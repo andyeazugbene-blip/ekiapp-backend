@@ -1,4 +1,5 @@
 import type { NextFunction, Request, Response } from "express";
+import { Prisma } from "@prisma/client";
 
 import { AppError } from "../shared/errors/app-error";
 
@@ -12,6 +13,15 @@ export function errorHandler(
     response.status(error.statusCode).json({
       message: error.message,
       details: error.details ?? null,
+    });
+    return;
+  }
+
+  if (error instanceof Prisma.PrismaClientInitializationError) {
+    console.error("Database initialization error", error);
+
+    response.status(503).json({
+      message: "Database unavailable",
     });
     return;
   }

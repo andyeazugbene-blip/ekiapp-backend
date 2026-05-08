@@ -134,9 +134,7 @@ class PaymentsService {
           {
             amount: subtotalAmount,
             currency,
-            automatic_payment_methods: {
-              enabled: true,
-            },
+            payment_method_types: ["card"],
             metadata: {
               orderId: order.id,
               paymentId: payment.id,
