@@ -1,0 +1,6 @@
+ALTER TABLE "Payment"
+ALTER COLUMN "stripePaymentIntentId" DROP NOT NULL;
+
+ALTER TABLE "Payment"
+ADD COLUMN "platformFeeAmount" INTEGER NOT NULL DEFAULT 0,
+ADD COLUMN "vendorEarningsAmount" INTEGER NOT NULL DEFAULT 0;

@@ -1,0 +1,175 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum OrderStatus {
+  PENDING
+  PAID
+  FAILED
+}
+
+enum PaymentStatus {
+  PENDING
+  SUCCEEDED
+  FAILED
+}
+
+enum WalletTransactionType {
+  PAYMENT_PENDING_CREDIT
+  PAYOUT_DEBIT
+  ADJUSTMENT_CREDIT
+  ADJUSTMENT_DEBIT
+}
+
+enum WebhookEventStatus {
+  PROCESSING
+  PROCESSED
+  IGNORED
+}
+
+model User {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  name      String
+  vendor    Vendor?
+  orders    Order[]  @relation("BuyerOrders")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Vendor {
+  id                 String              @id @default(cuid())
+  userId             String              @unique
+  storeName          String
+  user               User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  wallet             Wallet?
+  products           Product[]
+  orderItems         OrderItem[]
+  walletTransactions WalletTransaction[]
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
+}
+
+model Product {
+  id           String      @id @default(cuid())
+  vendorId     String
+  title        String
+  description  String?
+  priceInCents Int
+  currency     String      @default("usd")
+  isActive     Boolean     @default(true)
+  vendor       Vendor      @relation(fields: [vendorId], references: [id], onDelete: Restrict)
+  orderItems   OrderItem[]
+  createdAt    DateTime    @default(now())
+  updatedAt    DateTime    @updatedAt
+
+  @@unique([vendorId, title])
+  @@index([vendorId, isActive])
+}
+
+model Order {
+  id                 String              @id @default(cuid())
+  buyerId            String
+  status             OrderStatus         @default(PENDING)
+  totalAmount        Int
+  currency           String              @default("usd")
+  buyer              User                @relation("BuyerOrders", fields: [buyerId], references: [id], onDelete: Restrict)
+  items              OrderItem[]
+  payment            Payment?
+  walletTransactions WalletTransaction[]
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
+
+  @@index([buyerId, status])
+}
+
+model OrderItem {
+  id           String   @id @default(cuid())
+  orderId      String
+  productId    String
+  vendorId     String
+  quantity     Int
+  unitAmount   Int
+  totalAmount  Int
+  currency     String   @default("usd")
+  productTitle String
+  order        Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  product      Product  @relation(fields: [productId], references: [id], onDelete: Restrict)
+  vendor       Vendor   @relation(fields: [vendorId], references: [id], onDelete: Restrict)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([orderId])
+  @@index([vendorId])
+}
+
+model Payment {
+  id                    String              @id @default(cuid())
+  orderId               String              @unique
+  stripePaymentIntentId String?             @unique
+  amount                Int
+  platformFeeAmount     Int
+  vendorEarningsAmount  Int
+  currency              String              @default("usd")
+  status                PaymentStatus       @default(PENDING)
+  provider              String              @default("stripe")
+  metadata              Json?
+  processedAt           DateTime?
+  order                 Order               @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  walletTransactions    WalletTransaction[]
+  createdAt             DateTime            @default(now())
+  updatedAt             DateTime            @updatedAt
+
+  @@index([status])
+}
+
+model Wallet {
+  id               String              @id @default(cuid())
+  vendorId         String              @unique
+  pendingBalance   Int                 @default(0)
+  availableBalance Int                 @default(0)
+  currency         String              @default("usd")
+  vendor           Vendor              @relation(fields: [vendorId], references: [id], onDelete: Restrict)
+  transactions     WalletTransaction[]
+  createdAt        DateTime            @default(now())
+  updatedAt        DateTime            @updatedAt
+}
+
+model WalletTransaction {
+  id          String                @id @default(cuid())
+  walletId    String
+  vendorId    String
+  orderId     String
+  paymentId   String
+  type        WalletTransactionType
+  amount      Int
+  currency    String                @default("usd")
+  description String?
+  wallet      Wallet                @relation(fields: [walletId], references: [id], onDelete: Restrict)
+  vendor      Vendor                @relation(fields: [vendorId], references: [id], onDelete: Restrict)
+  order       Order                 @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  payment     Payment               @relation(fields: [paymentId], references: [id], onDelete: Restrict)
+  createdAt   DateTime              @default(now())
+
+  @@unique([vendorId, orderId, paymentId, type])
+  @@index([walletId, createdAt])
+  @@index([orderId])
+  @@index([paymentId])
+}
+
+model WebhookEvent {
+  id            String             @id @default(cuid())
+  stripeEventId String             @unique
+  eventType     String
+  provider      String             @default("stripe")
+  status        WebhookEventStatus @default(PROCESSING)
+  paymentId     String?
+  orderId       String?
+  createdAt     DateTime           @default(now())
+  processedAt   DateTime?
+}
