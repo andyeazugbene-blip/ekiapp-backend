@@ -1,35 +1,24 @@
-# Marketplace Payments Backend
+# Marketplace Backend
 
-Backend-only paid test task for a multi-vendor marketplace payment foundation using Node.js, Express, TypeScript, PostgreSQL, Prisma ORM, and Stripe.
+Multi-vendor marketplace backend built with Node.js, Express, TypeScript, PostgreSQL, Prisma ORM, and Stripe.
 
-## Scope
+## Features
 
-Implemented:
-- PaymentIntent creation
-- Order creation
-- Stripe webhook verification and handling
-- Wallet pending balance updates
-- Wallet ledger transaction recording
-- Webhook idempotency protection
-
-Not implemented:
-- Payout execution
-- Refunds
-- Authentication and authorization
-- Frontend
-- Admin dashboard
-- Multi-vendor checkout in a single order
-
-Manual payout execution is not implemented, but the wallet and ledger foundation is ready for it through `Wallet.availableBalance`, `Wallet.pendingBalance`, and `WalletTransaction`.
+- JWT-based authentication with three roles: `BUYER`, `VENDOR`, `ADMIN`
+- Vendor profiles, verification status, payout methods
+- Products with stock, images, category, weight
+- Shopping cart with single-vendor constraint and stock validation
+- Delivery zones and delivery fee calculation
+- Cart-based Stripe PaymentIntent checkout (subtotal + delivery)
+- Stripe webhook with signature verification, idempotency, and wallet credit
+- Admin order completion releasing vendor pending → available balance
+- Payout request flow (vendor request, admin approve / reject / mark-paid)
+- In-app notifications for payment and payout lifecycle events
+- Admin listing and moderation endpoints
 
 ## Tech Stack
 
-- Node.js
-- Express
-- TypeScript
-- PostgreSQL
-- Prisma ORM
-- Stripe SDK
+Node.js, Express 4, TypeScript 5, Prisma 6, PostgreSQL, Stripe SDK, bcryptjs, jsonwebtoken.
 
 ## Project Structure
 
@@ -39,305 +28,186 @@ prisma/
   schema.prisma
   seed.ts
 src/
+  app.ts
+  server.ts
   config/
   lib/
   middlewares/
   modules/
+    admin/
+    auth/
+    cart/
+    delivery/
     health/
+    notifications/
     orders/
     payments/
+    payouts/
+    products/
     stripe/
+    vendors/
   routes/
   shared/
 ```
 
-## Architecture
-
-- `modules/payments`: creates orders, order items, payment records, and Stripe PaymentIntents
-- `modules/stripe`: verifies Stripe webhooks and applies payment success side effects
-- `lib/prisma.ts`: shared Prisma client
-- `lib/stripe.ts`: shared Stripe client
-- `middlewares`: centralized error handling and 404 handling
-- `shared/errors`: reusable application error class
-- `shared/utils`: async route wrapper
-
-The code keeps business logic in services and keeps controllers/routes thin.
-
-## Data Model Summary
-
-- `User`: buyer or vendor owner
-- `Vendor`: seller profile linked to a user
-- `Product`: vendor-owned sellable item
-- `Order`: checkout record with `PENDING`, `PAID`, or `FAILED`
-- `OrderItem`: product snapshot inside an order
-- `Payment`: Stripe payment state and amount breakdown
-- `Wallet`: vendor wallet with `pendingBalance` and `availableBalance`
-- `WalletTransaction`: immutable wallet ledger entry linked to vendor, order, and payment
-- `WebhookEvent`: Stripe event tracking for idempotency
+Business logic lives in services. Controllers and routes stay thin. All authenticated-user routes use the `authenticate` middleware; admin routes add `requireRole("ADMIN")`.
 
 ## Environment Variables
 
-Copy `.env.example` to `.env` and update values.
+Copy `.env.example` to `.env` and fill in:
 
 ```env
 NODE_ENV=development
 PORT=4000
-DATABASE_URL="postgresql://postgres:postgres@localhost:5432/marketplace_payments?schema=public"
+DATABASE_URL="postgresql://postgres:postgres@localhost:5432/marketplace?schema=public"
 STRIPE_SECRET_KEY=sk_test_your_secret_key
 STRIPE_WEBHOOK_SECRET=whsec_your_webhook_secret
 DEFAULT_CURRENCY=usd
 PLATFORM_FEE_BPS=1000
+JWT_SECRET=change_me_in_production
+JWT_EXPIRES_IN=7d
 ```
 
-Explanation:
-- `NODE_ENV`: runtime mode
-- `PORT`: HTTP server port
-- `DATABASE_URL`: PostgreSQL connection string used by Prisma
-- `STRIPE_SECRET_KEY`: Stripe secret API key
-- `STRIPE_WEBHOOK_SECRET`: secret from Stripe CLI or Stripe dashboard webhook endpoint
-- `DEFAULT_CURRENCY`: fallback currency, currently expected to be `usd`
-- `PLATFORM_FEE_BPS`: platform fee in basis points, `1000` = `10%`
+- `JWT_SECRET`: required. Long random string used to sign access tokens.
+- `JWT_EXPIRES_IN`: token lifetime (e.g. `7d`, `12h`). Default `7d`.
+- `PLATFORM_FEE_BPS`: platform fee in basis points, `1000` = 10%. Applied to subtotal only (not delivery).
+- `DEFAULT_CURRENCY`: currency used for new wallets and as fallback for products.
 
 ## Setup
 
-1. Install dependencies:
-
 ```bash
 npm install
-```
-
-2. Create environment file:
-
-```bash
-cp .env.example .env
-```
-
-On Windows PowerShell:
-
-```powershell
-Copy-Item .env.example .env
-```
-
-3. Update `.env` with your PostgreSQL and Stripe values.
-
-4. Generate Prisma client:
-
-```bash
+cp .env.example .env     # or: Copy-Item .env.example .env
 npm run prisma:generate
-```
-
-5. Run migrations:
-
-```bash
 npm run prisma:migrate
-```
-
-6. Seed sample data:
-
-```bash
 npm run prisma:seed
-```
-
-The seed creates:
-- one buyer
-- one vendor owner
-- one vendor
-- one wallet
-- one sample product
-
-7. Start the API:
-
-```bash
 npm run dev
 ```
 
-## API Endpoints
+The seed creates one buyer, one vendor owner, one vendor, one wallet, and one product. Default seed password is `password123`.
 
-### Health Check
+## Money
 
-`GET /api/health`
+All monetary values are stored as integer cents (`Int` in Prisma). API request/response amounts (`priceAmount`, `amount`, `baseFeeAmount`, `feePerKgAmount`, `subtotalAmount`, `deliveryAmount`, `totalAmount`) are also integer cents.
 
-### Create PaymentIntent
+## API Overview
 
-`POST /api/payments/create-intent`
+All routes are prefixed with `/api`. Auth is `Bearer <JWT>` in the `Authorization` header unless noted.
 
-Request body:
+### Auth (public)
 
-```json
-{
-  "buyerId": "buyer_user_id",
-  "items": [
-    {
-      "productId": "product_id",
-      "quantity": 1
-    }
-  ]
-}
-```
+- `POST /auth/register` — `{ email, password, name }`. Always creates a `BUYER`. Returns `{ user, token }`.
+- `POST /auth/login` — `{ email, password }` → `{ user, token }`.
+- `GET /auth/me` — current user (auth).
 
-Rules:
-- buyer must exist
-- items cannot be empty
-- quantity must be greater than `0`
-- products must exist and be active
-- all products must belong to a single vendor
+### Vendors (auth)
 
-## Sample cURL Request
+- `POST /vendors` — create own vendor profile; creates the vendor's wallet and promotes a `BUYER` → `VENDOR` (admins keep their role).
+- `GET /vendors/me` — own profile with wallet.
+- `PATCH /vendors/me` — partial profile update.
+- `POST /vendors/me/payout-methods` — `{ type, label?, details, isDefault? }`.
+- `GET /vendors/me/payout-methods`.
 
-```bash
-curl -X POST http://localhost:4000/api/payments/create-intent \
-  -H "Content-Type: application/json" \
-  -d '{
-    "buyerId": "buyer_user_id",
-    "items": [
-      {
-        "productId": "product_id",
-        "quantity": 1
-      }
-    ]
-  }'
-```
+### Products
 
-PowerShell example:
+- `GET /products?category=&vendorId=&limit=&cursor=` (public) — list active products.
+- `GET /products/:id` (public) — 404 if missing or inactive.
+- `POST /products` (VENDOR) — `{ title, description?, priceAmount, currency?, images?, category?, stock?, weightGrams? }`.
+- `PATCH /products/:id` (VENDOR, owner) — partial update. Supports toggling `isActive`.
+- `DELETE /products/:id` (VENDOR, owner) — soft-disable.
 
-```powershell
-Invoke-RestMethod -Method Post -Uri "http://localhost:4000/api/payments/create-intent" `
-  -ContentType "application/json" `
-  -Body '{
-    "buyerId": "buyer_user_id",
-    "items": [
-      {
-        "productId": "product_id",
-        "quantity": 1
-      }
-    ]
-  }'
-```
+### Cart (auth)
 
-Expected response example:
+Cart is per user; enforces one vendor per cart and validates stock.
 
-```json
-{
-  "orderId": "cm_order_id",
-  "paymentId": "cm_payment_id",
-  "amount": 4999,
-  "currency": "usd",
-  "clientSecret": "pi_3Nx..._secret_abc123"
-}
-```
+- `GET /cart` — returns (auto-creating if missing).
+- `POST /cart/items` — `{ productId, quantity }`.
+- `PATCH /cart/items/:id` — `{ quantity }`.
+- `DELETE /cart/items/:id`.
+- `DELETE /cart` — clear all items.
 
-### Stripe Webhook
+### Delivery (auth)
 
-`POST /api/stripe/webhook`
+- `POST /delivery/calculate` — `{ cartId, destinationZoneId }` → `{ subtotalAmount, deliveryAmount, totalAmount, totalWeightGrams, currency }`. `deliveryAmount = baseFeeAmount + ceil(totalWeightGrams / 1000) * feePerKgAmount`.
 
-This endpoint expects the raw request body and verifies the `stripe-signature` header using `STRIPE_WEBHOOK_SECRET`.
+### Payments (auth)
 
-Handled event:
-- `payment_intent.succeeded`
+- `POST /payments/create-intent` — `{ cartId, destinationZoneId }` → `{ orderId, paymentId, amount, currency, clientSecret }`. Creates order + items + payment, calls Stripe, stores `clientSecret`.
 
-## Payment Flow
+Cart is cleared only after the Stripe webhook marks the payment successful.
 
-1. Client sends `buyerId` and line items to `POST /api/payments/create-intent`.
-2. Backend validates the buyer, products, quantities, single-vendor rule, and currency consistency.
-3. Backend calculates:
-   - subtotal
-   - platform fee
-   - vendor earnings
-4. Backend creates:
-   - `Order` with `PENDING`
-   - `OrderItem` rows
-   - `Payment` with `PENDING`
-5. Backend creates a Stripe PaymentIntent with metadata:
-   - `orderId`
-   - `paymentId`
-   - `buyerId`
-   - `vendorId`
-6. Backend returns `clientSecret` for client-side confirmation.
-7. Stripe sends `payment_intent.succeeded` webhook.
-8. Backend verifies the signature and processes the webhook atomically.
-9. Backend marks:
-   - `Payment` as `SUCCEEDED`
-   - `Order` as `PAID`
-10. Backend creates a `WalletTransaction` ledger record and increments vendor `pendingBalance`.
+### Stripe Webhook (public, signature-verified)
 
-## Wallet and Ledger Explanation
+- `POST /stripe/webhook` — handles `payment_intent.succeeded`. Verifies signature; dedupes on `WebhookEvent.stripeEventId`; atomically marks payment SUCCEEDED, order PAID, credits `pendingBalance` with `vendorEarningsAmount`, records a `PAYMENT_PENDING_CREDIT` ledger row, clears the buyer's cart, and emits notifications.
 
-The wallet system is ledger-based.
+### Payout Requests
 
-- `Wallet.pendingBalance`: money earned from successful payments but not yet paid out
-- `Wallet.availableBalance`: reserved for future payout release logic
-- `WalletTransaction`: immutable transaction history for wallet changes
+- `POST /payout-requests` (VENDOR) — `{ payoutMethodId, amount, notes? }` — validates amount ≤ `wallet.availableBalance`.
+- `GET /payout-requests/me` (VENDOR) — list own.
 
-For a successful payment:
-- one `WalletTransaction` of type `PAYMENT_PENDING_CREDIT` is created
-- the vendor wallet `pendingBalance` is incremented by `vendorEarningsAmount`
+### Admin (ADMIN role)
 
-This keeps balance derivation auditable and makes future payout integration straightforward.
+- `GET /admin/users?role=&limit=&cursor=`
+- `GET /admin/vendors?status=&limit=&cursor=`
+- `GET /admin/products?isActive=&limit=&cursor=`
+- `GET /admin/orders?status=&limit=&cursor=`
+- `GET /admin/payments?status=&limit=&cursor=`
+- `GET /admin/wallet-transactions?type=&vendorId=&limit=&cursor=`
+- `PATCH /admin/vendors/:id/approve` / `PATCH /admin/vendors/:id/reject`
+- `PATCH /admin/products/:id/approve` / `PATCH /admin/products/:id/disable`
+- `PATCH /admin/orders/:id/complete` — PAID → COMPLETED, releases `pendingBalance` → `availableBalance` with a `PENDING_TO_AVAILABLE` ledger row. Protected against duplicate release by the `WalletTransaction(vendorId, orderId, paymentId, type)` unique constraint.
+- `GET /admin/payout-requests?status=`
+- `PATCH /admin/payout-requests/:id/approve`
+- `PATCH /admin/payout-requests/:id/reject` — `{ reason? }`
+- `PATCH /admin/payout-requests/:id/mark-paid` — APPROVED → PAID, creates `PAYOUT_DEBIT`, debits `availableBalance`. Protected against duplicate processing by the `WalletTransaction(payoutRequestId, type)` unique constraint.
 
-## Webhook Idempotency
+### Notifications (auth)
 
-The webhook is safe against duplicate Stripe delivery.
+- `GET /notifications?limit=&cursor=&unreadOnly=true` — list current user's notifications.
+- `PATCH /notifications/:id/read` — mark read (idempotent).
 
-Protection layers:
-- `WebhookEvent.stripeEventId` is unique
-- `WalletTransaction` has a unique constraint on `(vendorId, orderId, paymentId, type)`
-- payment success handling exits safely if payment is already `SUCCEEDED`
+Notification types: `ORDER_PAID`, `BALANCE_CREDITED`, `PAYOUT_REQUESTED`, `PAYOUT_APPROVED`, `PAYOUT_REJECTED`, `PAYOUT_PAID`.
 
-This prevents duplicate vendor wallet credits.
+## Money Flow
 
-## Stripe CLI Local Testing
+1. Buyer adds items to cart (single vendor enforced).
+2. `POST /payments/create-intent` with `cartId` and `destinationZoneId`:
+   - `subtotalAmount = Σ priceInCents * quantity`
+   - `deliveryFeeAmount = baseFee + ceil(weightKg) * feePerKg`
+   - `totalAmount = subtotalAmount + deliveryFeeAmount`
+   - `platformFeeAmount = round(subtotal * PLATFORM_FEE_BPS / 10000)`
+   - `vendorEarningsAmount = subtotalAmount - platformFeeAmount` (vendor does not receive delivery fees)
+   - Stripe PaymentIntent created for `totalAmount`.
+3. Stripe → webhook → Payment SUCCEEDED, Order PAID, `pendingBalance += vendorEarningsAmount`, cart cleared, `ORDER_PAID` + `BALANCE_CREDITED` notifications.
+4. Admin marks order `COMPLETED` → `pendingBalance -= amount`, `availableBalance += amount`, `PENDING_TO_AVAILABLE` ledger row.
+5. Vendor requests payout (≤ availableBalance). Admin approves, then marks paid → `availableBalance -= amount`, `PAYOUT_DEBIT` ledger row.
 
-1. Start the app:
+## Idempotency & Concurrency Safeguards
 
-```bash
-npm run dev
-```
+- `WebhookEvent.stripeEventId` unique — dedupes Stripe retries.
+- `WalletTransaction @@unique([vendorId, orderId, paymentId, type])` — one `PAYMENT_PENDING_CREDIT` and one `PENDING_TO_AVAILABLE` per order.
+- `WalletTransaction @@unique([payoutRequestId, type])` — one `PAYOUT_DEBIT` per payout request.
+- Payout state transitions use `updateMany` with `where: { status: ... }` to reject concurrent writes.
+- All multi-write operations (vendor create, cart mutations, payment intent, webhook, order complete, payout mark-paid) run inside `prisma.$transaction`.
 
-2. Start Stripe listener and copy the webhook secret into `.env`:
+## Validation
 
-```bash
-stripe listen --forward-to localhost:4000/api/stripe/webhook
-```
+Every endpoint validates its input in a `*.validation.ts` file and throws `AppError` on bad input. JSON bodies are parsed by Express except the Stripe webhook which uses `express.raw`.
 
-3. In another terminal, trigger a test webhook:
-
-```bash
-stripe trigger payment_intent.succeeded
-```
-
-Note:
-- `stripe trigger payment_intent.succeeded` sends a generic test event
-- for a full end-to-end local test, first create a real PaymentIntent through `/api/payments/create-intent`, then confirm that PaymentIntent using Stripe test flows so the webhook metadata matches your stored payment and order records
-
-## API Testing Notes
-
-- Run the seed script and use the generated buyer/product IDs
-- Create a payment intent through the API
-- Confirm the Stripe PaymentIntent in test mode
-- Verify in the database:
-  - `Payment.status = SUCCEEDED`
-  - `Order.status = PAID`
-  - `Wallet.pendingBalance` increased
-  - `WalletTransaction` created once
-  - `WebhookEvent` stored once
-
-## Known Limitations
-
-- Only one vendor is allowed per order
-- No automatic release from `pendingBalance` to `availableBalance`
-- No payout execution
-- No refund support
-- No payment failure webhook handling yet
-- No authentication or authorization
-- No inventory management
-- No tax or shipping calculation
-- `stripe trigger payment_intent.succeeded` alone is not enough for a true end-to-end happy path unless the event metadata matches an existing payment created by this backend
-
-## Verification
-
-Run:
+## Build / Verify
 
 ```bash
 npm run prisma:generate
 npm run build
 ```
+
+Both commands currently exit clean.
+
+## Known Limitations
+
+- Single vendor per order (enforced at cart level).
+- No refunds.
+- No automatic Stripe Connect payouts — payouts are marked paid manually by an admin.
+- No real-time delivery (push / websocket / email).
+- No rate limiting or request logging middleware (recommended for production).
+- No unit test suite.

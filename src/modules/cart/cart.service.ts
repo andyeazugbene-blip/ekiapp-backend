@@ -1,0 +1,195 @@
+import type { Cart, CartItem, Prisma, Product } from "@prisma/client";
+
+import { prisma } from "../../lib/prisma";
+import { AppError } from "../../shared/errors/app-error";
+import type { AddCartItemInput, UpdateCartItemInput } from "./cart.types";
+
+type CartWithItems = Cart & { items: (CartItem & { product: Product })[] };
+
+function includeItems() {
+  return {
+    items: {
+      include: { product: true },
+      orderBy: { createdAt: "asc" as const },
+    },
+  };
+}
+
+async function getOrCreateCart(
+  buyerId: string,
+  tx: Prisma.TransactionClient = prisma as unknown as Prisma.TransactionClient,
+): Promise<CartWithItems> {
+  const existing = await tx.cart.findUnique({
+    where: { buyerId },
+    include: includeItems(),
+  });
+  if (existing) return existing as CartWithItems;
+
+  const created = await tx.cart.create({
+    data: { buyerId },
+    include: includeItems(),
+  });
+  return created as CartWithItems;
+}
+
+function assertProductPurchasable(product: Product | null, requestedQty: number): asserts product is Product {
+  if (!product) {
+    throw new AppError("Product not found", 404);
+  }
+  if (!product.isActive) {
+    throw new AppError("Product is not available", 400);
+  }
+  if (product.stock < requestedQty) {
+    throw new AppError("Insufficient stock", 400);
+  }
+}
+
+async function reloadCart(buyerId: string): Promise<CartWithItems> {
+  const cart = await prisma.cart.findUnique({
+    where: { buyerId },
+    include: includeItems(),
+  });
+  if (!cart) {
+    throw new AppError("Cart not found", 404);
+  }
+  return cart as CartWithItems;
+}
+
+export const cartService = {
+  async getCart(buyerId: string): Promise<CartWithItems> {
+    return getOrCreateCart(buyerId);
+  },
+
+  async addItem(buyerId: string, input: AddCartItemInput): Promise<CartWithItems> {
+    return prisma.$transaction(async (tx) => {
+      const cart = await getOrCreateCart(buyerId, tx);
+
+      const product = await tx.product.findUnique({ where: { id: input.productId } });
+      if (!product) throw new AppError("Product not found", 404);
+      if (!product.isActive) throw new AppError("Product is not available", 400);
+
+      if (cart.vendorId && cart.vendorId !== product.vendorId) {
+        throw new AppError("Cart can only contain products from one vendor", 400);
+      }
+
+      const existingItem = cart.items.find((item) => item.productId === product.id);
+      const newQuantity = (existingItem?.quantity ?? 0) + input.quantity;
+
+      if (product.stock < newQuantity) {
+        throw new AppError("Insufficient stock", 400);
+      }
+
+      if (existingItem) {
+        await tx.cartItem.update({
+          where: { id: existingItem.id },
+          data: { quantity: newQuantity },
+        });
+      } else {
+        await tx.cartItem.create({
+          data: {
+            cartId: cart.id,
+            productId: product.id,
+            quantity: input.quantity,
+          },
+        });
+      }
+
+      if (!cart.vendorId) {
+        await tx.cart.update({
+          where: { id: cart.id },
+          data: { vendorId: product.vendorId },
+        });
+      }
+
+      const updated = await tx.cart.findUnique({
+        where: { id: cart.id },
+        include: includeItems(),
+      });
+      return updated as CartWithItems;
+    });
+  },
+
+  async updateItem(
+    buyerId: string,
+    itemId: string,
+    input: UpdateCartItemInput,
+  ): Promise<CartWithItems> {
+    return prisma.$transaction(async (tx) => {
+      const cart = await tx.cart.findUnique({ where: { buyerId } });
+      if (!cart) throw new AppError("Cart not found", 404);
+
+      const item = await tx.cartItem.findUnique({
+        where: { id: itemId },
+        include: { product: true },
+      });
+      if (!item || item.cartId !== cart.id) {
+        throw new AppError("Cart item not found", 404);
+      }
+
+      assertProductPurchasable(item.product, input.quantity);
+
+      await tx.cartItem.update({
+        where: { id: item.id },
+        data: { quantity: input.quantity },
+      });
+
+      const updated = await tx.cart.findUnique({
+        where: { id: cart.id },
+        include: includeItems(),
+      });
+      return updated as CartWithItems;
+    });
+  },
+
+  async removeItem(buyerId: string, itemId: string): Promise<CartWithItems> {
+    return prisma.$transaction(async (tx) => {
+      const cart = await tx.cart.findUnique({
+        where: { buyerId },
+        include: { items: true },
+      });
+      if (!cart) throw new AppError("Cart not found", 404);
+
+      const item = cart.items.find((candidate) => candidate.id === itemId);
+      if (!item) throw new AppError("Cart item not found", 404);
+
+      await tx.cartItem.delete({ where: { id: item.id } });
+
+      const remaining = cart.items.length - 1;
+      if (remaining === 0 && cart.vendorId) {
+        await tx.cart.update({
+          where: { id: cart.id },
+          data: { vendorId: null },
+        });
+      }
+
+      const updated = await tx.cart.findUnique({
+        where: { id: cart.id },
+        include: includeItems(),
+      });
+      return updated as CartWithItems;
+    });
+  },
+
+  async clearCart(buyerId: string): Promise<CartWithItems> {
+    return prisma.$transaction(async (tx) => {
+      const cart = await getOrCreateCart(buyerId, tx);
+
+      if (cart.items.length > 0) {
+        await tx.cartItem.deleteMany({ where: { cartId: cart.id } });
+      }
+
+      await tx.cart.update({
+        where: { id: cart.id },
+        data: { vendorId: null },
+      });
+
+      const updated = await tx.cart.findUnique({
+        where: { id: cart.id },
+        include: includeItems(),
+      });
+      return updated as CartWithItems;
+    });
+  },
+};
+
+export { reloadCart };

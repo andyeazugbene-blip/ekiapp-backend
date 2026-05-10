@@ -8,6 +8,11 @@ export type CreatePaymentIntentInput = {
   items: CreatePaymentIntentItemInput[];
 };
 
+export type CreatePaymentIntentFromCartInput = {
+  cartId: string;
+  destinationZoneId: string;
+};
+
 export type NormalizedPaymentItem = CreatePaymentIntentItemInput;
 
 export type PricedOrderItem = {

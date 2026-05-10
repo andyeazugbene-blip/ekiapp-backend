@@ -7,9 +7,16 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+enum UserRole {
+  BUYER
+  VENDOR
+  ADMIN
+}
+
 enum OrderStatus {
   PENDING
   PAID
+  COMPLETED
   FAILED
 }
 
@@ -20,6 +27,7 @@ enum PaymentStatus {
 }
 
 enum WalletTransactionType {
+  PENDING_TO_AVAILABLE
   PAYMENT_PENDING_CREDIT
   PAYOUT_DEBIT
   ADJUSTMENT_CREDIT
@@ -32,27 +40,107 @@ enum WebhookEventStatus {
   IGNORED
 }
 
+enum PayoutRequestStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  PAID
+}
+
+enum VendorVerificationStatus {
+  PENDING
+  VERIFIED
+  REJECTED
+}
+
+enum PayoutMethodType {
+  BANK_TRANSFER
+  MOBILE_MONEY
+  WISE
+  PAYONEER
+  OTHER
+}
+
+enum NotificationType {
+  ORDER_PAID
+  BALANCE_CREDITED
+  PAYOUT_REQUESTED
+  PAYOUT_APPROVED
+  PAYOUT_REJECTED
+  PAYOUT_PAID
+}
+
 model User {
-  id        String   @id @default(cuid())
-  email     String   @unique
-  name      String
-  vendor    Vendor?
-  orders    Order[]  @relation("BuyerOrders")
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id            String         @id @default(cuid())
+  email         String         @unique
+  name          String
+  password      String
+  role          UserRole       @default(BUYER)
+  vendor        Vendor?
+  orders        Order[]        @relation("BuyerOrders")
+  cart          Cart?
+  notifications Notification[]
+  createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
 }
 
 model Vendor {
-  id                 String              @id @default(cuid())
-  userId             String              @unique
+  id                 String                   @id @default(cuid())
+  userId             String                   @unique
   storeName          String
-  user               User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  description        String?
+  contactEmail       String?
+  contactPhone       String?
+  country            String?
+  verificationStatus VendorVerificationStatus @default(PENDING)
+  user               User                     @relation(fields: [userId], references: [id], onDelete: Cascade)
   wallet             Wallet?
   products           Product[]
   orderItems         OrderItem[]
   walletTransactions WalletTransaction[]
+  payoutMethods      PayoutMethod[]
+  payoutRequests     PayoutRequest[]
+  carts              Cart[]
+  createdAt          DateTime                 @default(now())
+  updatedAt          DateTime                 @updatedAt
+}
+
+model PayoutMethod {
+  id             String           @id @default(cuid())
+  vendorId       String
+  type           PayoutMethodType
+  label          String?
+  details        Json
+  isDefault      Boolean          @default(false)
+  vendor         Vendor           @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+  payoutRequests PayoutRequest[]
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+
+  @@index([vendorId])
+}
+
+model PayoutRequest {
+  id                 String              @id @default(cuid())
+  vendorId           String
+  payoutMethodId     String
+  amount             Int
+  currency           String              @default("usd")
+  status             PayoutRequestStatus @default(PENDING)
+  notes              String?
+  rejectionReason    String?
+  approvedById       String?
+  approvedAt         DateTime?
+  paidById           String?
+  paidAt             DateTime?
+  vendor             Vendor              @relation(fields: [vendorId], references: [id], onDelete: Restrict)
+  payoutMethod       PayoutMethod        @relation(fields: [payoutMethodId], references: [id], onDelete: Restrict)
+  walletTransactions WalletTransaction[]
   createdAt          DateTime            @default(now())
   updatedAt          DateTime            @updatedAt
+
+  @@index([vendorId, status])
+  @@index([status, createdAt])
 }
 
 model Product {
@@ -62,23 +150,60 @@ model Product {
   description  String?
   priceInCents Int
   currency     String      @default("usd")
+  images       String[]    @default([])
+  category     String?
+  stock        Int         @default(0)
+  weightGrams  Int?
   isActive     Boolean     @default(true)
   vendor       Vendor      @relation(fields: [vendorId], references: [id], onDelete: Restrict)
   orderItems   OrderItem[]
+  cartItems    CartItem[]
   createdAt    DateTime    @default(now())
   updatedAt    DateTime    @updatedAt
 
   @@unique([vendorId, title])
   @@index([vendorId, isActive])
+  @@index([isActive, category])
+}
+
+model Cart {
+  id        String     @id @default(cuid())
+  buyerId   String     @unique
+  vendorId  String?
+  buyer     User       @relation(fields: [buyerId], references: [id], onDelete: Cascade)
+  vendor    Vendor?    @relation(fields: [vendorId], references: [id], onDelete: SetNull)
+  items     CartItem[]
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+
+  @@index([vendorId])
+}
+
+model CartItem {
+  id        String   @id @default(cuid())
+  cartId    String
+  productId String
+  quantity  Int
+  cart      Cart     @relation(fields: [cartId], references: [id], onDelete: Cascade)
+  product   Product  @relation(fields: [productId], references: [id], onDelete: Restrict)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([cartId, productId])
+  @@index([cartId])
 }
 
 model Order {
   id                 String              @id @default(cuid())
   buyerId            String
   status             OrderStatus         @default(PENDING)
+  subtotalAmount     Int                 @default(0)
+  deliveryFeeAmount  Int                 @default(0)
   totalAmount        Int
   currency           String              @default("usd")
+  deliveryZoneId     String?
   buyer              User                @relation("BuyerOrders", fields: [buyerId], references: [id], onDelete: Restrict)
+  deliveryZone       DeliveryZone?       @relation(fields: [deliveryZoneId], references: [id], onDelete: SetNull)
   items              OrderItem[]
   payment            Payment?
   walletTransactions WalletTransaction[]
@@ -141,25 +266,59 @@ model Wallet {
 }
 
 model WalletTransaction {
-  id          String                @id @default(cuid())
-  walletId    String
-  vendorId    String
-  orderId     String
-  paymentId   String
-  type        WalletTransactionType
-  amount      Int
-  currency    String                @default("usd")
-  description String?
-  wallet      Wallet                @relation(fields: [walletId], references: [id], onDelete: Restrict)
-  vendor      Vendor                @relation(fields: [vendorId], references: [id], onDelete: Restrict)
-  order       Order                 @relation(fields: [orderId], references: [id], onDelete: Restrict)
-  payment     Payment               @relation(fields: [paymentId], references: [id], onDelete: Restrict)
-  createdAt   DateTime              @default(now())
+  id              String                @id @default(cuid())
+  walletId        String
+  vendorId        String
+  orderId         String?
+  paymentId       String?
+  payoutRequestId String?
+  type            WalletTransactionType
+  amount          Int
+  currency        String                @default("usd")
+  description     String?
+  wallet          Wallet                @relation(fields: [walletId], references: [id], onDelete: Restrict)
+  vendor          Vendor                @relation(fields: [vendorId], references: [id], onDelete: Restrict)
+  order           Order?                @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  payment         Payment?              @relation(fields: [paymentId], references: [id], onDelete: Restrict)
+  payoutRequest   PayoutRequest?        @relation(fields: [payoutRequestId], references: [id], onDelete: Restrict)
+  createdAt       DateTime              @default(now())
 
   @@unique([vendorId, orderId, paymentId, type])
+  @@unique([payoutRequestId, type])
   @@index([walletId, createdAt])
   @@index([orderId])
   @@index([paymentId])
+  @@index([payoutRequestId])
+}
+
+model DeliveryZone {
+  id             String   @id @default(cuid())
+  name           String
+  country        String
+  baseFeeAmount  Int
+  feePerKgAmount Int
+  currency       String   @default("usd")
+  isActive       Boolean  @default(true)
+  orders         Order[]
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@index([country, isActive])
+}
+
+model Notification {
+  id        String           @id @default(cuid())
+  userId    String
+  type      NotificationType
+  title     String
+  body      String?
+  data      Json?
+  readAt    DateTime?
+  user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt DateTime         @default(now())
+
+  @@index([userId, readAt])
+  @@index([userId, createdAt])
 }
 
 model WebhookEvent {

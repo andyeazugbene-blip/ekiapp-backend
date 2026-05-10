@@ -1,14 +1,19 @@
-import { PrismaClient } from "@prisma/client";
+import { PrismaClient, UserRole } from "@prisma/client";
+import bcrypt from "bcryptjs";
 
 const prisma = new PrismaClient();
 
 async function main() {
+  const defaultPassword = await bcrypt.hash("password123", 10);
+
   const buyer = await prisma.user.upsert({
     where: { email: "buyer@example.com" },
     update: { name: "Sample Buyer" },
     create: {
       email: "buyer@example.com",
       name: "Sample Buyer",
+      password: defaultPassword,
+      role: UserRole.BUYER,
     },
   });
 
@@ -18,6 +23,8 @@ async function main() {
     create: {
       email: "vendor@example.com",
       name: "Sample Vendor Owner",
+      password: defaultPassword,
+      role: UserRole.VENDOR,
     },
   });
 

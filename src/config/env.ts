@@ -40,4 +40,6 @@ export const env = {
   stripeWebhookSecret: getRequiredEnv("STRIPE_WEBHOOK_SECRET"),
   defaultCurrency: process.env.DEFAULT_CURRENCY ?? "usd",
   platformFeeBps: getPlatformFeeBps(),
+  jwtSecret: getRequiredEnv("JWT_SECRET"),
+  jwtExpiresIn: process.env.JWT_EXPIRES_IN ?? "7d",
 } as const;

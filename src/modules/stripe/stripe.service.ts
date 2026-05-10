@@ -1,9 +1,10 @@
-import { PaymentStatus, Prisma } from "@prisma/client";
+import { NotificationType, PaymentStatus, Prisma } from "@prisma/client";
 import type Stripe from "stripe";
 
 import { env } from "../../config/env";
 import { prisma } from "../../lib/prisma";
 import { stripe } from "../../lib/stripe";
+import { notificationsService } from "../notifications/notifications.service";
 import { AppError } from "../../shared/errors/app-error";
 import type {
   PaymentIntentSucceededMetadata,
@@ -192,6 +193,41 @@ class StripeWebhookService {
           },
         });
 
+        await this.clearBuyerCart(tx, metadata.buyerId);
+
+        await notificationsService.create(
+          {
+            userId: metadata.buyerId,
+            type: NotificationType.ORDER_PAID,
+            title: "Your order has been paid",
+            body: `Order ${order.id} has been successfully paid.`,
+            data: { orderId: order.id, paymentId: payment.id, amount: payment.amount },
+          },
+          tx,
+        );
+
+        const vendorUser = await tx.vendor.findUnique({
+          where: { id: metadata.vendorId },
+          select: { userId: true },
+        });
+        if (vendorUser) {
+          await notificationsService.create(
+            {
+              userId: vendorUser.userId,
+              type: NotificationType.BALANCE_CREDITED,
+              title: "Pending balance credited",
+              body: `Your pending balance was credited for order ${order.id}.`,
+              data: {
+                orderId: order.id,
+                paymentId: payment.id,
+                amount: payment.vendorEarningsAmount,
+                currency: payment.currency,
+              },
+            },
+            tx,
+          );
+        }
+
         await tx.webhookEvent.update({
           where: { stripeEventId: event.id },
           data: {
@@ -248,6 +284,23 @@ class StripeWebhookService {
       buyerId,
       vendorId,
     };
+  }
+
+  private async clearBuyerCart(tx: Prisma.TransactionClient, buyerId: string): Promise<void> {
+    const cart = await tx.cart.findUnique({
+      where: { buyerId },
+      select: { id: true },
+    });
+
+    if (!cart) {
+      return;
+    }
+
+    await tx.cartItem.deleteMany({ where: { cartId: cart.id } });
+    await tx.cart.update({
+      where: { id: cart.id },
+      data: { vendorId: null },
+    });
   }
 
   private isUniqueConstraintError(error: unknown): boolean {
