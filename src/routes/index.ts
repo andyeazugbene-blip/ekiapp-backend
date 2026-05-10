@@ -1,5 +1,7 @@
 import { Router } from "express";
+import swaggerUi from "swagger-ui-express";
 
+import { swaggerSpec } from "../lib/swagger";
 import { adminRouter } from "../modules/admin/admin.routes";
 import { authRouter } from "../modules/auth/auth.routes";
 import { cartRouter } from "../modules/cart/cart.routes";
@@ -13,6 +15,17 @@ import { stripeRouter } from "../modules/stripe/stripe.routes";
 import { vendorsRouter } from "../modules/vendors/vendors.routes";
 
 export const apiRouter = Router();
+
+apiRouter.get("/docs.json", (_req, res) => {
+  res.json(swaggerSpec);
+});
+apiRouter.use(
+  "/docs",
+  swaggerUi.serve,
+  swaggerUi.setup(swaggerSpec, {
+    customSiteTitle: "Italian Marketplace API",
+  }),
+);
 
 apiRouter.use(healthRouter);
 apiRouter.use("/auth", authRouter);
