@@ -1,5 +1,5 @@
 import type { NextFunction, Request, Response } from "express";
-import { v4 as uuidv4 } from "uuid";
+import crypto from "crypto";
 
 declare global {
   // eslint-disable-next-line @typescript-eslint/no-namespace
@@ -15,7 +15,7 @@ declare global {
  * Uses X-Request-ID header if provided (from load balancer), otherwise generates one.
  */
 export function requestIdMiddleware(request: Request, response: Response, next: NextFunction): void {
-  const id = (request.headers["x-request-id"] as string) || uuidv4();
+  const id = (request.headers["x-request-id"] as string) || crypto.randomUUID();
   request.requestId = id;
   response.setHeader("X-Request-ID", id);
   next();
