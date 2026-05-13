@@ -1,10 +1,14 @@
 import type { Notification, NotificationType, Prisma } from "@prisma/client";
 
+import { logger } from "../../lib/logger";
 import { prisma } from "../../lib/prisma";
+import { notificationsQueue } from "../../queues";
 import { AppError } from "../../shared/errors/app-error";
 
 const DEFAULT_LIMIT = 20;
 const MAX_LIMIT = 100;
+
+export const NOTIFICATION_JOB = "create-notification";
 
 export interface CreateNotificationInput {
   userId: string;
@@ -33,6 +37,36 @@ export const notificationsService = {
         data: input.data,
       },
     });
+  },
+
+  // Async path: when Redis is configured, push the notification to the
+  // BullMQ queue and let the worker create it in the DB. When Redis
+  // is unavailable, fall back to a direct DB insert so the app keeps
+  // working in local dev. Never throws — notifications must not break
+  // the calling business operation.
+  async enqueue(input: CreateNotificationInput): Promise<void> {
+    if (notificationsQueue) {
+      try {
+        await notificationsQueue.add(NOTIFICATION_JOB, input, {
+          jobId: undefined,
+        });
+        return;
+      } catch (error) {
+        logger.warn("Notification enqueue failed, falling back to direct insert", {
+          type: input.type,
+          errorMessage: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+
+    try {
+      await this.create(input);
+    } catch (error) {
+      logger.error("Notification fallback insert failed", {
+        type: input.type,
+        errorMessage: error instanceof Error ? error.message : String(error),
+      });
+    }
   },
 
   async list(

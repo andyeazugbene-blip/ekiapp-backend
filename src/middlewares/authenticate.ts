@@ -18,23 +18,40 @@ declare global {
 }
 
 export function authenticate(request: Request, _response: Response, next: NextFunction): void {
+  const header = request.headers.authorization;
+  if (!header || !header.startsWith("Bearer ")) {
+    next(new AppError("Missing or invalid Authorization header", 401));
+    return;
+  }
+
+  const token = header.slice("Bearer ".length).trim();
+  if (!token) {
+    next(new AppError("Missing token", 401));
+    return;
+  }
+
+  let payload;
   try {
-    const header = request.headers.authorization;
-    if (!header || !header.startsWith("Bearer ")) {
-      throw new AppError("Missing or invalid Authorization header", 401);
-    }
-
-    const token = header.slice("Bearer ".length).trim();
-    if (!token) {
-      throw new AppError("Missing token", 401);
-    }
-
-    const payload = authService.verifyToken(token);
-    request.user = { id: payload.sub, role: payload.role, email: payload.email };
-    next();
+    payload = authService.verifyToken(token);
   } catch (error) {
     next(error);
+    return;
   }
+
+  // Verify tokenVersion against DB (async)
+  authService
+    .verifyTokenVersion(payload.sub, payload.tv ?? 0)
+    .then((valid) => {
+      if (!valid) {
+        next(new AppError("Token revoked. Please log in again.", 401));
+        return;
+      }
+      request.user = { id: payload.sub, role: payload.role, email: payload.email };
+      next();
+    })
+    .catch((error) => {
+      next(error);
+    });
 }
 
 export function requireRole(...roles: UserRole[]) {

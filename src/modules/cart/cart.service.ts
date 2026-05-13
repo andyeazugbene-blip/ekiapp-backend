@@ -19,17 +19,15 @@ async function getOrCreateCart(
   buyerId: string,
   tx: Prisma.TransactionClient = prisma as unknown as Prisma.TransactionClient,
 ): Promise<CartWithItems> {
-  const existing = await tx.cart.findUnique({
+  // Use upsert to prevent race condition where two concurrent requests
+  // both see no cart and try to create one (unique constraint on buyerId).
+  const cart = await tx.cart.upsert({
     where: { buyerId },
+    update: {},
+    create: { buyerId },
     include: includeItems(),
   });
-  if (existing) return existing as CartWithItems;
-
-  const created = await tx.cart.create({
-    data: { buyerId },
-    include: includeItems(),
-  });
-  return created as CartWithItems;
+  return cart as CartWithItems;
 }
 
 function assertProductPurchasable(product: Product | null, requestedQty: number): asserts product is Product {

@@ -72,6 +72,22 @@ JWT_EXPIRES_IN=7d
 - `JWT_EXPIRES_IN`: token lifetime (e.g. `7d`, `12h`). Default `7d`.
 - `PLATFORM_FEE_BPS`: platform fee in basis points, `1000` = 10%. Applied to subtotal only (not delivery).
 - `DEFAULT_CURRENCY`: currency used for new wallets and as fallback for products.
+- `SENTRY_DSN`: optional. Sentry project DSN. When set, the centralized error handler captures 5xx and uncaught errors to Sentry. Leave empty to disable monitoring (local dev runs unaffected).
+- `REDIS_URL`: optional. When set, BullMQ queues (`notifications`, `emails`, `payouts`) are initialized using this Redis instance. Leave empty in local dev to disable queueing — the app still runs without Redis. Use a managed Redis (Upstash, Redis Cloud, Railway, Render…) in production. Format: `redis://default:password@host:port` or `rediss://...` for TLS.
+
+### `DATABASE_URL` on Vercel (Neon pooled connection)
+
+On Vercel serverless, every warm Lambda instance keeps its own `PrismaClient`. To avoid exhausting Postgres connections you **must** point `DATABASE_URL` at the Neon **pooled** endpoint (the host contains `-pooler`):
+
+```
+postgresql://USER:PASS@ep-xxx-pooler.<region>.aws.neon.tech/<db>?sslmode=require&pgbouncer=true&connection_limit=1
+```
+
+- `pgbouncer=true` tells Prisma it is talking to PgBouncer (transaction-mode pooling).
+- `connection_limit=1` keeps each Lambda using a single backend connection.
+- For `prisma migrate` commands, set a separate `DIRECT_URL` to the unpooled Neon endpoint (host without `-pooler`) and add `directUrl = env("DIRECT_URL")` in `prisma/schema.prisma` if you run migrations from CI/Vercel.
+
+The Prisma client is created once per worker via a `globalThis` singleton in `src/lib/prisma.ts`, so no new client is ever instantiated per request.
 
 ## Setup
 

@@ -9,6 +9,20 @@ import type {
   UpdateProductInput,
 } from "./products.types";
 
+async function getVerifiedVendorIdForUser(userId: string): Promise<string> {
+  const vendor = await prisma.vendor.findUnique({
+    where: { userId },
+    select: { id: true, verificationStatus: true },
+  });
+  if (!vendor) {
+    throw new AppError("Vendor profile required", 403);
+  }
+  if (vendor.verificationStatus !== "VERIFIED") {
+    throw new AppError("Vendor must be verified to create products", 403);
+  }
+  return vendor.id;
+}
+
 async function getVendorIdForUser(userId: string): Promise<string> {
   const vendor = await prisma.vendor.findUnique({
     where: { userId },
@@ -22,7 +36,7 @@ async function getVendorIdForUser(userId: string): Promise<string> {
 
 export const productsService = {
   async createProduct(userId: string, input: CreateProductInput): Promise<Product> {
-    const vendorId = await getVendorIdForUser(userId);
+    const vendorId = await getVerifiedVendorIdForUser(userId);
 
     return prisma.product.create({
       data: {

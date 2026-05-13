@@ -1,5 +1,6 @@
 import { prisma } from "../../lib/prisma";
 import { AppError } from "../../shared/errors/app-error";
+import { calculateDeliveryFee } from "../../shared/pricing";
 import type { CalculateDeliveryInput, CalculateDeliveryResult } from "./delivery.types";
 
 export const deliveryService = {
@@ -47,9 +48,11 @@ export const deliveryService = {
     if (cartCurrency !== zone.currency.toLowerCase()) {
       throw new AppError("Delivery zone currency mismatch", 400);
     }
-
-    const weightKgCeil = Math.ceil(totalWeightGrams / 1000);
-    const deliveryAmount = zone.baseFeeAmount + weightKgCeil * zone.feePerKgAmount;
+    const deliveryAmount = calculateDeliveryFee({
+      baseFeeAmount: zone.baseFeeAmount,
+      feePerKgAmount: zone.feePerKgAmount,
+      totalWeightGrams,
+    });
     const totalAmount = subtotalAmount + deliveryAmount;
 
     return {

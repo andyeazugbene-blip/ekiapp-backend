@@ -1,7 +1,16 @@
 import { Router } from "express";
 
-import { authenticate } from "../../middlewares/authenticate";
+import { authenticate, requireRole } from "../../middlewares/authenticate";
 import { asyncHandler } from "../../shared/utils/async-handler";
+import {
+  getVendorOrder,
+  listVendorOrders,
+  updateVendorOrderStatus,
+} from "../orders/orders.controller";
+import {
+  getOwnVerification,
+  submitVerificationDocument,
+} from "../verification/verification.controller";
 import {
   createPayoutMethod,
   createVendor,
@@ -9,13 +18,41 @@ import {
   listPayoutMethods,
   updateOwnVendor,
 } from "./vendors.controller";
+import {
+  getVendorDashboard,
+  getVendorEarnings,
+} from "./vendors-dashboard.controller";
+import {
+  getStripeConnectStatus,
+  onboardStripeConnect,
+  refreshStripeConnect,
+} from "./stripe-connect.controller";
 
 export const vendorsRouter = Router();
 
 vendorsRouter.use(authenticate);
 
+// Any authenticated user can create a vendor profile (promotion endpoint)
 vendorsRouter.post("/", asyncHandler(createVendor));
-vendorsRouter.get("/me", asyncHandler(getOwnVendor));
-vendorsRouter.patch("/me", asyncHandler(updateOwnVendor));
-vendorsRouter.post("/me/payout-methods", asyncHandler(createPayoutMethod));
-vendorsRouter.get("/me/payout-methods", asyncHandler(listPayoutMethods));
+
+// All routes below require VENDOR role
+vendorsRouter.get("/me", requireRole("VENDOR", "ADMIN"), asyncHandler(getOwnVendor));
+vendorsRouter.patch("/me", requireRole("VENDOR", "ADMIN"), asyncHandler(updateOwnVendor));
+vendorsRouter.get("/me/dashboard", requireRole("VENDOR", "ADMIN"), asyncHandler(getVendorDashboard));
+vendorsRouter.get("/me/earnings", requireRole("VENDOR", "ADMIN"), asyncHandler(getVendorEarnings));
+vendorsRouter.post("/me/payout-methods", requireRole("VENDOR", "ADMIN"), asyncHandler(createPayoutMethod));
+vendorsRouter.get("/me/payout-methods", requireRole("VENDOR", "ADMIN"), asyncHandler(listPayoutMethods));
+
+// Stripe Connect
+vendorsRouter.post("/me/stripe-connect/onboard", requireRole("VENDOR", "ADMIN"), asyncHandler(onboardStripeConnect));
+vendorsRouter.get("/me/stripe-connect/status", requireRole("VENDOR", "ADMIN"), asyncHandler(getStripeConnectStatus));
+vendorsRouter.post("/me/stripe-connect/refresh", requireRole("VENDOR", "ADMIN"), asyncHandler(refreshStripeConnect));
+
+// Vendor verification (KYC)
+vendorsRouter.post("/me/verification", requireRole("VENDOR", "ADMIN"), asyncHandler(submitVerificationDocument));
+vendorsRouter.get("/me/verification", requireRole("VENDOR", "ADMIN"), asyncHandler(getOwnVerification));
+
+// Vendor order management
+vendorsRouter.get("/me/orders", requireRole("VENDOR", "ADMIN"), asyncHandler(listVendorOrders));
+vendorsRouter.get("/me/orders/:id", requireRole("VENDOR", "ADMIN"), asyncHandler(getVendorOrder));
+vendorsRouter.patch("/me/orders/:id/status", requireRole("VENDOR", "ADMIN"), asyncHandler(updateVendorOrderStatus));

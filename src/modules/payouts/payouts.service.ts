@@ -16,55 +16,50 @@ import type {
 } from "./payouts.types";
 
 async function getVendorForUser(userId: string): Promise<{ id: string }> {
-  const vendor = await prisma.vendor.findUnique({
-    where: { userId },
-    select: { id: true },
-  });
-  if (!vendor) {
-    throw new AppError("Vendor profile required", 403);
-  }
+  const vendor = await prisma.vendor.findUnique({ where: { userId }, select: { id: true } });
+  if (!vendor) throw new AppError("Vendor profile required", 403);
   return vendor;
 }
 
 async function getVendorUserId(vendorId: string): Promise<string | null> {
-  const vendor = await prisma.vendor.findUnique({
-    where: { id: vendorId },
-    select: { userId: true },
-  });
+  const vendor = await prisma.vendor.findUnique({ where: { id: vendorId }, select: { userId: true } });
   return vendor?.userId ?? null;
 }
 
 export const payoutsService = {
+  /**
+   * Create payout request with atomic balance check.
+   * Uses a transaction to prevent concurrent requests from overdrawing.
+   */
   async createRequest(userId: string, input: CreatePayoutRequestInput): Promise<PayoutRequest> {
     const vendor = await getVendorForUser(userId);
 
-    const [payoutMethod, wallet] = await Promise.all([
-      prisma.payoutMethod.findUnique({ where: { id: input.payoutMethodId } }),
-      prisma.wallet.findUnique({ where: { vendorId: vendor.id } }),
-    ]);
-
+    const payoutMethod = await prisma.payoutMethod.findUnique({ where: { id: input.payoutMethodId } });
     if (!payoutMethod || payoutMethod.vendorId !== vendor.id) {
       throw new AppError("Payout method not found", 404);
     }
-    if (!wallet) {
-      throw new AppError("Vendor wallet not found", 404);
-    }
-    if (input.amount > wallet.availableBalance) {
-      throw new AppError("Insufficient available balance", 400);
-    }
 
-    const created = await prisma.payoutRequest.create({
-      data: {
-        vendorId: vendor.id,
-        payoutMethodId: payoutMethod.id,
-        amount: input.amount,
-        currency: wallet.currency,
-        status: PayoutRequestStatus.PENDING,
-        notes: input.notes,
-      },
+    // Atomic: check balance and create request in one transaction
+    const created = await prisma.$transaction(async (tx) => {
+      const wallet = await tx.wallet.findUnique({ where: { vendorId: vendor.id } });
+      if (!wallet) throw new AppError("Vendor wallet not found", 404);
+      if (input.amount > wallet.availableBalance) {
+        throw new AppError("Insufficient available balance", 400);
+      }
+
+      return tx.payoutRequest.create({
+        data: {
+          vendorId: vendor.id,
+          payoutMethodId: payoutMethod.id,
+          amount: input.amount,
+          currency: wallet.currency,
+          status: PayoutRequestStatus.PENDING,
+          notes: input.notes,
+        },
+      });
     });
 
-    await notificationsService.create({
+    await notificationsService.enqueue({
       userId,
       type: NotificationType.PAYOUT_REQUESTED,
       title: "Payout requested",
@@ -90,27 +85,27 @@ export const payoutsService = {
     });
   },
 
+  /**
+   * Approve: conditional update (only if PENDING).
+   */
   async adminApprove(adminId: string, payoutRequestId: string): Promise<PayoutRequest> {
     const result = await prisma.payoutRequest.updateMany({
       where: { id: payoutRequestId, status: PayoutRequestStatus.PENDING },
-      data: {
-        status: PayoutRequestStatus.APPROVED,
-        approvedById: adminId,
-        approvedAt: new Date(),
-      },
+      data: { status: PayoutRequestStatus.APPROVED, approvedById: adminId, approvedAt: new Date() },
     });
 
     if (result.count === 0) {
-      await this.assertTransitionable(payoutRequestId, [PayoutRequestStatus.PENDING]);
+      const current = await prisma.payoutRequest.findUnique({ where: { id: payoutRequestId } });
+      if (!current) throw new AppError("Payout request not found", 404);
+      if (current.status === PayoutRequestStatus.APPROVED) throw new AppError("Already approved", 409);
+      throw new AppError(`Cannot approve payout in status ${current.status}`, 409);
     }
 
-    const payout = await prisma.payoutRequest.findUniqueOrThrow({
-      where: { id: payoutRequestId },
-    });
+    const payout = await prisma.payoutRequest.findUniqueOrThrow({ where: { id: payoutRequestId } });
 
     const vendorUserId = await getVendorUserId(payout.vendorId);
     if (vendorUserId) {
-      await notificationsService.create({
+      await notificationsService.enqueue({
         userId: vendorUserId,
         type: NotificationType.PAYOUT_APPROVED,
         title: "Payout approved",
@@ -122,38 +117,27 @@ export const payoutsService = {
     return payout;
   },
 
-  async adminReject(
-    adminId: string,
-    payoutRequestId: string,
-    input: RejectPayoutRequestInput,
-  ): Promise<PayoutRequest> {
+  async adminReject(adminId: string, payoutRequestId: string, input: RejectPayoutRequestInput): Promise<PayoutRequest> {
     const result = await prisma.payoutRequest.updateMany({
       where: { id: payoutRequestId, status: PayoutRequestStatus.PENDING },
-      data: {
-        status: PayoutRequestStatus.REJECTED,
-        approvedById: adminId,
-        approvedAt: new Date(),
-        rejectionReason: input.reason ?? null,
-      },
+      data: { status: PayoutRequestStatus.REJECTED, approvedById: adminId, approvedAt: new Date(), rejectionReason: input.reason ?? null },
     });
 
     if (result.count === 0) {
-      await this.assertTransitionable(payoutRequestId, [PayoutRequestStatus.PENDING]);
+      const current = await prisma.payoutRequest.findUnique({ where: { id: payoutRequestId } });
+      if (!current) throw new AppError("Payout request not found", 404);
+      throw new AppError(`Cannot reject payout in status ${current.status}`, 409);
     }
 
-    const payout = await prisma.payoutRequest.findUniqueOrThrow({
-      where: { id: payoutRequestId },
-    });
+    const payout = await prisma.payoutRequest.findUniqueOrThrow({ where: { id: payoutRequestId } });
 
     const vendorUserId = await getVendorUserId(payout.vendorId);
     if (vendorUserId) {
-      await notificationsService.create({
+      await notificationsService.enqueue({
         userId: vendorUserId,
         type: NotificationType.PAYOUT_REJECTED,
         title: "Payout rejected",
-        body: payout.rejectionReason
-          ? `Your payout was rejected: ${payout.rejectionReason}`
-          : "Your payout has been rejected.",
+        body: payout.rejectionReason ? `Your payout was rejected: ${payout.rejectionReason}` : "Your payout has been rejected.",
         data: { payoutRequestId: payout.id },
       });
     }
@@ -161,69 +145,64 @@ export const payoutsService = {
     return payout;
   },
 
+  /**
+   * Mark payout as paid with atomic balance deduction.
+   * Uses conditional updateMany on wallet to prevent negative balance.
+   * Idempotent: if already PAID, returns 409.
+   */
   async adminMarkPaid(adminId: string, payoutRequestId: string): Promise<PayoutRequest> {
     try {
       const payout = await prisma.$transaction(async (tx) => {
-        const payout = await tx.payoutRequest.findUnique({
-          where: { id: payoutRequestId },
+        // Conditional status transition: APPROVED → PAID
+        const transitionResult = await tx.payoutRequest.updateMany({
+          where: { id: payoutRequestId, status: PayoutRequestStatus.APPROVED },
+          data: { status: PayoutRequestStatus.PAID, paidById: adminId, paidAt: new Date() },
         });
-        if (!payout) {
-          throw new AppError("Payout request not found", 404);
-        }
-        if (payout.status === PayoutRequestStatus.PAID) {
-          throw new AppError("Payout already marked paid", 409);
-        }
-        if (payout.status !== PayoutRequestStatus.APPROVED) {
+
+        if (transitionResult.count === 0) {
+          const current = await tx.payoutRequest.findUnique({ where: { id: payoutRequestId } });
+          if (!current) throw new AppError("Payout request not found", 404);
+          if (current.status === PayoutRequestStatus.PAID) throw new AppError("Payout already marked paid", 409);
           throw new AppError("Payout must be approved before being marked paid", 400);
         }
 
-        const wallet = await tx.wallet.findUnique({
-          where: { vendorId: payout.vendorId },
+        const payoutRecord = await tx.payoutRequest.findUniqueOrThrow({ where: { id: payoutRequestId } });
+
+        // Atomic conditional balance deduction (prevents negative balance)
+        const walletUpdate = await tx.wallet.updateMany({
+          where: {
+            vendorId: payoutRecord.vendorId,
+            availableBalance: { gte: payoutRecord.amount },
+          },
+          data: { availableBalance: { decrement: payoutRecord.amount } },
         });
-        if (!wallet) {
-          throw new AppError("Vendor wallet not found", 404);
-        }
-        if (payout.amount > wallet.availableBalance) {
+
+        if (walletUpdate.count === 0) {
           throw new AppError("Insufficient available balance", 400);
         }
 
-        const marked = await tx.payoutRequest.updateMany({
-          where: { id: payout.id, status: PayoutRequestStatus.APPROVED },
-          data: {
-            status: PayoutRequestStatus.PAID,
-            paidById: adminId,
-            paidAt: new Date(),
-          },
-        });
-        if (marked.count === 0) {
-          throw new AppError("Payout state changed concurrently", 409);
-        }
+        // Get wallet ID for ledger entry
+        const wallet = await tx.wallet.findUniqueOrThrow({ where: { vendorId: payoutRecord.vendorId } });
 
+        // Create ledger entry
         await tx.walletTransaction.create({
           data: {
             walletId: wallet.id,
-            vendorId: payout.vendorId,
-            payoutRequestId: payout.id,
+            vendorId: payoutRecord.vendorId,
+            payoutRequestId: payoutRecord.id,
             type: WalletTransactionType.PAYOUT_DEBIT,
-            amount: payout.amount,
-            currency: payout.currency,
-            description: `Payout paid for request ${payout.id}`,
+            amount: payoutRecord.amount,
+            currency: payoutRecord.currency,
+            description: `Payout paid: ${payoutRecord.id}`,
           },
         });
 
-        await tx.wallet.update({
-          where: { id: wallet.id },
-          data: {
-            availableBalance: { decrement: payout.amount },
-          },
-        });
-
-        return tx.payoutRequest.findUniqueOrThrow({ where: { id: payout.id } });
+        return payoutRecord;
       });
 
       const vendorUserId = await getVendorUserId(payout.vendorId);
       if (vendorUserId) {
-        await notificationsService.create({
+        await notificationsService.enqueue({
           userId: vendorUserId,
           type: NotificationType.PAYOUT_PAID,
           title: "Payout paid",
@@ -234,33 +213,10 @@ export const payoutsService = {
 
       return payout;
     } catch (error) {
-      if (
-        error instanceof Prisma.PrismaClientKnownRequestError &&
-        error.code === "P2002"
-      ) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
         throw new AppError("Payout already processed", 409);
       }
       throw error;
     }
-  },
-
-  async assertTransitionable(
-    payoutRequestId: string,
-    allowedFrom: PayoutRequestStatus[],
-  ): Promise<never> {
-    const current = await prisma.payoutRequest.findUnique({
-      where: { id: payoutRequestId },
-      select: { status: true },
-    });
-    if (!current) {
-      throw new AppError("Payout request not found", 404);
-    }
-    if (!allowedFrom.includes(current.status)) {
-      throw new AppError(
-        `Cannot transition payout in status ${current.status}`,
-        409,
-      );
-    }
-    throw new AppError("Payout state changed concurrently", 409);
   },
 };

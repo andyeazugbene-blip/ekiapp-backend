@@ -1,5 +1,11 @@
 import { AppError } from "../../shared/errors/app-error";
-import type { LoginInput, RegisterInput } from "./auth.types";
+import type {
+  ForgotPasswordInput,
+  LoginInput,
+  RegisterInput,
+  ResetPasswordInput,
+  UpdateProfileInput,
+} from "./auth.types";
 
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
@@ -8,26 +14,26 @@ export function validateRegisterInput(input: unknown): RegisterInput {
     throw new AppError("Invalid request body", 400);
   }
 
-  const { email, password, name } = input as Partial<RegisterInput>;
+  const { email, password, name, phone, country } = input as Record<string, unknown>;
 
   if (!email || typeof email !== "string" || !EMAIL_REGEX.test(email)) {
     throw new AppError("Invalid email", 400);
   }
 
-  if (!password || typeof password !== "string" || password.length < 8) {
+  if (!password || typeof password !== "string" || (password as string).length < 8) {
     throw new AppError("Password must be at least 8 characters", 400);
   }
 
-  if (!name || typeof name !== "string" || name.trim().length === 0) {
+  if (!name || typeof name !== "string" || (name as string).trim().length === 0) {
     throw new AppError("Invalid name", 400);
   }
 
-  // Role is not client-provided at registration. All users start as BUYER
-  // and are promoted to VENDOR only after creating a vendor profile.
   return {
-    email: email.toLowerCase().trim(),
-    password,
-    name: name.trim(),
+    email: (email as string).toLowerCase().trim(),
+    password: password as string,
+    name: (name as string).trim(),
+    phone: typeof phone === "string" && phone.trim().length > 0 ? phone.trim() : undefined,
+    country: typeof country === "string" && country.trim().length > 0 ? country.trim() : undefined,
   };
 }
 
@@ -50,4 +56,67 @@ export function validateLoginInput(input: unknown): LoginInput {
     email: email.toLowerCase().trim(),
     password,
   };
+}
+
+export function validateUpdateProfileInput(input: unknown): UpdateProfileInput {
+  if (!input || typeof input !== "object") {
+    throw new AppError("Invalid request body", 400);
+  }
+  const raw = input as Record<string, unknown>;
+  const update: UpdateProfileInput = {};
+
+  if (raw.name !== undefined) {
+    if (typeof raw.name !== "string" || raw.name.trim().length === 0) {
+      throw new AppError("Invalid name", 400);
+    }
+    update.name = raw.name.trim();
+  }
+
+  if (raw.phone !== undefined) {
+    update.phone = raw.phone === null ? null : typeof raw.phone === "string" ? raw.phone.trim() || null : null;
+  }
+
+  if (raw.avatar !== undefined) {
+    update.avatar = raw.avatar === null ? null : typeof raw.avatar === "string" ? raw.avatar.trim() || null : null;
+  }
+
+  if (raw.country !== undefined) {
+    update.country = raw.country === null ? null : typeof raw.country === "string" ? raw.country.trim() || null : null;
+  }
+
+  if (Object.keys(update).length === 0) {
+    throw new AppError("No fields to update", 400);
+  }
+
+  return update;
+}
+
+export function validateForgotPasswordInput(input: unknown): ForgotPasswordInput {
+  if (!input || typeof input !== "object") {
+    throw new AppError("Invalid request body", 400);
+  }
+  const { email } = input as Record<string, unknown>;
+
+  if (!email || typeof email !== "string" || !EMAIL_REGEX.test(email)) {
+    throw new AppError("Invalid email", 400);
+  }
+
+  return { email: email.toLowerCase().trim() };
+}
+
+export function validateResetPasswordInput(input: unknown): ResetPasswordInput {
+  if (!input || typeof input !== "object") {
+    throw new AppError("Invalid request body", 400);
+  }
+  const { token, password } = input as Record<string, unknown>;
+
+  if (!token || typeof token !== "string" || token.trim().length === 0) {
+    throw new AppError("Invalid token", 400);
+  }
+
+  if (!password || typeof password !== "string" || (password as string).length < 8) {
+    throw new AppError("Password must be at least 8 characters", 400);
+  }
+
+  return { token: token.trim(), password: password as string };
 }

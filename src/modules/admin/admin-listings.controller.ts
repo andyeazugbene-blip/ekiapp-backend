@@ -1,6 +1,7 @@
 import type { Request, Response } from "express";
 
 import { AppError } from "../../shared/errors/app-error";
+import { recordAudit } from "../../shared/utils/audit";
 import { adminListingsService } from "./admin-listings.service";
 
 function requireIdParam(request: Request): string {
@@ -9,6 +10,13 @@ function requireIdParam(request: Request): string {
     throw new AppError("Invalid id", 400);
   }
   return id;
+}
+
+function requireUserId(request: Request): string {
+  if (!request.user) {
+    throw new AppError("Unauthorized", 401);
+  }
+  return request.user.id;
 }
 
 function q(request: Request): Record<string, unknown> {
@@ -43,21 +51,49 @@ export async function listWalletTransactions(
 }
 
 export async function approveVendor(request: Request, response: Response): Promise<void> {
-  const vendor = await adminListingsService.approveVendor(requireIdParam(request));
+  const vendorId = requireIdParam(request);
+  const vendor = await adminListingsService.approveVendor(vendorId);
+  await recordAudit({
+    actorId: requireUserId(request),
+    action: "vendor.approve",
+    entityType: "Vendor",
+    entityId: vendorId,
+  });
   response.status(200).json({ vendor });
 }
 
 export async function rejectVendor(request: Request, response: Response): Promise<void> {
-  const vendor = await adminListingsService.rejectVendor(requireIdParam(request));
+  const vendorId = requireIdParam(request);
+  const vendor = await adminListingsService.rejectVendor(vendorId);
+  await recordAudit({
+    actorId: requireUserId(request),
+    action: "vendor.reject",
+    entityType: "Vendor",
+    entityId: vendorId,
+  });
   response.status(200).json({ vendor });
 }
 
 export async function approveProduct(request: Request, response: Response): Promise<void> {
-  const product = await adminListingsService.approveProduct(requireIdParam(request));
+  const productId = requireIdParam(request);
+  const product = await adminListingsService.approveProduct(productId);
+  await recordAudit({
+    actorId: requireUserId(request),
+    action: "product.approve",
+    entityType: "Product",
+    entityId: productId,
+  });
   response.status(200).json({ product });
 }
 
 export async function disableProduct(request: Request, response: Response): Promise<void> {
-  const product = await adminListingsService.disableProduct(requireIdParam(request));
+  const productId = requireIdParam(request);
+  const product = await adminListingsService.disableProduct(productId);
+  await recordAudit({
+    actorId: requireUserId(request),
+    action: "product.disable",
+    entityType: "Product",
+    entityId: productId,
+  });
   response.status(200).json({ product });
 }

@@ -7,7 +7,27 @@ import {
   adminMarkPayoutRequestPaid,
   adminRejectPayoutRequest,
 } from "../payouts/payouts.controller";
+import {
+  createPromoCode as adminCreatePromoCode,
+  listPromoCodes as adminListPromoCodes,
+  updatePromoCode as adminUpdatePromoCode,
+} from "../promos/promos.controller";
+import {
+  adminListPendingDocuments,
+  adminReviewDocument,
+} from "../verification/verification.controller";
 import { asyncHandler } from "../../shared/utils/async-handler";
+import {
+  getAdminAnalytics,
+  getAdminDashboard,
+  listAuditLogs,
+} from "./admin-dashboard.controller";
+import {
+  createDeliveryZone,
+  deleteDeliveryZone,
+  listAllDeliveryZones,
+  updateDeliveryZone,
+} from "./admin-delivery-zones.controller";
 import {
   approveProduct,
   approveVendor,
@@ -21,11 +41,18 @@ import {
   rejectVendor,
 } from "./admin-listings.controller";
 import { completeOrder } from "./admin-orders.controller";
+import { suspendVendor, unsuspendVendor } from "./admin-vendors.controller";
 
 export const adminRouter = Router();
 
 adminRouter.use(authenticate, requireRole("ADMIN"));
 
+// Dashboard & Analytics
+adminRouter.get("/dashboard", asyncHandler(getAdminDashboard));
+adminRouter.get("/analytics", asyncHandler(getAdminAnalytics));
+adminRouter.get("/audit-logs", asyncHandler(listAuditLogs));
+
+// Listings
 adminRouter.get("/users", asyncHandler(listUsers));
 adminRouter.get("/vendors", asyncHandler(listVendors));
 adminRouter.get("/products", asyncHandler(listProducts));
@@ -33,23 +60,36 @@ adminRouter.get("/orders", asyncHandler(listOrders));
 adminRouter.get("/payments", asyncHandler(listPayments));
 adminRouter.get("/wallet-transactions", asyncHandler(listWalletTransactions));
 
+// Vendor moderation
 adminRouter.patch("/vendors/:id/approve", asyncHandler(approveVendor));
 adminRouter.patch("/vendors/:id/reject", asyncHandler(rejectVendor));
+adminRouter.patch("/vendors/:id/suspend", asyncHandler(suspendVendor));
+adminRouter.patch("/vendors/:id/unsuspend", asyncHandler(unsuspendVendor));
+
+// Product moderation
 adminRouter.patch("/products/:id/approve", asyncHandler(approveProduct));
 adminRouter.patch("/products/:id/disable", asyncHandler(disableProduct));
 
+// Order management
 adminRouter.patch("/orders/:id/complete", asyncHandler(completeOrder));
 
+// Payout management
 adminRouter.get("/payout-requests", asyncHandler(adminListPayoutRequests));
-adminRouter.patch(
-  "/payout-requests/:id/approve",
-  asyncHandler(adminApprovePayoutRequest),
-);
-adminRouter.patch(
-  "/payout-requests/:id/reject",
-  asyncHandler(adminRejectPayoutRequest),
-);
-adminRouter.patch(
-  "/payout-requests/:id/mark-paid",
-  asyncHandler(adminMarkPayoutRequestPaid),
-);
+adminRouter.patch("/payout-requests/:id/approve", asyncHandler(adminApprovePayoutRequest));
+adminRouter.patch("/payout-requests/:id/reject", asyncHandler(adminRejectPayoutRequest));
+adminRouter.patch("/payout-requests/:id/mark-paid", asyncHandler(adminMarkPayoutRequestPaid));
+
+// Verification document review
+adminRouter.get("/verification-documents", asyncHandler(adminListPendingDocuments));
+adminRouter.patch("/verification-documents/:id/review", asyncHandler(adminReviewDocument));
+
+// Delivery zone management (global)
+adminRouter.get("/delivery-zones", asyncHandler(listAllDeliveryZones));
+adminRouter.post("/delivery-zones", asyncHandler(createDeliveryZone));
+adminRouter.patch("/delivery-zones/:id", asyncHandler(updateDeliveryZone));
+adminRouter.delete("/delivery-zones/:id", asyncHandler(deleteDeliveryZone));
+
+// Promo code management
+adminRouter.get("/promo-codes", asyncHandler(adminListPromoCodes));
+adminRouter.post("/promo-codes", asyncHandler(adminCreatePromoCode));
+adminRouter.patch("/promo-codes/:id", asyncHandler(adminUpdatePromoCode));

@@ -16,7 +16,14 @@ enum UserRole {
 enum OrderStatus {
   PENDING
   PAID
+  CONFIRMED
+  PROCESSING
+  DISPATCHED
+  IN_TRANSIT
+  DELIVERED
   COMPLETED
+  CANCELLED
+  REFUNDED
   FAILED
 }
 
@@ -72,37 +79,59 @@ enum NotificationType {
 
 model User {
   id            String         @id @default(cuid())
-  email         String         @unique
-  name          String
-  password      String
-  role          UserRole       @default(BUYER)
-  vendor        Vendor?
-  orders        Order[]        @relation("BuyerOrders")
-  cart          Cart?
-  notifications Notification[]
-  createdAt     DateTime       @default(now())
-  updatedAt     DateTime       @updatedAt
+  email               String         @unique
+  name                String
+  password            String
+  phone               String?
+  avatar              String?
+  country             String?
+  referralCode        String?        @unique
+  referredBy          String?
+  tokenVersion        Int            @default(0)
+  failedLoginAttempts Int            @default(0)
+  lockedUntil         DateTime?
+  role                UserRole       @default(BUYER)
+  vendor              Vendor?
+  orders              Order[]        @relation("BuyerOrders")
+  cart                Cart?
+  notifications       Notification[]
+  createdAt           DateTime       @default(now())
+  updatedAt           DateTime       @updatedAt
+
+  @@index([role, createdAt])
+  @@index([createdAt])
 }
 
 model Vendor {
-  id                 String                   @id @default(cuid())
-  userId             String                   @unique
-  storeName          String
-  description        String?
-  contactEmail       String?
-  contactPhone       String?
-  country            String?
-  verificationStatus VendorVerificationStatus @default(PENDING)
-  user               User                     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  wallet             Wallet?
-  products           Product[]
-  orderItems         OrderItem[]
-  walletTransactions WalletTransaction[]
-  payoutMethods      PayoutMethod[]
-  payoutRequests     PayoutRequest[]
-  carts              Cart[]
-  createdAt          DateTime                 @default(now())
-  updatedAt          DateTime                 @updatedAt
+  id                    String                   @id @default(cuid())
+  userId                String                   @unique
+  storeName             String
+  description           String?
+  contactEmail          String?
+  contactPhone          String?
+  country               String?
+  city                  String?
+  isSuspended           Boolean                  @default(false)
+  suspendedReason       String?
+  stripeAccountId       String?                  @unique
+  stripeAccountStatus   String?
+  stripePayoutsEnabled  Boolean                  @default(false)
+  stripeChargesEnabled  Boolean                  @default(false)
+  stripeOnboardedAt     DateTime?
+  verificationStatus    VendorVerificationStatus @default(PENDING)
+  user                  User                     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  wallet                Wallet?
+  products              Product[]
+  orderItems            OrderItem[]
+  walletTransactions    WalletTransaction[]
+  payoutMethods         PayoutMethod[]
+  payoutRequests        PayoutRequest[]
+  carts                 Cart[]
+  createdAt             DateTime                 @default(now())
+  updatedAt             DateTime                 @updatedAt
+
+  @@index([verificationStatus, createdAt])
+  @@index([createdAt])
 }
 
 model PayoutMethod {
@@ -164,6 +193,7 @@ model Product {
   @@unique([vendorId, title])
   @@index([vendorId, isActive])
   @@index([isActive, category])
+  @@index([createdAt])
 }
 
 model Cart {
@@ -195,6 +225,7 @@ model CartItem {
 
 model Order {
   id                 String              @id @default(cuid())
+  orderNumber        String              @unique @default(cuid())
   buyerId            String
   status             OrderStatus         @default(PENDING)
   subtotalAmount     Int                 @default(0)
@@ -202,6 +233,8 @@ model Order {
   totalAmount        Int
   currency           String              @default("usd")
   deliveryZoneId     String?
+  notes              String?
+  deliveredAt        DateTime?
   buyer              User                @relation("BuyerOrders", fields: [buyerId], references: [id], onDelete: Restrict)
   deliveryZone       DeliveryZone?       @relation(fields: [deliveryZoneId], references: [id], onDelete: SetNull)
   items              OrderItem[]
@@ -211,6 +244,8 @@ model Order {
   updatedAt          DateTime            @updatedAt
 
   @@index([buyerId, status])
+  @@index([status, createdAt])
+  @@index([createdAt])
 }
 
 model OrderItem {
@@ -251,6 +286,8 @@ model Payment {
   updatedAt             DateTime            @updatedAt
 
   @@index([status])
+  @@index([status, createdAt])
+  @@index([createdAt])
 }
 
 model Wallet {
@@ -286,24 +323,71 @@ model WalletTransaction {
   @@unique([vendorId, orderId, paymentId, type])
   @@unique([payoutRequestId, type])
   @@index([walletId, createdAt])
+  @@index([vendorId, createdAt])
   @@index([orderId])
   @@index([paymentId])
   @@index([payoutRequestId])
 }
 
 model DeliveryZone {
-  id             String   @id @default(cuid())
-  name           String
-  country        String
-  baseFeeAmount  Int
-  feePerKgAmount Int
-  currency       String   @default("usd")
-  isActive       Boolean  @default(true)
-  orders         Order[]
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  id              String           @id @default(cuid())
+  name            String
+  country         String
+  flag            String?
+  baseFeeAmount   Int
+  feePerKgAmount  Int
+  currency        String           @default("usd")
+  isActive        Boolean          @default(true)
+  vendorId        String?
+  orders          Order[]
+  deliveryMethods DeliveryMethod[]
+  createdAt       DateTime         @default(now())
+  updatedAt       DateTime         @updatedAt
 
   @@index([country, isActive])
+  @@index([vendorId, isActive])
+}
+
+model DeliveryMethod {
+  id             String       @id @default(cuid())
+  deliveryZoneId String
+  label          String
+  priceAmount    Int
+  minDays        Int
+  maxDays        Int
+  isActive       Boolean      @default(true)
+  deliveryZone   DeliveryZone @relation(fields: [deliveryZoneId], references: [id], onDelete: Cascade)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  @@index([deliveryZoneId, isActive])
+}
+
+// ─── Phase 3: Shipment Tracking ─────────────────────────────────────────────
+
+enum ShipmentStatus {
+  PROCESSING
+  IN_TRANSIT
+  DELIVERED
+  DELAYED
+}
+
+model Shipment {
+  id                   String         @id @default(cuid())
+  orderId              String         @unique
+  vendorId             String
+  trackingNumber       String?
+  carrier              String?
+  status               ShipmentStatus @default(PROCESSING)
+  estimatedDeliveryAt  DateTime?
+  dispatchedAt         DateTime?
+  deliveredAt          DateTime?
+  createdAt            DateTime       @default(now())
+  updatedAt            DateTime       @updatedAt
+
+  @@index([vendorId, status])
+  @@index([status])
+  @@index([orderId])
 }
 
 model Notification {
@@ -319,6 +403,7 @@ model Notification {
 
   @@index([userId, readAt])
   @@index([userId, createdAt])
+  @@index([type])
 }
 
 model WebhookEvent {
@@ -331,4 +416,248 @@ model WebhookEvent {
   orderId       String?
   createdAt     DateTime           @default(now())
   processedAt   DateTime?
+
+  @@index([status, createdAt])
+  @@index([eventType])
+  @@index([paymentId])
+  @@index([orderId])
+}
+
+model PasswordResetToken {
+  id        String    @id @default(cuid())
+  userId    String
+  token     String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+// ─── Phase 2: Messaging ──────────────────────────────────────────────────────
+
+enum ConversationType {
+  BUYER_VENDOR
+  ADMIN_VENDOR
+  DISPUTE
+}
+
+model Conversation {
+  id            String           @id @default(cuid())
+  type          ConversationType @default(BUYER_VENDOR)
+  participantA  String
+  participantB  String
+  orderId       String?
+  lastMessageAt DateTime?
+  messages      Message[]
+  createdAt     DateTime         @default(now())
+  updatedAt     DateTime         @updatedAt
+
+  @@unique([participantA, participantB, orderId])
+  @@index([participantA, lastMessageAt])
+  @@index([participantB, lastMessageAt])
+  @@index([orderId])
+}
+
+model Message {
+  id             String       @id @default(cuid())
+  conversationId String
+  senderId       String
+  text           String
+  attachments    String[]     @default([])
+  readAt         DateTime?
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  createdAt      DateTime     @default(now())
+
+  @@index([conversationId, createdAt])
+  @@index([senderId])
+}
+
+// ─── Phase 2: Verification Documents ────────────────────────────────────────
+
+enum VerificationDocType {
+  GOVERNMENT_ID
+  BUSINESS_REGISTRATION
+}
+
+enum VerificationDocStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+model VerificationDocument {
+  id              String                @id @default(cuid())
+  vendorId        String
+  type            VerificationDocType
+  idType          String?
+  frontUrl        String
+  backUrl         String?
+  status          VerificationDocStatus @default(PENDING)
+  reviewedById    String?
+  reviewedAt      DateTime?
+  rejectionReason String?
+  createdAt       DateTime              @default(now())
+  updatedAt       DateTime              @updatedAt
+
+  @@index([vendorId, type])
+  @@index([status])
+}
+
+// ─── Phase 2: Buyer Addresses ───────────────────────────────────────────────
+
+model BuyerAddress {
+  id            String   @id @default(cuid())
+  buyerId       String
+  recipientName String
+  line1         String
+  line2         String?
+  city          String
+  postalCode    String
+  country       String
+  phone         String?
+  isDefault     Boolean  @default(false)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([buyerId])
+}
+
+// ─── Phase 4: Audit Log ─────────────────────────────────────────────────────
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  actorId    String
+  action     String
+  entityType String
+  entityId   String?
+  metadata   Json?
+  createdAt  DateTime @default(now())
+
+  @@index([actorId, createdAt])
+  @@index([entityType, entityId])
+  @@index([action, createdAt])
+  @@index([createdAt])
+}
+
+// ─── Phase 5: Buyer Wallet ──────────────────────────────────────────────────
+
+enum BuyerWalletTxType {
+  TOP_UP
+  REFERRAL_BONUS
+  ORDER_DEBIT
+  REFUND_CREDIT
+  WITHDRAWAL
+}
+
+model BuyerWallet {
+  id           String                 @id @default(cuid())
+  buyerId      String                 @unique
+  balance      Int                    @default(0)
+  currency     String                 @default("usd")
+  transactions BuyerWalletTransaction[]
+  createdAt    DateTime               @default(now())
+  updatedAt    DateTime               @updatedAt
+}
+
+model BuyerWalletTransaction {
+  id          String           @id @default(cuid())
+  walletId    String
+  buyerId     String
+  type        BuyerWalletTxType
+  amount      Int
+  currency    String           @default("usd")
+  description String?
+  orderId     String?
+  wallet      BuyerWallet      @relation(fields: [walletId], references: [id], onDelete: Restrict)
+  createdAt   DateTime         @default(now())
+
+  @@index([walletId, createdAt])
+  @@index([buyerId, createdAt])
+}
+
+// ─── Phase 5: Promo Codes ───────────────────────────────────────────────────
+
+enum PromoType {
+  PERCENTAGE
+  FIXED_AMOUNT
+}
+
+model PromoCode {
+  id             String           @id @default(cuid())
+  code           String           @unique
+  type           PromoType
+  value          Int
+  minOrderAmount Int?
+  maxUses        Int?
+  usedCount      Int              @default(0)
+  validFrom      DateTime         @default(now())
+  validUntil     DateTime?
+  isActive       Boolean          @default(true)
+  redemptions    PromoRedemption[]
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+
+  @@index([code, isActive])
+  @@index([isActive, validFrom, validUntil])
+}
+
+model PromoRedemption {
+  id             String    @id @default(cuid())
+  promoCodeId    String
+  buyerId        String
+  orderId        String?
+  discountAmount Int
+  promoCode      PromoCode @relation(fields: [promoCodeId], references: [id], onDelete: Restrict)
+  createdAt      DateTime  @default(now())
+
+  @@unique([promoCodeId, buyerId])
+  @@index([buyerId])
+}
+
+// ─── Phase 5: Referrals ─────────────────────────────────────────────────────
+
+model Referral {
+  id           String   @id @default(cuid())
+  referrerId   String
+  referredId   String   @unique
+  bonusAmount  Int
+  currency     String   @default("usd")
+  creditedAt   DateTime?
+  createdAt    DateTime @default(now())
+
+  @@index([referrerId])
+}
+
+// ─── Phase 8: Subscriptions ─────────────────────────────────────────────────
+
+enum SubscriptionPlan {
+  FREE
+  BASIC
+  PREMIUM
+}
+
+enum SubscriptionStatus {
+  ACTIVE
+  CANCELLED
+  EXPIRED
+  PAST_DUE
+}
+
+model VendorSubscription {
+  id                   String             @id @default(cuid())
+  vendorId             String             @unique
+  plan                 SubscriptionPlan   @default(FREE)
+  status               SubscriptionStatus @default(ACTIVE)
+  stripeSubscriptionId String?            @unique
+  stripeCustomerId     String?
+  currentPeriodStart   DateTime?
+  currentPeriodEnd     DateTime?
+  cancelledAt          DateTime?
+  createdAt            DateTime           @default(now())
+  updatedAt            DateTime           @updatedAt
+
+  @@index([status])
+  @@index([plan])
 }
