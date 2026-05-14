@@ -4,24 +4,27 @@ import type Stripe from "stripe";
 import { env } from "../../config/env";
 import { logger, serializeError } from "../../lib/logger";
 import { prisma } from "../../lib/prisma";
+import { pushNotifications } from "../../lib/push-notifications";
 import { stripe } from "../../lib/stripe";
 import { notificationsService } from "../notifications/notifications.service";
 import { AppError } from "../../shared/errors/app-error";
-import type {
-  PaymentIntentSucceededMetadata,
-  StripeWebhookInput,
-  StripeWebhookResult,
-} from "./stripe.types";
+import type { StripeWebhookInput, StripeWebhookResult } from "./stripe.types";
 
 /**
- * Production-hardened Stripe webhook handler.
+ * Multi-vendor webhook handler.
  *
- * Idempotency strategy:
- * - WebhookEvent table with unique constraint on stripeEventId
- * - Insert attempt catches P2002 → returns duplicate response
- * - Payment status checked: if already SUCCEEDED, skip (idempotent)
- * - All mutations in a single Prisma transaction
- * - Conditional updates (updateMany with status guards) prevent double-processing
+ * On payment_intent.succeeded:
+ * - Find Checkout by stripePaymentIntentId
+ * - Mark Checkout SUCCEEDED
+ * - For each Order in the checkout:
+ *   - Mark order PAID
+ *   - Mark payment SUCCEEDED
+ *   - Credit vendor wallet (pendingBalance)
+ *   - Create wallet ledger entry
+ * - Clear buyer cart
+ * - Send notifications
+ *
+ * Idempotency: WebhookEvent unique constraint + conditional status updates.
  */
 class StripeWebhookService {
   public async handleWebhook(input: StripeWebhookInput): Promise<StripeWebhookResult> {
@@ -38,91 +41,106 @@ class StripeWebhookService {
     return this.handlePaymentSucceeded(event);
   }
 
-  // ─── payment_intent.succeeded ────────────────────────────────────────────
-
   private async handlePaymentSucceeded(event: Stripe.Event): Promise<StripeWebhookResult> {
     const paymentIntent = event.data.object as Stripe.PaymentIntent;
-    const metadata = this.parseMetadata(paymentIntent.metadata);
+    const checkoutId = paymentIntent.metadata?.checkoutId;
+    const buyerId = paymentIntent.metadata?.buyerId;
+
+    if (!checkoutId || !buyerId) {
+      logger.warn("Webhook missing checkoutId/buyerId metadata", { eventId: event.id });
+      return { received: true, ignored: true, eventId: event.id, type: event.type };
+    }
 
     try {
       return await prisma.$transaction(async (tx) => {
-        // Idempotency: insert webhook event (unique on stripeEventId)
-        if (await this.isDuplicate(tx, event.id, event.type, metadata)) {
+        // Idempotency: insert webhook event
+        if (await this.isDuplicate(tx, event.id, event.type, { checkoutId })) {
           return { received: true, duplicate: true, eventId: event.id, type: event.type };
         }
 
-        // Load payment + order
-        const payment = await tx.payment.findUnique({
-          where: { id: metadata.paymentId },
-          select: {
-            id: true, orderId: true, amount: true, currency: true,
-            status: true, stripePaymentIntentId: true, vendorEarningsAmount: true,
+        // Load checkout
+        const checkout = await tx.checkout.findUnique({
+          where: { id: checkoutId },
+          include: {
+            orders: {
+              include: {
+                items: { select: { vendorId: true } },
+                payment: { select: { id: true, status: true, vendorEarningsAmount: true, currency: true } },
+              },
+            },
           },
         });
-        if (!payment) throw new AppError("Payment not found", 404);
 
-        // Already succeeded? Idempotent return.
-        if (payment.status === PaymentStatus.SUCCEEDED) {
+        if (!checkout) {
+          logger.error("Webhook: checkout not found", { checkoutId, eventId: event.id });
+          throw new AppError("Checkout not found", 404);
+        }
+
+        // Already processed? Idempotent return.
+        if (checkout.status === PaymentStatus.SUCCEEDED) {
           await this.markEventIgnored(tx, event.id);
           return { received: true, duplicate: true, eventId: event.id, type: event.type };
         }
 
-        const order = await tx.order.findUnique({
-          where: { id: metadata.orderId },
-          select: { id: true, buyerId: true, status: true, items: { select: { vendorId: true } } },
-        });
-        if (!order) throw new AppError("Order not found", 404);
+        // Validate amount
+        if (checkout.totalAmount !== paymentIntent.amount) {
+          throw new AppError("Amount mismatch", 400);
+        }
 
-        // Validate integrity
-        this.validateWebhookIntegrity(payment, order, paymentIntent, metadata);
-
-        // Get vendor wallet
-        const wallet = await tx.wallet.findUnique({
-          where: { vendorId: metadata.vendorId },
-          select: { id: true },
-        });
-        if (!wallet) throw new AppError("Wallet not found", 404);
-
-        // ─── Conditional updates (prevent double-processing) ───────────────
-
-        // Mark payment SUCCEEDED (only if currently PENDING)
-        const paymentUpdate = await tx.payment.updateMany({
-          where: { id: payment.id, status: PaymentStatus.PENDING },
+        // Mark checkout SUCCEEDED (conditional)
+        const checkoutUpdate = await tx.checkout.updateMany({
+          where: { id: checkoutId, status: PaymentStatus.PENDING },
           data: { status: "SUCCEEDED", processedAt: new Date(), stripePaymentIntentId: paymentIntent.id },
         });
-        if (paymentUpdate.count === 0) {
-          // Already processed by another webhook delivery
+        if (checkoutUpdate.count === 0) {
           await this.markEventIgnored(tx, event.id);
           return { received: true, duplicate: true, eventId: event.id, type: event.type };
         }
 
-        // Mark order PAID (only if currently PENDING)
-        await tx.order.updateMany({
-          where: { id: order.id, status: "PENDING" },
-          data: { status: "PAID" },
-        });
+        // Process each vendor order
+        for (const order of checkout.orders) {
+          if (!order.payment) continue;
 
-        // Credit vendor wallet (pendingBalance only)
-        await tx.walletTransaction.create({
-          data: {
-            walletId: wallet.id,
-            vendorId: metadata.vendorId,
-            orderId: order.id,
-            paymentId: payment.id,
-            type: "PAYMENT_PENDING_CREDIT",
-            amount: payment.vendorEarningsAmount,
-            currency: payment.currency,
-            description: `Pending credit for order ${order.id}`,
-          },
-        });
+          // Mark payment SUCCEEDED
+          await tx.payment.updateMany({
+            where: { id: order.payment.id, status: PaymentStatus.PENDING },
+            data: { status: "SUCCEEDED", processedAt: new Date(), stripePaymentIntentId: paymentIntent.id },
+          });
 
-        await tx.wallet.update({
-          where: { id: wallet.id },
-          data: { pendingBalance: { increment: payment.vendorEarningsAmount } },
-        });
+          // Mark order PAID
+          await tx.order.updateMany({
+            where: { id: order.id, status: "PENDING" },
+            data: { status: "PAID" },
+          });
+
+          // Credit vendor wallet
+          const vendorId = order.vendorId ?? order.items[0]?.vendorId;
+          if (vendorId && order.payment.vendorEarningsAmount > 0) {
+            const wallet = await tx.wallet.findUnique({ where: { vendorId }, select: { id: true } });
+            if (wallet) {
+              await tx.walletTransaction.create({
+                data: {
+                  walletId: wallet.id,
+                  vendorId,
+                  orderId: order.id,
+                  paymentId: order.payment.id,
+                  type: "PAYMENT_PENDING_CREDIT",
+                  amount: order.payment.vendorEarningsAmount,
+                  currency: order.payment.currency,
+                  description: `Pending credit for order ${order.id}`,
+                },
+              });
+
+              await tx.wallet.update({
+                where: { id: wallet.id },
+                data: { pendingBalance: { increment: order.payment.vendorEarningsAmount } },
+              });
+            }
+          }
+        }
 
         // Clear buyer cart
-        await this.clearBuyerCart(tx, metadata.buyerId);
+        await this.clearBuyerCart(tx, buyerId);
 
         // Mark webhook processed
         await tx.webhookEvent.update({
@@ -130,11 +148,11 @@ class StripeWebhookService {
           data: { status: "PROCESSED", processedAt: new Date() },
         });
 
-        // Notifications (non-blocking, outside critical path)
-        this.sendSuccessNotifications(metadata, order.id, payment.id, payment.amount, payment.vendorEarningsAmount, payment.currency);
+        // Notifications (fire-and-forget)
+        this.sendSuccessNotifications(buyerId, checkout.orders);
 
-        logger.info("Webhook processed: payment_intent.succeeded", {
-          eventId: event.id, paymentId: payment.id, orderId: order.id,
+        logger.info("Webhook processed: payment_intent.succeeded (multi-vendor)", {
+          eventId: event.id, checkoutId, orderCount: checkout.orders.length,
         });
 
         return { received: true, eventId: event.id, type: event.type };
@@ -148,62 +166,59 @@ class StripeWebhookService {
     }
   }
 
-  // ─── payment_intent.payment_failed ───────────────────────────────────────
-
   private async handlePaymentFailed(event: Stripe.Event): Promise<StripeWebhookResult> {
     const paymentIntent = event.data.object as Stripe.PaymentIntent;
-    const paymentIdFromMeta = paymentIntent.metadata?.paymentId;
-    const orderIdFromMeta = paymentIntent.metadata?.orderId;
+    const checkoutId = paymentIntent.metadata?.checkoutId;
 
     try {
       return await prisma.$transaction(async (tx) => {
-        // Idempotency
-        if (await this.isDuplicate(tx, event.id, event.type, { paymentId: paymentIdFromMeta, orderId: orderIdFromMeta })) {
+        if (await this.isDuplicate(tx, event.id, event.type, { checkoutId })) {
           return { received: true, duplicate: true, eventId: event.id, type: event.type };
         }
 
-        // Find payment by Stripe PI ID
-        const payment = await tx.payment.findFirst({
-          where: { stripePaymentIntentId: paymentIntent.id },
-          select: { id: true, orderId: true, status: true },
+        if (!checkoutId) {
+          // Legacy single-order fallback
+          const payment = await tx.payment.findFirst({
+            where: { stripePaymentIntentId: paymentIntent.id },
+            select: { id: true, orderId: true, status: true },
+          });
+          if (payment && payment.status === PaymentStatus.PENDING) {
+            await this.failSingleOrder(tx, payment.id, payment.orderId);
+          }
+          await tx.webhookEvent.update({ where: { stripeEventId: event.id }, data: { status: "PROCESSED", processedAt: new Date() } });
+          return { received: true, eventId: event.id, type: event.type };
+        }
+
+        const checkout = await tx.checkout.findUnique({
+          where: { id: checkoutId },
+          include: { orders: { include: { items: { select: { productId: true, quantity: true } } } } },
         });
 
-        if (!payment) {
+        if (!checkout || checkout.status !== PaymentStatus.PENDING) {
           await this.markEventIgnored(tx, event.id);
           return { received: true, ignored: true, eventId: event.id, type: event.type };
         }
 
-        // Already succeeded — ignore late failure
-        if (payment.status === PaymentStatus.SUCCEEDED) {
-          await this.markEventIgnored(tx, event.id);
-          return { received: true, ignored: true, eventId: event.id, type: event.type };
-        }
-
-        // Already failed — idempotent
-        if (payment.status === PaymentStatus.FAILED) {
-          await this.markEventIgnored(tx, event.id);
-          return { received: true, duplicate: true, eventId: event.id, type: event.type };
-        }
-
-        // Mark payment FAILED (conditional: only if PENDING)
-        const failUpdate = await tx.payment.updateMany({
-          where: { id: payment.id, status: PaymentStatus.PENDING },
-          data: { status: PaymentStatus.FAILED, processedAt: new Date() },
+        // Mark checkout FAILED
+        await tx.checkout.updateMany({
+          where: { id: checkoutId, status: PaymentStatus.PENDING },
+          data: { status: "FAILED", processedAt: new Date() },
         });
 
-        if (failUpdate.count > 0) {
-          // Mark order FAILED
+        // Fail all orders and restore stock
+        for (const order of checkout.orders) {
           await tx.order.updateMany({
-            where: { id: payment.orderId, status: "PENDING" },
+            where: { id: order.id, status: "PENDING" },
             data: { status: "FAILED" },
           });
 
-          // Restore stock atomically
-          const orderItems = await tx.orderItem.findMany({
-            where: { orderId: payment.orderId },
-            select: { productId: true, quantity: true },
+          await tx.payment.updateMany({
+            where: { orderId: order.id, status: PaymentStatus.PENDING },
+            data: { status: PaymentStatus.FAILED, processedAt: new Date() },
           });
-          for (const item of orderItems) {
+
+          // Restore stock
+          for (const item of order.items) {
             await tx.product.update({
               where: { id: item.productId },
               data: { stock: { increment: item.quantity } },
@@ -211,13 +226,10 @@ class StripeWebhookService {
           }
         }
 
-        await tx.webhookEvent.update({
-          where: { stripeEventId: event.id },
-          data: { status: "PROCESSED", processedAt: new Date() },
-        });
+        await tx.webhookEvent.update({ where: { stripeEventId: event.id }, data: { status: "PROCESSED", processedAt: new Date() } });
 
-        logger.info("Webhook processed: payment_intent.payment_failed", {
-          eventId: event.id, paymentId: payment.id, orderId: payment.orderId,
+        logger.info("Webhook processed: payment_intent.payment_failed (multi-vendor)", {
+          eventId: event.id, checkoutId, orderCount: checkout.orders.length,
         });
 
         return { received: true, eventId: event.id, type: event.type };
@@ -233,21 +245,19 @@ class StripeWebhookService {
 
   // ─── Helpers ─────────────────────────────────────────────────────────────
 
-  private async isDuplicate(
-    tx: Prisma.TransactionClient,
-    eventId: string,
-    eventType: string,
-    meta: { paymentId?: string | null; orderId?: string | null },
-  ): Promise<boolean> {
+  private async failSingleOrder(tx: Prisma.TransactionClient, paymentId: string, orderId: string): Promise<void> {
+    await tx.payment.updateMany({ where: { id: paymentId, status: PaymentStatus.PENDING }, data: { status: PaymentStatus.FAILED, processedAt: new Date() } });
+    await tx.order.updateMany({ where: { id: orderId, status: "PENDING" }, data: { status: "FAILED" } });
+    const items = await tx.orderItem.findMany({ where: { orderId }, select: { productId: true, quantity: true } });
+    for (const item of items) {
+      await tx.product.update({ where: { id: item.productId }, data: { stock: { increment: item.quantity } } });
+    }
+  }
+
+  private async isDuplicate(tx: Prisma.TransactionClient, eventId: string, eventType: string, meta: Record<string, string | null | undefined>): Promise<boolean> {
     try {
       await tx.webhookEvent.create({
-        data: {
-          stripeEventId: eventId,
-          eventType,
-          paymentId: meta.paymentId ?? null,
-          orderId: meta.orderId ?? null,
-          status: "PROCESSING",
-        },
+        data: { stripeEventId: eventId, eventType, paymentId: meta.paymentId ?? null, orderId: meta.orderId ?? meta.checkoutId ?? null, status: "PROCESSING" },
       });
       return false;
     } catch (error) {
@@ -257,65 +267,46 @@ class StripeWebhookService {
   }
 
   private async markEventIgnored(tx: Prisma.TransactionClient, eventId: string): Promise<void> {
-    await tx.webhookEvent.updateMany({
-      where: { stripeEventId: eventId },
-      data: { status: "IGNORED", processedAt: new Date() },
-    });
+    await tx.webhookEvent.updateMany({ where: { stripeEventId: eventId }, data: { status: "IGNORED", processedAt: new Date() } });
   }
 
-  private validateWebhookIntegrity(
-    payment: { orderId: string; amount: number; currency: string; stripePaymentIntentId: string | null },
-    order: { id: string; buyerId: string; items: { vendorId: string }[] },
-    paymentIntent: Stripe.PaymentIntent,
-    metadata: PaymentIntentSucceededMetadata,
-  ): void {
-    if (payment.orderId !== order.id) throw new AppError("Payment/order mismatch", 400);
-    if (order.buyerId !== metadata.buyerId) throw new AppError("Buyer mismatch", 400);
-    if (payment.amount !== paymentIntent.amount) throw new AppError("Amount mismatch", 400);
-    if (payment.currency.toLowerCase() !== paymentIntent.currency?.toLowerCase()) throw new AppError("Currency mismatch", 400);
-    if (payment.stripePaymentIntentId && payment.stripePaymentIntentId !== paymentIntent.id) throw new AppError("PI mismatch", 400);
-
-    const vendorIds = [...new Set(order.items.map((i) => i.vendorId))];
-    if (vendorIds.length !== 1 || vendorIds[0] !== metadata.vendorId) throw new AppError("Vendor mismatch", 400);
-  }
-
-  private sendSuccessNotifications(
-    metadata: PaymentIntentSucceededMetadata,
-    orderId: string,
-    paymentId: string,
-    amount: number,
-    vendorEarnings: number,
-    currency: string,
-  ): void {
-    // Fire-and-forget — notifications must not break the webhook response
+  private sendSuccessNotifications(buyerId: string, orders: { id: string; vendorId: string | null; items: { vendorId: string }[] }[]): void {
+    // In-app notifications
     notificationsService.enqueue({
-      userId: metadata.buyerId,
+      userId: buyerId,
       type: NotificationType.ORDER_PAID,
       title: "Your order has been paid",
-      body: `Order ${orderId} has been successfully paid.`,
-      data: { orderId, paymentId, amount },
+      body: `${orders.length} order(s) confirmed.`,
+      data: { orderIds: orders.map((o) => o.id) },
     }).catch(() => {});
 
-    prisma.vendor.findUnique({ where: { id: metadata.vendorId }, select: { userId: true } })
-      .then((v) => {
-        if (v) {
-          notificationsService.enqueue({
-            userId: v.userId,
-            type: NotificationType.BALANCE_CREDITED,
-            title: "Pending balance credited",
-            body: `Your pending balance was credited for order ${orderId}.`,
-            data: { orderId, paymentId, amount: vendorEarnings, currency },
-          }).catch(() => {});
-        }
-      })
-      .catch(() => {});
+    // Push notification to buyer
+    pushNotifications.orderPaid(buyerId, orders.length);
+
+    for (const order of orders) {
+      const vendorId = order.vendorId ?? order.items[0]?.vendorId;
+      if (!vendorId) continue;
+      prisma.vendor.findUnique({ where: { id: vendorId }, select: { userId: true } })
+        .then((v) => {
+          if (v) {
+            notificationsService.enqueue({
+              userId: v.userId,
+              type: NotificationType.BALANCE_CREDITED,
+              title: "New order received",
+              body: `Order ${order.id} has been paid.`,
+              data: { orderId: order.id },
+            }).catch(() => {});
+            // Push notification to vendor
+            pushNotifications.vendorNewOrder(v.userId, order.id);
+          }
+        }).catch(() => {});
+    }
   }
 
   private async clearBuyerCart(tx: Prisma.TransactionClient, buyerId: string): Promise<void> {
     const cart = await tx.cart.findUnique({ where: { buyerId }, select: { id: true } });
     if (!cart) return;
     await tx.cartItem.deleteMany({ where: { cartId: cart.id } });
-    await tx.cart.update({ where: { id: cart.id }, data: { vendorId: null } });
   }
 
   private constructEvent(input: StripeWebhookInput): Stripe.Event {
@@ -325,14 +316,6 @@ class StripeWebhookService {
       logger.warn("Stripe webhook signature verification failed", serializeError(error));
       throw new AppError("Invalid signature", 400);
     }
-  }
-
-  private parseMetadata(metadata: Stripe.Metadata): PaymentIntentSucceededMetadata {
-    const { orderId, paymentId, buyerId, vendorId } = metadata;
-    if (!orderId || !paymentId || !buyerId || !vendorId) {
-      throw new AppError("Missing metadata", 400);
-    }
-    return { orderId, paymentId, buyerId, vendorId };
   }
 
   private isUniqueConstraintError(error: unknown): boolean {

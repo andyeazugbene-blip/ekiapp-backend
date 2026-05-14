@@ -8,6 +8,5 @@ export async function createPaymentIntent(request: Request, response: Response):
     throw new AppError("Unauthorized", 401);
   }
   const result = await paymentsService.createPaymentIntent(request.body, request.user.id);
-
   response.status(201).json(result);
 }

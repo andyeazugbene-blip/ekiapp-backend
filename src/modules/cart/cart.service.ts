@@ -19,8 +19,7 @@ async function getOrCreateCart(
   buyerId: string,
   tx: Prisma.TransactionClient = prisma as unknown as Prisma.TransactionClient,
 ): Promise<CartWithItems> {
-  // Use upsert to prevent race condition where two concurrent requests
-  // both see no cart and try to create one (unique constraint on buyerId).
+  // Use upsert to prevent race condition (unique on buyerId)
   const cart = await tx.cart.upsert({
     where: { buyerId },
     update: {},
@@ -42,17 +41,6 @@ function assertProductPurchasable(product: Product | null, requestedQty: number)
   }
 }
 
-async function reloadCart(buyerId: string): Promise<CartWithItems> {
-  const cart = await prisma.cart.findUnique({
-    where: { buyerId },
-    include: includeItems(),
-  });
-  if (!cart) {
-    throw new AppError("Cart not found", 404);
-  }
-  return cart as CartWithItems;
-}
-
 export const cartService = {
   async getCart(buyerId: string): Promise<CartWithItems> {
     return getOrCreateCart(buyerId);
@@ -66,10 +54,7 @@ export const cartService = {
       if (!product) throw new AppError("Product not found", 404);
       if (!product.isActive) throw new AppError("Product is not available", 400);
 
-      if (cart.vendorId && cart.vendorId !== product.vendorId) {
-        throw new AppError("Cart can only contain products from one vendor", 400);
-      }
-
+      // Multi-vendor: no vendor restriction — items from any vendor allowed
       const existingItem = cart.items.find((item) => item.productId === product.id);
       const newQuantity = (existingItem?.quantity ?? 0) + input.quantity;
 
@@ -89,13 +74,6 @@ export const cartService = {
             productId: product.id,
             quantity: input.quantity,
           },
-        });
-      }
-
-      if (!cart.vendorId) {
-        await tx.cart.update({
-          where: { id: cart.id },
-          data: { vendorId: product.vendorId },
         });
       }
 
@@ -152,14 +130,6 @@ export const cartService = {
 
       await tx.cartItem.delete({ where: { id: item.id } });
 
-      const remaining = cart.items.length - 1;
-      if (remaining === 0 && cart.vendorId) {
-        await tx.cart.update({
-          where: { id: cart.id },
-          data: { vendorId: null },
-        });
-      }
-
       const updated = await tx.cart.findUnique({
         where: { id: cart.id },
         include: includeItems(),
@@ -176,11 +146,6 @@ export const cartService = {
         await tx.cartItem.deleteMany({ where: { cartId: cart.id } });
       }
 
-      await tx.cart.update({
-        where: { id: cart.id },
-        data: { vendorId: null },
-      });
-
       const updated = await tx.cart.findUnique({
         where: { id: cart.id },
         include: includeItems(),
@@ -189,5 +154,3 @@ export const cartService = {
     });
   },
 };
-
-export { reloadCart };

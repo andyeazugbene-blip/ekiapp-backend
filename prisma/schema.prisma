@@ -126,7 +126,6 @@ model Vendor {
   walletTransactions    WalletTransaction[]
   payoutMethods         PayoutMethod[]
   payoutRequests        PayoutRequest[]
-  carts                 Cart[]
   createdAt             DateTime                 @default(now())
   updatedAt             DateTime                 @updatedAt
 
@@ -199,14 +198,10 @@ model Product {
 model Cart {
   id        String     @id @default(cuid())
   buyerId   String     @unique
-  vendorId  String?
   buyer     User       @relation(fields: [buyerId], references: [id], onDelete: Cascade)
-  vendor    Vendor?    @relation(fields: [vendorId], references: [id], onDelete: SetNull)
   items     CartItem[]
   createdAt DateTime   @default(now())
   updatedAt DateTime   @updatedAt
-
-  @@index([vendorId])
 }
 
 model CartItem {
@@ -226,15 +221,20 @@ model CartItem {
 model Order {
   id                 String              @id @default(cuid())
   orderNumber        String              @unique @default(cuid())
+  checkoutId         String?
   buyerId            String
+  vendorId           String?
   status             OrderStatus         @default(PENDING)
   subtotalAmount     Int                 @default(0)
   deliveryFeeAmount  Int                 @default(0)
+  platformFeeAmount  Int                 @default(0)
+  vendorEarnings     Int                 @default(0)
   totalAmount        Int
   currency           String              @default("usd")
   deliveryZoneId     String?
   notes              String?
   deliveredAt        DateTime?
+  checkout           Checkout?           @relation(fields: [checkoutId], references: [id], onDelete: SetNull)
   buyer              User                @relation("BuyerOrders", fields: [buyerId], references: [id], onDelete: Restrict)
   deliveryZone       DeliveryZone?       @relation(fields: [deliveryZoneId], references: [id], onDelete: SetNull)
   items              OrderItem[]
@@ -243,9 +243,28 @@ model Order {
   createdAt          DateTime            @default(now())
   updatedAt          DateTime            @updatedAt
 
+  @@index([checkoutId])
   @@index([buyerId, status])
+  @@index([vendorId, status])
   @@index([status, createdAt])
   @@index([createdAt])
+}
+
+model Checkout {
+  id                    String        @id @default(cuid())
+  buyerId               String
+  stripePaymentIntentId String?       @unique
+  totalAmount           Int
+  currency              String        @default("usd")
+  status                PaymentStatus @default(PENDING)
+  metadata              Json?
+  processedAt           DateTime?
+  orders                Order[]
+  createdAt             DateTime      @default(now())
+  updatedAt             DateTime      @updatedAt
+
+  @@index([buyerId])
+  @@index([status])
 }
 
 model OrderItem {
@@ -660,4 +679,17 @@ model VendorSubscription {
 
   @@index([status])
   @@index([plan])
+}
+
+// ─── Push Notifications (Expo) ──────────────────────────────────────────────
+
+model PushToken {
+  id        String   @id @default(cuid())
+  userId    String
+  token     String
+  platform  String?
+  createdAt DateTime @default(now())
+
+  @@unique([userId, token])
+  @@index([userId])
 }

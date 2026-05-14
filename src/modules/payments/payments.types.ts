@@ -23,11 +23,12 @@ export type PricedOrderItem = {
   totalAmount: number;
   currency: string;
   productTitle: string;
+  weightGrams: number;
 };
 
 export type CreatePaymentIntentResponse = {
-  orderId: string;
-  paymentId: string;
+  checkoutId: string;
+  orderIds: string[];
   amount: number;
   currency: string;
   clientSecret: string;
