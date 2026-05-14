@@ -17,8 +17,14 @@ export const app = express();
 // Trust first proxy (Vercel, Cloudflare, nginx) for correct req.ip in rate limiting
 app.set("trust proxy", 1);
 
-// Security headers
-app.use(helmet());
+// Security headers — relax CSP for /api/docs so Swagger UI CDN assets load
+app.use((req, res, next) => {
+  if (req.path === "/api/docs") {
+    // Skip helmet entirely for the docs page
+    return next();
+  }
+  helmet()(req, res, next);
+});
 
 // Request ID (before everything else for tracing)
 app.use(requestIdMiddleware);
