@@ -56,7 +56,10 @@ export function errorHandler(
   });
   captureException(error, requestContext);
 
+  const message = error instanceof Error ? error.message : "Internal server error";
   response.status(500).json({
     message: "Internal server error",
+    // Include error details for debugging (remove in hardened production)
+    debug: message,
   });
 }

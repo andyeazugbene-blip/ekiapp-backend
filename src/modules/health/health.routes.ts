@@ -1,7 +1,9 @@
 import { Router } from "express";
 
-import { getHealth } from "./health.controller";
+import { asyncHandler } from "../../shared/utils/async-handler";
+import { getHealth, getHealthDetailed } from "./health.controller";
 
 export const healthRouter = Router();
 
 healthRouter.get("/health", getHealth);
+healthRouter.get("/health/detailed", asyncHandler(getHealthDetailed));
