@@ -66,3 +66,6 @@ app.use("/api", apiRouter);
 // Error handling
 app.use(notFoundHandler);
 app.use(errorHandler);
+
+// Default export for Vercel serverless compatibility
+export default app;
