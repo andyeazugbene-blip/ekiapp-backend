@@ -1,5 +1,4 @@
 import { Router } from "express";
-import swaggerUi from "swagger-ui-express";
 
 import { swaggerSpec } from "../lib/swagger";
 import { addressesRouter } from "../modules/addresses/addresses.routes";
@@ -27,18 +26,40 @@ import { vendorsRouter } from "../modules/vendors/vendors.routes";
 export const apiRouter = Router();
 
 // Swagger UI — enabled unless DISABLE_DOCS=true
+// Serves a custom HTML page that loads Swagger UI from CDN (serverless-compatible)
 const enableDocs = process.env.DISABLE_DOCS !== "true";
 if (enableDocs) {
   apiRouter.get("/docs.json", (_req, res) => {
     res.json(swaggerSpec);
   });
-  apiRouter.use(
-    "/docs",
-    swaggerUi.serve,
-    swaggerUi.setup(swaggerSpec, {
-      customSiteTitle: "Italian Marketplace API",
-    }),
-  );
+
+  apiRouter.get("/docs", (_req, res) => {
+    res.setHeader("Content-Type", "text/html");
+    res.send(`<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Italian Marketplace API</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui.css">
+</head>
+<body>
+  <div id="swagger-ui"></div>
+  <script src="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui-bundle.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/swagger-ui-dist@5/swagger-ui-standalone-preset.js"></script>
+  <script>
+    window.onload = function() {
+      SwaggerUIBundle({
+        url: '/api/docs.json',
+        dom_id: '#swagger-ui',
+        presets: [SwaggerUIBundle.presets.apis, SwaggerUIStandalonePreset],
+        layout: 'StandaloneLayout'
+      });
+    };
+  </script>
+</body>
+</html>`);
+  });
 }
 
 apiRouter.use(healthRouter);
