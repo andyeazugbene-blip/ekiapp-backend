@@ -26,8 +26,9 @@ import { vendorsRouter } from "../modules/vendors/vendors.routes";
 
 export const apiRouter = Router();
 
-// Swagger UI — only in non-production environments
-if (process.env.NODE_ENV !== "production") {
+// Swagger UI — enabled unless DISABLE_DOCS=true
+const enableDocs = process.env.DISABLE_DOCS !== "true";
+if (enableDocs) {
   apiRouter.get("/docs.json", (_req, res) => {
     res.json(swaggerSpec);
   });
