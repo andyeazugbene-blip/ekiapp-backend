@@ -1,7 +1,9 @@
 import type { Request, Response } from "express";
 import type { Vendor } from "@prisma/client";
 
+import { prisma } from "../../lib/prisma";
 import { AppError } from "../../shared/errors/app-error";
+import { authService } from "../auth/auth.service";
 import { buildVendorShareUrl, vendorsService } from "./vendors.service";
 import {
   validateCreatePayoutMethodInput,
@@ -18,7 +20,6 @@ function requireUserId(request: Request): string {
 
 /**
  * Add `shareUrl` to a vendor object before it is sent to clients.
- * Wallet (if present) is preserved.
  */
 function withShareUrl<T extends Pick<Vendor, "storeSlug">>(vendor: T): T & { shareUrl: string } {
   return { ...vendor, shareUrl: buildVendorShareUrl(vendor.storeSlug) };
@@ -28,7 +29,16 @@ export async function createVendor(request: Request, response: Response): Promis
   const userId = requireUserId(request);
   const input = validateCreateVendorInput(request.body);
   const vendor = await vendorsService.createVendor(userId, input);
-  response.status(201).json({ vendor: withShareUrl(vendor) });
+
+  // Issue a fresh JWT with the updated VENDOR role so the frontend
+  // does not need to re-login after vendor creation.
+  const user = await prisma.user.findUniqueOrThrow({
+    where: { id: userId },
+    select: { id: true, role: true, email: true, tokenVersion: true },
+  });
+  const token = authService.signTokenPublic(user);
+
+  response.status(201).json({ vendor: withShareUrl(vendor), token });
 }
 
 export async function getOwnVendor(request: Request, response: Response): Promise<void> {

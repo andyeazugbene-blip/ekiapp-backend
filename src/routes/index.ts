@@ -31,9 +31,15 @@ export const apiRouter = Router();
 // Serves a custom HTML page that loads Swagger UI from CDN (serverless-compatible)
 const enableDocs = process.env.DISABLE_DOCS !== "true";
 if (enableDocs) {
-  apiRouter.get("/docs.json", (_req, res) => {
+  const serveSpec = (_req: import("express").Request, res: import("express").Response) => {
     res.json(swaggerSpec);
-  });
+  };
+
+  apiRouter.get("/docs.json", serveSpec);
+  // OpenAPI aliases — all return the same spec
+  apiRouter.get("/openapi.json", serveSpec);
+  apiRouter.get("/api-json", serveSpec);
+  apiRouter.get("/swagger.json", serveSpec);
 
   apiRouter.get("/docs", (_req, res) => {
     res.setHeader("Content-Type", "text/html");

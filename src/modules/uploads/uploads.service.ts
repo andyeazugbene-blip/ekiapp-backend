@@ -1,11 +1,9 @@
 import crypto from "crypto";
 import path from "path";
 
-import { generatePresignedUpload, getPublicUrl, isStorageConfigured } from "../../lib/storage";
+import { generatePresignedUpload, isStorageConfigured } from "../../lib/storage";
 import { AppError } from "../../shared/errors/app-error";
 import type { RequestUploadInput, UploadUrlResponse } from "./uploads.types";
-
-const UPLOAD_BASE_URL = process.env.UPLOAD_BASE_URL || "/uploads";
 
 function generateKey(userId: string, input: RequestUploadInput): string {
   // Sanitize filename: extract only the extension, strip path traversal characters
@@ -31,22 +29,21 @@ function mimeToExt(mime: string): string {
 
 export const uploadsService = {
   async requestUploadUrl(userId: string, input: RequestUploadInput): Promise<UploadUrlResponse> {
-    const key = generateKey(userId, input);
-
-    // Production: use S3/R2 presigned URL
-    if (isStorageConfigured()) {
-      const result = await generatePresignedUpload(key, input.contentType, input.category);
-      if (result) {
-        return result;
-      }
+    // If storage is not configured, return a clear error instead of fake URLs
+    if (!isStorageConfigured()) {
+      throw new AppError(
+        "File upload is not available. Storage service is not configured.",
+        503,
+      );
     }
 
-    // Dev fallback: return a local-style URL
-    const publicUrl = `${UPLOAD_BASE_URL}/${key}`;
-    return {
-      uploadUrl: publicUrl,
-      publicUrl,
-      key,
-    };
+    const key = generateKey(userId, input);
+    const result = await generatePresignedUpload(key, input.contentType, input.category);
+
+    if (!result) {
+      throw new AppError("Failed to generate upload URL", 502);
+    }
+
+    return result;
   },
 };

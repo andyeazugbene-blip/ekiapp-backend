@@ -32,28 +32,19 @@ app.use(requestIdMiddleware);
 
 // CORS — restrict origins in production, allow all in dev.
 const isProduction = process.env.NODE_ENV === "production";
+const defaultOrigins = ["https://neon.online"];
 const allowedOrigins = process.env.CORS_ORIGINS
   ? process.env.CORS_ORIGINS.split(",").map((o) => o.trim())
-  : undefined;
+  : isProduction ? defaultOrigins : undefined;
 
-if (isProduction && !allowedOrigins) {
-  // In production, CORS_ORIGINS must be set. Fail-closed: reject all cross-origin.
-  app.use(
-    cors({
-      origin: false,
-      credentials: true,
-    }),
-  );
-} else {
-  app.use(
-    cors({
-      origin: allowedOrigins ?? true,
-      credentials: true,
-      methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-      allowedHeaders: ["Content-Type", "Authorization", "X-Request-ID"],
-    }),
-  );
-}
+app.use(
+  cors({
+    origin: allowedOrigins ?? true,
+    credentials: true,
+    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization", "X-Request-ID"],
+  }),
+);
 
 // Request logging
 app.use(requestLogger);

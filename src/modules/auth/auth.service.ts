@@ -249,4 +249,12 @@ export const authService = {
     if (!user) return false;
     return user.tokenVersion === tokenVersion;
   },
+
+  /**
+   * Issue a new JWT. Used when the user's role changes (e.g. after vendor creation)
+   * so the frontend can continue without re-login.
+   */
+  signTokenPublic(user: { id: string; role: UserRole; email: string; tokenVersion: number }): string {
+    return signToken(user);
+  },
 };
