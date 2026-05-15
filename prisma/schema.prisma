@@ -97,6 +97,7 @@ model User {
   tokenVersion        Int            @default(0)
   failedLoginAttempts Int            @default(0)
   lockedUntil         DateTime?
+  emailVerifiedAt     DateTime?
   role                UserRole       @default(BUYER)
   vendor              Vendor?
   orders              Order[]        @relation("BuyerOrders")
@@ -485,6 +486,22 @@ model PasswordResetToken {
   createdAt DateTime  @default(now())
 
   @@index([userId])
+  @@index([expiresAt])
+}
+
+// ─── Email OTP Verification ─────────────────────────────────────────────────
+
+model EmailOtp {
+  id         String    @id @default(cuid())
+  email      String
+  codeHash   String
+  purpose    String    @default("vendor_onboarding_email")
+  expiresAt  DateTime
+  consumedAt DateTime?
+  attempts   Int       @default(0)
+  createdAt  DateTime  @default(now())
+
+  @@index([email, purpose, createdAt])
   @@index([expiresAt])
 }
 

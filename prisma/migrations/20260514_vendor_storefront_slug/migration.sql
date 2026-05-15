@@ -3,25 +3,24 @@
 -- Backfills storeSlug from storeName for existing rows, ensuring uniqueness.
 
 -- 1. Add columns as nullable first so we can backfill safely.
-ALTER TABLE "Vendor" ADD COLUMN "storeSlug" TEXT;
-ALTER TABLE "Vendor" ADD COLUMN "avatar" TEXT;
-ALTER TABLE "Vendor" ADD COLUMN "coverImage" TEXT;
+ALTER TABLE "Vendor" ADD COLUMN IF NOT EXISTS "storeSlug" TEXT;
+ALTER TABLE "Vendor" ADD COLUMN IF NOT EXISTS "avatar" TEXT;
+ALTER TABLE "Vendor" ADD COLUMN IF NOT EXISTS "coverImage" TEXT;
 
--- 2. Backfill storeSlug for existing rows.
---    a) Build a base slug from storeName (lowercase, alphanumeric+hyphen).
---    b) Disambiguate duplicates by appending the row number per base.
+-- 2. Backfill storeSlug for existing rows that don't have one yet.
 WITH normalized AS (
   SELECT
     id,
-    storeName,
+    "storeName",
     NULLIF(
       regexp_replace(
-        regexp_replace(lower(storeName), '[^a-z0-9]+', '-', 'g'),
+        regexp_replace(lower("storeName"), '[^a-z0-9]+', '-', 'g'),
         '(^-+|-+$)', '', 'g'
       ),
       ''
     ) AS base
   FROM "Vendor"
+  WHERE "storeSlug" IS NULL
 ),
 ranked AS (
   SELECT
@@ -37,7 +36,7 @@ WHERE v.id = r.id;
 
 -- 3. Enforce NOT NULL and uniqueness once backfill is complete.
 ALTER TABLE "Vendor" ALTER COLUMN "storeSlug" SET NOT NULL;
-CREATE UNIQUE INDEX "Vendor_storeSlug_key" ON "Vendor" ("storeSlug");
+CREATE UNIQUE INDEX IF NOT EXISTS "Vendor_storeSlug_key" ON "Vendor" ("storeSlug");
 
 -- 4. Add index for suspension filtering on public lookups.
-CREATE INDEX "Vendor_isSuspended_idx" ON "Vendor" ("isSuspended");
+CREATE INDEX IF NOT EXISTS "Vendor_isSuspended_idx" ON "Vendor" ("isSuspended");

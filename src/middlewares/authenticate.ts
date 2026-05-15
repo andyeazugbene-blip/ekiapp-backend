@@ -67,3 +67,42 @@ export function requireRole(...roles: UserRole[]) {
     next();
   };
 }
+
+/**
+ * Optional authentication — attaches user if a valid token is present,
+ * but does NOT reject the request if no token is provided.
+ */
+export function optionalAuthenticate(request: Request, _response: Response, next: NextFunction): void {
+  const header = request.headers.authorization;
+  if (!header || !header.startsWith("Bearer ")) {
+    next();
+    return;
+  }
+
+  const token = header.slice("Bearer ".length).trim();
+  if (!token) {
+    next();
+    return;
+  }
+
+  let payload;
+  try {
+    payload = authService.verifyToken(token);
+  } catch {
+    // Invalid token — proceed without user context
+    next();
+    return;
+  }
+
+  authService
+    .verifyTokenVersion(payload.sub, payload.tv ?? 0)
+    .then((valid) => {
+      if (valid) {
+        request.user = { id: payload.sub, role: payload.role, email: payload.email };
+      }
+      next();
+    })
+    .catch(() => {
+      next();
+    });
+}
