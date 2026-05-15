@@ -3,6 +3,7 @@ import type { Product } from "@prisma/client";
 import { env } from "../../config/env";
 import { prisma } from "../../lib/prisma";
 import { AppError } from "../../shared/errors/app-error";
+import { subscriptionsService } from "../subscriptions/subscriptions.service";
 import type {
   CreateProductInput,
   ListProductsQuery,
@@ -37,6 +38,9 @@ async function getVendorIdForUser(userId: string): Promise<string> {
 export const productsService = {
   async createProduct(userId: string, input: CreateProductInput): Promise<Product> {
     const vendorId = await getVerifiedVendorIdForUser(userId);
+
+    // Enforce subscription product limit
+    await subscriptionsService.enforceProductLimit(vendorId);
 
     return prisma.product.create({
       data: {

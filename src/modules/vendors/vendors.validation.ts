@@ -76,6 +76,15 @@ export function validateUpdateVendorInput(input: unknown): UpdateVendorInput {
   if (raw.country !== undefined) {
     update.country = nullableString(raw.country, "country");
   }
+  if (raw.city !== undefined) {
+    update.city = nullableString(raw.city, "city");
+  }
+  if (raw.avatar !== undefined) {
+    update.avatar = nullableString(raw.avatar, "avatar");
+  }
+  if (raw.coverImage !== undefined) {
+    update.coverImage = nullableString(raw.coverImage, "coverImage");
+  }
 
   if (Object.keys(update).length === 0) {
     throw new AppError("No fields to update", 400);

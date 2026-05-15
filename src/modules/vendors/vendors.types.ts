@@ -14,6 +14,9 @@ export interface UpdateVendorInput {
   contactEmail?: string | null;
   contactPhone?: string | null;
   country?: string | null;
+  city?: string | null;
+  avatar?: string | null;
+  coverImage?: string | null;
 }
 
 export interface CreatePayoutMethodInput {

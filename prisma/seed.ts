@@ -34,6 +34,7 @@ async function main() {
     create: {
       userId: vendorOwner.id,
       storeName: "Sample Store",
+      storeSlug: "sample-store",
     },
   });
 

@@ -9,6 +9,8 @@ import { calculatePlatformFee as calcPlatformFee } from "../../shared/pricing";
 import { validateCreatePaymentIntentFromCartInput } from "./payments.validation";
 import type { CreatePaymentIntentResponse, PricedOrderItem } from "./payments.types";
 
+const MAX_VENDOR_WEIGHT_GRAMS = 30_000; // 30 kg per vendor group
+
 interface VendorGroup {
   vendorId: string;
   items: PricedOrderItem[];
@@ -25,8 +27,8 @@ interface VendorGroup {
  *
  * 1. Validate cart (multi-vendor allowed), stock, delivery zones
  * 2. Group items by vendor, calculate per-vendor totals
- * 3. DB transaction: reserve stock + create Checkout + Orders + Payments
- * 4. OUTSIDE transaction: create single Stripe PaymentIntent
+ * 3. DB transaction: reserve stock + create Checkout + Orders + Payments + wallet debit
+ * 4. OUTSIDE transaction: create single Stripe PaymentIntent (if stripe amount > 0)
  * 5. Link PI to Checkout
  * 6. Webhook (payment_intent.succeeded) marks all orders PAID + credits wallets
  */
@@ -80,17 +82,54 @@ class PaymentsService {
       vendorMap.set(item.vendorId, existing);
     }
 
-    // Resolve delivery zones per vendor
-    // payload.destinationZoneId can be a single zone (applied to all) or we pick per vendor
-    const zone = await prisma.deliveryZone.findUnique({ where: { id: payload.destinationZoneId } });
-    if (!zone || !zone.isActive) throw new AppError("Delivery zone not available", 404);
-    if (zone.currency.toLowerCase() !== currency) throw new AppError("Delivery zone currency mismatch", 400);
+    // ─── Step 2b: Resolve delivery zone ────────────────────────────────────
+    // Accept either a direct destinationZoneId or resolve from deliveryCountry.
+
+    let zone;
+    if (payload.destinationZoneId) {
+      zone = await prisma.deliveryZone.findUnique({ where: { id: payload.destinationZoneId } });
+      if (!zone || !zone.isActive) throw new AppError("Delivery zone not available", 404);
+    } else if (payload.deliveryCountry) {
+      zone = await prisma.deliveryZone.findFirst({
+        where: { country: { equals: payload.deliveryCountry, mode: "insensitive" }, isActive: true },
+      });
+      if (!zone) {
+        throw new AppError(`Delivery to "${payload.deliveryCountry}" is not available`, 400);
+      }
+    } else {
+      throw new AppError("Delivery destination is required", 400);
+    }
+
+    if (zone.currency.toLowerCase() !== currency) {
+      throw new AppError("Delivery zone currency mismatch", 400);
+    }
+
+    // ─── Step 2c: Per-vendor delivery validation + weight check ────────────
 
     const vendorGroups: VendorGroup[] = [];
     for (const [vendorId, items] of vendorMap) {
       const subtotal = items.reduce((sum, i) => sum + i.totalAmount, 0);
       const totalWeight = items.reduce((sum, i) => sum + i.weightGrams, 0);
-      const deliveryFee = zone.baseFeeAmount + Math.ceil(totalWeight / 1000) * zone.feePerKgAmount;
+
+      // Enforce max weight per vendor group
+      if (totalWeight > MAX_VENDOR_WEIGHT_GRAMS) {
+        throw new AppError(
+          `Order weight for one vendor exceeds the maximum of ${MAX_VENDOR_WEIGHT_GRAMS / 1000}kg. Please reduce items.`,
+          400,
+        );
+      }
+
+      // Check if vendor-specific zone exists; fall back to global zone
+      const vendorZone = await prisma.deliveryZone.findFirst({
+        where: {
+          vendorId,
+          country: zone.country,
+          isActive: true,
+        },
+      });
+      const effectiveZone = vendorZone ?? zone;
+
+      const deliveryFee = effectiveZone.baseFeeAmount + Math.ceil(totalWeight / 1000) * effectiveZone.feePerKgAmount;
       const platformFee = calcPlatformFee(subtotal, env.platformFeeBps);
       const vendorEarnings = subtotal - platformFee;
 
@@ -102,12 +141,31 @@ class PaymentsService {
         totalAmount: subtotal + deliveryFee,
         platformFeeAmount: platformFee,
         vendorEarningsAmount: vendorEarnings,
-        deliveryZoneId: zone.id,
+        deliveryZoneId: effectiveZone.id,
       });
     }
 
     const grandTotal = vendorGroups.reduce((sum, g) => sum + g.totalAmount, 0);
     const buyerId = cart.buyerId;
+
+    // ─── Step 2d: Wallet deduction validation ──────────────────────────────
+
+    let walletDeduction = 0;
+    if (payload.walletAmount && payload.walletAmount > 0) {
+      const buyerWallet = await prisma.buyerWallet.findUnique({
+        where: { buyerId },
+      });
+      if (!buyerWallet) {
+        throw new AppError("Buyer wallet not found", 400);
+      }
+      if (payload.walletAmount > buyerWallet.balance) {
+        throw new AppError("Insufficient wallet balance", 400);
+      }
+      // Cannot exceed grand total
+      walletDeduction = Math.min(payload.walletAmount, grandTotal);
+    }
+
+    const stripeAmount = grandTotal - walletDeduction;
 
     // ─── Step 3: Atomic DB transaction (stock + checkout + orders) ─────────
 
@@ -120,6 +178,31 @@ class PaymentsService {
         });
         if (result.count !== 1) {
           throw new AppError(`Insufficient stock for "${item.productTitle}"`, 409);
+        }
+      }
+
+      // Debit buyer wallet if applicable
+      if (walletDeduction > 0) {
+        const walletUpdate = await tx.buyerWallet.updateMany({
+          where: { buyerId, balance: { gte: walletDeduction } },
+          data: { balance: { decrement: walletDeduction } },
+        });
+        if (walletUpdate.count !== 1) {
+          throw new AppError("Insufficient wallet balance", 400);
+        }
+
+        const wallet = await tx.buyerWallet.findUnique({ where: { buyerId } });
+        if (wallet) {
+          await tx.buyerWalletTransaction.create({
+            data: {
+              walletId: wallet.id,
+              buyerId,
+              type: "ORDER_DEBIT",
+              amount: -walletDeduction,
+              currency,
+              description: "Order payment (wallet)",
+            },
+          });
         }
       }
 
@@ -138,6 +221,9 @@ class PaymentsService {
               platformFee: g.platformFeeAmount,
               vendorEarnings: g.vendorEarningsAmount,
             })),
+            walletDeduction,
+            deliveryAddress: payload.deliveryAddress ?? null,
+            deliveryCountry: payload.deliveryCountry ?? zone.country,
           } as unknown as Prisma.InputJsonValue,
         },
         select: { id: true },
@@ -154,7 +240,7 @@ class PaymentsService {
             buyerId,
             vendorId: group.vendorId,
             orderNumber,
-            status: "PENDING",
+            status: stripeAmount === 0 ? "PAID" : "PENDING",
             subtotalAmount: group.subtotalAmount,
             deliveryFeeAmount: group.deliveryFeeAmount,
             platformFeeAmount: group.platformFeeAmount,
@@ -179,7 +265,7 @@ class PaymentsService {
           })),
         });
 
-        // Create Payment record per order (for backward compat with wallet ledger)
+        // Create Payment record per order
         await tx.payment.create({
           data: {
             orderId: order.id,
@@ -187,24 +273,43 @@ class PaymentsService {
             platformFeeAmount: group.platformFeeAmount,
             vendorEarningsAmount: group.vendorEarningsAmount,
             currency,
-            status: "PENDING",
-            provider: "stripe",
+            status: stripeAmount === 0 ? "SUCCEEDED" : "PENDING",
+            provider: walletDeduction > 0 && stripeAmount === 0 ? "wallet" : "stripe",
           },
         });
 
         orderIds.push(order.id);
       }
 
+      // If fully paid by wallet, mark checkout as succeeded
+      if (stripeAmount === 0) {
+        await tx.checkout.update({
+          where: { id: checkout.id },
+          data: { status: "SUCCEEDED", processedAt: new Date() },
+        });
+      }
+
       return { checkoutId: checkout.id, orderIds };
     });
 
-    // ─── Step 4: Stripe call OUTSIDE transaction ───────────────────────────
+    // ─── Step 4: Stripe call OUTSIDE transaction (if needed) ───────────────
+
+    if (stripeAmount === 0) {
+      // Fully paid by wallet — no Stripe needed
+      return {
+        checkoutId,
+        orderIds,
+        amount: grandTotal,
+        currency,
+        clientSecret: "wallet_paid",
+      };
+    }
 
     let paymentIntent;
     try {
       paymentIntent = await stripe.paymentIntents.create(
         {
-          amount: grandTotal,
+          amount: stripeAmount,
           currency,
           payment_method_types: ["card"],
           metadata: {
@@ -212,6 +317,7 @@ class PaymentsService {
             buyerId,
             orderIds: orderIds.join(","),
             vendorIds: vendorGroups.map((g) => g.vendorId).join(","),
+            walletDeduction: String(walletDeduction),
           },
         },
         { idempotencyKey: `pi:checkout:${checkoutId}` },

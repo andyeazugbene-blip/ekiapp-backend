@@ -23,6 +23,10 @@ import {
   getVendorEarnings,
 } from "./vendors-dashboard.controller";
 import {
+  getVendorBuyer,
+  listVendorBuyers,
+} from "./vendors-buyers.controller";
+import {
   getStripeConnectStatus,
   onboardStripeConnect,
   refreshStripeConnect,
@@ -40,6 +44,8 @@ vendorsRouter.get("/me", requireRole("VENDOR", "ADMIN"), asyncHandler(getOwnVend
 vendorsRouter.patch("/me", requireRole("VENDOR", "ADMIN"), asyncHandler(updateOwnVendor));
 vendorsRouter.get("/me/dashboard", requireRole("VENDOR", "ADMIN"), asyncHandler(getVendorDashboard));
 vendorsRouter.get("/me/earnings", requireRole("VENDOR", "ADMIN"), asyncHandler(getVendorEarnings));
+vendorsRouter.get("/me/buyers", requireRole("VENDOR", "ADMIN"), asyncHandler(listVendorBuyers));
+vendorsRouter.get("/me/buyers/:id", requireRole("VENDOR", "ADMIN"), asyncHandler(getVendorBuyer));
 vendorsRouter.post("/me/payout-methods", requireRole("VENDOR", "ADMIN"), asyncHandler(createPayoutMethod));
 vendorsRouter.get("/me/payout-methods", requireRole("VENDOR", "ADMIN"), asyncHandler(listPayoutMethods));
 

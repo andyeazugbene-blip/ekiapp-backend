@@ -1,8 +1,9 @@
 import { Router } from "express";
 
-import { authenticate } from "../../middlewares/authenticate";
+import { authenticate, requireRole } from "../../middlewares/authenticate";
 import { asyncHandler } from "../../shared/utils/async-handler";
 import {
+  activateSubscription,
   cancelSubscription,
   createCheckoutSession,
   getPlanLimits,
@@ -19,5 +20,6 @@ subscriptionsRouter.get("/plans", asyncHandler(getPlans));
 subscriptionsRouter.use(authenticate);
 subscriptionsRouter.get("/me", asyncHandler(getSubscription));
 subscriptionsRouter.get("/me/limits", asyncHandler(getPlanLimits));
+subscriptionsRouter.post("/activate", requireRole("VENDOR", "ADMIN"), asyncHandler(activateSubscription));
 subscriptionsRouter.post("/checkout", asyncHandler(createCheckoutSession));
 subscriptionsRouter.post("/cancel", asyncHandler(cancelSubscription));

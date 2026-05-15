@@ -116,6 +116,14 @@ export const notificationsService = {
 
     return prisma.notification.findUniqueOrThrow({ where: { id: notificationId } });
   },
+
+  async markAllRead(userId: string): Promise<{ count: number }> {
+    const result = await prisma.notification.updateMany({
+      where: { userId, readAt: null },
+      data: { readAt: new Date() },
+    });
+    return { count: result.count };
+  },
 };
 
 export function parseListQuery(query: Record<string, unknown>): ListNotificationsQuery {

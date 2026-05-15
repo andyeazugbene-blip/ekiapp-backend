@@ -13,6 +13,10 @@ import {
   updatePromoCode as adminUpdatePromoCode,
 } from "../promos/promos.controller";
 import {
+  adminListReviews,
+  adminModerateReview,
+} from "../reviews/reviews.controller";
+import {
   adminListPendingDocuments,
   adminReviewDocument,
 } from "../verification/verification.controller";
@@ -93,3 +97,7 @@ adminRouter.delete("/delivery-zones/:id", asyncHandler(deleteDeliveryZone));
 adminRouter.get("/promo-codes", asyncHandler(adminListPromoCodes));
 adminRouter.post("/promo-codes", asyncHandler(adminCreatePromoCode));
 adminRouter.patch("/promo-codes/:id", asyncHandler(adminUpdatePromoCode));
+
+// Review moderation
+adminRouter.get("/reviews", asyncHandler(adminListReviews));
+adminRouter.patch("/reviews/:id/moderate", asyncHandler(adminModerateReview));

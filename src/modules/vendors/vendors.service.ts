@@ -4,6 +4,7 @@ import { UserRole } from "@prisma/client";
 import { env } from "../../config/env";
 import { prisma } from "../../lib/prisma";
 import { AppError } from "../../shared/errors/app-error";
+import { resolveUniqueSlug } from "../../shared/utils/slug";
 import type {
   CreatePayoutMethodInput,
   CreateVendorInput,
@@ -18,6 +19,24 @@ async function ensureWallet(vendorId: string, tx: Prisma.TransactionClient): Pro
   });
 }
 
+/**
+ * Build the public share URL for a vendor storefront.
+ * Format: {PUBLIC_STORE_BASE_URL}/store/{storeSlug}
+ */
+export function buildVendorShareUrl(storeSlug: string): string {
+  return `${env.publicStoreBaseUrl}/store/${storeSlug}`;
+}
+
+async function generateUniqueStoreSlug(storeName: string): Promise<string> {
+  return resolveUniqueSlug(storeName, async (candidate) => {
+    const existing = await prisma.vendor.findUnique({
+      where: { storeSlug: candidate },
+      select: { id: true },
+    });
+    return existing !== null;
+  });
+}
+
 export const vendorsService = {
   async createVendor(userId: string, input: CreateVendorInput): Promise<Vendor> {
     const existing = await prisma.vendor.findUnique({ where: { userId } });
@@ -25,11 +44,14 @@ export const vendorsService = {
       throw new AppError("Vendor profile already exists", 409);
     }
 
+    const storeSlug = await generateUniqueStoreSlug(input.storeName);
+
     return prisma.$transaction(async (tx) => {
       const vendor = await tx.vendor.create({
         data: {
           userId,
           storeName: input.storeName,
+          storeSlug,
           description: input.description,
           contactEmail: input.contactEmail,
           contactPhone: input.contactPhone,
@@ -66,6 +88,9 @@ export const vendorsService = {
       throw new AppError("Vendor profile not found", 404);
     }
 
+    // If storeName changes, only regenerate the slug when the vendor has not
+    // explicitly set one yet (legacy rows). We do NOT change a slug that is
+    // already in use because share links would break.
     return prisma.vendor.update({
       where: { id: vendor.id },
       data: input,

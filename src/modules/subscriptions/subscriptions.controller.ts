@@ -2,7 +2,7 @@ import type { Request, Response } from "express";
 
 import { AppError } from "../../shared/errors/app-error";
 import { subscriptionsService } from "./subscriptions.service";
-import { validateCreateSubscriptionInput } from "./subscriptions.validation";
+import { validateActivateSubscriptionInput, validateCreateSubscriptionInput } from "./subscriptions.validation";
 import { PLAN_LIMITS } from "./subscriptions.types";
 
 function requireUserId(request: Request): string {
@@ -23,6 +23,12 @@ export async function getPlans(_request: Request, response: Response): Promise<v
     ...limits,
   }));
   response.status(200).json({ plans });
+}
+
+export async function activateSubscription(request: Request, response: Response): Promise<void> {
+  const input = validateActivateSubscriptionInput(request.body);
+  const result = await subscriptionsService.activatePlan(requireUserId(request), input);
+  response.status(200).json(result);
 }
 
 export async function createCheckoutSession(request: Request, response: Response): Promise<void> {

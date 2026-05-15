@@ -34,3 +34,11 @@ export async function markNotificationRead(
   );
   response.status(200).json({ notification });
 }
+
+export async function markAllNotificationsRead(
+  request: Request,
+  response: Response,
+): Promise<void> {
+  const result = await notificationsService.markAllRead(requireUserId(request));
+  response.status(200).json(result);
+}

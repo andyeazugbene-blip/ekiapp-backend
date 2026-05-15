@@ -10,7 +10,10 @@ export type CreatePaymentIntentInput = {
 
 export type CreatePaymentIntentFromCartInput = {
   cartId: string;
-  destinationZoneId: string;
+  destinationZoneId?: string;
+  deliveryAddress?: string;
+  deliveryCountry?: string;
+  walletAmount?: number;
 };
 
 export type NormalizedPaymentItem = CreatePaymentIntentItemInput;

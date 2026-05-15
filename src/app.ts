@@ -10,6 +10,7 @@ import { generalRateLimiter } from "./middlewares/rate-limit";
 import { requestIdMiddleware } from "./middlewares/request-id";
 import { requestLogger } from "./middlewares/request-logger";
 import { validateInputLength } from "./middlewares/validate-input-length";
+import { getPublicStorePage } from "./modules/public-stores/public-stores.page";
 import { apiRouter } from "./routes";
 
 export const app = express();
@@ -17,10 +18,10 @@ export const app = express();
 // Trust first proxy (Vercel, Cloudflare, nginx) for correct req.ip in rate limiting
 app.set("trust proxy", 1);
 
-// Security headers — relax CSP for /api/docs so Swagger UI CDN assets load
+// Security headers — relax CSP for /api/docs (Swagger UI from CDN) and
+// /store/:slug (server-rendered public page with inline copy-link script).
 app.use((req, res, next) => {
-  if (req.path === "/api/docs") {
-    // Skip helmet entirely for the docs page
+  if (req.path === "/api/docs" || req.path.startsWith("/store/")) {
     return next();
   }
   helmet()(req, res, next);
@@ -68,6 +69,12 @@ app.use(validateInputLength);
 
 // Routes
 app.use("/api", apiRouter);
+
+// Public web routes (server-rendered pages outside /api).
+// /store/:slug is the public storefront page used by share links.
+app.get("/store/:slug", (req, res, next) => {
+  Promise.resolve(getPublicStorePage(req, res)).catch(next);
+});
 
 // Error handling
 app.use(notFoundHandler);

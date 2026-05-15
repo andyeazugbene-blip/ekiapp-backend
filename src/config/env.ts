@@ -42,4 +42,5 @@ export const env = {
   platformFeeBps: getPlatformFeeBps(),
   jwtSecret: getRequiredEnv("JWT_SECRET"),
   jwtExpiresIn: process.env.JWT_EXPIRES_IN ?? "7d",
+  publicStoreBaseUrl: (process.env.PUBLIC_STORE_BASE_URL ?? "https://neon.online").replace(/\/+$/, ""),
 } as const;

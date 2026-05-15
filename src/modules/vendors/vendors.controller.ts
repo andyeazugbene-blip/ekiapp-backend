@@ -1,7 +1,8 @@
 import type { Request, Response } from "express";
+import type { Vendor } from "@prisma/client";
 
 import { AppError } from "../../shared/errors/app-error";
-import { vendorsService } from "./vendors.service";
+import { buildVendorShareUrl, vendorsService } from "./vendors.service";
 import {
   validateCreatePayoutMethodInput,
   validateCreateVendorInput,
@@ -15,24 +16,32 @@ function requireUserId(request: Request): string {
   return request.user.id;
 }
 
+/**
+ * Add `shareUrl` to a vendor object before it is sent to clients.
+ * Wallet (if present) is preserved.
+ */
+function withShareUrl<T extends Pick<Vendor, "storeSlug">>(vendor: T): T & { shareUrl: string } {
+  return { ...vendor, shareUrl: buildVendorShareUrl(vendor.storeSlug) };
+}
+
 export async function createVendor(request: Request, response: Response): Promise<void> {
   const userId = requireUserId(request);
   const input = validateCreateVendorInput(request.body);
   const vendor = await vendorsService.createVendor(userId, input);
-  response.status(201).json({ vendor });
+  response.status(201).json({ vendor: withShareUrl(vendor) });
 }
 
 export async function getOwnVendor(request: Request, response: Response): Promise<void> {
   const userId = requireUserId(request);
   const vendor = await vendorsService.getOwnVendor(userId);
-  response.status(200).json({ vendor });
+  response.status(200).json({ vendor: withShareUrl(vendor) });
 }
 
 export async function updateOwnVendor(request: Request, response: Response): Promise<void> {
   const userId = requireUserId(request);
   const input = validateUpdateVendorInput(request.body);
   const vendor = await vendorsService.updateOwnVendor(userId, input);
-  response.status(200).json({ vendor });
+  response.status(200).json({ vendor: withShareUrl(vendor) });
 }
 
 export async function createPayoutMethod(request: Request, response: Response): Promise<void> {

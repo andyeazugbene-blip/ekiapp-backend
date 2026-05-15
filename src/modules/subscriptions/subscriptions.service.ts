@@ -4,6 +4,7 @@ import { prisma } from "../../lib/prisma";
 import { stripe } from "../../lib/stripe";
 import { AppError } from "../../shared/errors/app-error";
 import { PLAN_LIMITS } from "./subscriptions.types";
+import type { ActivateSubscriptionInput } from "./subscriptions.types";
 
 export const subscriptionsService = {
   async getSubscription(userId: string): Promise<VendorSubscription> {
@@ -31,6 +32,86 @@ export const subscriptionsService = {
     }
 
     return subscription;
+  },
+
+  /**
+   * Activate a plan without Stripe payment. For now, vendors can switch to
+   * FREE/GROWTH/PRO by button click. Creates or updates VendorSubscription.
+   */
+  async activatePlan(
+    userId: string,
+    input: ActivateSubscriptionInput,
+  ): Promise<{ subscription: VendorSubscription; limits: (typeof PLAN_LIMITS)[SubscriptionPlan] }> {
+    const vendor = await prisma.vendor.findUnique({
+      where: { userId },
+      select: { id: true },
+    });
+    if (!vendor) {
+      throw new AppError("Vendor profile required", 403);
+    }
+
+    const now = new Date();
+    const periodEnd = new Date(now);
+    periodEnd.setMonth(periodEnd.getMonth() + 1);
+
+    const subscription = await prisma.vendorSubscription.upsert({
+      where: { vendorId: vendor.id },
+      update: {
+        plan: input.plan,
+        status: "ACTIVE",
+        currentPeriodStart: now,
+        currentPeriodEnd: periodEnd,
+        cancelledAt: null,
+      },
+      create: {
+        vendorId: vendor.id,
+        plan: input.plan,
+        status: "ACTIVE",
+        currentPeriodStart: now,
+        currentPeriodEnd: periodEnd,
+      },
+    });
+
+    return { subscription, limits: PLAN_LIMITS[input.plan] };
+  },
+
+  /**
+   * Enforce product count limit based on current subscription plan.
+   * Call this before creating a new product.
+   */
+  async enforceProductLimit(vendorId: string): Promise<void> {
+    const subscription = await prisma.vendorSubscription.findUnique({
+      where: { vendorId },
+    });
+    const plan: SubscriptionPlan = subscription?.plan ?? "FREE";
+    const limits = PLAN_LIMITS[plan];
+
+    if (limits.maxProducts === -1) return; // unlimited
+
+    const currentCount = await prisma.product.count({
+      where: { vendorId, isActive: true },
+    });
+
+    if (currentCount >= limits.maxProducts) {
+      throw new AppError(
+        `Your ${plan} plan allows a maximum of ${limits.maxProducts} active products. Upgrade your plan to add more.`,
+        403,
+      );
+    }
+  },
+
+  /**
+   * Check if a vendor's plan allows a specific feature.
+   */
+  async checkFeatureAccess(
+    vendorId: string,
+    feature: "analytics" | "flashSales" | "bundles" | "discounts",
+  ): Promise<boolean> {
+    const subscription = await prisma.vendorSubscription.findUnique({
+      where: { vendorId },
+    });
+    const plan: SubscriptionPlan = subscription?.plan ?? "FREE";
+    return PLAN_LIMITS[plan][feature];
   },
 
   async createCheckoutSession(
