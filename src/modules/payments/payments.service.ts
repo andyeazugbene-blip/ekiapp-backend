@@ -323,9 +323,10 @@ class PaymentsService {
         { idempotencyKey: `pi:checkout:${checkoutId}` },
       );
     } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : String(error);
       logger.error("Stripe PaymentIntent creation failed", {
         checkoutId,
-        errorMessage: error instanceof Error ? error.message : String(error),
+        errorMessage: errorMsg,
       });
       throw new AppError("Payment provider unavailable", 502);
     }
