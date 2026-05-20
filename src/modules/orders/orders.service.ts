@@ -1,6 +1,7 @@
 import type { Order, OrderStatus } from "@prisma/client";
 
 import { prisma } from "../../lib/prisma";
+import { CURSOR_ORDER_BY } from "../../shared/constants";
 import { AppError } from "../../shared/errors/app-error";
 import type { ListBuyerOrdersQuery, ListVendorOrdersQuery } from "./orders.types";
 import { VENDOR_STATUS_TRANSITIONS } from "./orders.types";
@@ -32,7 +33,7 @@ export const ordersService = {
         ...(query.status ? { status: query.status } : {}),
       },
       include: orderInclude,
-      orderBy: { createdAt: "desc" },
+      orderBy: CURSOR_ORDER_BY,
       take: query.limit + 1,
       ...(query.cursor ? { cursor: { id: query.cursor }, skip: 1 } : {}),
     });
@@ -98,7 +99,7 @@ export const ordersService = {
           select: { id: true, name: true, email: true },
         },
       },
-      orderBy: { createdAt: "desc" },
+      orderBy: CURSOR_ORDER_BY,
       take: query.limit + 1,
       ...(query.cursor ? { cursor: { id: query.cursor }, skip: 1 } : {}),
     });

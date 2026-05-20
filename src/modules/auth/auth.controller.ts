@@ -50,3 +50,10 @@ export async function resetPassword(request: Request, response: Response): Promi
   const result = await authService.resetPassword(input);
   response.status(200).json(result);
 }
+
+export async function verifyEmail(request: Request, response: Response): Promise<void> {
+  const token = typeof request.body?.token === "string" ? request.body.token.trim() : "";
+  if (!token) throw new AppError("Token is required", 400);
+  const result = await authService.verifyEmail(token);
+  response.status(200).json(result);
+}

@@ -7,12 +7,12 @@ describe("validateRegisterInput", () => {
   it("normalizes email to lowercase and trims name", () => {
     const out = validateRegisterInput({
       email: "Alice@Example.COM",
-      password: "supersecret",
+      password: "Supersecret1",
       name: "  Alice  ",
     });
     expect(out).toEqual({
       email: "alice@example.com",
-      password: "supersecret",
+      password: "Supersecret1",
       name: "Alice",
     });
   });
@@ -24,7 +24,7 @@ describe("validateRegisterInput", () => {
 
   it("rejects malformed email", () => {
     expect(() =>
-      validateRegisterInput({ email: "not-an-email", password: "supersecret", name: "Alice" }),
+      validateRegisterInput({ email: "not-an-email", password: "Supersecret1", name: "Alice" }),
     ).toThrow(/email/i);
   });
 
@@ -36,14 +36,14 @@ describe("validateRegisterInput", () => {
 
   it("rejects empty name", () => {
     expect(() =>
-      validateRegisterInput({ email: "a@b.co", password: "supersecret", name: "   " }),
+      validateRegisterInput({ email: "a@b.co", password: "Supersecret1", name: "   " }),
     ).toThrow(/name/i);
   });
 
   it("does not accept a client-provided role", () => {
     const out = validateRegisterInput({
       email: "a@b.co",
-      password: "supersecret",
+      password: "Supersecret1",
       name: "Alice",
       role: "ADMIN",
     });

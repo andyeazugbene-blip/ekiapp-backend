@@ -3,10 +3,9 @@ import crypto from "crypto";
 import { prisma } from "../../lib/prisma";
 import { logger } from "../../lib/logger";
 import { AppError } from "../../shared/errors/app-error";
-import { buyerWalletService } from "../buyer-wallet/buyer-wallet.service";
 
-const REFERRAL_BONUS_AMOUNT = 500; // 500 cents = £5 / $5
-const REFERRAL_CURRENCY = "usd";
+const REFERRAL_BONUS_AMOUNT = 500; // 500 cents = €5
+const REFERRAL_CURRENCY = "eur";
 
 function generateReferralCode(): string {
   return "REF-" + crypto.randomBytes(4).toString("hex").toUpperCase();
@@ -85,7 +84,12 @@ export const referralsService = {
     });
   },
 
-  async creditReferralBonus(referredUserId: string): Promise<void> {
+  /**
+   * Credit referral bonus only after referred user's first paid order.
+   * Called from payment_intent.succeeded webhook handler.
+   * Idempotent: creditedAt acts as one-time marker.
+   */
+  async creditReferralBonusOnFirstOrder(referredUserId: string): Promise<void> {
     const referral = await prisma.referral.findUnique({
       where: { referredId: referredUserId },
     });
@@ -93,17 +97,73 @@ export const referralsService = {
       return; // No referral or already credited
     }
 
-    // Credit the referrer
-    await buyerWalletService.creditReferralBonus(
-      referral.referrerId,
-      referral.bonusAmount,
-      `Referral bonus for inviting a friend`,
-    );
+    // Self-referral guard (should be caught at apply time, but double-check)
+    if (referral.referrerId === referredUserId) {
+      logger.warn("Self-referral detected, skipping bonus", { referredUserId });
+      return;
+    }
 
-    // Mark as credited
-    await prisma.referral.update({
-      where: { id: referral.id },
-      data: { creditedAt: new Date() },
+    // Verify this is genuinely the first paid order
+    const paidOrderCount = await prisma.order.count({
+      where: { buyerId: referredUserId, status: { in: ["PAID", "DELIVERED", "COMPLETED"] } },
+    });
+    if (paidOrderCount < 1) {
+      return; // No paid order yet
+    }
+
+    // Transactional: credit wallet + mark referral as credited atomically
+    await prisma.$transaction(async (tx) => {
+      // Re-check creditedAt inside transaction for idempotency
+      const ref = await tx.referral.findUnique({ where: { referredId: referredUserId } });
+      if (!ref || ref.creditedAt) return;
+
+      const wallet = await tx.buyerWallet.findUnique({ where: { buyerId: ref.referrerId } });
+      if (!wallet) {
+        // Create wallet if doesn't exist
+        const newWallet = await tx.buyerWallet.create({
+          data: { buyerId: ref.referrerId, currency: ref.currency },
+        });
+        await tx.buyerWalletTransaction.create({
+          data: {
+            walletId: newWallet.id,
+            buyerId: ref.referrerId,
+            type: "REFERRAL_BONUS",
+            amount: ref.bonusAmount,
+            currency: ref.currency,
+            description: "Referral bonus for inviting a friend",
+          },
+        });
+        await tx.buyerWallet.update({
+          where: { id: newWallet.id },
+          data: { balance: { increment: ref.bonusAmount } },
+        });
+      } else {
+        await tx.buyerWalletTransaction.create({
+          data: {
+            walletId: wallet.id,
+            buyerId: ref.referrerId,
+            type: "REFERRAL_BONUS",
+            amount: ref.bonusAmount,
+            currency: ref.currency,
+            description: "Referral bonus for inviting a friend",
+          },
+        });
+        await tx.buyerWallet.update({
+          where: { id: wallet.id },
+          data: { balance: { increment: ref.bonusAmount } },
+        });
+      }
+
+      await tx.referral.update({
+        where: { id: ref.id },
+        data: { creditedAt: new Date() },
+      });
+
+      logger.info("Referral bonus credited", {
+        referrerId: ref.referrerId,
+        referredId: referredUserId,
+        amount: ref.bonusAmount,
+      });
     });
   },
 

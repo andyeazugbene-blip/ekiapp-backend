@@ -1,6 +1,7 @@
 import type { PromoCode } from "@prisma/client";
 
 import { prisma } from "../../lib/prisma";
+import { CURSOR_ORDER_BY } from "../../shared/constants";
 import { AppError } from "../../shared/errors/app-error";
 import type {
   CreatePromoCodeInput,
@@ -33,7 +34,7 @@ export const promosService = {
 
   async listPromoCodes(): Promise<PromoCode[]> {
     return prisma.promoCode.findMany({
-      orderBy: { createdAt: "desc" },
+      orderBy: CURSOR_ORDER_BY,
     });
   },
 
@@ -115,21 +116,48 @@ export const promosService = {
   ): Promise<number> {
     const result = await this.validatePromo(buyerId, { code, orderAmount });
 
-    await prisma.$transaction([
-      prisma.promoRedemption.create({
+    // Atomic: raw SQL for field-to-field compare (usedCount < maxUses)
+    // prevents concurrent over-redemption
+    const now = new Date();
+    return prisma.$transaction(async (tx) => {
+      // One promo per order policy: prevent stacking multiple promos on the same order
+      if (orderId) {
+        const existingRedemption = await tx.promoRedemption.findFirst({
+          where: { orderId, buyerId },
+          select: { id: true },
+        });
+        if (existingRedemption) {
+          throw new AppError("Only one promo code can be applied per order", 409);
+        }
+      }
+
+      // Atomically increment usedCount only if all conditions hold
+      const rows: number = await tx.$executeRaw`
+        UPDATE "PromoCode"
+        SET "usedCount" = "usedCount" + 1, "updatedAt" = NOW()
+        WHERE "code" = ${code}
+          AND "isActive" = true
+          AND "validFrom" <= ${now}
+          AND ("validUntil" IS NULL OR "validUntil" >= ${now})
+          AND ("maxUses" IS NULL OR "usedCount" < "maxUses")
+      `;
+
+      if (rows !== 1) {
+        throw new AppError("Promo no longer available", 409);
+      }
+
+      const promo = await tx.promoCode.findUniqueOrThrow({ where: { code } });
+
+      await tx.promoRedemption.create({
         data: {
-          promoCodeId: (await prisma.promoCode.findUnique({ where: { code } }))!.id,
+          promoCodeId: promo.id,
           buyerId,
           orderId,
           discountAmount: result.discountAmount,
         },
-      }),
-      prisma.promoCode.update({
-        where: { code },
-        data: { usedCount: { increment: 1 } },
-      }),
-    ]);
+      });
 
-    return result.discountAmount;
+      return result.discountAmount;
+    });
   },
 };

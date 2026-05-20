@@ -38,7 +38,7 @@ export const env = {
   databaseUrl: getRequiredEnv("DATABASE_URL"),
   stripeSecretKey: getRequiredEnv("STRIPE_SECRET_KEY"),
   stripeWebhookSecret: getRequiredEnv("STRIPE_WEBHOOK_SECRET"),
-  defaultCurrency: process.env.DEFAULT_CURRENCY ?? "usd",
+  defaultCurrency: process.env.DEFAULT_CURRENCY ?? "eur",
   platformFeeBps: getPlatformFeeBps(),
   jwtSecret: getRequiredEnv("JWT_SECRET"),
   jwtExpiresIn: process.env.JWT_EXPIRES_IN ?? "7d",

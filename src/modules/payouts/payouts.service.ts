@@ -7,6 +7,7 @@ import {
 } from "@prisma/client";
 
 import { prisma } from "../../lib/prisma";
+import { CURSOR_ORDER_BY } from "../../shared/constants";
 import { notificationsService } from "../notifications/notifications.service";
 import { AppError } from "../../shared/errors/app-error";
 import type {
@@ -74,14 +75,14 @@ export const payoutsService = {
     const vendor = await getVendorForUser(userId);
     return prisma.payoutRequest.findMany({
       where: { vendorId: vendor.id },
-      orderBy: { createdAt: "desc" },
+      orderBy: CURSOR_ORDER_BY,
     });
   },
 
   async adminList(query: ListPayoutRequestsQuery): Promise<PayoutRequest[]> {
     return prisma.payoutRequest.findMany({
       where: query.status ? { status: query.status } : {},
-      orderBy: { createdAt: "desc" },
+      orderBy: CURSOR_ORDER_BY,
     });
   },
 

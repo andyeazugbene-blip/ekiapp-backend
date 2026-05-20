@@ -7,11 +7,17 @@ Multi-vendor marketplace backend built with Node.js, Express, TypeScript, Postgr
 - JWT-based authentication with three roles: `BUYER`, `VENDOR`, `ADMIN`
 - Vendor profiles, verification status, payout methods
 - Products with stock, images, category, weight
-- Shopping cart with single-vendor constraint and stock validation
+- Shopping cart with stock validation
 - Delivery zones and delivery fee calculation
-- Cart-based Stripe PaymentIntent checkout (subtotal + delivery)
-- Stripe webhook with signature verification, idempotency, and wallet credit
+- **Multi-vendor** cart-based Stripe PaymentIntent checkout (subtotal + delivery + wallet deduction)
+- Stripe webhook with signature verification, idempotency, wallet credit, and cancellation handling
 - Admin order completion releasing vendor pending → available balance
+- Buyer wallet (top-up via Stripe, apply to orders, referral bonuses)
+- Promo codes with atomic redemption (race-condition safe)
+- Reviews with rating validation (1–5, DB CHECK enforced)
+- Referral system (bonus on first paid order, idempotent, self-referral guard)
+- Subscription plans with product limits
+- Rate limiting on auth and API endpoints
 - Payout request flow (vendor request, admin approve / reject / mark-paid)
 - In-app notifications for payment and payout lifecycle events
 - Admin listing and moderation endpoints
@@ -36,6 +42,7 @@ src/
   modules/
     admin/
     auth/
+    buyer-wallet/
     cart/
     delivery/
     health/
@@ -44,10 +51,16 @@ src/
     payments/
     payouts/
     products/
+    promos/
+    referrals/
+    reviews/
     stripe/
+    subscriptions/
+    uploads/
     vendors/
   routes/
   shared/
+  tests/
 ```
 
 Business logic lives in services. Controllers and routes stay thin. All authenticated-user routes use the `authenticate` middleware; admin routes add `requireRole("ADMIN")`.
@@ -221,9 +234,36 @@ Both commands currently exit clean.
 
 ## Known Limitations
 
-- Single vendor per order (enforced at cart level).
-- No refunds.
+- No refunds endpoint (manual via Stripe dashboard).
 - No automatic Stripe Connect payouts — payouts are marked paid manually by an admin.
-- No real-time delivery (push / websocket / email).
-- No rate limiting or request logging middleware (recommended for production).
-- No unit test suite.
+- No real-time delivery tracking (push / websocket).
+
+## Security Hardening
+
+The following security measures have been applied across four phases:
+
+### Phase 1 — Critical Financial Safety
+- Wallet top-up via Stripe PaymentIntent (no direct credit)
+- Wallet apply race condition fixed with conditional `updateMany`
+- Webhook permanent failures → `IGNORED` + 200
+- `payment_intent.canceled` handler with wallet restore
+- R2/S3 upload config hardened (content type allowlist, max file size)
+- `BuyerWallet.balance >= 0` CHECK constraint
+
+### Phase 2 — High Financial/Security
+- Promo code redemption: atomic `UPDATE WHERE usedCount < maxUses` (raw SQL)
+- Review rating: `BETWEEN 1 AND 5` CHECK constraint
+- Referral reward: credited only on first paid order, transactional, idempotent
+- Stripe `automatic_payment_methods: { enabled: true }` (replaces `payment_method_types`)
+- Stripe API version pinned to `2025-08-27.basil`
+- Auth middleware loads role from DB (not JWT) on every request
+- Bcrypt rounds 10→12 with opportunistic rehash on login
+
+### Phase 3 — Data Integrity
+- DB CHECK constraints on all money/stock/quantity columns
+- Currency validation at service level (`eur`, `usd`, `gbp`)
+
+### Phase 4 — Cleanup
+- Dead code removed (`assertSingleVendor`, unused `creditReferralBonus`)
+- `AppError.code` field for machine-readable error codes
+- README updated

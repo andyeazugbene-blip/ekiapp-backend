@@ -5,7 +5,6 @@ import { prisma } from "../lib/prisma";
 import { getRedisConnection } from "../lib/redis";
 import { QUEUE_NAMES } from "../queues";
 import type { CreateNotificationInput } from "../modules/notifications/notifications.service";
-import { NOTIFICATION_JOB } from "../modules/notifications/notifications.service";
 
 async function processNotification(job: Job<CreateNotificationInput>): Promise<void> {
   const { userId, type, title, body, data } = job.data;

@@ -2,7 +2,7 @@ import { OrderStatus, UserRole } from "@prisma/client";
 
 import { env } from "../../config/env";
 import { prisma } from "../../lib/prisma";
-import { AppError } from "../../shared/errors/app-error";
+import { CURSOR_ORDER_BY } from "../../shared/constants";
 import type { AdminAnalyticsData, AdminDashboardData, ListAuditLogsQuery } from "./admin-dashboard.types";
 
 function startOfDay(): Date {
@@ -173,7 +173,7 @@ export const adminDashboardService = {
         ...(query.action ? { action: query.action } : {}),
         ...(query.entityType ? { entityType: query.entityType } : {}),
       },
-      orderBy: { createdAt: "desc" },
+      orderBy: CURSOR_ORDER_BY,
       take: query.limit + 1,
       ...(query.cursor ? { cursor: { id: query.cursor }, skip: 1 } : {}),
     });

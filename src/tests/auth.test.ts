@@ -7,7 +7,7 @@ describe("Auth Validation", () => {
     it("accepts valid input", () => {
       const result = validateRegisterInput({
         email: "test@example.com",
-        password: "password123",
+        password: "Password1",
         name: "Test User",
       });
       expect(result.email).toBe("test@example.com");
@@ -15,7 +15,7 @@ describe("Auth Validation", () => {
     });
 
     it("rejects missing email", () => {
-      expect(() => validateRegisterInput({ password: "12345678", name: "Test" }))
+      expect(() => validateRegisterInput({ password: "Password1", name: "Test" }))
         .toThrow("Invalid email");
     });
 
@@ -25,14 +25,14 @@ describe("Auth Validation", () => {
     });
 
     it("rejects empty name", () => {
-      expect(() => validateRegisterInput({ email: "a@b.com", password: "12345678", name: "" }))
+      expect(() => validateRegisterInput({ email: "a@b.com", password: "Password1", name: "" }))
         .toThrow("Invalid name");
     });
 
     it("normalizes email to lowercase", () => {
       const result = validateRegisterInput({
         email: "TEST@Example.COM",
-        password: "password123",
+        password: "Password1",
         name: "Test",
       });
       expect(result.email).toBe("test@example.com");
@@ -64,7 +64,7 @@ describe("Auth Validation", () => {
 
   describe("validateResetPasswordInput", () => {
     it("accepts valid input", () => {
-      const result = validateResetPasswordInput({ token: "abc123", password: "newpass123" });
+      const result = validateResetPasswordInput({ token: "abc123", password: "Newpass1" });
       expect(result.token).toBe("abc123");
     });
 

@@ -1,9 +1,12 @@
 import type { BuyerWallet, BuyerWalletTransaction } from "@prisma/client";
 
 import { env } from "../../config/env";
+import { logger } from "../../lib/logger";
 import { prisma } from "../../lib/prisma";
+import { CURSOR_ORDER_BY } from "../../shared/constants";
+import { stripe } from "../../lib/stripe";
 import { AppError } from "../../shared/errors/app-error";
-import type { ApplyWalletInput, ListWalletTransactionsQuery, TopUpInput } from "./buyer-wallet.types";
+import type { ApplyWalletInput, ListWalletTransactionsQuery, TopUpInput, TopUpResponse } from "./buyer-wallet.types";
 
 async function getOrCreateWallet(buyerId: string): Promise<BuyerWallet> {
   const existing = await prisma.buyerWallet.findUnique({ where: { buyerId } });
@@ -27,7 +30,7 @@ export const buyerWalletService = {
 
     const items = await prisma.buyerWalletTransaction.findMany({
       where: { walletId: wallet.id },
-      orderBy: { createdAt: "desc" },
+      orderBy: CURSOR_ORDER_BY,
       take: query.limit + 1,
       ...(query.cursor ? { cursor: { id: query.cursor }, skip: 1 } : {}),
     });
@@ -41,38 +44,47 @@ export const buyerWalletService = {
     return { items, nextCursor };
   },
 
-  async topUp(buyerId: string, input: TopUpInput): Promise<BuyerWalletTransaction> {
+  async topUp(buyerId: string, input: TopUpInput): Promise<TopUpResponse> {
     const wallet = await getOrCreateWallet(buyerId);
 
-    // In production, this would create a Stripe PaymentIntent for the top-up
-    // and only credit the wallet on webhook success. For now, we credit directly.
-    const [tx] = await prisma.$transaction([
-      prisma.buyerWalletTransaction.create({
-        data: {
-          walletId: wallet.id,
-          buyerId,
-          type: "TOP_UP",
+    // Create a Stripe PaymentIntent for the wallet top-up.
+    // Wallet balance is credited ONLY from the Stripe webhook (payment_intent.succeeded).
+    let paymentIntent;
+    try {
+      paymentIntent = await stripe.paymentIntents.create(
+        {
           amount: input.amount,
           currency: wallet.currency,
-          description: `Wallet top-up of ${input.amount}`,
+          automatic_payment_methods: { enabled: true },
+          metadata: {
+            kind: "wallet_topup",
+            buyerId,
+          },
         },
-      }),
-      prisma.buyerWallet.update({
-        where: { id: wallet.id },
-        data: { balance: { increment: input.amount } },
-      }),
-    ]);
+        { idempotencyKey: `wallet_topup:${buyerId}:${Date.now()}` },
+      );
+    } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      logger.error("Stripe PaymentIntent creation failed for wallet top-up", {
+        buyerId,
+        errorMessage: errorMsg,
+      });
+      throw new AppError("Payment provider unavailable", 502);
+    }
 
-    return tx;
+    if (!paymentIntent.client_secret) {
+      throw new AppError("Stripe failure: no client secret", 502);
+    }
+
+    return {
+      clientSecret: paymentIntent.client_secret,
+      paymentIntentId: paymentIntent.id,
+      amount: input.amount,
+      currency: wallet.currency,
+    };
   },
 
   async applyToOrder(buyerId: string, input: ApplyWalletInput): Promise<BuyerWalletTransaction> {
-    const wallet = await getOrCreateWallet(buyerId);
-
-    if (wallet.balance < input.amount) {
-      throw new AppError("Insufficient wallet balance", 400);
-    }
-
     // Verify order belongs to buyer
     const order = await prisma.order.findUnique({
       where: { id: input.orderId },
@@ -85,8 +97,20 @@ export const buyerWalletService = {
       throw new AppError("Forbidden", 403);
     }
 
-    const [tx] = await prisma.$transaction([
-      prisma.buyerWalletTransaction.create({
+    // Atomic: conditional balance decrement + transaction record in one DB transaction
+    return prisma.$transaction(async (tx) => {
+      const walletUpdate = await tx.buyerWallet.updateMany({
+        where: { buyerId, balance: { gte: input.amount } },
+        data: { balance: { decrement: input.amount } },
+      });
+
+      if (walletUpdate.count !== 1) {
+        throw new AppError("Insufficient wallet balance", 400);
+      }
+
+      const wallet = await tx.buyerWallet.findUniqueOrThrow({ where: { buyerId } });
+
+      return tx.buyerWalletTransaction.create({
         data: {
           walletId: wallet.id,
           buyerId,
@@ -96,34 +120,8 @@ export const buyerWalletService = {
           description: `Applied to order ${input.orderId}`,
           orderId: input.orderId,
         },
-      }),
-      prisma.buyerWallet.update({
-        where: { id: wallet.id },
-        data: { balance: { decrement: input.amount } },
-      }),
-    ]);
-
-    return tx;
+      });
+    });
   },
 
-  async creditReferralBonus(buyerId: string, amount: number, description: string): Promise<void> {
-    const wallet = await getOrCreateWallet(buyerId);
-
-    await prisma.$transaction([
-      prisma.buyerWalletTransaction.create({
-        data: {
-          walletId: wallet.id,
-          buyerId,
-          type: "REFERRAL_BONUS",
-          amount,
-          currency: wallet.currency,
-          description,
-        },
-      }),
-      prisma.buyerWallet.update({
-        where: { id: wallet.id },
-        data: { balance: { increment: amount } },
-      }),
-    ]);
-  },
 };

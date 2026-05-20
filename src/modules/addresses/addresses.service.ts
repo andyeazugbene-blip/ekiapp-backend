@@ -1,6 +1,7 @@
 import type { BuyerAddress } from "@prisma/client";
 
 import { prisma } from "../../lib/prisma";
+import { CURSOR_ORDER_BY } from "../../shared/constants";
 import { AppError } from "../../shared/errors/app-error";
 import type { CreateAddressInput, UpdateAddressInput } from "./addresses.types";
 
@@ -8,7 +9,7 @@ export const addressesService = {
   async list(buyerId: string): Promise<BuyerAddress[]> {
     return prisma.buyerAddress.findMany({
       where: { buyerId },
-      orderBy: [{ isDefault: "desc" }, { createdAt: "desc" }],
+      orderBy: [{ isDefault: "desc" }, { createdAt: "desc" }, { id: "desc" }],
     });
   },
 
@@ -81,7 +82,7 @@ export const addressesService = {
     if (address.isDefault) {
       const next = await prisma.buyerAddress.findFirst({
         where: { buyerId },
-        orderBy: { createdAt: "desc" },
+        orderBy: CURSOR_ORDER_BY,
       });
       if (next) {
         await prisma.buyerAddress.update({

@@ -2,6 +2,7 @@ import type { Request, Response } from "express";
 
 import { env } from "../../config/env";
 import { prisma } from "../../lib/prisma";
+import { validateCurrency } from "../../shared/currency";
 import { AppError } from "../../shared/errors/app-error";
 import { recordAudit } from "../../shared/utils/audit";
 
@@ -54,7 +55,7 @@ export async function createDeliveryZone(request: Request, response: Response): 
       flag: typeof raw.flag === "string" ? raw.flag.trim() || null : null,
       baseFeeAmount,
       feePerKgAmount,
-      currency: typeof raw.currency === "string" ? raw.currency.trim().toLowerCase() : env.defaultCurrency,
+      currency: validateCurrency(typeof raw.currency === "string" ? raw.currency : undefined, env.defaultCurrency),
       isActive: raw.isActive !== false,
       vendorId: null, // Global zone
     },
@@ -103,7 +104,7 @@ export async function updateDeliveryZone(request: Request, response: Response): 
     data.feePerKgAmount = v;
   }
   if (raw.currency !== undefined) {
-    data.currency = typeof raw.currency === "string" ? raw.currency.trim().toLowerCase() : env.defaultCurrency;
+    data.currency = validateCurrency(typeof raw.currency === "string" ? raw.currency : undefined, env.defaultCurrency);
   }
   if (raw.isActive !== undefined) {
     data.isActive = raw.isActive === true;

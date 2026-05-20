@@ -63,7 +63,7 @@ async function processStockAlerts(_job: Job<StockAlertJobData>): Promise<void> {
 
   // Send alerts
   let sentCount = 0;
-  for (const [vendorId, data] of vendorMap) {
+  for (const [_vendorId, data] of vendorMap) {
     const template = emailTemplates.lowStockAlert({
       storeName: data.storeName,
       products: data.products,

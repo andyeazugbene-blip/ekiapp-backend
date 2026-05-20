@@ -2,6 +2,7 @@ import type { Notification, NotificationType, Prisma } from "@prisma/client";
 
 import { logger } from "../../lib/logger";
 import { prisma } from "../../lib/prisma";
+import { CURSOR_ORDER_BY } from "../../shared/constants";
 import { notificationsQueue } from "../../queues";
 import { AppError } from "../../shared/errors/app-error";
 
@@ -83,7 +84,7 @@ export const notificationsService = {
         userId,
         ...(query.unreadOnly ? { readAt: null } : {}),
       },
-      orderBy: { createdAt: "desc" },
+      orderBy: CURSOR_ORDER_BY,
       take: limit + 1,
       ...(query.cursor ? { cursor: { id: query.cursor }, skip: 1 } : {}),
     });

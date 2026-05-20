@@ -2,6 +2,8 @@ import type { Product } from "@prisma/client";
 
 import { env } from "../../config/env";
 import { prisma } from "../../lib/prisma";
+import { CURSOR_ORDER_BY } from "../../shared/constants";
+import { validateCurrency } from "../../shared/currency";
 import { AppError } from "../../shared/errors/app-error";
 import { subscriptionsService } from "../subscriptions/subscriptions.service";
 import type {
@@ -48,7 +50,7 @@ export const productsService = {
         title: input.title,
         description: input.description,
         priceInCents: input.priceAmount,
-        currency: input.currency ?? env.defaultCurrency,
+        currency: validateCurrency(input.currency, env.defaultCurrency),
         images: input.images ?? [],
         category: input.category,
         stock: input.stock ?? 0,
@@ -107,7 +109,7 @@ export const productsService = {
         ...(query.category ? { category: query.category } : {}),
         ...(query.vendorId ? { vendorId: query.vendorId } : {}),
       },
-      orderBy: { createdAt: "desc" },
+      orderBy: CURSOR_ORDER_BY,
       take: query.limit + 1,
       ...(query.cursor ? { cursor: { id: query.cursor }, skip: 1 } : {}),
     });

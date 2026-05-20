@@ -20,14 +20,16 @@ import type {
   UpdateProfileInput,
 } from "./auth.types";
 
-const BCRYPT_ROUNDS = 10;
+const BCRYPT_ROUNDS = 12;
 const RESET_TOKEN_EXPIRY_HOURS = 1;
 const MAX_FAILED_ATTEMPTS = 5;
 const LOCKOUT_DURATION_MS = 15 * 60 * 1000; // 15 minutes
 
+const JWT_SIGN_OPTIONS: SignOptions = { algorithm: "HS256", expiresIn: env.jwtExpiresIn as string & SignOptions["expiresIn"] };
+
 function signToken(user: { id: string; role: UserRole; email: string; tokenVersion: number }): string {
   const payload: JwtPayload = { sub: user.id, role: user.role, email: user.email, tv: user.tokenVersion };
-  return jwt.sign(payload, env.jwtSecret, { algorithm: "HS256", expiresIn: env.jwtExpiresIn } as SignOptions);
+  return jwt.sign(payload as object, env.jwtSecret, JWT_SIGN_OPTIONS);
 }
 
 function toAuthUser(user: {
@@ -76,6 +78,19 @@ export const authService = {
     const welcome = emailTemplates.welcomeBuyer({ name: user.name });
     enqueueEmail({ to: user.email, subject: welcome.subject, html: welcome.html });
 
+    // Send email verification token (non-blocking)
+    const verificationToken = crypto.randomBytes(32).toString("hex");
+    const verificationExpiry = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours
+    await prisma.emailVerificationToken.create({
+      data: {
+        userId: user.id,
+        token: verificationToken,
+        expiresAt: verificationExpiry,
+      },
+    }).catch((err: unknown) => {
+      logger.error("Failed to create email verification token", { userId: user.id, error: String(err) });
+    });
+
     return { user: toAuthUser(user), token: signToken(user) };
   },
 
@@ -115,12 +130,14 @@ export const authService = {
       throw new AppError("Invalid credentials", 401);
     }
 
-    // Successful login: reset failed attempts and clear lockout
-    if (user.failedLoginAttempts > 0 || user.lockedUntil) {
-      await prisma.user.update({
-        where: { id: user.id },
-        data: { failedLoginAttempts: 0, lockedUntil: null },
-      });
+    // Successful login: reset failed attempts, clear lockout, and opportunistic rehash
+    const needsRehash = bcrypt.getRounds(user.password) < BCRYPT_ROUNDS;
+    if (user.failedLoginAttempts > 0 || user.lockedUntil || needsRehash) {
+      const data: Record<string, unknown> = { failedLoginAttempts: 0, lockedUntil: null };
+      if (needsRehash) {
+        data.password = await bcrypt.hash(input.password, BCRYPT_ROUNDS);
+      }
+      await prisma.user.update({ where: { id: user.id }, data });
     }
 
     return { user: toAuthUser(user), token: signToken(user) };
@@ -225,6 +242,26 @@ export const authService = {
     return { message: "Password reset successfully." };
   },
 
+  async verifyEmail(token: string): Promise<{ message: string }> {
+    const record = await prisma.emailVerificationToken.findUnique({ where: { token } });
+    if (!record) throw new AppError("Invalid verification token", 400);
+    if (record.usedAt) throw new AppError("Token already used", 400);
+    if (record.expiresAt < new Date()) throw new AppError("Verification token expired", 400);
+
+    await prisma.$transaction([
+      prisma.user.update({
+        where: { id: record.userId },
+        data: { emailVerifiedAt: new Date() },
+      }),
+      prisma.emailVerificationToken.update({
+        where: { id: record.id },
+        data: { usedAt: new Date() },
+      }),
+    ]);
+
+    return { message: "Email verified successfully." };
+  },
+
   /**
    * Verify JWT signature and structure. Does NOT check tokenVersion
    * (that requires a DB call and is done in the authenticate middleware).
@@ -241,13 +278,13 @@ export const authService = {
    * Verify that the token's tokenVersion matches the user's current version.
    * Called by authenticate middleware on every request.
    */
-  async verifyTokenVersion(userId: string, tokenVersion: number): Promise<boolean> {
+  async verifyTokenVersion(userId: string, tokenVersion: number): Promise<{ valid: boolean; role?: UserRole }> {
     const user = await prisma.user.findUnique({
       where: { id: userId },
-      select: { tokenVersion: true },
+      select: { tokenVersion: true, role: true },
     });
-    if (!user) return false;
-    return user.tokenVersion === tokenVersion;
+    if (!user) return { valid: false };
+    return { valid: user.tokenVersion === tokenVersion, role: user.role };
   },
 
   /**

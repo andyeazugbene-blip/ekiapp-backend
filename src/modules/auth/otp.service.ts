@@ -1,11 +1,11 @@
 import crypto from "crypto";
 
 import { prisma } from "../../lib/prisma";
+import { CURSOR_ORDER_BY } from "../../shared/constants";
 import { sendEmail } from "../../lib/email";
 import { emailTemplates } from "../../lib/email-templates";
 import { AppError } from "../../shared/errors/app-error";
 
-const OTP_LENGTH = 6;
 const OTP_EXPIRY_MINUTES = 10;
 const MAX_ATTEMPTS = 5;
 const VALID_PURPOSES = ["vendor_onboarding_email"] as const;
@@ -89,7 +89,7 @@ export const otpService = {
         purpose,
         consumedAt: null,
       },
-      orderBy: { createdAt: "desc" },
+      orderBy: CURSOR_ORDER_BY,
     });
 
     if (!otp) {

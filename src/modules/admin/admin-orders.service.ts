@@ -79,7 +79,7 @@ export const adminOrdersService = {
         });
 
         return { orderId, status: OrderStatus.COMPLETED };
-      });
+      }, { isolationLevel: "Serializable" });
     } catch (error) {
       if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
         throw new AppError("Release already processed for this order", 409);

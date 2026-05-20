@@ -23,6 +23,11 @@ export const swaggerSpec = swaggerJSDoc({
       { name: "cart" },
       { name: "delivery" },
       { name: "payments" },
+      { name: "wallet" },
+      { name: "orders" },
+      { name: "reviews" },
+      { name: "promos" },
+      { name: "referrals" },
       { name: "payouts" },
       { name: "admin" },
       { name: "notifications" },
@@ -971,6 +976,409 @@ export const swaggerSpec = swaggerJSDoc({
             200: { description: "OK", content: { "application/json": { schema: { $ref: "#/components/schemas/PayoutRequest" } } } },
             400: { $ref: "#/components/responses/BadRequest" },
             401: { $ref: "#/components/responses/Unauthorized" }, 403: { $ref: "#/components/responses/Forbidden" }, 404: { $ref: "#/components/responses/NotFound" }, 409: { $ref: "#/components/responses/Conflict" },
+          },
+        },
+      },
+    // ─── Wallet ──────────────────────────────────────────────────────────
+      "/wallet/me": {
+        get: {
+          tags: ["wallet"],
+          summary: "Get buyer wallet balance",
+          responses: {
+            200: { description: "OK" },
+            401: { $ref: "#/components/responses/Unauthorized" },
+          },
+        },
+      },
+      "/wallet/me/top-up": {
+        post: {
+          tags: ["wallet"],
+          summary: "Start a wallet top-up (returns Stripe clientSecret, credits on webhook)",
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  required: ["amount"],
+                  properties: {
+                    amount: { type: "integer", minimum: 100, description: "Amount in cents", example: 5000 },
+                  },
+                },
+              },
+            },
+          },
+          responses: {
+            200: {
+              description: "PaymentIntent created",
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    properties: {
+                      clientSecret: { type: "string" },
+                      paymentIntentId: { type: "string" },
+                      amount: { type: "integer" },
+                      currency: { type: "string" },
+                    },
+                  },
+                },
+              },
+            },
+            401: { $ref: "#/components/responses/Unauthorized" },
+            502: { description: "Stripe unavailable" },
+          },
+        },
+      },
+      "/wallet/me/apply": {
+        post: {
+          tags: ["wallet"],
+          summary: "Apply wallet balance to an order (atomic deduction)",
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  required: ["orderId", "amount"],
+                  properties: {
+                    orderId: { type: "string" },
+                    amount: { type: "integer", minimum: 1 },
+                  },
+                },
+              },
+            },
+          },
+          responses: {
+            200: { description: "Wallet deduction applied" },
+            400: { $ref: "#/components/responses/BadRequest" },
+            401: { $ref: "#/components/responses/Unauthorized" },
+            403: { $ref: "#/components/responses/Forbidden" },
+            404: { $ref: "#/components/responses/NotFound" },
+          },
+        },
+      },
+      "/wallet/me/transactions": {
+        get: {
+          tags: ["wallet"],
+          summary: "List wallet transaction history",
+          parameters: [
+            { name: "limit", in: "query", schema: { type: "integer", minimum: 1, maximum: 100, default: 20 } },
+            { name: "cursor", in: "query", schema: { type: "string" } },
+          ],
+          responses: {
+            200: { description: "OK" },
+            401: { $ref: "#/components/responses/Unauthorized" },
+          },
+        },
+      },
+
+      // ─── Auth (new) ─────────────────────────────────────────────────────
+      "/auth/forgot-password": {
+        post: {
+          tags: ["auth"],
+          summary: "Request a password reset email",
+          security: [],
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  required: ["email"],
+                  properties: { email: { type: "string", format: "email" } },
+                },
+              },
+            },
+          },
+          responses: {
+            200: { description: "If the email exists, a reset link is sent" },
+            400: { $ref: "#/components/responses/BadRequest" },
+          },
+        },
+      },
+      "/auth/reset-password": {
+        post: {
+          tags: ["auth"],
+          summary: "Reset password with token",
+          security: [],
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  required: ["token", "password"],
+                  properties: {
+                    token: { type: "string" },
+                    password: { type: "string", minLength: 8, description: "Must contain uppercase, lowercase, and digit" },
+                  },
+                },
+              },
+            },
+          },
+          responses: {
+            200: { description: "Password reset successfully" },
+            400: { $ref: "#/components/responses/BadRequest" },
+          },
+        },
+      },
+      "/auth/verify-email": {
+        post: {
+          tags: ["auth"],
+          summary: "Verify email address with token",
+          security: [],
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  required: ["token"],
+                  properties: { token: { type: "string" } },
+                },
+              },
+            },
+          },
+          responses: {
+            200: { description: "Email verified" },
+            400: { $ref: "#/components/responses/BadRequest" },
+          },
+        },
+      },
+
+      // ─── Reviews ────────────────────────────────────────────────────────
+      "/reviews": {
+        get: {
+          tags: ["reviews"],
+          summary: "List public approved reviews (vendorId or productId filter)",
+          security: [],
+          parameters: [
+            { name: "vendorId", in: "query", schema: { type: "string" } },
+            { name: "productId", in: "query", schema: { type: "string" } },
+            { name: "limit", in: "query", schema: { type: "integer", minimum: 1, maximum: 100, default: 20 } },
+            { name: "cursor", in: "query", schema: { type: "string" } },
+          ],
+          responses: {
+            200: { description: "OK with items, nextCursor, averageRating" },
+          },
+        },
+        post: {
+          tags: ["reviews"],
+          summary: "Create a review (order must be DELIVERED/COMPLETED, 1-5 integer rating)",
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  required: ["orderId", "vendorId", "rating"],
+                  properties: {
+                    orderId: { type: "string" },
+                    vendorId: { type: "string" },
+                    productId: { type: "string" },
+                    rating: { type: "integer", minimum: 1, maximum: 5 },
+                    comment: { type: "string" },
+                  },
+                },
+              },
+            },
+          },
+          responses: {
+            201: { description: "Review created" },
+            400: { $ref: "#/components/responses/BadRequest" },
+            401: { $ref: "#/components/responses/Unauthorized" },
+            403: { $ref: "#/components/responses/Forbidden" },
+            409: { $ref: "#/components/responses/Conflict" },
+          },
+        },
+      },
+      "/admin/reviews": {
+        get: {
+          tags: ["admin"],
+          summary: "List all reviews (ADMIN, optional status filter)",
+          parameters: [
+            { name: "status", in: "query", schema: { type: "string", enum: ["APPROVED", "HIDDEN", "REJECTED", "PENDING"] } },
+            { name: "limit", in: "query", schema: { type: "integer", minimum: 1, maximum: 100 } },
+            { name: "cursor", in: "query", schema: { type: "string" } },
+          ],
+          responses: { 200: { description: "OK" }, 401: { $ref: "#/components/responses/Unauthorized" }, 403: { $ref: "#/components/responses/Forbidden" } },
+        },
+      },
+      "/admin/reviews/{id}/moderate": {
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+        patch: {
+          tags: ["admin"],
+          summary: "Moderate a review: APPROVED, HIDDEN, or REJECTED (ADMIN)",
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  required: ["status"],
+                  properties: { status: { type: "string", enum: ["APPROVED", "HIDDEN", "REJECTED"] } },
+                },
+              },
+            },
+          },
+          responses: {
+            200: { description: "OK" },
+            400: { $ref: "#/components/responses/BadRequest" },
+            401: { $ref: "#/components/responses/Unauthorized" },
+            403: { $ref: "#/components/responses/Forbidden" },
+            404: { $ref: "#/components/responses/NotFound" },
+          },
+        },
+      },
+
+      // ─── Promo Codes ────────────────────────────────────────────────────
+      "/promo-codes/validate": {
+        post: {
+          tags: ["promos"],
+          summary: "Validate a promo code (check eligibility, returns discount amount)",
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  required: ["code", "orderAmount"],
+                  properties: {
+                    code: { type: "string" },
+                    orderAmount: { type: "integer", minimum: 1 },
+                  },
+                },
+              },
+            },
+          },
+          responses: {
+            200: { description: "Promo valid" },
+            400: { $ref: "#/components/responses/BadRequest" },
+            401: { $ref: "#/components/responses/Unauthorized" },
+            404: { $ref: "#/components/responses/NotFound" },
+            409: { $ref: "#/components/responses/Conflict" },
+          },
+        },
+      },
+      "/promo-codes/redeem": {
+        post: {
+          tags: ["promos"],
+          summary: "Redeem a promo code (atomic, one per order, race-safe)",
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  required: ["code", "orderAmount"],
+                  properties: {
+                    code: { type: "string" },
+                    orderAmount: { type: "integer", minimum: 1 },
+                    orderId: { type: "string" },
+                  },
+                },
+              },
+            },
+          },
+          responses: {
+            200: { description: "Discount applied" },
+            400: { $ref: "#/components/responses/BadRequest" },
+            401: { $ref: "#/components/responses/Unauthorized" },
+            409: { $ref: "#/components/responses/Conflict" },
+          },
+        },
+      },
+
+      // ─── Referrals ──────────────────────────────────────────────────────
+      "/referrals/stats": {
+        get: {
+          tags: ["referrals"],
+          summary: "Get referral stats (code, total referred, total earned)",
+          responses: {
+            200: { description: "OK" },
+            401: { $ref: "#/components/responses/Unauthorized" },
+          },
+        },
+      },
+      "/referrals/apply": {
+        post: {
+          tags: ["referrals"],
+          summary: "Apply a referral code (credits on first paid order, not on signup)",
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  required: ["code"],
+                  properties: { code: { type: "string" } },
+                },
+              },
+            },
+          },
+          responses: {
+            200: { description: "Referral applied (bonus credited on first paid order)" },
+            400: { $ref: "#/components/responses/BadRequest" },
+            401: { $ref: "#/components/responses/Unauthorized" },
+            409: { $ref: "#/components/responses/Conflict" },
+          },
+        },
+      },
+
+      // ─── Orders (vendor) ────────────────────────────────────────────────
+      "/orders/vendor/list": {
+        get: {
+          tags: ["orders"],
+          summary: "List vendor's orders",
+          parameters: [
+            { name: "status", in: "query", schema: { type: "string" } },
+            { name: "limit", in: "query", schema: { type: "integer", minimum: 1, maximum: 100, default: 20 } },
+            { name: "cursor", in: "query", schema: { type: "string" } },
+          ],
+          responses: {
+            200: { description: "OK" },
+            401: { $ref: "#/components/responses/Unauthorized" },
+            403: { $ref: "#/components/responses/Forbidden" },
+          },
+        },
+      },
+      "/orders/vendor/{id}": {
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+        get: {
+          tags: ["orders"],
+          summary: "Get a single vendor order",
+          responses: {
+            200: { description: "OK" },
+            401: { $ref: "#/components/responses/Unauthorized" },
+            403: { $ref: "#/components/responses/Forbidden" },
+            404: { $ref: "#/components/responses/NotFound" },
+          },
+        },
+      },
+      "/orders/vendor/{id}/status": {
+        parameters: [{ name: "id", in: "path", required: true, schema: { type: "string" } }],
+        patch: {
+          tags: ["orders"],
+          summary: "Update vendor order status (e.g. PROCESSING, SHIPPED)",
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  required: ["status"],
+                  properties: { status: { type: "string" } },
+                },
+              },
+            },
+          },
+          responses: {
+            200: { description: "OK" },
+            400: { $ref: "#/components/responses/BadRequest" },
+            401: { $ref: "#/components/responses/Unauthorized" },
+            403: { $ref: "#/components/responses/Forbidden" },
+            404: { $ref: "#/components/responses/NotFound" },
           },
         },
       },

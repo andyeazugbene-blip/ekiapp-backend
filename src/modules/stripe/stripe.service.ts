@@ -7,6 +7,7 @@ import { prisma } from "../../lib/prisma";
 import { pushNotifications } from "../../lib/push-notifications";
 import { stripe } from "../../lib/stripe";
 import { notificationsService } from "../notifications/notifications.service";
+import { referralsService } from "../referrals/referrals.service";
 import { AppError } from "../../shared/errors/app-error";
 import type { StripeWebhookInput, StripeWebhookResult } from "./stripe.types";
 
@@ -14,15 +15,15 @@ import type { StripeWebhookInput, StripeWebhookResult } from "./stripe.types";
  * Multi-vendor webhook handler.
  *
  * On payment_intent.succeeded:
- * - Find Checkout by stripePaymentIntentId
- * - Mark Checkout SUCCEEDED
- * - For each Order in the checkout:
- *   - Mark order PAID
- *   - Mark payment SUCCEEDED
- *   - Credit vendor wallet (pendingBalance)
- *   - Create wallet ledger entry
- * - Clear buyer cart
- * - Send notifications
+ * - If metadata.kind === "wallet_topup": credit buyer wallet (idempotent)
+ * - Else: find Checkout, mark SUCCEEDED, mark orders PAID, credit vendor wallets
+ *
+ * On payment_intent.payment_failed / payment_intent.canceled:
+ * - Fail checkout + orders, restore stock, restore wallet deduction
+ *
+ * Permanent validation errors (amount mismatch, checkout not found, buyer mismatch,
+ * currency mismatch) are marked IGNORED and return HTTP 200 to Stripe.
+ * Only invalid signatures return 400. Transient DB/server errors return 500.
  *
  * Idempotency: WebhookEvent unique constraint + conditional status updates.
  */
@@ -31,7 +32,15 @@ class StripeWebhookService {
     const event = this.constructEvent(input);
 
     if (event.type === "payment_intent.payment_failed") {
-      return this.handlePaymentFailed(event);
+      return this.handlePaymentFailedOrCanceled(event);
+    }
+
+    if (event.type === "payment_intent.canceled") {
+      return this.handlePaymentFailedOrCanceled(event);
+    }
+
+    if (event.type === "charge.dispute.created") {
+      return this.handleDisputeCreated(event);
     }
 
     if (event.type !== "payment_intent.succeeded") {
@@ -43,6 +52,14 @@ class StripeWebhookService {
 
   private async handlePaymentSucceeded(event: Stripe.Event): Promise<StripeWebhookResult> {
     const paymentIntent = event.data.object as Stripe.PaymentIntent;
+    const kind = paymentIntent.metadata?.kind;
+
+    // ─── Wallet top-up flow ───────────────────────────────────────────────
+    if (kind === "wallet_topup") {
+      return this.handleWalletTopUpSucceeded(event, paymentIntent);
+    }
+
+    // ─── Checkout flow ────────────────────────────────────────────────────
     const checkoutId = paymentIntent.metadata?.checkoutId;
     const buyerId = paymentIntent.metadata?.buyerId;
 
@@ -73,7 +90,8 @@ class StripeWebhookService {
 
         if (!checkout) {
           logger.error("Webhook: checkout not found", { checkoutId, eventId: event.id });
-          throw new AppError("Checkout not found", 404);
+          await this.markEventIgnored(tx, event.id);
+          return { received: true, ignored: true, eventId: event.id, type: event.type };
         }
 
         // Already processed? Idempotent return.
@@ -82,9 +100,25 @@ class StripeWebhookService {
           return { received: true, duplicate: true, eventId: event.id, type: event.type };
         }
 
+        // Validate buyer
+        if (checkout.buyerId !== buyerId) {
+          logger.error("Webhook: buyer mismatch", { checkoutId, expected: checkout.buyerId, got: buyerId, eventId: event.id });
+          await this.markEventIgnored(tx, event.id);
+          return { received: true, ignored: true, eventId: event.id, type: event.type };
+        }
+
+        // Validate currency
+        if (checkout.currency.toLowerCase() !== paymentIntent.currency.toLowerCase()) {
+          logger.error("Webhook: currency mismatch", { checkoutId, expected: checkout.currency, got: paymentIntent.currency, eventId: event.id });
+          await this.markEventIgnored(tx, event.id);
+          return { received: true, ignored: true, eventId: event.id, type: event.type };
+        }
+
         // Validate amount
         if (checkout.totalAmount !== paymentIntent.amount) {
-          throw new AppError("Amount mismatch", 400);
+          logger.error("Webhook: amount mismatch", { checkoutId, expected: checkout.totalAmount, got: paymentIntent.amount, eventId: event.id });
+          await this.markEventIgnored(tx, event.id);
+          return { received: true, ignored: true, eventId: event.id, type: event.type };
         }
 
         // Mark checkout SUCCEEDED (conditional)
@@ -151,12 +185,17 @@ class StripeWebhookService {
         // Notifications (fire-and-forget)
         this.sendSuccessNotifications(buyerId, checkout.orders);
 
+        // Referral bonus: credit referrer on referred user's first paid order (fire-and-forget)
+        referralsService.creditReferralBonusOnFirstOrder(buyerId).catch((err) => {
+          logger.error("Referral bonus credit failed", { buyerId, error: String(err) });
+        });
+
         logger.info("Webhook processed: payment_intent.succeeded (multi-vendor)", {
           eventId: event.id, checkoutId, orderCount: checkout.orders.length,
         });
 
         return { received: true, eventId: event.id, type: event.type };
-      });
+      }, { isolationLevel: "Serializable" });
     } catch (error) {
       if (this.isUniqueConstraintError(error)) {
         return { received: true, duplicate: true, eventId: event.id, type: event.type };
@@ -166,9 +205,93 @@ class StripeWebhookService {
     }
   }
 
-  private async handlePaymentFailed(event: Stripe.Event): Promise<StripeWebhookResult> {
+  // ─── Wallet Top-Up Webhook Handler ──────────────────────────────────────
+
+  private async handleWalletTopUpSucceeded(event: Stripe.Event, paymentIntent: Stripe.PaymentIntent): Promise<StripeWebhookResult> {
+    const buyerId = paymentIntent.metadata?.buyerId;
+
+    if (!buyerId) {
+      logger.warn("Wallet top-up webhook missing buyerId", { eventId: event.id });
+      return { received: true, ignored: true, eventId: event.id, type: event.type };
+    }
+
+    try {
+      return await prisma.$transaction(async (tx) => {
+        if (await this.isDuplicate(tx, event.id, event.type, {})) {
+          return { received: true, duplicate: true, eventId: event.id, type: event.type };
+        }
+
+        // Get or create buyer wallet
+        let wallet = await tx.buyerWallet.findUnique({ where: { buyerId } });
+        if (!wallet) {
+          wallet = await tx.buyerWallet.create({
+            data: { buyerId, currency: paymentIntent.currency },
+          });
+        }
+
+        // Idempotency: unique constraint on [paymentIntentId, type] prevents double credit
+        await tx.buyerWalletTransaction.create({
+          data: {
+            walletId: wallet.id,
+            buyerId,
+            type: "TOP_UP",
+            amount: paymentIntent.amount,
+            currency: paymentIntent.currency,
+            description: `Wallet top-up of ${paymentIntent.amount}`,
+            paymentIntentId: paymentIntent.id,
+          },
+        });
+
+        await tx.buyerWallet.update({
+          where: { id: wallet.id },
+          data: { balance: { increment: paymentIntent.amount } },
+        });
+
+        await tx.webhookEvent.update({
+          where: { stripeEventId: event.id },
+          data: { status: "PROCESSED", processedAt: new Date() },
+        });
+
+        logger.info("Webhook processed: wallet_topup succeeded", {
+          eventId: event.id, buyerId, amount: paymentIntent.amount,
+        });
+
+        return { received: true, eventId: event.id, type: event.type };
+      }, { isolationLevel: "Serializable" });
+    } catch (error) {
+      if (this.isUniqueConstraintError(error)) {
+        return { received: true, duplicate: true, eventId: event.id, type: event.type };
+      }
+      logger.error("Webhook failed: wallet_topup", { eventId: event.id, ...serializeError(error) });
+      throw error;
+    }
+  }
+
+  // ─── Payment Failed / Canceled ──────────────────────────────────────────
+
+  private async handlePaymentFailedOrCanceled(event: Stripe.Event): Promise<StripeWebhookResult> {
     const paymentIntent = event.data.object as Stripe.PaymentIntent;
     const checkoutId = paymentIntent.metadata?.checkoutId;
+    const kind = paymentIntent.metadata?.kind;
+
+    // Wallet top-up canceled/failed: nothing to reverse (wallet was never credited)
+    if (kind === "wallet_topup") {
+      try {
+        return await prisma.$transaction(async (tx) => {
+          if (await this.isDuplicate(tx, event.id, event.type, {})) {
+            return { received: true, duplicate: true, eventId: event.id, type: event.type };
+          }
+          await tx.webhookEvent.update({ where: { stripeEventId: event.id }, data: { status: "PROCESSED", processedAt: new Date() } });
+          logger.info(`Webhook processed: wallet_topup ${event.type}`, { eventId: event.id });
+          return { received: true, eventId: event.id, type: event.type };
+        }, { isolationLevel: "Serializable" });
+      } catch (error) {
+        if (this.isUniqueConstraintError(error)) {
+          return { received: true, duplicate: true, eventId: event.id, type: event.type };
+        }
+        throw error;
+      }
+    }
 
     try {
       return await prisma.$transaction(async (tx) => {
@@ -217,33 +340,68 @@ class StripeWebhookService {
             data: { status: PaymentStatus.FAILED, processedAt: new Date() },
           });
 
-          // Restore stock
-          for (const item of order.items) {
-            await tx.product.update({
-              where: { id: item.productId },
-              data: { stock: { increment: item.quantity } },
-            });
-          }
+          // Restore stock (batched)
+          await Promise.all(
+            order.items.map((item) =>
+              tx.product.update({
+                where: { id: item.productId },
+                data: { stock: { increment: item.quantity } },
+              }),
+            ),
+          );
         }
+
+        // Restore wallet deduction if any
+        await this.restoreWalletDeduction(tx, checkout);
 
         await tx.webhookEvent.update({ where: { stripeEventId: event.id }, data: { status: "PROCESSED", processedAt: new Date() } });
 
-        logger.info("Webhook processed: payment_intent.payment_failed (multi-vendor)", {
+        logger.info(`Webhook processed: ${event.type} (multi-vendor)`, {
           eventId: event.id, checkoutId, orderCount: checkout.orders.length,
         });
 
         return { received: true, eventId: event.id, type: event.type };
-      });
+      }, { isolationLevel: "Serializable" });
     } catch (error) {
       if (this.isUniqueConstraintError(error)) {
         return { received: true, duplicate: true, eventId: event.id, type: event.type };
       }
-      logger.error("Webhook failed: payment_intent.payment_failed", { eventId: event.id, ...serializeError(error) });
+      logger.error(`Webhook failed: ${event.type}`, { eventId: event.id, ...serializeError(error) });
       throw error;
     }
   }
 
   // ─── Helpers ─────────────────────────────────────────────────────────────
+
+  private async restoreWalletDeduction(
+    tx: Prisma.TransactionClient,
+    checkout: { id: string; buyerId: string; metadata: unknown },
+  ): Promise<void> {
+    const meta = checkout.metadata as { walletDeduction?: number } | null;
+    const walletDeduction = meta?.walletDeduction;
+    if (!walletDeduction || walletDeduction <= 0) return;
+
+    const wallet = await tx.buyerWallet.findUnique({ where: { buyerId: checkout.buyerId } });
+    if (!wallet) return;
+
+    // Idempotent: unique [paymentIntentId, type] won't apply here since this is a refund
+    // but we use orderId-based description to keep it traceable
+    await tx.buyerWallet.update({
+      where: { id: wallet.id },
+      data: { balance: { increment: walletDeduction } },
+    });
+
+    await tx.buyerWalletTransaction.create({
+      data: {
+        walletId: wallet.id,
+        buyerId: checkout.buyerId,
+        type: "REFUND_CREDIT",
+        amount: walletDeduction,
+        currency: wallet.currency,
+        description: `Wallet deduction restored for canceled/failed checkout ${checkout.id}`,
+      },
+    });
+  }
 
   private async failSingleOrder(tx: Prisma.TransactionClient, paymentId: string, orderId: string): Promise<void> {
     await tx.payment.updateMany({ where: { id: paymentId, status: PaymentStatus.PENDING }, data: { status: PaymentStatus.FAILED, processedAt: new Date() } });
@@ -300,6 +458,55 @@ class StripeWebhookService {
             pushNotifications.vendorNewOrder(v.userId, order.id);
           }
         }).catch(() => {});
+    }
+  }
+
+  // ─── Dispute Handler ─────────────────────────────────────────────────────
+
+  private async handleDisputeCreated(event: Stripe.Event): Promise<StripeWebhookResult> {
+    const dispute = event.data.object as Stripe.Dispute;
+    const paymentIntentId = typeof dispute.payment_intent === "string" ? dispute.payment_intent : dispute.payment_intent?.id;
+
+    try {
+      return await prisma.$transaction(async (tx) => {
+        if (await this.isDuplicate(tx, event.id, event.type, {})) {
+          return { received: true, duplicate: true, eventId: event.id, type: event.type };
+        }
+
+        // Find related checkout via payment intent
+        const checkout = paymentIntentId
+          ? await tx.checkout.findUnique({
+              where: { stripePaymentIntentId: paymentIntentId },
+              select: { id: true, buyerId: true },
+            })
+          : null;
+
+        // Log dispute for manual review. Chargebacks require human investigation.
+        logger.error("Stripe dispute created — manual review required", {
+          eventId: event.id,
+          disputeId: dispute.id,
+          paymentIntentId,
+          checkoutId: checkout?.id ?? null,
+          buyerId: checkout?.buyerId ?? null,
+          amount: dispute.amount,
+          currency: dispute.currency,
+          reason: dispute.reason,
+          status: dispute.status,
+        });
+
+        await tx.webhookEvent.update({
+          where: { stripeEventId: event.id },
+          data: { status: "PROCESSED", processedAt: new Date() },
+        });
+
+        return { received: true, eventId: event.id, type: event.type };
+      }, { isolationLevel: "Serializable" });
+    } catch (error) {
+      if (this.isUniqueConstraintError(error)) {
+        return { received: true, duplicate: true, eventId: event.id, type: event.type };
+      }
+      logger.error("Webhook failed: charge.dispute.created", { eventId: event.id, ...serializeError(error) });
+      throw error;
     }
   }
 

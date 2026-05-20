@@ -1,6 +1,3 @@
-import type { Vendor } from "@prisma/client";
-
-import { env } from "../../config/env";
 import { logger } from "../../lib/logger";
 import { prisma } from "../../lib/prisma";
 import { stripe } from "../../lib/stripe";

@@ -1,4 +1,5 @@
 import type { Cart, CartItem, Prisma, Product } from "@prisma/client";
+import type { PrismaClient } from "@prisma/client";
 
 import { prisma } from "../../lib/prisma";
 import { AppError } from "../../shared/errors/app-error";
@@ -17,7 +18,7 @@ function includeItems() {
 
 async function getOrCreateCart(
   buyerId: string,
-  tx: Prisma.TransactionClient = prisma as unknown as Prisma.TransactionClient,
+  tx: Prisma.TransactionClient | PrismaClient = prisma,
 ): Promise<CartWithItems> {
   // Use upsert to prevent race condition (unique on buyerId)
   const cart = await tx.cart.upsert({

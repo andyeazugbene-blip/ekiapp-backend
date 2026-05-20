@@ -38,15 +38,16 @@ export function authenticate(request: Request, _response: Response, next: NextFu
     return;
   }
 
-  // Verify tokenVersion against DB (async)
+  // Verify tokenVersion against DB (async) and load live role
   authService
     .verifyTokenVersion(payload.sub, payload.tv ?? 0)
-    .then((valid) => {
-      if (!valid) {
+    .then((result) => {
+      if (!result.valid) {
         next(new AppError("Token revoked. Please log in again.", 401));
         return;
       }
-      request.user = { id: payload.sub, role: payload.role, email: payload.email };
+      // Use DB role (not JWT claim) so role changes take effect immediately
+      request.user = { id: payload.sub, role: result.role ?? payload.role, email: payload.email };
       next();
     })
     .catch((error) => {
@@ -96,9 +97,9 @@ export function optionalAuthenticate(request: Request, _response: Response, next
 
   authService
     .verifyTokenVersion(payload.sub, payload.tv ?? 0)
-    .then((valid) => {
-      if (valid) {
-        request.user = { id: payload.sub, role: payload.role, email: payload.email };
+    .then((result) => {
+      if (result.valid) {
+        request.user = { id: payload.sub, role: result.role ?? payload.role, email: payload.email };
       }
       next();
     })

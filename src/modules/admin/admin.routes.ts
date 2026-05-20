@@ -1,3 +1,16 @@
+/**
+ * Admin routes — convention:
+ *
+ * - All routes are prefixed with /api/admin and require ADMIN role.
+ * - GET   /resource          → list (paginated, cursor-based)
+ * - POST  /resource          → create
+ * - PATCH /resource/:id      → update fields
+ * - PATCH /resource/:id/verb → state transition (approve, reject, complete, suspend, etc.)
+ * - DELETE /resource/:id     → delete
+ *
+ * State transitions use PATCH with an action verb suffix (not POST) to stay RESTful.
+ * All admin mutations are recorded in the AuditLog table.
+ */
 import { Router } from "express";
 
 import { authenticate, requireRole } from "../../middlewares/authenticate";

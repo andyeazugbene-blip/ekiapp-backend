@@ -1,6 +1,7 @@
 import type { Shipment } from "@prisma/client";
 
 import { prisma } from "../../lib/prisma";
+import { CURSOR_ORDER_BY } from "../../shared/constants";
 import { AppError } from "../../shared/errors/app-error";
 import type { CreateShipmentInput, ListShipmentsQuery, UpdateShipmentInput } from "./shipments.types";
 
@@ -117,7 +118,7 @@ export const shipmentsService = {
         vendorId: vendor.id,
         ...(query.status ? { status: query.status } : {}),
       },
-      orderBy: { createdAt: "desc" },
+      orderBy: CURSOR_ORDER_BY,
       take: query.limit + 1,
       ...(query.cursor ? { cursor: { id: query.cursor }, skip: 1 } : {}),
     });

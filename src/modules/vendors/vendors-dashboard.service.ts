@@ -1,4 +1,5 @@
 import { prisma } from "../../lib/prisma";
+import { CURSOR_ORDER_BY } from "../../shared/constants";
 import { AppError } from "../../shared/errors/app-error";
 import type { DashboardAlert, VendorDashboardData, VendorEarningsData } from "./vendors-dashboard.types";
 
@@ -152,7 +153,7 @@ export const vendorDashboardService = {
 
     const recentPayouts = await prisma.payoutRequest.findMany({
       where: { vendorId: vendor.id },
-      orderBy: { createdAt: "desc" },
+      orderBy: CURSOR_ORDER_BY,
       take: 10,
       select: {
         id: true,

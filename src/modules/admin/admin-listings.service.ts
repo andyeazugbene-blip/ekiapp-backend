@@ -7,6 +7,7 @@ import {
 } from "@prisma/client";
 
 import { prisma } from "../../lib/prisma";
+import { CURSOR_ORDER_BY } from "../../shared/constants";
 import { AppError } from "../../shared/errors/app-error";
 
 const MAX_LIMIT = 100;
@@ -43,7 +44,7 @@ function optionalEnum<T extends string>(
   return allowed[value as keyof typeof allowed];
 }
 
-async function paginate<TWhere, TItem extends { id: string }>(
+async function paginate<TItem extends { id: string }>(
   fetcher: (args: { take: number; cursor?: { id: string }; skip?: number }) => Promise<TItem[]>,
   pagination: PaginationQuery,
 ): Promise<{ items: TItem[]; nextCursor: string | null }> {
@@ -76,7 +77,7 @@ export const adminListingsService = {
             createdAt: true,
             updatedAt: true,
           },
-          orderBy: { createdAt: "desc" },
+          orderBy: CURSOR_ORDER_BY,
           take,
           cursor,
           skip,
@@ -100,7 +101,7 @@ export const adminListingsService = {
           include: {
             user: { select: { id: true, email: true, name: true, role: true } },
           },
-          orderBy: { createdAt: "desc" },
+          orderBy: CURSOR_ORDER_BY,
           take,
           cursor,
           skip,
@@ -123,7 +124,7 @@ export const adminListingsService = {
       ({ take, cursor, skip }) =>
         prisma.product.findMany({
           where: isActive === undefined ? {} : { isActive },
-          orderBy: { createdAt: "desc" },
+          orderBy: CURSOR_ORDER_BY,
           take,
           cursor,
           skip,
@@ -144,7 +145,7 @@ export const adminListingsService = {
             items: true,
             payment: { select: { id: true, status: true, stripePaymentIntentId: true } },
           },
-          orderBy: { createdAt: "desc" },
+          orderBy: CURSOR_ORDER_BY,
           take,
           cursor,
           skip,
@@ -161,7 +162,7 @@ export const adminListingsService = {
       ({ take, cursor, skip }) =>
         prisma.payment.findMany({
           where: status ? { status } : {},
-          orderBy: { createdAt: "desc" },
+          orderBy: CURSOR_ORDER_BY,
           take,
           cursor,
           skip,
@@ -185,7 +186,7 @@ export const adminListingsService = {
             ...(type ? { type } : {}),
             ...(vendorId ? { vendorId } : {}),
           },
-          orderBy: { createdAt: "desc" },
+          orderBy: CURSOR_ORDER_BY,
           take,
           cursor,
           skip,

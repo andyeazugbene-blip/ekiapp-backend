@@ -28,8 +28,8 @@ export async function listTransactions(request: Request, response: Response): Pr
 
 export async function topUp(request: Request, response: Response): Promise<void> {
   const input = validateTopUpInput(request.body);
-  const transaction = await buyerWalletService.topUp(requireUserId(request), input);
-  response.status(201).json({ transaction });
+  const result = await buyerWalletService.topUp(requireUserId(request), input);
+  response.status(201).json(result);
 }
 
 export async function applyToOrder(request: Request, response: Response): Promise<void> {

@@ -1,6 +1,7 @@
 import type { VerificationDocument, VendorVerificationStatus } from "@prisma/client";
 
 import { prisma } from "../../lib/prisma";
+import { CURSOR_ORDER_BY } from "../../shared/constants";
 import { AppError } from "../../shared/errors/app-error";
 import type { ReviewVerificationInput, SubmitVerificationInput } from "./verification.types";
 
@@ -69,7 +70,7 @@ export const verificationService = {
 
     const documents = await prisma.verificationDocument.findMany({
       where: { vendorId: vendor.id },
-      orderBy: { createdAt: "desc" },
+      orderBy: CURSOR_ORDER_BY,
     });
 
     return {

@@ -33,6 +33,7 @@ export function errorHandler(
     }
     response.status(error.statusCode).json({
       message: error.message,
+      ...(error.code ? { code: error.code } : {}),
       details: error.details ?? null,
     });
     return;

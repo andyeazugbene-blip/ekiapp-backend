@@ -1,3 +1,5 @@
+import crypto from "crypto";
+
 import type { Prisma } from "@prisma/client";
 
 import { env } from "../../config/env";
@@ -9,7 +11,7 @@ import { calculatePlatformFee as calcPlatformFee } from "../../shared/pricing";
 import { validateCreatePaymentIntentFromCartInput } from "./payments.validation";
 import type { CreatePaymentIntentResponse, PricedOrderItem } from "./payments.types";
 
-const MAX_VENDOR_WEIGHT_GRAMS = 30_000; // 30 kg per vendor group
+import { MAX_VENDOR_WEIGHT_GRAMS } from "../../shared/constants";
 
 interface VendorGroup {
   vendorId: string;
@@ -232,7 +234,7 @@ class PaymentsService {
       // Create one Order per vendor
       const orderIds: string[] = [];
       for (const group of vendorGroups) {
-        const orderNumber = `EKI-${new Date().getFullYear()}-${String(Date.now()).slice(-6)}-${orderIds.length}`;
+        const orderNumber = `EKI-${new Date().getFullYear()}-${crypto.randomBytes(4).toString("hex").toUpperCase()}-${orderIds.length}`;
 
         const order = await tx.order.create({
           data: {
@@ -311,7 +313,7 @@ class PaymentsService {
         {
           amount: stripeAmount,
           currency,
-          payment_method_types: ["card"],
+          automatic_payment_methods: { enabled: true },
           metadata: {
             checkoutId,
             buyerId,
@@ -322,13 +324,25 @@ class PaymentsService {
         },
         { idempotencyKey: `pi:checkout:${checkoutId}` },
       );
-    } catch (error) {
+    } catch (error: unknown) {
+      const stripeErr = error as { type?: string; code?: string; message?: string };
       const errorMsg = error instanceof Error ? error.message : String(error);
       logger.error("Stripe PaymentIntent creation failed", {
         checkoutId,
         errorMessage: errorMsg,
+        stripeType: stripeErr.type,
+        stripeCode: stripeErr.code,
       });
-      throw new AppError("Payment provider unavailable", 502);
+
+      // Card-declined or invalid request → client error
+      if (stripeErr.type === "StripeCardError") {
+        throw new AppError(stripeErr.message ?? "Card declined", 400, undefined, "CARD_DECLINED");
+      }
+      if (stripeErr.type === "StripeInvalidRequestError") {
+        throw new AppError("Payment request invalid", 400, undefined, "STRIPE_INVALID_REQUEST");
+      }
+      // All other Stripe / network errors → server error
+      throw new AppError("Payment provider unavailable", 502, undefined, "STRIPE_UNAVAILABLE");
     }
 
     if (!paymentIntent.client_secret) {

@@ -1,6 +1,7 @@
 import type { Review } from "@prisma/client";
 
 import { prisma } from "../../lib/prisma";
+import { CURSOR_ORDER_BY } from "../../shared/constants";
 import { AppError } from "../../shared/errors/app-error";
 import type {
   AdminListReviewsQuery,
@@ -82,7 +83,7 @@ export const reviewsService = {
 
     const items = await prisma.review.findMany({
       where,
-      orderBy: { createdAt: "desc" },
+      orderBy: CURSOR_ORDER_BY,
       take: query.limit + 1,
       ...(query.cursor ? { cursor: { id: query.cursor }, skip: 1 } : {}),
     });
@@ -110,7 +111,7 @@ export const reviewsService = {
   ): Promise<{ items: Review[]; nextCursor: string | null }> {
     const items = await prisma.review.findMany({
       where: query.status ? { status: query.status } : {},
-      orderBy: { createdAt: "desc" },
+      orderBy: CURSOR_ORDER_BY,
       take: query.limit + 1,
       ...(query.cursor ? { cursor: { id: query.cursor }, skip: 1 } : {}),
     });

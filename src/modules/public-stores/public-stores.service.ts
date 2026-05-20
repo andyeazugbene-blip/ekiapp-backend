@@ -1,4 +1,5 @@
 import { prisma } from "../../lib/prisma";
+import { CURSOR_ORDER_BY } from "../../shared/constants";
 import { AppError } from "../../shared/errors/app-error";
 import { buildVendorShareUrl } from "../vendors/vendors.service";
 import type {
@@ -88,7 +89,7 @@ export const publicStoresService = {
         isActive: true,
         ...(query.category ? { category: query.category } : {}),
       },
-      orderBy: { createdAt: "desc" },
+      orderBy: CURSOR_ORDER_BY,
       take: query.limit + 1,
       ...(query.cursor ? { cursor: { id: query.cursor }, skip: 1 } : {}),
       select: {
