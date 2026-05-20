@@ -5,7 +5,13 @@
       "src": "src/app.ts",
       "use": "@vercel/node",
       "config": {
-        "includeFiles": ["prisma/**"]
+        "maxLambdaSize": "50mb",
+        "includeFiles": [
+          "prisma/**",
+          "node_modules/.prisma/**",
+          "node_modules/@prisma/client/**",
+          "node_modules/@prisma/engines/**"
+        ]
       }
     }
   ],
