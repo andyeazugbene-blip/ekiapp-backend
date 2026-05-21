@@ -147,7 +147,7 @@ All routes are prefixed with `/api`. Auth is `Bearer <JWT>` in the `Authorizatio
 
 ### Cart (auth)
 
-Cart is per user; enforces one vendor per cart and validates stock.
+Cart is per user, supports multiple vendors, and validates stock.
 
 - `GET /cart` — returns (auto-creating if missing).
 - `POST /cart/items` — `{ productId, quantity }`.
@@ -161,13 +161,13 @@ Cart is per user; enforces one vendor per cart and validates stock.
 
 ### Payments (auth)
 
-- `POST /payments/create-intent` — `{ cartId, destinationZoneId }` → `{ orderId, paymentId, amount, currency, clientSecret }`. Creates order + items + payment, calls Stripe, stores `clientSecret`.
+- `POST /payments/create-intent` - `{ cartId, destinationZoneId | deliveryCountry, walletAmount? }` returns `{ checkoutId, orderIds, amount, currency, clientSecret }`. Creates one checkout, one order/payment per vendor, reserves stock, optionally debits buyer wallet, and creates a Stripe PaymentIntent for the remaining amount.
 
-Cart is cleared only after the Stripe webhook marks the payment successful.
+For Stripe-paid checkouts, the cart is cleared after the webhook marks payment successful. For fully wallet-paid checkouts, the cart is cleared inside the checkout transaction.
 
 ### Stripe Webhook (public, signature-verified)
 
-- `POST /stripe/webhook` — handles `payment_intent.succeeded`. Verifies signature; dedupes on `WebhookEvent.stripeEventId`; atomically marks payment SUCCEEDED, order PAID, credits `pendingBalance` with `vendorEarningsAmount`, records a `PAYMENT_PENDING_CREDIT` ledger row, clears the buyer's cart, and emits notifications.
+- `POST /stripe/webhook` - handles `payment_intent.succeeded`, `payment_intent.payment_failed`, `payment_intent.canceled`, wallet top-up success, and basic dispute logging. It verifies the signature, dedupes on `WebhookEvent.stripeEventId`, credits vendor pending balances through `PAYMENT_PENDING_CREDIT` ledger rows, restores stock/wallet deductions on failed or canceled checkouts, clears the buyer cart on success, and emits notifications.
 
 ### Payout Requests
 
@@ -253,7 +253,9 @@ The following security measures have been applied across four phases:
 ### Phase 2 — High Financial/Security
 - Promo code redemption: atomic `UPDATE WHERE usedCount < maxUses` (raw SQL)
 - Review rating: `BETWEEN 1 AND 5` CHECK constraint
-- Referral reward: credited only on first paid order, transactional, idempotent
+- Referral reward: credited only on first paid order, transactional, idempotent, and capped per referrer over a rolling 30-day window
+- Fully wallet-paid checkout: vendor pending wallet credits + ledger rows are created in the checkout transaction
+- Verification uploads: disabled until private storage is implemented, preventing KYC documents from using the public bucket
 - Stripe `automatic_payment_methods: { enabled: true }` (replaces `payment_method_types`)
 - Stripe API version pinned to `2025-08-27.basil`
 - Auth middleware loads role from DB (not JWT) on every request

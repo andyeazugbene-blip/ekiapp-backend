@@ -1,11 +1,14 @@
 import crypto from "crypto";
 
+import { Prisma } from "@prisma/client";
+
 import { prisma } from "../../lib/prisma";
 import { logger } from "../../lib/logger";
 import { AppError } from "../../shared/errors/app-error";
 
 const REFERRAL_BONUS_AMOUNT = 500; // 500 cents = €5
 const REFERRAL_CURRENCY = "eur";
+const MAX_REFERRAL_BONUSES_PER_30_DAYS = 10;
 
 function generateReferralCode(): string {
   return "REF-" + crypto.randomBytes(4).toString("hex").toUpperCase();
@@ -111,52 +114,53 @@ export const referralsService = {
       return; // No paid order yet
     }
 
-    // Transactional: credit wallet + mark referral as credited atomically
+    // Transactional: atomically claim the referral, credit wallet, and write ledger.
     await prisma.$transaction(async (tx) => {
-      // Re-check creditedAt inside transaction for idempotency
       const ref = await tx.referral.findUnique({ where: { referredId: referredUserId } });
-      if (!ref || ref.creditedAt) return;
+      if (!ref || ref.creditedAt || ref.referrerId === referredUserId) return;
 
-      const wallet = await tx.buyerWallet.findUnique({ where: { buyerId: ref.referrerId } });
-      if (!wallet) {
-        // Create wallet if doesn't exist
-        const newWallet = await tx.buyerWallet.create({
-          data: { buyerId: ref.referrerId, currency: ref.currency },
+      const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+      const recentCredits = await tx.referral.count({
+        where: {
+          referrerId: ref.referrerId,
+          creditedAt: { gte: thirtyDaysAgo },
+        },
+      });
+      if (recentCredits >= MAX_REFERRAL_BONUSES_PER_30_DAYS) {
+        logger.warn("Referral bonus skipped: 30-day cap reached", {
+          referrerId: ref.referrerId,
+          referredId: referredUserId,
+          cap: MAX_REFERRAL_BONUSES_PER_30_DAYS,
         });
-        await tx.buyerWalletTransaction.create({
-          data: {
-            walletId: newWallet.id,
-            buyerId: ref.referrerId,
-            type: "REFERRAL_BONUS",
-            amount: ref.bonusAmount,
-            currency: ref.currency,
-            description: "Referral bonus for inviting a friend",
-          },
-        });
-        await tx.buyerWallet.update({
-          where: { id: newWallet.id },
-          data: { balance: { increment: ref.bonusAmount } },
-        });
-      } else {
-        await tx.buyerWalletTransaction.create({
-          data: {
-            walletId: wallet.id,
-            buyerId: ref.referrerId,
-            type: "REFERRAL_BONUS",
-            amount: ref.bonusAmount,
-            currency: ref.currency,
-            description: "Referral bonus for inviting a friend",
-          },
-        });
-        await tx.buyerWallet.update({
-          where: { id: wallet.id },
-          data: { balance: { increment: ref.bonusAmount } },
-        });
+        return;
       }
 
-      await tx.referral.update({
-        where: { id: ref.id },
+      const claim = await tx.referral.updateMany({
+        where: { id: ref.id, creditedAt: null },
         data: { creditedAt: new Date() },
+      });
+      if (claim.count !== 1) return;
+
+      const wallet = await tx.buyerWallet.upsert({
+        where: { buyerId: ref.referrerId },
+        update: {},
+        create: { buyerId: ref.referrerId, currency: ref.currency },
+      });
+
+      await tx.buyerWalletTransaction.create({
+        data: {
+          walletId: wallet.id,
+          buyerId: ref.referrerId,
+          type: "REFERRAL_BONUS",
+          amount: ref.bonusAmount,
+          currency: ref.currency,
+          description: "Referral bonus for inviting a friend",
+        },
+      });
+
+      await tx.buyerWallet.update({
+        where: { id: wallet.id },
+        data: { balance: { increment: ref.bonusAmount } },
       });
 
       logger.info("Referral bonus credited", {
@@ -164,7 +168,7 @@ export const referralsService = {
         referredId: referredUserId,
         amount: ref.bonusAmount,
       });
-    });
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
   },
 
   async getReferralStats(userId: string): Promise<{

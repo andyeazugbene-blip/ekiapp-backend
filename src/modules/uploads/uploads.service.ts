@@ -29,6 +29,13 @@ function mimeToExt(mime: string): string {
 
 export const uploadsService = {
   async requestUploadUrl(userId: string, input: RequestUploadInput): Promise<UploadUrlResponse> {
+    if (input.category === "verification") {
+      throw new AppError(
+        "Verification document uploads require private storage and are currently disabled.",
+        503,
+      );
+    }
+
     // If storage is not configured, return a clear error instead of fake URLs
     if (!isStorageConfigured()) {
       throw new AppError(

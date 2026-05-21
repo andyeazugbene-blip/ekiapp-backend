@@ -79,8 +79,6 @@ const ALLOWED_CONTENT_TYPES = new Set([
  * Generate a presigned PUT URL for direct browser upload.
  * Returns null if storage is not configured (dev mode).
  *
- * NOTE: Verification/KYC uploads use the same public bucket. If private bucket
- * support is added, verification uploads should be routed to a private bucket.
  */
 export async function generatePresignedUpload(
   key: string,
@@ -89,6 +87,10 @@ export async function generatePresignedUpload(
 ): Promise<PresignedUpload | null> {
   if (!s3 || !BUCKET) {
     return null;
+  }
+
+  if (category === "verification") {
+    throw new Error("Verification uploads require private storage and cannot use the public upload bucket.");
   }
 
   // Validate content type against allowlist

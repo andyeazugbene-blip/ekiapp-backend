@@ -1,8 +1,5 @@
 import { AppError } from "../../shared/errors/app-error";
-import type {
-  CreatePaymentIntentFromCartInput,
-  PricedOrderItem,
-} from "./payments.types";
+import type { CreatePaymentIntentFromCartInput } from "./payments.types";
 
 export function validateCreatePaymentIntentFromCartInput(
   input: unknown,
@@ -46,14 +43,4 @@ export function validateCreatePaymentIntentFromCartInput(
   }
 
   return result;
-}
-
-export function assertUniformCurrency(items: PricedOrderItem[]): string {
-  const currencies = new Set(items.map((item) => item.currency.toLowerCase()));
-
-  if (currencies.size !== 1) {
-    throw new AppError("Products must use the same currency", 400);
-  }
-
-  return items[0].currency.toLowerCase();
 }

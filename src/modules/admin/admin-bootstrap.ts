@@ -4,7 +4,7 @@ import { UserRole } from "@prisma/client";
 import { logger } from "../../lib/logger";
 import { prisma } from "../../lib/prisma";
 
-const BCRYPT_ROUNDS = 10;
+const BCRYPT_ROUNDS = 12;
 
 /**
  * Bootstrap the first admin user if none exists.
@@ -44,7 +44,7 @@ export async function bootstrapAdmin(): Promise<void> {
     // Promote existing user to admin
     await prisma.user.update({
       where: { id: existingUser.id },
-      data: { role: UserRole.ADMIN },
+      data: { role: UserRole.ADMIN, tokenVersion: { increment: 1 } },
     });
     logger.info("Existing user promoted to ADMIN");
     return;

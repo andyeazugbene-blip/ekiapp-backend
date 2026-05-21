@@ -8,6 +8,7 @@ import { prisma } from "../../lib/prisma";
 import { stripe } from "../../lib/stripe";
 import { AppError } from "../../shared/errors/app-error";
 import { calculatePlatformFee as calcPlatformFee } from "../../shared/pricing";
+import { referralsService } from "../referrals/referrals.service";
 import { validateCreatePaymentIntentFromCartInput } from "./payments.validation";
 import type { CreatePaymentIntentResponse, PricedOrderItem } from "./payments.types";
 
@@ -32,7 +33,8 @@ interface VendorGroup {
  * 3. DB transaction: reserve stock + create Checkout + Orders + Payments + wallet debit
  * 4. OUTSIDE transaction: create single Stripe PaymentIntent (if stripe amount > 0)
  * 5. Link PI to Checkout
- * 6. Webhook (payment_intent.succeeded) marks all orders PAID + credits wallets
+ * 6. Webhook marks Stripe orders PAID + credits wallets.
+ *    Fully wallet-paid checkouts do the same wallet ledger work in this transaction.
  */
 class PaymentsService {
   public async createPaymentIntent(
@@ -268,7 +270,7 @@ class PaymentsService {
         });
 
         // Create Payment record per order
-        await tx.payment.create({
+        const payment = await tx.payment.create({
           data: {
             orderId: order.id,
             amount: group.totalAmount,
@@ -278,7 +280,36 @@ class PaymentsService {
             status: stripeAmount === 0 ? "SUCCEEDED" : "PENDING",
             provider: walletDeduction > 0 && stripeAmount === 0 ? "wallet" : "stripe",
           },
+          select: { id: true, vendorEarningsAmount: true, currency: true },
         });
+
+        if (stripeAmount === 0 && payment.vendorEarningsAmount > 0) {
+          const vendorWallet = await tx.wallet.findUnique({
+            where: { vendorId: group.vendorId },
+            select: { id: true },
+          });
+          if (!vendorWallet) {
+            throw new AppError("Vendor wallet not found", 500);
+          }
+
+          await tx.walletTransaction.create({
+            data: {
+              walletId: vendorWallet.id,
+              vendorId: group.vendorId,
+              orderId: order.id,
+              paymentId: payment.id,
+              type: "PAYMENT_PENDING_CREDIT",
+              amount: payment.vendorEarningsAmount,
+              currency: payment.currency,
+              description: `Pending credit for wallet-paid order ${order.id}`,
+            },
+          });
+
+          await tx.wallet.update({
+            where: { id: vendorWallet.id },
+            data: { pendingBalance: { increment: payment.vendorEarningsAmount } },
+          });
+        }
 
         orderIds.push(order.id);
       }
@@ -289,15 +320,27 @@ class PaymentsService {
           where: { id: checkout.id },
           data: { status: "SUCCEEDED", processedAt: new Date() },
         });
+
+        const buyerCart = await tx.cart.findUnique({ where: { buyerId }, select: { id: true } });
+        if (buyerCart) {
+          await tx.cartItem.deleteMany({ where: { cartId: buyerCart.id } });
+        }
       }
 
       return { checkoutId: checkout.id, orderIds };
-    });
+    }, { isolationLevel: "Serializable" });
 
     // ─── Step 4: Stripe call OUTSIDE transaction (if needed) ───────────────
 
     if (stripeAmount === 0) {
       // Fully paid by wallet — no Stripe needed
+      referralsService.creditReferralBonusOnFirstOrder(buyerId).catch((error) => {
+        logger.error("Referral bonus credit failed for wallet-paid checkout", {
+          buyerId,
+          errorMessage: error instanceof Error ? error.message : String(error),
+        });
+      });
+
       return {
         checkoutId,
         orderIds,
