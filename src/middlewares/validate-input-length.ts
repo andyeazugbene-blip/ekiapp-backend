@@ -16,7 +16,8 @@ export function validateInputLength(
   _response: Response,
   next: NextFunction,
 ): void {
-  if (!request.body || typeof request.body !== "object") {
+  // Skip raw Buffer bodies (e.g. Stripe webhook raw payload)
+  if (!request.body || typeof request.body !== "object" || Buffer.isBuffer(request.body)) {
     next();
     return;
   }
