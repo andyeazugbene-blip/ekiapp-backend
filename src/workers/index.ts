@@ -4,6 +4,9 @@ import { logger } from "../lib/logger";
 import { isRedisEnabled } from "../lib/redis";
 import { startCartCleanupWorker } from "./cart-cleanup.worker";
 import { startEmailsWorker } from "./emails.worker";
+import { startEscrowAutoReleaseWorker } from "./escrow-auto-release.worker";
+import { startEscrowBalanceCheckWorker } from "./escrow-balance-check.worker";
+import { startEscrowTimeoutWorker } from "./escrow-timeout.worker";
 import { startNotificationsWorker } from "./notifications.worker";
 import { startStockAlertsWorker } from "./stock-alerts.worker";
 
@@ -32,6 +35,15 @@ export function startWorkers(): void {
 
   const cartResult = startCartCleanupWorker();
   if (cartResult) activeWorkers.push(cartResult.worker);
+
+  const escrowTimeout = startEscrowTimeoutWorker();
+  if (escrowTimeout) activeWorkers.push(escrowTimeout);
+
+  const escrowRelease = startEscrowAutoReleaseWorker();
+  if (escrowRelease) activeWorkers.push(escrowRelease);
+
+  const escrowBalance = startEscrowBalanceCheckWorker();
+  if (escrowBalance) activeWorkers.push(escrowBalance);
 
   logger.info("All workers started", { count: activeWorkers.length });
 }

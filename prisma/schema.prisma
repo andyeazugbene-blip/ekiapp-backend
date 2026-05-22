@@ -26,6 +26,22 @@ enum OrderStatus {
   CANCELLED
   REFUNDED
   FAILED
+  PAYMENT_SECURED
+  VENDOR_CONFIRMED
+  DISPUTED
+  AUTO_RELEASED
+}
+
+enum EscrowType {
+  NONE
+  DOMESTIC_AFRICA
+}
+
+enum PaystackTxStatus {
+  PENDING
+  SUCCESS
+  FAILED
+  REVERSED
 }
 
 enum PaymentStatus {
@@ -99,6 +115,7 @@ model User {
   failedLoginAttempts Int            @default(0)
   lockedUntil         DateTime?
   emailVerifiedAt     DateTime?
+  trustScore          Int            @default(50)
   role                UserRole       @default(BUYER)
   vendor              Vendor?
   orders              Order[]        @relation("BuyerOrders")
@@ -138,6 +155,7 @@ model Vendor {
   walletTransactions    WalletTransaction[]
   payoutMethods         PayoutMethod[]
   payoutRequests        PayoutRequest[]
+  bankAccounts          VendorBankAccount[]
   createdAt             DateTime                 @default(now())
   updatedAt             DateTime                 @updatedAt
 
@@ -238,6 +256,11 @@ model Order {
   buyerId            String
   vendorId           String?
   status             OrderStatus         @default(PENDING)
+  escrowType         EscrowType          @default(NONE)
+  escrowExpiresAt    DateTime?
+  vendorConfirmedAt  DateTime?
+  disputedAt         DateTime?
+  autoReleasedAt     DateTime?
   subtotalAmount     Int                 @default(0)
   deliveryFeeAmount  Int                 @default(0)
   platformFeeAmount  Int                 @default(0)
@@ -245,6 +268,7 @@ model Order {
   totalAmount        Int
   currency           String              @default("eur")
   deliveryZoneId     String?
+  deliveryAddress    String?
   notes              String?
   deliveredAt        DateTime?
   checkout           Checkout?           @relation(fields: [checkoutId], references: [id], onDelete: SetNull)
@@ -252,6 +276,9 @@ model Order {
   deliveryZone       DeliveryZone?       @relation(fields: [deliveryZoneId], references: [id], onDelete: SetNull)
   items              OrderItem[]
   payment            Payment?
+  paystackTransaction PaystackTransaction?
+  deliveryOtp        DeliveryOtp?
+  dispute            Dispute?
   walletTransactions WalletTransaction[]
   createdAt          DateTime            @default(now())
   updatedAt          DateTime            @updatedAt
@@ -260,6 +287,7 @@ model Order {
   @@index([buyerId, status])
   @@index([vendorId, status])
   @@index([status, createdAt])
+  @@index([escrowType, status])
   @@index([createdAt])
 }
 
@@ -760,4 +788,82 @@ model PushToken {
 
   @@unique([userId, token])
   @@index([userId])
+}
+
+// ─── Domestic Africa Escrow ─────────────────────────────────────────────────
+
+model PaystackTransaction {
+  id               String          @id @default(cuid())
+  orderId          String          @unique
+  reference        String          @unique
+  amount           Int
+  currency         String          @default("NGN")
+  status           PaystackTxStatus @default(PENDING)
+  paystackResponse Json?
+  order            Order           @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  createdAt        DateTime        @default(now())
+  updatedAt        DateTime        @updatedAt
+
+  @@index([reference])
+  @@index([orderId])
+  @@index([status, createdAt])
+}
+
+model VendorBankAccount {
+  id                   String   @id @default(cuid())
+  vendorId             String
+  bankName             String
+  bankCode             String
+  accountNumber        String
+  accountName          String
+  currency             String   @default("NGN")
+  isDefault            Boolean  @default(false)
+  paystackRecipientCode String?
+  vendor               Vendor   @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  @@index([vendorId])
+}
+
+model DeliveryOtp {
+  id          String    @id @default(cuid())
+  orderId     String    @unique
+  codeHash    String
+  expiresAt   DateTime
+  attempts    Int       @default(0)
+  confirmedAt DateTime?
+  order       Order     @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  createdAt   DateTime  @default(now())
+
+  @@index([orderId])
+  @@index([expiresAt])
+}
+
+enum DisputeStatus {
+  OPEN
+  RESOLVED_VENDOR
+  RESOLVED_BUYER
+  RESOLVED_PARTIAL
+}
+
+model Dispute {
+  id           String        @id @default(cuid())
+  orderId      String        @unique
+  buyerId      String
+  vendorId     String
+  reason       String
+  status       DisputeStatus @default(OPEN)
+  resolution   String?
+  fraudulent   Boolean       @default(false)
+  refundAmount Int?
+  resolvedById String?
+  resolvedAt   DateTime?
+  order        Order         @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+
+  @@index([status, createdAt])
+  @@index([buyerId])
+  @@index([vendorId])
 }

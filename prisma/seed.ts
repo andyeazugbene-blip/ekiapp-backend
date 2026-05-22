@@ -6,6 +6,16 @@ const prisma = new PrismaClient();
 async function main() {
   const defaultPassword = await bcrypt.hash("password123", 10);
 
+  // ─── Cleanup QA artifacts ──────────────────────────────────────────────
+  await prisma.product.updateMany({
+    where: { title: { startsWith: "QA " } },
+    data: { isActive: false },
+  });
+  await prisma.product.updateMany({
+    where: { title: { startsWith: "Test " } },
+    data: { isActive: false },
+  });
+
   // ─── Buyer ─────────────────────────────────────────────────────────────
   const buyer = await prisma.user.upsert({
     where: { email: "buyer@example.com" },

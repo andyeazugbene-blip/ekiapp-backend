@@ -43,6 +43,10 @@ class StripeWebhookService {
       return this.handleDisputeCreated(event);
     }
 
+    if (event.type === "charge.refunded" || event.type === "charge.refund.updated") {
+      return this.handleChargeRefunded(event);
+    }
+
     if (event.type !== "payment_intent.succeeded") {
       return { received: true, ignored: true, eventId: event.id, type: event.type };
     }
@@ -458,6 +462,118 @@ class StripeWebhookService {
             pushNotifications.vendorNewOrder(v.userId, order.id);
           }
         }).catch(() => {});
+    }
+  }
+
+  // ─── Charge Refunded Handler ──────────────────────────────────────────
+
+  private async handleChargeRefunded(event: Stripe.Event): Promise<StripeWebhookResult> {
+    const charge = event.data.object as Stripe.Charge;
+    const paymentIntentId = typeof charge.payment_intent === "string" ? charge.payment_intent : charge.payment_intent?.id;
+
+    if (!paymentIntentId) {
+      return { received: true, ignored: true, eventId: event.id, type: event.type };
+    }
+
+    try {
+      return await prisma.$transaction(async (tx) => {
+        if (await this.isDuplicate(tx, event.id, event.type, {})) {
+          return { received: true, duplicate: true, eventId: event.id, type: event.type };
+        }
+
+        // Find the checkout and orders via payment intent
+        const checkout = await tx.checkout.findUnique({
+          where: { stripePaymentIntentId: paymentIntentId },
+          include: {
+            orders: {
+              include: {
+                payment: { select: { id: true, vendorEarningsAmount: true, currency: true } },
+                items: { select: { productId: true, quantity: true } },
+              },
+            },
+          },
+        });
+
+        if (!checkout) {
+          // Try single-order lookup
+          const payment = await tx.payment.findFirst({
+            where: { stripePaymentIntentId: paymentIntentId },
+            select: { orderId: true },
+          });
+          if (payment) {
+            await tx.order.updateMany({
+              where: { id: payment.orderId, status: { notIn: ["REFUNDED", "CANCELLED"] } },
+              data: { status: "REFUNDED" },
+            });
+          }
+          await tx.webhookEvent.update({ where: { stripeEventId: event.id }, data: { status: "PROCESSED", processedAt: new Date() } });
+          return { received: true, eventId: event.id, type: event.type };
+        }
+
+        // Reverse vendor wallet credits and mark orders refunded
+        for (const order of checkout.orders) {
+          // Mark order refunded (conditional — don't re-refund)
+          await tx.order.updateMany({
+            where: { id: order.id, status: { notIn: ["REFUNDED", "CANCELLED"] } },
+            data: { status: "REFUNDED" },
+          });
+
+          // Reverse vendor wallet credit if it exists
+          if (order.payment) {
+            const vendorId = order.vendorId;
+            if (vendorId) {
+              const existingCredit = await tx.walletTransaction.findFirst({
+                where: { orderId: order.id, vendorId, type: "PAYMENT_PENDING_CREDIT" },
+              });
+
+              if (existingCredit) {
+                const wallet = await tx.wallet.findUnique({ where: { vendorId } });
+                if (wallet) {
+                  // Debit the pending balance (reverse the credit)
+                  await tx.wallet.update({
+                    where: { id: wallet.id },
+                    data: { pendingBalance: { decrement: existingCredit.amount } },
+                  });
+
+                  await tx.walletTransaction.create({
+                    data: {
+                      walletId: wallet.id,
+                      vendorId,
+                      orderId: order.id,
+                      type: "ADJUSTMENT_DEBIT",
+                      amount: -existingCredit.amount,
+                      currency: existingCredit.currency,
+                      description: `Refund reversal for order ${order.id}`,
+                    },
+                  });
+                }
+              }
+            }
+          }
+
+          // Restore stock
+          for (const item of order.items) {
+            await tx.product.update({
+              where: { id: item.productId },
+              data: { stock: { increment: item.quantity } },
+            });
+          }
+        }
+
+        await tx.webhookEvent.update({ where: { stripeEventId: event.id }, data: { status: "PROCESSED", processedAt: new Date() } });
+
+        logger.info("Webhook processed: charge.refunded", {
+          eventId: event.id, paymentIntentId, orderCount: checkout.orders.length,
+        });
+
+        return { received: true, eventId: event.id, type: event.type };
+      }, { isolationLevel: "Serializable" });
+    } catch (error) {
+      if (this.isUniqueConstraintError(error)) {
+        return { received: true, duplicate: true, eventId: event.id, type: event.type };
+      }
+      logger.error("Webhook failed: charge.refunded", { eventId: event.id, ...serializeError(error) });
+      throw error;
     }
   }
 

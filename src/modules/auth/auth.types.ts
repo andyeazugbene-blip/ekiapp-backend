@@ -28,6 +28,7 @@ export interface AuthUser {
   avatar: string | null;
   country: string | null;
   role: UserRole;
+  trustScore: number;
   createdAt: Date;
 }
 

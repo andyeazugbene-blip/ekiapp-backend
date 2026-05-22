@@ -30,6 +30,13 @@ import {
   adminModerateReview,
 } from "../reviews/reviews.controller";
 import {
+  adminGetDispute,
+  adminListDisputes,
+  adminResolveDispute,
+} from "../paystack/dispute.controller";
+import { adminAdjustTrustScore } from "../paystack/trust-score.controller";
+import { getEscrowHealth } from "../paystack/escrow-health.controller";
+import {
   adminListPendingDocuments,
   adminReviewDocument,
 } from "../verification/verification.controller";
@@ -58,6 +65,7 @@ import {
   rejectVendor,
 } from "./admin-listings.controller";
 import { completeOrder } from "./admin-orders.controller";
+import { adminRefundOrder } from "./admin-refunds.controller";
 import { suspendVendor, unsuspendVendor } from "./admin-vendors.controller";
 
 export const adminRouter = Router();
@@ -89,6 +97,7 @@ adminRouter.patch("/products/:id/disable", asyncHandler(disableProduct));
 
 // Order management
 adminRouter.patch("/orders/:id/complete", asyncHandler(completeOrder));
+adminRouter.post("/orders/:id/refund", asyncHandler(adminRefundOrder));
 
 // Payout management
 adminRouter.get("/payout-requests", asyncHandler(adminListPayoutRequests));
@@ -114,3 +123,14 @@ adminRouter.patch("/promo-codes/:id", asyncHandler(adminUpdatePromoCode));
 // Review moderation
 adminRouter.get("/reviews", asyncHandler(adminListReviews));
 adminRouter.patch("/reviews/:id/moderate", asyncHandler(adminModerateReview));
+
+// Escrow disputes
+adminRouter.get("/disputes", asyncHandler(adminListDisputes));
+adminRouter.get("/disputes/:id", asyncHandler(adminGetDispute));
+adminRouter.patch("/disputes/:id/resolve", asyncHandler(adminResolveDispute));
+
+// Trust score management
+adminRouter.patch("/users/:id/trust-score", asyncHandler(adminAdjustTrustScore));
+
+// Escrow health monitoring
+adminRouter.get("/escrow/health", asyncHandler(getEscrowHealth));

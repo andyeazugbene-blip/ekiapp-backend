@@ -51,6 +51,7 @@ app.use(requestLogger);
 
 // Body parsing (Stripe webhook needs raw body BEFORE json parser)
 app.use("/api/stripe/webhook", express.raw({ type: "application/json" }));
+app.use("/api/paystack/webhook", express.raw({ type: "application/json" }));
 app.use(express.json({ limit: "5mb" }));
 app.use(express.urlencoded({ extended: true, limit: "2mb" }));
 
@@ -60,6 +61,12 @@ app.use(validateInputLength);
 
 // Routes
 app.use("/api", apiRouter);
+
+// Root-level OpenAPI spec aliases (for Postman, Insomnia, openapi-generator)
+import { swaggerSpec } from "./lib/swagger";
+app.get("/openapi.json", (_req, res) => res.json(swaggerSpec));
+app.get("/api-json", (_req, res) => res.json(swaggerSpec));
+app.get("/swagger.json", (_req, res) => res.json(swaggerSpec));
 
 // Public web routes (server-rendered pages outside /api).
 // /store/:slug is the public storefront page used by share links.

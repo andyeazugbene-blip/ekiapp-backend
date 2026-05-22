@@ -40,6 +40,7 @@ function toAuthUser(user: {
   avatar: string | null;
   country: string | null;
   role: UserRole;
+  trustScore: number;
   createdAt: Date;
 }): AuthUser {
   return {
@@ -50,6 +51,7 @@ function toAuthUser(user: {
     avatar: user.avatar,
     country: user.country,
     role: user.role,
+    trustScore: user.trustScore,
     createdAt: user.createdAt,
   };
 }

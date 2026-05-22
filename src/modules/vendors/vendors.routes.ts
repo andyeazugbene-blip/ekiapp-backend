@@ -26,6 +26,7 @@ import {
   getVendorBuyer,
   listVendorBuyers,
 } from "./vendors-buyers.controller";
+import { vendorConfirmEscrowOrder, vendorDispatchOrder, registerBankAccount, listBankAccounts } from "../paystack/escrow.controller";
 import {
   getStripeConnectStatus,
   onboardStripeConnect,
@@ -62,3 +63,7 @@ vendorsRouter.get("/me/verification", requireRole("VENDOR", "ADMIN"), asyncHandl
 vendorsRouter.get("/me/orders", requireRole("VENDOR", "ADMIN"), asyncHandler(listVendorOrders));
 vendorsRouter.get("/me/orders/:id", requireRole("VENDOR", "ADMIN"), asyncHandler(getVendorOrder));
 vendorsRouter.patch("/me/orders/:id/status", requireRole("VENDOR", "ADMIN"), asyncHandler(updateVendorOrderStatus));
+vendorsRouter.post("/me/orders/:id/confirm-escrow", requireRole("VENDOR", "ADMIN"), asyncHandler(vendorConfirmEscrowOrder));
+vendorsRouter.post("/me/orders/:id/dispatch", requireRole("VENDOR", "ADMIN"), asyncHandler(vendorDispatchOrder));
+vendorsRouter.post("/me/bank-accounts", requireRole("VENDOR", "ADMIN"), asyncHandler(registerBankAccount));
+vendorsRouter.get("/me/bank-accounts", requireRole("VENDOR", "ADMIN"), asyncHandler(listBankAccounts));
