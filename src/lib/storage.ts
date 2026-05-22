@@ -50,6 +50,8 @@ if (!storageDisabled && BUCKET && ACCESS_KEY && SECRET_KEY) {
     requestChecksumCalculation: "WHEN_REQUIRED",
     responseChecksumValidation: "WHEN_REQUIRED",
   });
+  // Remove the flexible checksums middleware that causes R2 SignatureDoesNotMatch
+  s3.middlewareStack.remove("flexibleChecksumsMiddleware");
   logger.info("S3 storage client initialized", { bucket: BUCKET, region: REGION });
 }
 
@@ -61,7 +63,8 @@ export interface PresignedUpload {
 
 const PRESIGN_EXPIRY = 300; // 5 minutes
 
-const MAX_SIZES: Record<string, number> = {
+// @ts-ignore — kept for documentation; will be used when content-length validation is added
+const _MAX_SIZES: Record<string, number> = {
   product: 5 * 1024 * 1024,       // 5MB
   avatar: 2 * 1024 * 1024,        // 2MB
   cover: 5 * 1024 * 1024,         // 5MB
@@ -100,8 +103,6 @@ export async function generatePresignedUpload(
     throw new Error(`Content type "${contentType}" is not allowed`);
   }
 
-  const maxSize = MAX_SIZES[category] ?? 5 * 1024 * 1024;
-
   // PUBLIC_URL is required at this point (validated at startup for R2)
   if (!PUBLIC_URL) {
     throw new Error("S3_PUBLIC_URL is not configured. Cannot generate public URL for uploads.");
@@ -111,7 +112,6 @@ export async function generatePresignedUpload(
     Bucket: BUCKET,
     Key: key,
     ContentType: contentType,
-    ContentLength: maxSize,
   });
 
   const uploadUrl = await getSignedUrl(s3, command, {

@@ -185,7 +185,7 @@ model PayoutRequest {
   vendorId           String
   payoutMethodId     String
   amount             Int
-  currency           String              @default("eur")
+  currency           String              @default("EUR")
   status             PayoutRequestStatus @default(PENDING)
   notes              String?
   rejectionReason    String?
@@ -209,7 +209,7 @@ model Product {
   title        String
   description  String?
   priceInCents Int
-  currency     String      @default("eur")
+  currency     String      @default("EUR")
   images       String[]    @default([])
   category     String?
   stock        Int         @default(0)
@@ -267,7 +267,7 @@ model Order {
   platformFeeAmount  Int                 @default(0)
   vendorEarnings     Int                 @default(0)
   totalAmount        Int
-  currency           String              @default("eur")
+  currency           String              @default("EUR")
   deliveryZoneId     String?
   deliveryAddress    String?
   notes              String?
@@ -297,7 +297,7 @@ model Checkout {
   buyerId               String
   stripePaymentIntentId String?       @unique
   totalAmount           Int
-  currency              String        @default("eur")
+  currency              String        @default("EUR")
   status                PaymentStatus @default(PENDING)
   metadata              Json?
   processedAt           DateTime?
@@ -317,7 +317,7 @@ model OrderItem {
   quantity     Int
   unitAmount   Int
   totalAmount  Int
-  currency     String   @default("eur")
+  currency     String   @default("EUR")
   productTitle String
   order        Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
   product      Product  @relation(fields: [productId], references: [id], onDelete: Restrict)
@@ -336,7 +336,7 @@ model Payment {
   amount                Int
   platformFeeAmount     Int
   vendorEarningsAmount  Int
-  currency              String              @default("eur")
+  currency              String              @default("EUR")
   status                PaymentStatus       @default(PENDING)
   provider              String              @default("stripe")
   metadata              Json?
@@ -356,7 +356,7 @@ model Wallet {
   vendorId         String              @unique
   pendingBalance   Int                 @default(0)
   availableBalance Int                 @default(0)
-  currency         String              @default("eur")
+  currency         String              @default("EUR")
   vendor           Vendor              @relation(fields: [vendorId], references: [id], onDelete: Restrict)
   transactions     WalletTransaction[]
   createdAt        DateTime            @default(now())
@@ -372,7 +372,7 @@ model WalletTransaction {
   payoutRequestId String?
   type            WalletTransactionType
   amount          Int
-  currency        String                @default("eur")
+  currency        String                @default("EUR")
   description     String?
   wallet          Wallet                @relation(fields: [walletId], references: [id], onDelete: Restrict)
   vendor          Vendor                @relation(fields: [vendorId], references: [id], onDelete: Restrict)
@@ -420,7 +420,7 @@ model DeliveryZone {
   flag            String?
   baseFeeAmount   Int
   feePerKgAmount  Int
-  currency        String           @default("eur")
+  currency        String           @default("EUR")
   isActive        Boolean          @default(true)
   vendorId        String?
   orders          Order[]
@@ -667,7 +667,7 @@ model BuyerWallet {
   id           String                 @id @default(cuid())
   buyerId      String                 @unique
   balance      Int                    @default(0)
-  currency     String                 @default("eur")
+  currency     String                 @default("EUR")
   transactions BuyerWalletTransaction[]
   createdAt    DateTime               @default(now())
   updatedAt    DateTime               @updatedAt
@@ -679,7 +679,7 @@ model BuyerWalletTransaction {
   buyerId          String
   type             BuyerWalletTxType
   amount           Int
-  currency         String           @default("eur")
+  currency         String           @default("EUR")
   description      String?
   orderId          String?
   paymentIntentId  String?
@@ -737,7 +737,7 @@ model Referral {
   referrerId   String
   referredId   String   @unique
   bonusAmount  Int
-  currency     String   @default("eur")
+  currency     String   @default("EUR")
   creditedAt   DateTime?
   createdAt    DateTime @default(now())
 

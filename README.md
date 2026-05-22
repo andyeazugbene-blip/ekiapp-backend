@@ -245,7 +245,6 @@ Both commands currently exit clean.
 
 ## Known Limitations
 
-- No refunds endpoint (manual via Stripe dashboard).
 - No automatic Stripe Connect payouts — payouts are marked paid manually by an admin.
 - No real-time delivery tracking (push / websocket).
 

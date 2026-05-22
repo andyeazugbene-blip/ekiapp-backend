@@ -1,5 +1,7 @@
 import crypto from "crypto";
 
+import { Prisma } from "@prisma/client";
+
 import { prisma } from "../../lib/prisma";
 import { paystack } from "../../lib/paystack";
 import { logger } from "../../lib/logger";
@@ -184,6 +186,26 @@ export const paystackService = {
     if (tx.status === "SUCCESS") {
       logger.info("Paystack webhook: already processed", { reference });
       return; // Idempotent
+    }
+
+    // Database-level idempotency: use WebhookEvent with unique constraint
+    try {
+      await prisma.webhookEvent.create({
+        data: {
+          stripeEventId: `paystack:${reference}`, // reuse stripeEventId field for Paystack
+          eventType: "paystack.charge.success",
+          provider: "paystack",
+          status: "PROCESSING",
+          orderId: tx.orderId,
+        },
+      });
+    } catch (error: unknown) {
+      // Unique constraint violation = duplicate webhook
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+        logger.info("Paystack webhook: duplicate (unique constraint)", { reference });
+        return;
+      }
+      throw error;
     }
 
     await prisma.$transaction(async (db) => {
