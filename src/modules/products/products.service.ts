@@ -1,9 +1,8 @@
 import type { Product } from "@prisma/client";
 
-import { env } from "../../config/env";
 import { prisma } from "../../lib/prisma";
 import { CURSOR_ORDER_BY } from "../../shared/constants";
-import { validateCurrency } from "../../shared/currency";
+import { currencyFromCountry } from "../../shared/currency";
 import { AppError } from "../../shared/errors/app-error";
 import { subscriptionsService } from "../subscriptions/subscriptions.service";
 import type {
@@ -12,10 +11,10 @@ import type {
   UpdateProductInput,
 } from "./products.types";
 
-async function getVerifiedVendorIdForUser(userId: string): Promise<string> {
+async function getVerifiedVendorIdForUser(userId: string): Promise<{ id: string; currency: string }> {
   const vendor = await prisma.vendor.findUnique({
     where: { userId },
-    select: { id: true, verificationStatus: true },
+    select: { id: true, verificationStatus: true, currency: true, country: true },
   });
   if (!vendor) {
     throw new AppError("Vendor profile required", 403);
@@ -23,7 +22,9 @@ async function getVerifiedVendorIdForUser(userId: string): Promise<string> {
   if (vendor.verificationStatus !== "VERIFIED") {
     throw new AppError("Vendor must be verified to create products", 403);
   }
-  return vendor.id;
+  // Use vendor.currency; if missing, derive from country
+  const currency = vendor.currency || currencyFromCountry(vendor.country);
+  return { id: vendor.id, currency };
 }
 
 async function getVendorIdForUser(userId: string): Promise<string> {
@@ -39,18 +40,19 @@ async function getVendorIdForUser(userId: string): Promise<string> {
 
 export const productsService = {
   async createProduct(userId: string, input: CreateProductInput): Promise<Product> {
-    const vendorId = await getVerifiedVendorIdForUser(userId);
+    const vendor = await getVerifiedVendorIdForUser(userId);
 
     // Enforce subscription product limit
-    await subscriptionsService.enforceProductLimit(vendorId);
+    await subscriptionsService.enforceProductLimit(vendor.id);
 
+    // Product currency ALWAYS inherits from vendor — input.currency is ignored
     return prisma.product.create({
       data: {
-        vendorId,
+        vendorId: vendor.id,
         title: input.title,
         description: input.description,
         priceInCents: input.priceAmount,
-        currency: validateCurrency(input.currency, env.defaultCurrency),
+        currency: vendor.currency,
         images: input.images ?? [],
         category: input.category,
         stock: input.stock ?? 0,
