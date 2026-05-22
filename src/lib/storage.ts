@@ -47,6 +47,8 @@ if (!storageDisabled && BUCKET && ACCESS_KEY && SECRET_KEY) {
       secretAccessKey: SECRET_KEY,
     },
     forcePathStyle: true, // Required for R2 and MinIO
+    requestChecksumCalculation: "WHEN_REQUIRED",
+    responseChecksumValidation: "WHEN_REQUIRED",
   });
   logger.info("S3 storage client initialized", { bucket: BUCKET, region: REGION });
 }

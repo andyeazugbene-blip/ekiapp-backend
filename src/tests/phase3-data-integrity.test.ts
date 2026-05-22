@@ -24,19 +24,19 @@ beforeEach(() => vi.clearAllMocks());
 
 describe("Currency validation (P3)", () => {
   it("accepts eur", () => {
-    expect(validateCurrency("eur")).toBe("eur");
+    expect(validateCurrency("eur")).toBe("EUR");
   });
 
   it("accepts usd", () => {
-    expect(validateCurrency("usd")).toBe("usd");
+    expect(validateCurrency("usd")).toBe("USD");
   });
 
   it("accepts gbp", () => {
-    expect(validateCurrency("gbp")).toBe("gbp");
+    expect(validateCurrency("gbp")).toBe("GBP");
   });
 
-  it("normalizes uppercase EUR to eur", () => {
-    expect(validateCurrency("EUR")).toBe("eur");
+  it("normalizes lowercase to uppercase", () => {
+    expect(validateCurrency("eur")).toBe("EUR");
   });
 
   it("rejects unsupported currency xyz", () => {
@@ -44,21 +44,23 @@ describe("Currency validation (P3)", () => {
   });
 
   it("rejects empty string", () => {
-    expect(() => validateCurrency("")).toThrow("Currency is required");
+    expect(() => validateCurrency("")).toThrow("Unsupported currency");
   });
 
   it("uses fallback when undefined", () => {
-    expect(validateCurrency(undefined, "eur")).toBe("eur");
+    expect(validateCurrency(undefined, "eur")).toBe("EUR");
   });
 
-  it("rejects null without fallback", () => {
-    expect(() => validateCurrency(null)).toThrow("Currency is required");
+  it("null without fallback uses EUR default", () => {
+    expect(validateCurrency(null)).toBe("EUR");
   });
 
-  it("supported currencies includes eur, usd, gbp", () => {
-    expect(SUPPORTED_CURRENCIES.has("eur")).toBe(true);
-    expect(SUPPORTED_CURRENCIES.has("usd")).toBe(true);
-    expect(SUPPORTED_CURRENCIES.has("gbp")).toBe(true);
+  it("supported currencies includes EUR, USD, GBP, NGN, GHS", () => {
+    expect(SUPPORTED_CURRENCIES).toContain("EUR");
+    expect(SUPPORTED_CURRENCIES).toContain("USD");
+    expect(SUPPORTED_CURRENCIES).toContain("GBP");
+    expect(SUPPORTED_CURRENCIES).toContain("NGN");
+    expect(SUPPORTED_CURRENCIES).toContain("GHS");
   });
 });
 

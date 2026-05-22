@@ -138,6 +138,7 @@ model Vendor {
   contactPhone          String?
   country               String?
   city                  String?
+  currency              String                   @default("EUR")
   avatar                String?
   coverImage            String?
   isSuspended           Boolean                  @default(false)

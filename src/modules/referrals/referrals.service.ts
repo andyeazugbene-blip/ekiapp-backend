@@ -10,6 +10,24 @@ const REFERRAL_BONUS_AMOUNT = 500; // 500 cents = €5
 const REFERRAL_CURRENCY = "eur";
 const MAX_REFERRAL_BONUSES_PER_30_DAYS = 10;
 
+/**
+ * Normalize an email for anti-abuse comparison.
+ * Strips Gmail dots and +tags, lowercases.
+ * "test.user+tag@gmail.com" → "testuser@gmail.com"
+ */
+function normalizeEmailForAbuse(email: string): string {
+  const [local, domain] = email.toLowerCase().split("@");
+  if (!local || !domain) return email.toLowerCase();
+  // Gmail and googlemail: strip dots and +tags
+  if (domain === "gmail.com" || domain === "googlemail.com") {
+    const stripped = local.split("+")[0].replace(/\./g, "");
+    return `${stripped}@gmail.com`;
+  }
+  // Other providers: just strip +tags
+  const stripped = local.split("+")[0];
+  return `${stripped}@${domain}`;
+}
+
 function generateReferralCode(): string {
   return "REF-" + crypto.randomBytes(4).toString("hex").toUpperCase();
 }
@@ -104,6 +122,21 @@ export const referralsService = {
     if (referral.referrerId === referredUserId) {
       logger.warn("Self-referral detected, skipping bonus", { referredUserId });
       return;
+    }
+
+    // Gmail normalization anti-abuse: check if referrer and referred share the same normalized email
+    const [referrerUser, referredUser] = await Promise.all([
+      prisma.user.findUnique({ where: { id: referral.referrerId }, select: { email: true } }),
+      prisma.user.findUnique({ where: { id: referredUserId }, select: { email: true } }),
+    ]);
+    if (referrerUser && referredUser) {
+      if (normalizeEmailForAbuse(referrerUser.email) === normalizeEmailForAbuse(referredUser.email)) {
+        logger.warn("Referral abuse: same normalized email", {
+          referrerId: referral.referrerId,
+          referredId: referredUserId,
+        });
+        return;
+      }
     }
 
     // Verify this is genuinely the first paid order

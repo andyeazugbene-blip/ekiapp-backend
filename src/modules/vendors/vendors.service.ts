@@ -4,6 +4,7 @@ import { UserRole } from "@prisma/client";
 import { env } from "../../config/env";
 import { prisma } from "../../lib/prisma";
 import { AppError } from "../../shared/errors/app-error";
+import { currencyFromCountry } from "../../shared/currency";
 import { resolveUniqueSlug } from "../../shared/utils/slug";
 import type {
   CreatePayoutMethodInput,
@@ -56,6 +57,7 @@ export const vendorsService = {
           contactEmail: input.contactEmail,
           contactPhone: input.contactPhone,
           country: input.country,
+          currency: currencyFromCountry(input.country),
         },
       });
 

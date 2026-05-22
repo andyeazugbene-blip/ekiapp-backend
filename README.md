@@ -1,26 +1,37 @@
 # Marketplace Backend
 
-Multi-vendor marketplace backend built with Node.js, Express, TypeScript, PostgreSQL, Prisma ORM, and Stripe.
+Multi-vendor marketplace backend built with Node.js, Express, TypeScript, PostgreSQL, Prisma ORM, Stripe, and Paystack.
 
 ## Features
 
 - JWT-based authentication with three roles: `BUYER`, `VENDOR`, `ADMIN`
-- Vendor profiles, verification status, payout methods
+- Vendor profiles with per-vendor currency (derived from country: GBP, EUR, USD, NGN, GHS, KES, ZAR)
+- Vendor verification, payout methods, bank accounts
 - Products with stock, images, category, weight
 - Shopping cart with stock validation
 - Delivery zones and delivery fee calculation
 - **Multi-vendor** cart-based Stripe PaymentIntent checkout (subtotal + delivery + wallet deduction)
-- Stripe webhook with signature verification, idempotency, wallet credit, and cancellation handling
+- **Domestic Africa Escrow** via Paystack (Nigeria/Ghana) with delivery OTP, 48h vendor timeout, 24h auto-release, disputes
+- Stripe webhook with signature verification, idempotency, wallet credit, cancellation, and refund handling
+- **Admin refund endpoint** (Stripe + Paystack) with idempotency keys
+- `charge.refunded` webhook handler — reverses vendor wallet credit, restores stock, marks order REFUNDED
 - Admin order completion releasing vendor pending → available balance
 - Buyer wallet (top-up via Stripe, apply to orders, referral bonuses)
 - Promo codes with atomic redemption (race-condition safe)
 - Reviews with rating validation (1–5, DB CHECK enforced)
-- Referral system (bonus on first paid order, idempotent, self-referral guard)
+- Referral system (bonus on first paid order, idempotent, self-referral guard, Gmail normalization anti-abuse)
 - Subscription plans with product limits
+- Email OTP verification via Resend
+- SMS notifications via Africa's Talking
 - Rate limiting on auth and API endpoints
 - Payout request flow (vendor request, admin approve / reject / mark-paid)
 - In-app notifications for payment and payout lifecycle events
-- Admin listing and moderation endpoints
+- Admin listing and moderation endpoints (disputes, reviews, delivery zones, promo codes)
+- Buyer trust score system
+- Escrow balance monitoring with ops alerts
+- R2/S3 file uploads with presigned URLs
+- OpenAPI spec at `/openapi.json`, `/swagger.json`, `/api-json`, `/api/docs.json`
+- 280+ automated tests (vitest)
 
 ## Tech Stack
 
