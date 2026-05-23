@@ -1,23 +1,57 @@
 import type { Request, Response } from "express";
 
 import { prisma } from "../../lib/prisma";
+import { stripe } from "../../lib/stripe";
+import { paystack } from "../../lib/paystack";
 
 export function getHealth(_request: Request, response: Response): void {
-  response.status(200).json({
-    status: "ok",
-  });
+  response.status(200).json({ status: "ok" });
 }
 
+/**
+ * Detailed health check — verifies all critical dependencies.
+ * Returns 200 if all critical checks pass, 503 if any fail.
+ */
 export async function getHealthDetailed(_request: Request, response: Response): Promise<void> {
-  const checks: Record<string, string> = { server: "ok" };
+  const checks: Record<string, { status: "ok" | "error" | "skipped"; latencyMs?: number; detail?: string }> = {};
 
+  // Database
+  const dbStart = Date.now();
   try {
     await prisma.$queryRaw`SELECT 1`;
-    checks.database = "ok";
+    checks.database = { status: "ok", latencyMs: Date.now() - dbStart };
   } catch (error) {
-    checks.database = `error: ${error instanceof Error ? error.message : String(error)}`;
+    checks.database = { status: "error", latencyMs: Date.now() - dbStart, detail: error instanceof Error ? error.message : String(error) };
   }
 
-  const allOk = Object.values(checks).every((v) => v === "ok");
-  response.status(allOk ? 200 : 503).json({ status: allOk ? "ok" : "degraded", checks });
+  // Stripe
+  const stripeStart = Date.now();
+  try {
+    await stripe.balance.retrieve();
+    checks.stripe = { status: "ok", latencyMs: Date.now() - stripeStart };
+  } catch (error) {
+    checks.stripe = { status: "error", latencyMs: Date.now() - stripeStart, detail: error instanceof Error ? error.message : String(error) };
+  }
+
+  // Paystack (optional — only check if configured)
+  if (paystack.isConfigured()) {
+    const psStart = Date.now();
+    try {
+      // Simple connectivity check — verify API responds
+      const res = await fetch("https://api.paystack.co/bank?currency=NGN&perPage=1", {
+        headers: { Authorization: `Bearer ${process.env.PAYSTACK_SECRET_KEY}` },
+      });
+      checks.paystack = { status: res.ok ? "ok" : "error", latencyMs: Date.now() - psStart };
+    } catch (error) {
+      checks.paystack = { status: "error", latencyMs: Date.now() - psStart, detail: error instanceof Error ? error.message : String(error) };
+    }
+  } else {
+    checks.paystack = { status: "skipped", detail: "PAYSTACK_SECRET_KEY not configured" };
+  }
+
+  // Critical = database + stripe
+  const critical = checks.database.status === "ok" && checks.stripe.status === "ok";
+  const overall = critical ? "ok" : "degraded";
+
+  response.status(critical ? 200 : 503).json({ status: overall, checks });
 }

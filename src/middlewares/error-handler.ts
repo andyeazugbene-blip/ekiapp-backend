@@ -14,6 +14,8 @@ export function errorHandler(
   const requestContext = {
     method: request.method,
     path: request.path,
+    requestId: (request.headers["x-request-id"] as string) ?? undefined,
+    userId: request.user?.id,
   };
 
   if (error instanceof AppError) {

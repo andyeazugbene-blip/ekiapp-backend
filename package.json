@@ -17,6 +17,10 @@
     "prisma:migrate": "prisma migrate dev",
     "prisma:migrate:deploy": "prisma migrate deploy",
     "prisma:seed": "prisma db seed",
+    "launch:health": "tsx scripts/launch-health-check.ts",
+    "reconcile:stripe": "tsx scripts/reconcile-stripe.ts",
+    "reconcile:paystack": "tsx scripts/reconcile-paystack.ts",
+    "reconcile:wallets": "tsx scripts/reconcile-wallets.ts",
     "prepare": "husky"
   },
   "prisma": {
