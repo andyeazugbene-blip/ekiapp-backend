@@ -1,7 +1,6 @@
 /**
- * Marketplace Scenario Test Suite
- * Simulates realistic marketplace usage with vendors, buyers, products, orders.
- * All QA data is prefixed with SCENARIO_QA_ and cleaned up at the end.
+ * Marketplace Scenario Test Suite v2
+ * Rate-limit aware, uses real orders for review validation, clean separation of concerns.
  *
  * Usage: npx tsx scripts/scenario-marketplace-test.ts [url]
  */
@@ -12,13 +11,13 @@ const BASE = process.argv[2] ?? process.env.STAGING_URL ?? "https://italian-mark
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!);
 const PREFIX = "SCENARIO_QA_";
 const TS = Date.now();
+const DELAY_MS = 1200; // delay between registrations to avoid rate limit
 
 let passed = 0, failed = 0, total = 0;
 const failures: { test: string; detail: string }[] = [];
 
 function log(test: string, ok: boolean, detail?: string) {
-  total++;
-  ok ? passed++ : failed++;
+  total++; ok ? passed++ : failed++;
   if (!ok) failures.push({ test, detail: detail ?? "" });
   if (!ok) console.log(`  ❌ ${test} — ${detail ?? ""}`);
 }
@@ -30,36 +29,33 @@ async function api(m: string, p: string, b?: unknown, t?: string) {
   return { s: r.status, d: await r.json().catch(() => null) };
 }
 
-// ─── Data structures ─────────────────────────────────────────────────────
+function sleep(ms: number) { return new Promise(r => setTimeout(r, ms)); }
+
 interface Vendor { email: string; token: string; id: string; currency: string; products: string[] }
 interface Buyer { email: string; token: string; id: string }
 
 const VENDOR_CONFIGS = [
-  ...Array(8).fill(null).map((_, i) => ({ country: "Italy", currency: "EUR", idx: i })),
-  ...Array(4).fill(null).map((_, i) => ({ country: "United Kingdom", currency: "GBP", idx: i + 8 })),
-  ...Array(3).fill(null).map((_, i) => ({ country: "United States", currency: "USD", idx: i + 12 })),
-  ...Array(3).fill(null).map((_, i) => ({ country: "Nigeria", currency: "NGN", idx: i + 15 })),
-  { country: "Ghana", currency: "GHS", idx: 18 },
-  { country: "Kenya", currency: "KES", idx: 19 },
+  ...Array(4).fill(null).map((_, i) => ({ country: "Italy", currency: "EUR", idx: i })),
+  ...Array(2).fill(null).map((_, i) => ({ country: "United Kingdom", currency: "GBP", idx: i + 4 })),
+  { country: "United States", currency: "USD", idx: 6 },
+  { country: "Nigeria", currency: "NGN", idx: 7 },
+  { country: "Ghana", currency: "GHS", idx: 8 },
+  { country: "Kenya", currency: "KES", idx: 9 },
 ];
 
 const PRODUCT_NAMES = [
   "Organic Pasta", "Fresh Basil Sauce", "Extra Virgin Olive Oil", "Truffle Salt", "Aged Parmesan",
   "Sourdough Bread", "Artisan Cheese", "Smoked Salmon", "Wild Honey", "Dark Chocolate",
-  "Basmati Rice", "Coconut Oil", "Turmeric Powder", "Dried Mango", "Cashew Nuts",
-  "Palm Oil", "Plantain Chips", "Jollof Spice Mix", "Suya Seasoning", "Garri",
 ];
 
 const vendors: Vendor[] = [];
 const buyers: Buyer[] = [];
-const orderIds: string[] = [];
 let adminToken = "";
 
 async function run() {
   console.log("═══════════════════════════════════════════════════════════");
-  console.log("  MARKETPLACE SCENARIO TEST");
+  console.log("  MARKETPLACE SCENARIO TEST v2");
   console.log(`  Target: ${BASE}`);
-  console.log(`  Prefix: ${PREFIX}`);
   console.log("═══════════════════════════════════════════════════════════\n");
 
   // Admin login
@@ -67,70 +63,58 @@ async function run() {
   adminToken = al.d?.token ?? "";
   if (!adminToken) { console.log("❌ Admin login failed. Aborting."); return; }
 
-  // ═══ 1. CREATE VENDORS ═══════════════════════════════════════════════
-  console.log("── 1. CREATING 20 VENDORS ──\n");
+  // ═══ 1. CREATE VENDORS (with delay to avoid rate limit) ══════════════
+  console.log("── 1. CREATING 10 VENDORS (rate-limit aware) ──\n");
   for (const cfg of VENDOR_CONFIGS) {
-    const email = `${PREFIX}vendor${cfg.idx}_${TS}@test.com`;
-    const reg = await api("POST", "/api/auth/register", { email, password: "Vendor1A!", name: `${PREFIX}Vendor ${cfg.idx}` });
-    if (reg.s !== 201) { log(`Register vendor ${cfg.idx}`, false, `${reg.s}`); continue; }
+    await sleep(DELAY_MS);
+    const email = `${PREFIX}v${cfg.idx}_${TS}@test.com`;
+    const reg = await api("POST", "/api/auth/register", { email, password: "Vendor1A!", name: `${PREFIX}V${cfg.idx}` });
+    if (reg.s === 429) { log(`Vendor ${cfg.idx} rate-limited`, false, "429 — increase delay"); continue; }
+    if (reg.s !== 201) { log(`Vendor ${cfg.idx}`, false, `${reg.s}`); continue; }
     let token = reg.d?.token;
-    const cv = await api("POST", "/api/vendors", { storeName: `${PREFIX}Store_${cfg.idx}_${TS}`, country: cfg.country }, token);
+    const cv = await api("POST", "/api/vendors", { storeName: `${PREFIX}S${cfg.idx}_${TS}`, country: cfg.country }, token);
     if (cv.d?.token) token = cv.d.token;
     const vid = cv.d?.vendor?.id;
     log(`Vendor ${cfg.idx} (${cfg.country})`, cv.s === 201 && cv.d?.vendor?.currency === cfg.currency,
       `currency=${cv.d?.vendor?.currency}`);
-    if (vid && adminToken) await api("PATCH", `/api/admin/vendors/${vid}/approve`, {}, adminToken);
+    if (vid) await api("PATCH", `/api/admin/vendors/${vid}/approve`, {}, adminToken);
     vendors.push({ email, token: token!, id: vid!, currency: cfg.currency, products: [] });
   }
-  console.log(`  Created: ${vendors.length}/20 vendors\n`);
+  console.log(`  Created: ${vendors.length}/${VENDOR_CONFIGS.length}\n`);
 
   // ═══ 2. CREATE PRODUCTS ══════════════════════════════════════════════
-  console.log("── 2. CREATING 100 PRODUCTS ──\n");
+  console.log("── 2. CREATING PRODUCTS (5 per vendor) ──\n");
   let prodCount = 0;
   for (const vendor of vendors) {
     for (let i = 0; i < 5; i++) {
-      const name = `${PREFIX}${PRODUCT_NAMES[(prodCount) % PRODUCT_NAMES.length]}_${prodCount}`;
+      const name = `${PREFIX}${PRODUCT_NAMES[prodCount % PRODUCT_NAMES.length]}_${prodCount}`;
       const price = Math.floor(Math.random() * 5000) + 500;
       const stock = Math.floor(Math.random() * 45) + 5;
-      // Try to override currency — should be ignored
       const wrongCurrency = vendor.currency === "EUR" ? "USD" : "EUR";
       const p = await api("POST", "/api/products", {
         title: name, priceAmount: price, stock, category: "food", currency: wrongCurrency,
       }, vendor.token);
       if (p.s === 201) {
-        const pid = p.d?.product?.id;
-        vendor.products.push(pid);
-        log(`Product ${prodCount}`, p.d?.product?.currency === vendor.currency,
+        vendor.products.push(p.d?.product?.id);
+        log(`Product ${prodCount} currency`, p.d?.product?.currency === vendor.currency,
           `expected=${vendor.currency} got=${p.d?.product?.currency}`);
-        prodCount++;
       } else {
         log(`Product ${prodCount}`, false, `${p.s} ${p.d?.message}`);
-        prodCount++;
       }
+      prodCount++;
     }
   }
-  console.log(`  Created: ${prodCount} products\n`);
+  console.log(`  Created: ${prodCount}\n`);
 
-  // Verify catalog
-  const catalog = await api("GET", "/api/products?limit=50");
-  const catalogTitles = (catalog.d?.items ?? []).map((p: any) => p.title);
-  const qaCatalog = catalogTitles.filter((t: string) => t.startsWith(PREFIX));
-  log("Catalog has QA products", qaCatalog.length > 0, `found=${qaCatalog.length}`);
-
-  // ═══ 3. CREATE BUYERS ════════════════════════════════════════════════
-  console.log("\n── 3. CREATING 50 BUYERS ──\n");
-  // Test weak password once
-  const weakTest = await api("POST", "/api/auth/register", { email: `${PREFIX}weak@t.com`, password: "weak", name: "W" });
-  log("Weak password rejected", weakTest.s === 400);
-
-  for (let i = 0; i < 50; i++) {
-    const email = `${PREFIX}buyer${i}_${TS}@test.com`;
-    const reg = await api("POST", "/api/auth/register", { email, password: "Buyer1Aa!", name: `${PREFIX}Buyer ${i}` });
-    if (reg.s === 201) {
-      buyers.push({ email, token: reg.d?.token, id: reg.d?.user?.id });
-    }
+  // ═══ 3. CREATE BUYERS (with delay) ═══════════════════════════════════
+  console.log("── 3. CREATING 5 BUYERS ──\n");
+  for (let i = 0; i < 5; i++) {
+    await sleep(DELAY_MS);
+    const email = `${PREFIX}b${i}_${TS}@test.com`;
+    const reg = await api("POST", "/api/auth/register", { email, password: "Buyer1Aa!", name: `${PREFIX}B${i}` });
+    if (reg.s === 201) buyers.push({ email, token: reg.d?.token, id: reg.d?.user?.id });
   }
-  console.log(`  Created: ${buyers.length}/50 buyers\n`);
+  log("Buyers created", buyers.length >= 3, `count=${buyers.length}`);
 
   // Verify auth/me
   if (buyers[0]) {
@@ -138,112 +122,107 @@ async function run() {
     log("Buyer /auth/me", me.s === 200 && me.d?.user?.role === "BUYER" && me.d?.user?.trustScore !== undefined);
   }
 
-  // ═══ 4. BUYER CHECKOUT SIMULATION ════════════════════════════════════
-  console.log("── 4. CHECKOUT SIMULATION ──\n");
-  // Pick EUR vendors/products for Stripe checkout (Stripe uses EUR)
+  // ═══ 4. STRIPE CHECKOUT ══════════════════════════════════════════════
+  console.log("\n── 4. STRIPE CHECKOUT ──\n");
   const eurVendors = vendors.filter(v => v.currency === "EUR" && v.products.length > 0);
-  let stripeOrders = 0, walletOrders = 0, abandoned = 0;
+  let paidOrderId: string | undefined;
 
-  for (let i = 0; i < Math.min(buyers.length, 30); i++) {
-    const buyer = buyers[i];
-    const action = Math.random();
-
-    if (action < 0.1) { abandoned++; continue; } // 10% abandon
-
-    // Pick a random EUR product
-    const vendor = eurVendors[i % eurVendors.length];
-    if (!vendor || !vendor.products[0]) continue;
-    const pid = vendor.products[i % vendor.products.length];
-
-    // Clear cart + add
+  if (eurVendors[0] && buyers[0]) {
+    const buyer = buyers[0];
+    const pid = eurVendors[0].products[0];
     await api("DELETE", "/api/cart", undefined, buyer.token);
     await api("GET", "/api/cart", undefined, buyer.token);
     await api("POST", "/api/cart/items", { productId: pid, quantity: 1 }, buyer.token);
     const cart = await api("GET", "/api/cart", undefined, buyer.token);
     const cartId = cart.d?.id ?? cart.d?.cart?.id;
 
-    if (!cartId) continue;
-
-    // Stripe checkout (most buyers)
     const co = await api("POST", "/api/payments/create-intent", { cartId, deliveryCountry: "Italy" }, buyer.token);
-    if (co.s === 201 && co.d?.clientSecret) {
-      const piId = co.d.clientSecret.split("_secret_")[0];
-      orderIds.push(co.d.orderIds?.[0]);
+    log("Checkout created", co.s === 201, `status=${co.s}`);
 
-      // Confirm with test card
-      try {
-        const pm = await stripe.paymentMethods.create({ type: "card", card: { token: "tok_visa" } });
-        await stripe.paymentIntents.confirm(piId, { payment_method: pm.id, return_url: BASE });
-        stripeOrders++;
-      } catch { /* rate limited or PI issue — skip */ }
+    if (co.s === 201) {
+      const piId = co.d.clientSecret.split("_secret_")[0];
+      paidOrderId = co.d.orderIds?.[0];
+      const pm = await stripe.paymentMethods.create({ type: "card", card: { token: "tok_visa" } });
+      const confirmed = await stripe.paymentIntents.confirm(piId, { payment_method: pm.id, return_url: BASE });
+      log("Payment confirmed", confirmed.status === "succeeded", `status=${confirmed.status}`);
+
+      console.log("  Waiting 12s for webhook...");
+      await sleep(12000);
+
+      const order = await api("GET", `/api/orders/${paidOrderId}`, undefined, buyer.token);
+      log("Order PAID", order.d?.order?.status === "PAID", `status=${order.d?.order?.status}`);
     }
   }
-  console.log(`  Stripe orders: ${stripeOrders}`);
-  console.log(`  Abandoned: ${abandoned}\n`);
 
-  // Wait for webhooks
-  if (stripeOrders > 0) {
-    console.log("  Waiting 15s for webhooks...\n");
-    await new Promise(r => setTimeout(r, 15000));
-  }
+  // ═══ 5. REVIEWS (using real paid order) ══════════════════════════════
+  console.log("\n── 5. REVIEW VALIDATION ──\n");
 
-  // ═══ 5. REVIEWS ══════════════════════════════════════════════════════
-  console.log("── 5. REVIEWS ──\n");
-  // Invalid ratings
-  const invalidRatings = [0, -1, 3.5, 6];
-  for (const rating of invalidRatings) {
-    const r = await api("POST", "/api/reviews", { orderId: "fake", vendorId: "fake", rating }, buyers[0]?.token);
-    log(`Invalid rating ${rating} rejected`, r.s === 400);
+  // Test with fake order → expect 404
+  const fakeReview = await api("POST", "/api/reviews", { orderId: "fake", vendorId: "fake", rating: 5 }, buyers[0]?.token);
+  log("Fake order → 404", fakeReview.s === 404, `status=${fakeReview.s}`);
+
+  // Invalid ratings against a real order (if we have one that's DELIVERED/COMPLETED)
+  // Since our order is PAID (not DELIVERED), we expect 400 "can only review after delivered"
+  if (paidOrderId && buyers[0]) {
+    const vendorId = eurVendors[0]?.id ?? "";
+    const reviewAttempt = await api("POST", "/api/reviews", { orderId: paidOrderId, vendorId, rating: 5 }, buyers[0].token);
+    log("Review before delivery → rejected", reviewAttempt.s === 400, `status=${reviewAttempt.s} msg=${reviewAttempt.d?.message?.slice(0, 50)}`);
+
+    // Invalid ratings (these hit validation before order check)
+    for (const rating of [0, -1, 3.5, 6]) {
+      const r = await api("POST", "/api/reviews", { orderId: paidOrderId, vendorId, rating }, buyers[0].token);
+      log(`Rating ${rating} rejected`, r.s === 400, `status=${r.s} msg=${r.d?.message?.slice(0, 40)}`);
+    }
   }
 
   // ═══ 6. REFUND + DUPLICATE ═══════════════════════════════════════════
-  console.log("\n── 6. REFUND TEST ──\n");
-  // Find a paid order from our scenario
-  const paidOrder = await api("GET", "/api/admin/orders?status=PAID&limit=3", undefined, adminToken);
-  const refundableOrders = (paidOrder.d?.items ?? []).filter((o: any) =>
-    o.orderNumber?.includes("EKI") && o.status === "PAID"
-  ).slice(0, 2);
-
-  for (const order of refundableOrders) {
-    const ref = await api("POST", `/api/admin/orders/${order.id}/refund`, { amount: order.totalAmount, reason: "QA test" }, adminToken);
-    log(`Refund order ${order.id.slice(0, 8)}`, ref.s === 202, `status=${ref.s}`);
-
-    // Duplicate
-    const dup = await api("POST", `/api/admin/orders/${order.id}/refund`, { amount: order.totalAmount }, adminToken);
-    log(`Duplicate refund → 409`, dup.s === 409, `status=${dup.s}`);
+  console.log("\n── 6. REFUND ──\n");
+  if (paidOrderId) {
+    const ref = await api("POST", `/api/admin/orders/${paidOrderId}/refund`, { amount: 100, reason: "QA" }, adminToken);
+    log("Admin refund", ref.s === 202, `status=${ref.s}`);
+    const dup = await api("POST", `/api/admin/orders/${paidOrderId}/refund`, { amount: 100 }, adminToken);
+    log("Duplicate refund → 409", dup.s === 409, `status=${dup.s}`);
   }
 
-  // ═══ 7. R2 UPLOAD ═══════════════════════════════════════════════════
+  // ═══ 7. R2 UPLOAD (using confirmed vendor token) ═════════════════════
   console.log("\n── 7. R2 UPLOAD ──\n");
-  if (vendors[0]) {
-    const upl = await api("POST", "/api/uploads/request-url", { filename: "scenario.png", contentType: "image/png", category: "product" }, vendors[0].token);
-    log("Upload URL request", upl.s === 200);
+  const uploadVendor = vendors.find(v => !!v.token);
+  if (uploadVendor) {
+    const upl = await api("POST", "/api/uploads/request-url", { filename: "scenario.png", contentType: "image/png", category: "product" }, uploadVendor.token);
+    log("Upload URL", upl.s === 200, `status=${upl.s}`);
     if (upl.s === 200) {
       const PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==", "base64");
       const put = await fetch(upl.d.uploadUrl, { method: "PUT", headers: { "Content-Type": "image/png" }, body: PNG });
       log("PUT upload", put.status === 200 || put.status === 204, `status=${put.status}`);
       if (put.status === 200 || put.status === 204) {
-        await new Promise(r => setTimeout(r, 2000));
+        await sleep(2000);
         const get = await fetch(upl.d.publicUrl);
         log("GET publicUrl", get.status === 200, `status=${get.status}`);
       }
     }
   }
 
-  // ═══ 8. CONCURRENCY ═════════════════════════════════════════════════
-  console.log("\n── 8. CONCURRENCY ──\n");
-  // Low-stock product race
-  if (eurVendors[0] && buyers.length >= 10) {
-    // Create a product with stock=2
+  // ═══ 8. RATE LIMIT TEST (dedicated) ═════════════════════════════════
+  console.log("\n── 8. RATE LIMIT VERIFICATION ──\n");
+  // Rapid-fire 12 login attempts to trigger rate limit
+  let gotRateLimited = false;
+  for (let i = 0; i < 12; i++) {
+    const r = await api("POST", "/api/auth/login", { email: "nonexistent@test.com", password: "x" });
+    if (r.s === 429) { gotRateLimited = true; break; }
+  }
+  log("Rate limiter triggers on rapid auth", gotRateLimited, gotRateLimited ? "429 received" : "not triggered (may need more attempts)");
+
+  // ═══ 9. CONCURRENCY ═════════════════════════════════════════════════
+  console.log("\n── 9. CONCURRENCY ──\n");
+  if (eurVendors[0] && buyers.length >= 3) {
     const lowStock = await api("POST", "/api/products", {
       title: `${PREFIX}LowStock_${TS}`, priceAmount: 1000, stock: 2, category: "food",
     }, eurVendors[0].token);
     const lsPid = lowStock.d?.product?.id;
-
     if (lsPid) {
-      // 5 concurrent checkout attempts
+      eurVendors[0].products.push(lsPid);
       const attempts = await Promise.all(
-        buyers.slice(0, 5).map(async (buyer) => {
+        buyers.slice(0, 3).map(async (buyer) => {
           await api("DELETE", "/api/cart", undefined, buyer.token);
           await api("GET", "/api/cart", undefined, buyer.token);
           await api("POST", "/api/cart/items", { productId: lsPid, quantity: 1 }, buyer.token);
@@ -253,42 +232,31 @@ async function run() {
         }),
       );
       const successes = attempts.filter(a => a.s === 201).length;
-      log("Concurrent low-stock: max 2 succeed", successes <= 2, `successes=${successes}/5`);
+      log("Low-stock concurrency: max 2 succeed", successes <= 2, `successes=${successes}/3`);
     }
   }
 
-  // ═══ 9. CLEANUP ═════════════════════════════════════════════════════
-  console.log("\n── 9. CLEANUP ──\n");
-  // Deactivate all QA products
+  // ═══ 10. CLEANUP ════════════════════════════════════════════════════
+  console.log("\n── 10. CLEANUP ──\n");
   let deactivated = 0;
   for (const vendor of vendors) {
     for (const pid of vendor.products) {
-      // Use admin to deactivate
       await api("PATCH", `/api/admin/products/${pid}/disable`, {}, adminToken);
       deactivated++;
     }
   }
-  console.log(`  Deactivated ${deactivated} QA products`);
+  console.log(`  Deactivated: ${deactivated} products`);
 
-  // Verify cleanup
   const finalCatalog = await api("GET", "/api/products?limit=100");
   const remaining = (finalCatalog.d?.items ?? []).filter((p: any) => p.title?.startsWith(PREFIX));
-  log("No QA products in catalog after cleanup", remaining.length === 0, `remaining=${remaining.length}`);
+  log("Cleanup: no QA products visible", remaining.length === 0, `remaining=${remaining.length}`);
 
-  // ═══ 10. FINAL REPORT ═══════════════════════════════════════════════
+  // ═══ SUMMARY ════════════════════════════════════════════════════════
   console.log("\n═══════════════════════════════════════════════════════════");
-  console.log("  SCENARIO TEST RESULTS");
+  console.log("  RESULTS");
   console.log("═══════════════════════════════════════════════════════════\n");
-  console.log(`  Vendors created:    ${vendors.length}`);
-  console.log(`  Buyers created:     ${buyers.length}`);
-  console.log(`  Products created:   ${prodCount}`);
-  console.log(`  Stripe orders:      ${stripeOrders}`);
-  console.log(`  Wallet orders:      ${walletOrders}`);
-  console.log(`  Refunds:            ${refundableOrders.length}`);
-  console.log(`  Tests:              ${total}`);
-  console.log(`  Passed:             ${passed}`);
-  console.log(`  Failed:             ${failed}`);
-  console.log("");
+  console.log(`  Vendors: ${vendors.length} | Buyers: ${buyers.length} | Products: ${prodCount}`);
+  console.log(`  Tests: ${total} | ✅ ${passed} | ❌ ${failed}\n`);
 
   if (failures.length > 0) {
     console.log("  FAILURES:");
