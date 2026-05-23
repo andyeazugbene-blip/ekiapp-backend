@@ -121,6 +121,7 @@ model User {
   orders              Order[]        @relation("BuyerOrders")
   cart                Cart?
   notifications       Notification[]
+  adminTwoFactor      AdminTwoFactor?
   createdAt           DateTime       @default(now())
   updatedAt           DateTime       @updatedAt
 
@@ -867,4 +868,17 @@ model Dispute {
   @@index([status, createdAt])
   @@index([buyerId])
   @@index([vendorId])
+}
+
+// ─── Admin Two-Factor Authentication ────────────────────────────────────────
+
+model AdminTwoFactor {
+  id          String   @id @default(cuid())
+  userId      String   @unique
+  secret      String
+  enabled     Boolean  @default(false)
+  backupCodes String[] @default([])
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 }

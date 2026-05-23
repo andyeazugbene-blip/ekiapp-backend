@@ -4,6 +4,7 @@ import { swaggerSpec } from "../lib/swagger";
 import { addressesRouter } from "../modules/addresses/addresses.routes";
 import { adminRouter } from "../modules/admin/admin.routes";
 import { authRouter } from "../modules/auth/auth.routes";
+import { gdprRouter } from "../modules/auth/gdpr.routes";
 import { buyerWalletRouter } from "../modules/buyer-wallet/buyer-wallet.routes";
 import { cartRouter } from "../modules/cart/cart.routes";
 import { deliveryRouter } from "../modules/delivery/delivery.routes";
@@ -73,6 +74,7 @@ if (enableDocs) {
 
 apiRouter.use(healthRouter);
 apiRouter.use("/auth", authRouter);
+apiRouter.use("/me", gdprRouter);
 apiRouter.use("/admin", adminRouter);
 apiRouter.use("/public/stores", publicStoresRouter);
 apiRouter.use("/vendors", vendorsRouter);

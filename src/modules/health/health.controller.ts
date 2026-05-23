@@ -3,9 +3,25 @@ import type { Request, Response } from "express";
 import { prisma } from "../../lib/prisma";
 import { stripe } from "../../lib/stripe";
 import { paystack } from "../../lib/paystack";
+import { isSentryEnabled } from "../../lib/sentry";
 
 export function getHealth(_request: Request, response: Response): void {
   response.status(200).json({ status: "ok" });
+}
+
+/**
+ * GET /api/health/sentry-test
+ * Triggers a safe test error to verify Sentry is capturing exceptions.
+ * Only available in non-production or when explicitly enabled.
+ */
+export function sentryTest(_request: Request, _response: Response): void {
+  if (!isSentryEnabled()) {
+    _response.status(200).json({ sentry: "disabled", message: "SENTRY_DSN not configured" });
+    return;
+  }
+
+  // Throw a controlled error that the error handler will catch and send to Sentry
+  throw new Error("[Sentry Test] Verification error — safe to ignore");
 }
 
 /**

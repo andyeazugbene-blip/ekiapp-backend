@@ -14,6 +14,7 @@
 import { Router } from "express";
 
 import { authenticate, requireRole } from "../../middlewares/authenticate";
+import { require2fa } from "../../middlewares/require-2fa";
 import {
   adminApprovePayoutRequest,
   adminListPayoutRequests,
@@ -67,6 +68,12 @@ import {
 import { completeOrder } from "./admin-orders.controller";
 import { adminRefundOrder } from "./admin-refunds.controller";
 import { suspendVendor, unsuspendVendor } from "./admin-vendors.controller";
+import {
+  disable2fa,
+  regenerateBackupCodes,
+  setup2fa,
+  verify2fa,
+} from "./admin-2fa.controller";
 
 export const adminRouter = Router();
 
@@ -88,8 +95,6 @@ adminRouter.get("/wallet-transactions", asyncHandler(listWalletTransactions));
 // Vendor moderation
 adminRouter.patch("/vendors/:id/approve", asyncHandler(approveVendor));
 adminRouter.patch("/vendors/:id/reject", asyncHandler(rejectVendor));
-adminRouter.patch("/vendors/:id/suspend", asyncHandler(suspendVendor));
-adminRouter.patch("/vendors/:id/unsuspend", asyncHandler(unsuspendVendor));
 
 // Product moderation
 adminRouter.patch("/products/:id/approve", asyncHandler(approveProduct));
@@ -97,13 +102,11 @@ adminRouter.patch("/products/:id/disable", asyncHandler(disableProduct));
 
 // Order management
 adminRouter.patch("/orders/:id/complete", asyncHandler(completeOrder));
-adminRouter.post("/orders/:id/refund", asyncHandler(adminRefundOrder));
 
 // Payout management
 adminRouter.get("/payout-requests", asyncHandler(adminListPayoutRequests));
 adminRouter.patch("/payout-requests/:id/approve", asyncHandler(adminApprovePayoutRequest));
 adminRouter.patch("/payout-requests/:id/reject", asyncHandler(adminRejectPayoutRequest));
-adminRouter.patch("/payout-requests/:id/mark-paid", asyncHandler(adminMarkPayoutRequestPaid));
 
 // Verification document review
 adminRouter.get("/verification-documents", asyncHandler(adminListPendingDocuments));
@@ -134,3 +137,15 @@ adminRouter.patch("/users/:id/trust-score", asyncHandler(adminAdjustTrustScore))
 
 // Escrow health monitoring
 adminRouter.get("/escrow/health", asyncHandler(getEscrowHealth));
+
+// ─── 2FA Management ─────────────────────────────────────────────────────────
+adminRouter.post("/2fa/setup", asyncHandler(setup2fa));
+adminRouter.post("/2fa/verify", asyncHandler(verify2fa));
+adminRouter.post("/2fa/disable", asyncHandler(disable2fa));
+adminRouter.post("/2fa/backup-codes/regenerate", asyncHandler(regenerateBackupCodes));
+
+// ─── Sensitive operations requiring 2FA (if enabled) ────────────────────────
+adminRouter.post("/orders/:id/refund", asyncHandler(require2fa), asyncHandler(adminRefundOrder));
+adminRouter.patch("/vendors/:id/suspend", asyncHandler(require2fa), asyncHandler(suspendVendor));
+adminRouter.patch("/vendors/:id/unsuspend", asyncHandler(require2fa), asyncHandler(unsuspendVendor));
+adminRouter.patch("/payout-requests/:id/mark-paid", asyncHandler(require2fa), asyncHandler(adminMarkPayoutRequestPaid));
