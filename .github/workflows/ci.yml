@@ -1,0 +1,44 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    env:
+      NODE_ENV: test
+      JWT_SECRET: ci-test-secret
+      DATABASE_URL: postgresql://test:test@localhost:5432/test
+      STRIPE_SECRET_KEY: sk_test_fake
+      STRIPE_WEBHOOK_SECRET: whsec_fake
+      PLATFORM_FEE_BPS: "1000"
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      - run: npm ci
+
+      - name: Prisma Generate
+        run: npx prisma generate
+
+      - name: Scaffolding Phrase Check
+        run: npm run check:scaffolding
+
+      - name: Module Test Coverage Map
+        run: npm run test:coverage-map
+
+      - name: TypeScript Check
+        run: npx tsc --noEmit
+
+      - name: Unit Tests
+        run: npx vitest run

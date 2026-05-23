@@ -51,6 +51,4 @@
 
 | Risk | Severity | Mitigation |
 |------|----------|------------|
-| Paystack module has no direct unit tests | Medium | Covered by production smoke tests; add unit tests in next sprint |
-| Background jobs require Redis (not available on Vercel free tier) | Low | Queue plan documented; sync fallback works |
-| No CI pipeline (GitHub Actions) | Medium | Tests run via husky pre-commit; add GH Actions in next sprint |
+| Background jobs require Redis (not available on Vercel free tier) | Low | Queue plan documented; sync fallback works. Not a blocker for soft launch. |
