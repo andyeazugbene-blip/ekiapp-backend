@@ -25,6 +25,7 @@
     "test:scenario": "tsx scripts/scenario-marketplace-test.ts",
     "test:scenario:low": "tsx scripts/scenario-marketplace-test.ts",
     "test:security:ratelimit": "tsx scripts/security-ratelimit-test.ts",
+    "cleanup:scenario": "tsx scripts/cleanup-scenario-products.ts",
     "reconcile:stripe": "tsx scripts/reconcile-stripe.ts",
     "reconcile:paystack": "tsx scripts/reconcile-paystack.ts",
     "reconcile:wallets": "tsx scripts/reconcile-wallets.ts",

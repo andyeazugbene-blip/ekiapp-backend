@@ -249,13 +249,47 @@ async function run() {
 
   // ─── CLEANUP ───────────────────────────────────────────────────────
   console.log("\n── CLEANUP ──\n");
+
+  // Deactivate products created in this run
   let deactivated = 0;
   for (const v of vendorData) {
     for (const pid of v.products) { await api("PATCH", `/api/admin/products/${pid}/disable`, {}, adminToken); deactivated++; }
   }
+
+  // Global cleanup: paginate through ALL products and deactivate any QA/test artifacts
+  const QA_PATTERNS = ["SCENARIO_QA_", "R3PNG", "R3P", "QA ", "QA_", "TEST", "Test ", "Demo", "NG Prod", "UK Prod", "Sample Marketplace"];
+  const PROTECTED = ["Olio Extra Vergine di Oliva", "Sugo al Basilico", "Spaghetti di Gragnano"];
+  let cursor: string | undefined;
+  let globalDeactivated = 0;
+
+  for (let page = 0; page < 10; page++) {
+    const list = await api("GET", `/api/admin/products?limit=100${cursor ? `&cursor=${cursor}` : ""}`, undefined, adminToken);
+    const items = list.d?.items ?? [];
+    if (items.length === 0) break;
+
+    for (const p of items) {
+      if (!p.isActive) continue;
+      if (PROTECTED.includes(p.title)) continue;
+      const isQA = QA_PATTERNS.some((pat: string) => p.title?.startsWith(pat)) || /^(test|qa|demo|r\d+)/i.test(p.title ?? "");
+      if (isQA) {
+        await api("PATCH", `/api/admin/products/${p.id}/disable`, {}, adminToken);
+        globalDeactivated++;
+      }
+    }
+
+    cursor = list.d?.nextCursor;
+    if (!cursor) break;
+  }
+
+  // Verify: fetch public catalog and check no QA products visible
   const final = await api("GET", "/api/products?limit=100");
-  const remaining = (final.d?.items ?? []).filter((p: any) => p.title?.startsWith(PREFIX));
-  log("Cleanup", remaining.length === 0 ? "PASS" : "FAIL", `deactivated=${deactivated} remaining=${remaining.length}`);
+  const remaining = (final.d?.items ?? []).filter((p: any) => {
+    if (PROTECTED.includes(p.title)) return false;
+    return QA_PATTERNS.some((pat: string) => p.title?.startsWith(pat)) || /^(test|qa|demo|r\d+)/i.test(p.title ?? "");
+  });
+
+  log("Cleanup", remaining.length === 0 ? "PASS" : "FAIL",
+    `thisRun=${deactivated} global=${globalDeactivated} remaining=${remaining.length}`);
 
   // ─── SUMMARY ───────────────────────────────────────────────────────
   const counts = { PASS: 0, FAIL: 0, SKIPPED: 0, SKIPPED_RATE_LIMIT: 0, EXPECTED_SECURITY_BLOCK: 0 };
