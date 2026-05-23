@@ -18,6 +18,7 @@
     "prisma:migrate:deploy": "prisma migrate deploy",
     "prisma:seed": "prisma db seed",
     "launch:health": "tsx scripts/launch-health-check.ts",
+    "launch:load-smoke": "tsx scripts/load-smoke-test.ts",
     "reconcile:stripe": "tsx scripts/reconcile-stripe.ts",
     "reconcile:paystack": "tsx scripts/reconcile-paystack.ts",
     "reconcile:wallets": "tsx scripts/reconcile-wallets.ts",
