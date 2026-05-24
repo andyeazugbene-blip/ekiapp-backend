@@ -29,6 +29,8 @@
     "reconcile:stripe": "tsx scripts/reconcile-stripe.ts",
     "reconcile:paystack": "tsx scripts/reconcile-paystack.ts",
     "reconcile:wallets": "tsx scripts/reconcile-wallets.ts",
+    "r2:round-trip": "tsx scripts/r2-round-trip.ts",
+    "register:smoke": "tsx scripts/register-smoke.ts",
     "prepare": "husky"
   },
   "prisma": {
@@ -62,11 +64,13 @@
     "@types/express": "^5.0.0",
     "@types/jsonwebtoken": "^9.0.7",
     "@types/node": "^22.10.1",
+    "@types/supertest": "^7.2.0",
     "@types/swagger-jsdoc": "^6.0.4",
     "@types/swagger-ui-express": "^4.1.8",
     "@vercel/node": "^5.8.1",
     "husky": "^9.1.7",
     "prisma": "^6.0.0",
+    "supertest": "^7.2.2",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2",
     "vitest": "^4.1.5"

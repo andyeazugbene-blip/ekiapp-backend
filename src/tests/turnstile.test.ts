@@ -1,88 +1,84 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import type { NextFunction, Request, Response } from "express";
 
+import { requireTurnstile } from "../middlewares/turnstile";
+
 // Mock fetch globally
 const mockFetch = vi.fn();
 vi.stubGlobal("fetch", mockFetch);
 
-describe("Turnstile Middleware", () => {
-  let requireTurnstile: (req: Request, res: Response, next: NextFunction) => void;
+function createMockReq(body: Record<string, unknown> = {}, ip = "127.0.0.1"): Request {
+  return { body, ip } as unknown as Request;
+}
 
-  function createMockReq(body: Record<string, unknown> = {}, ip = "127.0.0.1"): Request {
-    return { body, ip } as unknown as Request;
-  }
+function createMockRes(): Response {
+  return {} as unknown as Response;
+}
 
-  function createMockRes(): Response {
-    return {} as unknown as Response;
-  }
-
+describe("Turnstile Middleware (unit)", () => {
   beforeEach(() => {
-    vi.resetModules();
+    mockFetch.mockReset();
   });
 
   afterEach(() => {
     vi.unstubAllEnvs();
-    mockFetch.mockReset();
   });
 
-  it("should skip validation in development when TURNSTILE_SECRET_KEY is not set", async () => {
+  it("skips validation in development when TURNSTILE_SECRET_KEY is not set", () => {
     vi.stubEnv("NODE_ENV", "development");
     vi.stubEnv("TURNSTILE_SECRET_KEY", "");
 
-    const mod = await import("../middlewares/turnstile");
-    requireTurnstile = mod.requireTurnstile;
-
     const next = vi.fn();
     requireTurnstile(createMockReq(), createMockRes(), next);
     expect(next).toHaveBeenCalledWith();
   });
 
-  it("should skip validation in test environment when key is not set", async () => {
+  it("skips validation in test environment when key is not set", () => {
     vi.stubEnv("NODE_ENV", "test");
     vi.stubEnv("TURNSTILE_SECRET_KEY", "");
 
-    const mod = await import("../middlewares/turnstile");
-    requireTurnstile = mod.requireTurnstile;
-
     const next = vi.fn();
     requireTurnstile(createMockReq(), createMockRes(), next);
     expect(next).toHaveBeenCalledWith();
   });
 
-  it("should reject in production when TURNSTILE_SECRET_KEY is not configured", async () => {
+  it("returns controlled 503 with TURNSTILE_NOT_CONFIGURED code when key missing in production", () => {
     vi.stubEnv("NODE_ENV", "production");
     vi.stubEnv("TURNSTILE_SECRET_KEY", "");
-
-    const mod = await import("../middlewares/turnstile");
-    requireTurnstile = mod.requireTurnstile;
+    vi.stubEnv("TURNSTILE_DISABLED", "");
 
     const next = vi.fn();
     requireTurnstile(createMockReq(), createMockRes(), next);
-    expect(next).toHaveBeenCalledWith(expect.objectContaining({ statusCode: 503 }));
+
+    expect(next).toHaveBeenCalledTimes(1);
+    const err = next.mock.calls[0][0];
+    expect(err).toBeDefined();
+    expect(err.statusCode).toBe(503);
+    expect(err.code).toBe("TURNSTILE_NOT_CONFIGURED");
   });
 
-  it("should reject when cf-turnstile-response is missing", async () => {
+  it("returns 400 with TURNSTILE_TOKEN_MISSING when token is missing", () => {
     vi.stubEnv("NODE_ENV", "production");
     vi.stubEnv("TURNSTILE_SECRET_KEY", "test-secret");
-
-    const mod = await import("../middlewares/turnstile");
-    requireTurnstile = mod.requireTurnstile;
+    vi.stubEnv("TURNSTILE_DISABLED", "");
 
     const next = vi.fn();
     requireTurnstile(createMockReq({}), createMockRes(), next);
-    expect(next).toHaveBeenCalledWith(expect.objectContaining({ statusCode: 400 }));
+
+    const err = next.mock.calls[0][0];
+    expect(err.statusCode).toBe(400);
+    expect(err.code).toBe("TURNSTILE_TOKEN_MISSING");
+    expect(err.message).toContain("Turnstile token required");
   });
 
-  it("should reject when captcha verification fails", async () => {
+  it("returns 403 with TURNSTILE_INVALID_TOKEN when Cloudflare rejects the token", async () => {
     vi.stubEnv("NODE_ENV", "production");
     vi.stubEnv("TURNSTILE_SECRET_KEY", "test-secret");
+    vi.stubEnv("TURNSTILE_DISABLED", "");
 
     mockFetch.mockResolvedValueOnce({
       json: async () => ({ success: false, "error-codes": ["invalid-input-response"] }),
     });
-
-    const mod = await import("../middlewares/turnstile");
-    requireTurnstile = mod.requireTurnstile;
 
     const next = vi.fn();
     requireTurnstile(
@@ -91,21 +87,20 @@ describe("Turnstile Middleware", () => {
       next,
     );
 
-    // Wait for async verification
     await new Promise((r) => setTimeout(r, 10));
-    expect(next).toHaveBeenCalledWith(expect.objectContaining({ statusCode: 403 }));
+    const err = next.mock.calls[0][0];
+    expect(err.statusCode).toBe(403);
+    expect(err.code).toBe("TURNSTILE_INVALID_TOKEN");
   });
 
-  it("should pass when captcha verification succeeds", async () => {
+  it("calls next() with no error when Cloudflare accepts the token", async () => {
     vi.stubEnv("NODE_ENV", "production");
     vi.stubEnv("TURNSTILE_SECRET_KEY", "test-secret");
+    vi.stubEnv("TURNSTILE_DISABLED", "");
 
     mockFetch.mockResolvedValueOnce({
       json: async () => ({ success: true }),
     });
-
-    const mod = await import("../middlewares/turnstile");
-    requireTurnstile = mod.requireTurnstile;
 
     const next = vi.fn();
     requireTurnstile(
@@ -118,16 +113,51 @@ describe("Turnstile Middleware", () => {
     expect(next).toHaveBeenCalledWith();
   });
 
-  it("should skip when TURNSTILE_DISABLED=true", async () => {
+  it("skips validation when TURNSTILE_DISABLED=true even in production with no key", () => {
     vi.stubEnv("NODE_ENV", "production");
-    vi.stubEnv("TURNSTILE_SECRET_KEY", "test-secret");
+    vi.stubEnv("TURNSTILE_SECRET_KEY", "");
     vi.stubEnv("TURNSTILE_DISABLED", "true");
-
-    const mod = await import("../middlewares/turnstile");
-    requireTurnstile = mod.requireTurnstile;
 
     const next = vi.fn();
     requireTurnstile(createMockReq(), createMockRes(), next);
+    expect(next).toHaveBeenCalledWith();
+  });
+
+  it("returns 503 with TURNSTILE_VERIFY_UNAVAILABLE on network failure in production", async () => {
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("TURNSTILE_SECRET_KEY", "test-secret");
+    vi.stubEnv("TURNSTILE_DISABLED", "");
+
+    mockFetch.mockRejectedValueOnce(new Error("ECONNRESET"));
+
+    const next = vi.fn();
+    requireTurnstile(
+      createMockReq({ "cf-turnstile-response": "any-token" }),
+      createMockRes(),
+      next,
+    );
+
+    await new Promise((r) => setTimeout(r, 10));
+    const err = next.mock.calls[0][0];
+    expect(err.statusCode).toBe(503);
+    expect(err.code).toBe("TURNSTILE_VERIFY_UNAVAILABLE");
+  });
+
+  it("fails open in development when Cloudflare network call fails", async () => {
+    vi.stubEnv("NODE_ENV", "development");
+    vi.stubEnv("TURNSTILE_SECRET_KEY", "test-secret");
+    vi.stubEnv("TURNSTILE_DISABLED", "");
+
+    mockFetch.mockRejectedValueOnce(new Error("ECONNRESET"));
+
+    const next = vi.fn();
+    requireTurnstile(
+      createMockReq({ "cf-turnstile-response": "any-token" }),
+      createMockRes(),
+      next,
+    );
+
+    await new Promise((r) => setTimeout(r, 10));
     expect(next).toHaveBeenCalledWith();
   });
 });

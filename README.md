@@ -30,8 +30,11 @@ Multi-vendor marketplace backend built with Node.js, Express, TypeScript, Postgr
 - Buyer trust score system
 - Escrow balance monitoring with ops alerts
 - R2/S3 file uploads with presigned URLs
+- Cloudflare Turnstile bot protection on registration (toggleable via `TURNSTILE_DISABLED`)
+- Admin TOTP 2FA with backup codes (`/api/admin/2fa/*`) enforced on refunds, suspensions, and payout mark-paid
+- GDPR endpoints: `GET /api/me/data-export`, `POST /api/me/delete-account`
 - OpenAPI spec at `/openapi.json`, `/swagger.json`, `/api-json`, `/api/docs.json`
-- 280+ automated tests (vitest)
+- 315+ automated tests (vitest)
 
 ## Tech Stack
 
@@ -196,6 +199,7 @@ For Stripe-paid checkouts, the cart is cleared after the webhook marks payment s
 - `PATCH /admin/vendors/:id/approve` / `PATCH /admin/vendors/:id/reject`
 - `PATCH /admin/products/:id/approve` / `PATCH /admin/products/:id/disable`
 - `PATCH /admin/orders/:id/complete` — PAID → COMPLETED, releases `pendingBalance` → `availableBalance` with a `PENDING_TO_AVAILABLE` ledger row. Protected against duplicate release by the `WalletTransaction(vendorId, orderId, paymentId, type)` unique constraint.
+- `POST /admin/orders/:id/refund` — full or partial refund. Branches on payment provider: Stripe (`stripe.refunds.create` with `idempotencyKey`) or Paystack (`paystack.refundTransaction`). Marks order `REFUNDED`, writes `AuditLog`. **Requires admin 2FA when enabled.**
 - `GET /admin/payout-requests?status=`
 - `PATCH /admin/payout-requests/:id/approve`
 - `PATCH /admin/payout-requests/:id/reject` — `{ reason? }`
