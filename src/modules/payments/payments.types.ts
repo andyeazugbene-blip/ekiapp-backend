@@ -30,9 +30,12 @@ export type PricedOrderItem = {
 };
 
 export type CreatePaymentIntentResponse = {
+  /** Stripe PaymentIntent id (`pi_...`). Empty string when fully wallet-paid. */
+  paymentIntentId: string;
+  /** Stripe PaymentIntent client_secret. The literal string "wallet_paid" when no Stripe call was made. */
+  clientSecret: string;
   checkoutId: string;
   orderIds: string[];
   amount: number;
   currency: string;
-  clientSecret: string;
 };

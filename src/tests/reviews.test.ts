@@ -4,7 +4,9 @@ vi.mock("../lib/prisma", () => ({
   prisma: {
     order: { findUnique: vi.fn() },
     orderItem: { findFirst: vi.fn() },
-    review: { findFirst: vi.fn(), create: vi.fn(), findMany: vi.fn(), aggregate: vi.fn() },
+    product: { findUnique: vi.fn() },
+    review: { findFirst: vi.fn(), create: vi.fn(), findMany: vi.fn(), aggregate: vi.fn(), count: vi.fn() },
+    user: { findMany: vi.fn() },
   },
 }));
 
@@ -14,11 +16,14 @@ import { validateCreateReviewInput } from "../modules/reviews/reviews.validation
 
 const orderFindUnique = prisma.order.findUnique as unknown as ReturnType<typeof vi.fn>;
 const orderItemFindFirst = prisma.orderItem.findFirst as unknown as ReturnType<typeof vi.fn>;
+const productFindUnique = prisma.product.findUnique as unknown as ReturnType<typeof vi.fn>;
 const reviewFindFirst = prisma.review.findFirst as unknown as ReturnType<typeof vi.fn>;
 const reviewCreate = prisma.review.create as unknown as ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // Default: product exists (most tests don't care about product lookup)
+  productFindUnique.mockResolvedValue({ id: "product-1" });
 });
 
 describe("reviewsService.createReview", () => {
@@ -30,17 +35,42 @@ describe("reviewsService.createReview", () => {
     comment: "Great!",
   };
 
-  it("rejects review when order is not DELIVERED or COMPLETED", async () => {
+  it("rejects review when order is still PENDING (not yet paid)", async () => {
     orderFindUnique.mockResolvedValue({
       id: "order-1",
       buyerId: "buyer-1",
-      status: "PAID",
+      status: "PENDING",
       vendorId: "vendor-1",
     });
 
     await expect(
       reviewsService.createReview("buyer-1", validInput),
     ).rejects.toMatchObject({ statusCode: 400 });
+  });
+
+  it("allows review when order is PAID", async () => {
+    orderFindUnique.mockResolvedValue({
+      id: "order-1",
+      buyerId: "buyer-1",
+      status: "PAID",
+      vendorId: "vendor-1",
+    });
+    orderItemFindFirst.mockResolvedValue({ id: "item-1" });
+    reviewFindFirst.mockResolvedValue(null);
+    reviewCreate.mockResolvedValue({
+      id: "review-1",
+      buyerId: "buyer-1",
+      vendorId: "vendor-1",
+      productId: "product-1",
+      orderId: "order-1",
+      rating: 5,
+      comment: "Great!",
+      status: "PENDING",
+      createdAt: new Date(),
+    });
+
+    const result = await reviewsService.createReview("buyer-1", validInput);
+    expect(result.id).toBe("review-1");
   });
 
   it("rejects review when buyer does not own the order", async () => {
@@ -121,6 +151,20 @@ describe("reviewsService.createReview", () => {
     ).rejects.toMatchObject({ statusCode: 400 });
   });
 
+  it("rejects review when product does not exist (404)", async () => {
+    orderFindUnique.mockResolvedValue({
+      id: "order-1",
+      buyerId: "buyer-1",
+      status: "DELIVERED",
+      vendorId: "vendor-1",
+    });
+    productFindUnique.mockResolvedValue(null);
+
+    await expect(
+      reviewsService.createReview("buyer-1", validInput),
+    ).rejects.toMatchObject({ statusCode: 404 });
+  });
+
   it("rejects review when order does not exist", async () => {
     orderFindUnique.mockResolvedValue(null);
 
@@ -140,6 +184,12 @@ describe("Review Validation", () => {
   it("rejects rating above 5", () => {
     expect(() =>
       validateCreateReviewInput({ orderId: "o1", vendorId: "v1", rating: 6 }),
+    ).toThrow();
+  });
+
+  it("rejects non-integer rating (3.5)", () => {
+    expect(() =>
+      validateCreateReviewInput({ orderId: "o1", vendorId: "v1", rating: 3.5 }),
     ).toThrow();
   });
 

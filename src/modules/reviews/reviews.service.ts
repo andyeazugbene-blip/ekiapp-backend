@@ -10,6 +10,37 @@ import type {
   ModerateReviewInput,
 } from "./reviews.types";
 
+interface PublicReview {
+  id: string;
+  vendorId: string;
+  productId: string | null;
+  rating: number;
+  comment: string | null;
+  buyerName: string;
+  createdAt: Date;
+}
+
+interface PublicReviewsResponse {
+  items: PublicReview[];
+  nextCursor: string | null;
+  averageRating: number | null;
+  totalReviews: number;
+}
+
+/**
+ * Convert a buyer's full name into a privacy-preserving display name
+ * ("Jane Doe" -> "Jane D."). Empty/short names pass through.
+ */
+function safeBuyerDisplayName(name: string): string {
+  const trimmed = name.trim();
+  if (!trimmed) return "Anonymous";
+  const parts = trimmed.split(/\s+/);
+  if (parts.length === 1) return parts[0];
+  const first = parts[0];
+  const lastInitial = parts[parts.length - 1].charAt(0).toUpperCase();
+  return `${first} ${lastInitial}.`;
+}
+
 export const reviewsService = {
   /**
    * Create a review. Buyer must own the order, order must be DELIVERED or COMPLETED,
@@ -24,9 +55,13 @@ export const reviewsService = {
     if (!order) throw new AppError("Order not found", 404);
     if (order.buyerId !== buyerId) throw new AppError("Forbidden", 403);
 
-    // Order must be delivered or completed
-    if (!["DELIVERED", "COMPLETED"].includes(order.status)) {
-      throw new AppError("You can only review after the order is delivered", 400);
+    // Order must be paid or beyond — accepts the full set of post-payment statuses.
+    const reviewableStatuses = new Set([
+      "PAID", "CONFIRMED", "PROCESSING", "DISPATCHED", "IN_TRANSIT",
+      "DELIVERED", "COMPLETED", "PAYMENT_SECURED", "VENDOR_CONFIRMED", "AUTO_RELEASED",
+    ]);
+    if (!reviewableStatuses.has(order.status)) {
+      throw new AppError("You can only review after the order has been paid", 400);
     }
 
     // Verify vendor matches the order
@@ -36,6 +71,13 @@ export const reviewsService = {
 
     // If productId provided, verify it belongs to the order
     if (input.productId) {
+      // Verify the product itself exists (404 if it doesn't)
+      const product = await prisma.product.findUnique({
+        where: { id: input.productId },
+        select: { id: true },
+      });
+      if (!product) throw new AppError("Product not found", 404);
+
       const orderItem = await prisma.orderItem.findFirst({
         where: { orderId: input.orderId, productId: input.productId },
       });
@@ -71,36 +113,59 @@ export const reviewsService = {
 
   /**
    * List approved/visible reviews (public). Filters by vendorId and/or productId.
+   * Returns safe buyer display name + summary (averageRating, totalReviews).
    */
-  async listPublicReviews(
-    query: ListReviewsQuery,
-  ): Promise<{ items: Review[]; nextCursor: string | null; averageRating: number | null }> {
+  async listPublicReviews(query: ListReviewsQuery): Promise<PublicReviewsResponse> {
     const where = {
       status: "APPROVED" as const,
       ...(query.vendorId ? { vendorId: query.vendorId } : {}),
       ...(query.productId ? { productId: query.productId } : {}),
     };
 
-    const items = await prisma.review.findMany({
-      where,
-      orderBy: CURSOR_ORDER_BY,
-      take: query.limit + 1,
-      ...(query.cursor ? { cursor: { id: query.cursor }, skip: 1 } : {}),
-    });
+    const [rawItems, agg, totalReviews] = await Promise.all([
+      prisma.review.findMany({
+        where,
+        orderBy: CURSOR_ORDER_BY,
+        take: query.limit + 1,
+        ...(query.cursor ? { cursor: { id: query.cursor }, skip: 1 } : {}),
+      }),
+      prisma.review.aggregate({ where, _avg: { rating: true } }),
+      prisma.review.count({ where }),
+    ]);
 
     let nextCursor: string | null = null;
+    let items = rawItems;
     if (items.length > query.limit) {
       const next = items.pop();
       nextCursor = next?.id ?? null;
     }
 
-    // Compute average rating
-    const agg = await prisma.review.aggregate({
-      where,
-      _avg: { rating: true },
-    });
+    // Hydrate buyer display names in one query (no PII)
+    const buyerIds = [...new Set(items.map((r) => r.buyerId))];
+    const buyers = buyerIds.length === 0
+      ? []
+      : await prisma.user.findMany({
+          where: { id: { in: buyerIds } },
+          select: { id: true, name: true },
+        });
+    const nameMap = new Map(buyers.map((b) => [b.id, safeBuyerDisplayName(b.name)]));
 
-    return { items, nextCursor, averageRating: agg._avg.rating };
+    const publicItems: PublicReview[] = items.map((r) => ({
+      id: r.id,
+      vendorId: r.vendorId,
+      productId: r.productId,
+      rating: r.rating,
+      comment: r.comment,
+      buyerName: nameMap.get(r.buyerId) ?? "Anonymous",
+      createdAt: r.createdAt,
+    }));
+
+    return {
+      items: publicItems,
+      nextCursor,
+      averageRating: agg._avg.rating,
+      totalReviews,
+    };
   },
 
   /**
@@ -151,5 +216,47 @@ export const reviewsService = {
       _avg: { rating: true },
     });
     return agg._avg.rating;
+  },
+
+  /**
+   * Buyer: list reviews they have authored (any status). Includes vendor + product titles.
+   */
+  async listMyReviews(buyerId: string, query: { limit: number; cursor?: string }): Promise<{
+    items: Array<{
+      id: string;
+      vendorId: string;
+      productId: string | null;
+      orderId: string;
+      rating: number;
+      comment: string | null;
+      status: string;
+      createdAt: Date;
+    }>;
+    nextCursor: string | null;
+  }> {
+    const items = await prisma.review.findMany({
+      where: { buyerId },
+      orderBy: CURSOR_ORDER_BY,
+      take: query.limit + 1,
+      ...(query.cursor ? { cursor: { id: query.cursor }, skip: 1 } : {}),
+      select: {
+        id: true,
+        vendorId: true,
+        productId: true,
+        orderId: true,
+        rating: true,
+        comment: true,
+        status: true,
+        createdAt: true,
+      },
+    });
+
+    let nextCursor: string | null = null;
+    if (items.length > query.limit) {
+      const next = items.pop();
+      nextCursor = next?.id ?? null;
+    }
+
+    return { items, nextCursor };
   },
 };

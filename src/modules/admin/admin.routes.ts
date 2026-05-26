@@ -47,6 +47,7 @@ import {
   getAdminDashboard,
   listAuditLogs,
 } from "./admin-dashboard.controller";
+import { getAdminRevenue } from "./admin-revenue.controller";
 import {
   createDeliveryZone,
   deleteDeliveryZone,
@@ -82,6 +83,7 @@ adminRouter.use(authenticate, requireRole("ADMIN"));
 // Dashboard & Analytics
 adminRouter.get("/dashboard", asyncHandler(getAdminDashboard));
 adminRouter.get("/analytics", asyncHandler(getAdminAnalytics));
+adminRouter.get("/revenue", asyncHandler(getAdminRevenue));
 adminRouter.get("/audit-logs", asyncHandler(listAuditLogs));
 
 // Listings

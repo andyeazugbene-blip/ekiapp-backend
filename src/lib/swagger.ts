@@ -146,12 +146,15 @@ export const swaggerSpec = swaggerJSDoc({
         },
         CreatePaymentIntentResponse: {
           type: "object",
+          description:
+            "Returned by POST /api/payments/create-intent. Mobile Stripe PaymentSheet uses paymentIntentId + clientSecret. Wallet-only checkouts return clientSecret = \"wallet_paid\" and an empty paymentIntentId.",
           properties: {
-            orderId: { type: "string" },
-            paymentId: { type: "string" },
+            paymentIntentId: { type: "string", example: "pi_3...", description: "Stripe PaymentIntent id; empty string when fully wallet-paid" },
+            clientSecret: { type: "string", example: "pi_3..._secret_..." },
+            checkoutId: { type: "string" },
+            orderIds: { type: "array", items: { type: "string" } },
             amount: { type: "integer", example: 11498 },
             currency: { type: "string", example: "usd" },
-            clientSecret: { type: "string", example: "pi_3..._secret_..." },
           },
         },
         PayoutRequest: {
@@ -1379,6 +1382,210 @@ export const swaggerSpec = swaggerJSDoc({
             401: { $ref: "#/components/responses/Unauthorized" },
             403: { $ref: "#/components/responses/Forbidden" },
             404: { $ref: "#/components/responses/NotFound" },
+          },
+        },
+      },
+
+      // ─── Reviews (additions for Round 6) ──────────────────────────────
+      "/reviews/me": {
+        get: {
+          tags: ["reviews"],
+          summary: "List the authenticated buyer's own reviews",
+          parameters: [
+            { name: "limit", in: "query", schema: { type: "integer", minimum: 1, maximum: 100, default: 20 } },
+            { name: "cursor", in: "query", schema: { type: "string" } },
+          ],
+          responses: {
+            200: { description: "OK" },
+            401: { $ref: "#/components/responses/Unauthorized" },
+          },
+        },
+      },
+
+      // ─── Subscriptions ────────────────────────────────────────────────
+      "/subscriptions/activate": {
+        post: {
+          tags: ["subscriptions"],
+          summary: "Activate a subscription plan",
+          description:
+            "Soft-launch policy: only FREE activates without payment. Paid plans (BASIC/GROWTH/PREMIUM/PRO) return 409 SUBSCRIPTIONS_NOT_AVAILABLE. Use POST /api/subscriptions/checkout for paid plans; activation happens after the Stripe webhook confirms payment.",
+          requestBody: {
+            required: true,
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  required: ["plan"],
+                  properties: { plan: { type: "string", enum: ["free", "growth", "pro"] } },
+                },
+              },
+            },
+          },
+          responses: {
+            200: {
+              description: "Activated (FREE only)",
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    properties: {
+                      subscription: { type: "object" },
+                      limits: { type: "object" },
+                    },
+                  },
+                },
+              },
+            },
+            401: { $ref: "#/components/responses/Unauthorized" },
+            403: { $ref: "#/components/responses/Forbidden" },
+            409: {
+              description: "SUBSCRIPTIONS_NOT_AVAILABLE — paid plans require checkout",
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    properties: {
+                      message: { type: "string" },
+                      code: { type: "string", example: "SUBSCRIPTIONS_NOT_AVAILABLE" },
+                    },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+
+      // ─── Vendors: Buyers ──────────────────────────────────────────────
+      "/vendors/me/buyers": {
+        get: {
+          tags: ["vendors"],
+          summary: "List buyers who purchased from this vendor",
+          parameters: [
+            { name: "limit", in: "query", schema: { type: "integer", minimum: 1, maximum: 100, default: 20 } },
+            { name: "cursor", in: "query", schema: { type: "string" } },
+          ],
+          responses: {
+            200: {
+              description: "OK",
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    properties: {
+                      items: {
+                        type: "array",
+                        items: {
+                          type: "object",
+                          properties: {
+                            buyerId: { type: "string" },
+                            name: { type: "string" },
+                            country: { type: "string", nullable: true },
+                            totalOrders: { type: "integer" },
+                            totalSpent: { type: "integer" },
+                            lastOrderAt: { type: "string", format: "date-time" },
+                          },
+                        },
+                      },
+                      nextCursor: { type: "string", nullable: true },
+                    },
+                  },
+                },
+              },
+            },
+            401: { $ref: "#/components/responses/Unauthorized" },
+            403: { $ref: "#/components/responses/Forbidden" },
+          },
+        },
+      },
+
+      // ─── Revenue Endpoints ─────────────────────────────────────────────
+      "/vendors/me/revenue": {
+        get: {
+          tags: ["vendors"],
+          summary: "Vendor revenue summary + daily series",
+          parameters: [
+            { name: "range", in: "query", schema: { type: "string", enum: ["7d", "30d", "90d"], default: "30d" } },
+          ],
+          responses: {
+            200: {
+              description: "Revenue summary",
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    properties: {
+                      range: { type: "string" },
+                      currency: { type: "string" },
+                      totalRevenue: { type: "integer" },
+                      pendingBalance: { type: "integer" },
+                      availableBalance: { type: "integer" },
+                      orderCount: { type: "integer" },
+                      averageOrderValue: { type: "integer" },
+                      series: {
+                        type: "array",
+                        items: {
+                          type: "object",
+                          properties: {
+                            date: { type: "string" },
+                            revenue: { type: "integer" },
+                            orders: { type: "integer" },
+                          },
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+            401: { $ref: "#/components/responses/Unauthorized" },
+            403: { $ref: "#/components/responses/Forbidden" },
+          },
+        },
+      },
+      "/admin/revenue": {
+        get: {
+          tags: ["admin"],
+          summary: "Platform-wide revenue with Stripe vs Paystack split",
+          parameters: [
+            { name: "range", in: "query", schema: { type: "string", enum: ["7d", "30d", "90d"], default: "30d" } },
+          ],
+          responses: {
+            200: {
+              description: "Revenue summary",
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    properties: {
+                      range: { type: "string" },
+                      currency: { type: "string" },
+                      totalRevenue: { type: "integer" },
+                      stripeRevenue: { type: "integer" },
+                      paystackRevenue: { type: "integer" },
+                      orderCount: { type: "integer" },
+                      averageOrderValue: { type: "integer" },
+                      series: {
+                        type: "array",
+                        items: {
+                          type: "object",
+                          properties: {
+                            date: { type: "string" },
+                            revenue: { type: "integer" },
+                            stripeRevenue: { type: "integer" },
+                            paystackRevenue: { type: "integer" },
+                            orders: { type: "integer" },
+                          },
+                        },
+                      },
+                    },
+                  },
+                },
+              },
+            },
+            400: { $ref: "#/components/responses/BadRequest" },
+            401: { $ref: "#/components/responses/Unauthorized" },
+            403: { $ref: "#/components/responses/Forbidden" },
           },
         },
       },

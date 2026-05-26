@@ -10,7 +10,7 @@ vi.mock("../lib/prisma", () => ({
   prisma: {
     vendor: { findUnique: vi.fn() },
     vendorSubscription: { findUnique: vi.fn(), upsert: vi.fn(), create: vi.fn() },
-    product: { count: vi.fn(), updateMany: vi.fn() },
+    product: { count: vi.fn(), updateMany: vi.fn(), findUnique: vi.fn() },
     order: { findUnique: vi.fn(), findMany: vi.fn(), count: vi.fn(), aggregate: vi.fn(), create: vi.fn() },
     orderItem: { findFirst: vi.fn(), createMany: vi.fn(), groupBy: vi.fn() },
     review: { findFirst: vi.fn(), create: vi.fn(), findMany: vi.fn(), aggregate: vi.fn(), findUnique: vi.fn(), update: vi.fn() },
@@ -75,20 +75,30 @@ describe("POST /api/subscriptions/activate", () => {
   });
 
   it("activatePlan creates/updates subscription with ACTIVE status", async () => {
+    // Soft-launch policy: only FREE activates without payment.
+    // Paid plans must go through Stripe Checkout.
     vendorFindUnique.mockResolvedValue({ id: "vendor-1" });
     subscriptionUpsert.mockResolvedValue({
       id: "sub-1",
       vendorId: "vendor-1",
-      plan: "GROWTH",
+      plan: "FREE",
       status: "ACTIVE",
       currentPeriodStart: new Date(),
       currentPeriodEnd: new Date(),
     });
 
-    const result = await subscriptionsService.activatePlan("user-1", { plan: "GROWTH" });
-    expect(result.subscription.plan).toBe("GROWTH");
+    const result = await subscriptionsService.activatePlan("user-1", { plan: "FREE" });
+    expect(result.subscription.plan).toBe("FREE");
     expect(result.subscription.status).toBe("ACTIVE");
-    expect(result.limits).toEqual(PLAN_LIMITS.GROWTH);
+    expect(result.limits).toEqual(PLAN_LIMITS.FREE);
+  });
+
+  it("activatePlan rejects paid plans with SUBSCRIPTIONS_NOT_AVAILABLE (no fake activation)", async () => {
+    vendorFindUnique.mockResolvedValue({ id: "vendor-1" });
+    await expect(
+      subscriptionsService.activatePlan("user-1", { plan: "GROWTH" }),
+    ).rejects.toMatchObject({ statusCode: 409, code: "SUBSCRIPTIONS_NOT_AVAILABLE" });
+    expect(subscriptionUpsert).not.toHaveBeenCalled();
   });
 });
 
@@ -147,18 +157,27 @@ describe("Growth/Pro unlock marketing tools", () => {
   });
 });
 
-// ─── 4. Reviews: only after delivered/completed ──────────────────────────
+// ─── 4. Reviews: only after order is paid (PAID/DELIVERED/COMPLETED etc.) ─
 
-describe("Reviews create only after delivered/completed order", () => {
-  it("rejects review when order status is PAID", async () => {
+describe("Reviews create only after order is paid", () => {
+  it("allows review when order status is PAID", async () => {
     orderFindUnique.mockResolvedValue({ id: "o1", buyerId: "b1", status: "PAID", vendorId: "v1" });
-    await expect(
-      reviewsService.createReview("b1", { orderId: "o1", vendorId: "v1", rating: 5 }),
-    ).rejects.toMatchObject({ statusCode: 400 });
+    reviewFindFirst.mockResolvedValue(null);
+    reviewCreate.mockResolvedValue({ id: "r1", rating: 5, status: "PENDING" });
+    const result = await reviewsService.createReview("b1", { orderId: "o1", vendorId: "v1", rating: 5 });
+    expect(result.rating).toBe(5);
   });
 
-  it("rejects review when order status is PROCESSING", async () => {
+  it("allows review when order status is PROCESSING", async () => {
     orderFindUnique.mockResolvedValue({ id: "o1", buyerId: "b1", status: "PROCESSING", vendorId: "v1" });
+    reviewFindFirst.mockResolvedValue(null);
+    reviewCreate.mockResolvedValue({ id: "r1", rating: 5, status: "PENDING" });
+    const result = await reviewsService.createReview("b1", { orderId: "o1", vendorId: "v1", rating: 5 });
+    expect(result.rating).toBe(5);
+  });
+
+  it("rejects review when order is PENDING", async () => {
+    orderFindUnique.mockResolvedValue({ id: "o1", buyerId: "b1", status: "PENDING", vendorId: "v1" });
     await expect(
       reviewsService.createReview("b1", { orderId: "o1", vendorId: "v1", rating: 5 }),
     ).rejects.toMatchObject({ statusCode: 400 });

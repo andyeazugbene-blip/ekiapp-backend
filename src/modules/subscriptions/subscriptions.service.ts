@@ -35,8 +35,15 @@ export const subscriptionsService = {
   },
 
   /**
-   * Activate a plan without Stripe payment. For now, vendors can switch to
-   * FREE/GROWTH/PRO by button click. Creates or updates VendorSubscription.
+   * Activate a plan. Soft-launch policy:
+   *   - FREE: activated immediately (no payment).
+   *   - Paid plans (GROWTH/PRO/BASIC/PREMIUM): rejected with a controlled
+   *     SUBSCRIPTIONS_NOT_AVAILABLE error and a clear next-step pointer to
+   *     POST /api/subscriptions/checkout (Stripe Checkout). Activation only
+   *     happens after the Stripe webhook confirms payment succeeded —
+   *     never via this endpoint directly.
+   *
+   * The frontend therefore never sees a "fake active" paid subscription.
    */
   async activatePlan(
     userId: string,
@@ -48,6 +55,15 @@ export const subscriptionsService = {
     });
     if (!vendor) {
       throw new AppError("Vendor profile required", 403);
+    }
+
+    if (input.plan !== "FREE") {
+      throw new AppError(
+        "Paid subscriptions require checkout. Call POST /api/subscriptions/checkout to start a Stripe Checkout session; activation happens after the webhook confirms payment.",
+        409,
+        null,
+        "SUBSCRIPTIONS_NOT_AVAILABLE",
+      );
     }
 
     const now = new Date();

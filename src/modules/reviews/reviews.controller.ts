@@ -26,6 +26,14 @@ export async function listReviews(request: Request, response: Response): Promise
   response.status(200).json(result);
 }
 
+export async function listMyReviews(request: Request, response: Response): Promise<void> {
+  const userId = requireUserId(request);
+  const limit = Math.min(Math.max(Number(request.query.limit) || 20, 1), 100);
+  const cursor = typeof request.query.cursor === "string" ? request.query.cursor : undefined;
+  const result = await reviewsService.listMyReviews(userId, { limit, cursor });
+  response.status(200).json(result);
+}
+
 export async function adminListReviews(request: Request, response: Response): Promise<void> {
   const query = validateAdminListReviewsQuery(request.query as Record<string, unknown>);
   const result = await reviewsService.adminListReviews(query);

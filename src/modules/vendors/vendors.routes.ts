@@ -22,6 +22,7 @@ import {
   getVendorDashboard,
   getVendorEarnings,
 } from "./vendors-dashboard.controller";
+import { getVendorRevenue } from "./vendors-revenue.controller";
 import {
   getVendorBuyer,
   listVendorBuyers,
@@ -45,6 +46,7 @@ vendorsRouter.get("/me", requireRole("VENDOR", "ADMIN"), asyncHandler(getOwnVend
 vendorsRouter.patch("/me", requireRole("VENDOR", "ADMIN"), asyncHandler(updateOwnVendor));
 vendorsRouter.get("/me/dashboard", requireRole("VENDOR", "ADMIN"), asyncHandler(getVendorDashboard));
 vendorsRouter.get("/me/earnings", requireRole("VENDOR", "ADMIN"), asyncHandler(getVendorEarnings));
+vendorsRouter.get("/me/revenue", requireRole("VENDOR", "ADMIN"), asyncHandler(getVendorRevenue));
 vendorsRouter.get("/me/buyers", requireRole("VENDOR", "ADMIN"), asyncHandler(listVendorBuyers));
 vendorsRouter.get("/me/buyers/:id", requireRole("VENDOR", "ADMIN"), asyncHandler(getVendorBuyer));
 vendorsRouter.post("/me/payout-methods", requireRole("VENDOR", "ADMIN"), asyncHandler(createPayoutMethod));

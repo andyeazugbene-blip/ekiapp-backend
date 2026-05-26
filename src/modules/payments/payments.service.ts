@@ -342,11 +342,12 @@ class PaymentsService {
       });
 
       return {
+        paymentIntentId: "",
+        clientSecret: "wallet_paid",
         checkoutId,
         orderIds,
         amount: grandTotal,
         currency,
-        clientSecret: "wallet_paid",
       };
     }
 
@@ -400,11 +401,12 @@ class PaymentsService {
     });
 
     return {
+      paymentIntentId: paymentIntent.id,
+      clientSecret: paymentIntent.client_secret,
       checkoutId,
       orderIds,
       amount: grandTotal,
       currency,
-      clientSecret: paymentIntent.client_secret,
     };
   }
 }
