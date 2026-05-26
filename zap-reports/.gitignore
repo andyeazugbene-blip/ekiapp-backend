@@ -1,0 +1,15 @@
+# Raw ZAP scan artifacts (HTML/JSON) and the ZAP install zip are excluded.
+# The runnable scripts and this gitignore are committed so the scans are
+# reproducible.
+
+ZAP.zip
+zap-extracted/
+*-report.html
+*-report.json
+*-summary.md
+manual-security-checks.json
+
+# upstream ZAP wrapper files (not ours)
+zap-baseline.py
+zap-api-scan.py
+zap_common.py
