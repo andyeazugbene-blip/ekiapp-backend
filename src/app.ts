@@ -18,11 +18,28 @@ export const app = express();
 // Trust first proxy (Vercel, Cloudflare, nginx) for correct req.ip in rate limiting
 app.set("trust proxy", 1);
 
-// Security headers — relax CSP for /api/docs (Swagger UI from CDN) and
-// /store/:slug (server-rendered public page with inline copy-link script).
+// Hide the default `X-Powered-By: Express` header on every response.
+// Helmet does this for routes it runs on, but the bypass below for
+// /api/docs and /store/:slug skips Helmet, so we set it at the app
+// level to cover both paths in one place.
+app.disable("x-powered-by");
+
+// Security headers. CSP must be relaxed on /api/docs (Swagger UI from CDN)
+// and /store/:slug (server-rendered page with inline copy-link script),
+// but the other passive-scan headers (X-Content-Type-Options,
+// X-Frame-Options, Referrer-Policy) still apply to those paths.
+const swaggerAndStorePaths = (req: { path: string }) =>
+  req.path === "/api/docs" || req.path.startsWith("/store/");
+
 app.use((req, res, next) => {
-  if (req.path === "/api/docs" || req.path.startsWith("/store/")) {
-    return next();
+  if (swaggerAndStorePaths(req)) {
+    // Subset of helmet defaults — no CSP, no COEP. Still safe to send.
+    helmet({
+      contentSecurityPolicy: false,
+      crossOriginEmbedderPolicy: false,
+      crossOriginResourcePolicy: false,
+    })(req, res, next);
+    return;
   }
   helmet()(req, res, next);
 });
