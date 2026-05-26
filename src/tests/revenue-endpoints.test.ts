@@ -122,12 +122,22 @@ describe("getVendorRevenue", () => {
     expect(body.availableBalance).toBe(200);
   });
 
-  it("invalid range falls back to 30d (graceful)", async () => {
+  it("invalid range returns 400 (consistent with admin endpoint)", async () => {
     m.vendor.findUnique.mockResolvedValue({ id: "vendor-1", currency: "EUR" } as never);
     m.wallet.findUnique.mockResolvedValue(null);
     m.orderItem.findMany.mockResolvedValue([] as never);
 
     const req = createMockReq({ user: { id: "u1", role: "VENDOR", email: "v@v.com" }, query: { range: "garbage" } });
+    const res = createMockRes();
+    await expect(getVendorRevenue(req, res as unknown as Response)).rejects.toMatchObject({ statusCode: 400 });
+  });
+
+  it("missing range falls back to 30d", async () => {
+    m.vendor.findUnique.mockResolvedValue({ id: "vendor-1", currency: "EUR" } as never);
+    m.wallet.findUnique.mockResolvedValue(null);
+    m.orderItem.findMany.mockResolvedValue([] as never);
+
+    const req = createMockReq({ user: { id: "u1", role: "VENDOR", email: "v@v.com" }, query: {} });
     const res = createMockRes();
     await getVendorRevenue(req, res as unknown as Response);
 

@@ -1163,12 +1163,43 @@ export const swaggerSpec = swaggerJSDoc({
             { name: "cursor", in: "query", schema: { type: "string" } },
           ],
           responses: {
-            200: { description: "OK with items, nextCursor, averageRating" },
+            200: {
+              description: "List + summary",
+              content: {
+                "application/json": {
+                  schema: {
+                    type: "object",
+                    properties: {
+                      items: {
+                        type: "array",
+                        items: {
+                          type: "object",
+                          properties: {
+                            id: { type: "string" },
+                            vendorId: { type: "string" },
+                            productId: { type: "string", nullable: true },
+                            rating: { type: "integer", minimum: 1, maximum: 5 },
+                            comment: { type: "string", nullable: true },
+                            buyerDisplayName: { type: "string", description: "Privacy-preserving display name (e.g. 'Jane D.')" },
+                            buyerName: { type: "string", description: "Deprecated alias of buyerDisplayName" },
+                            createdAt: { type: "string", format: "date-time" },
+                          },
+                        },
+                      },
+                      nextCursor: { type: "string", nullable: true },
+                      averageRating: { type: "number", nullable: true },
+                      totalReviews: { type: "integer" },
+                    },
+                  },
+                },
+              },
+            },
           },
         },
         post: {
           tags: ["reviews"],
-          summary: "Create a review (order must be DELIVERED/COMPLETED, 1-5 integer rating)",
+          summary: "Create a review (BUYER role only; one per buyer+order+product)",
+          description: "Order must be PAID/CONFIRMED/PROCESSING/DISPATCHED/IN_TRANSIT/DELIVERED/COMPLETED. VENDOR/ADMIN roles → 403.",
           requestBody: {
             required: true,
             content: {
@@ -1192,6 +1223,7 @@ export const swaggerSpec = swaggerJSDoc({
             400: { $ref: "#/components/responses/BadRequest" },
             401: { $ref: "#/components/responses/Unauthorized" },
             403: { $ref: "#/components/responses/Forbidden" },
+            404: { $ref: "#/components/responses/NotFound" },
             409: { $ref: "#/components/responses/Conflict" },
           },
         },
@@ -1500,10 +1532,10 @@ export const swaggerSpec = swaggerJSDoc({
       },
 
       // ─── Revenue Endpoints ─────────────────────────────────────────────
-      "/vendors/me/revenue": {
+      "/vendors/me/analytics/revenue": {
         get: {
           tags: ["vendors"],
-          summary: "Vendor revenue summary + daily series",
+          summary: "Vendor revenue summary + daily series (canonical path)",
           parameters: [
             { name: "range", in: "query", schema: { type: "string", enum: ["7d", "30d", "90d"], default: "30d" } },
           ],
@@ -1538,15 +1570,31 @@ export const swaggerSpec = swaggerJSDoc({
                 },
               },
             },
+            400: { $ref: "#/components/responses/BadRequest" },
             401: { $ref: "#/components/responses/Unauthorized" },
             403: { $ref: "#/components/responses/Forbidden" },
           },
         },
       },
-      "/admin/revenue": {
+      "/vendors/me/revenue": {
+        get: {
+          tags: ["vendors"],
+          summary: "Alias of /vendors/me/analytics/revenue (kept for back-compat)",
+          parameters: [
+            { name: "range", in: "query", schema: { type: "string", enum: ["7d", "30d", "90d"], default: "30d" } },
+          ],
+          responses: {
+            200: { description: "Same shape as /vendors/me/analytics/revenue" },
+            400: { $ref: "#/components/responses/BadRequest" },
+            401: { $ref: "#/components/responses/Unauthorized" },
+            403: { $ref: "#/components/responses/Forbidden" },
+          },
+        },
+      },
+      "/admin/analytics/revenue": {
         get: {
           tags: ["admin"],
-          summary: "Platform-wide revenue with Stripe vs Paystack split",
+          summary: "Platform-wide revenue with Stripe vs Paystack split (canonical path)",
           parameters: [
             { name: "range", in: "query", schema: { type: "string", enum: ["7d", "30d", "90d"], default: "30d" } },
           ],
@@ -1583,6 +1631,21 @@ export const swaggerSpec = swaggerJSDoc({
                 },
               },
             },
+            400: { $ref: "#/components/responses/BadRequest" },
+            401: { $ref: "#/components/responses/Unauthorized" },
+            403: { $ref: "#/components/responses/Forbidden" },
+          },
+        },
+      },
+      "/admin/revenue": {
+        get: {
+          tags: ["admin"],
+          summary: "Alias of /admin/analytics/revenue (kept for back-compat)",
+          parameters: [
+            { name: "range", in: "query", schema: { type: "string", enum: ["7d", "30d", "90d"], default: "30d" } },
+          ],
+          responses: {
+            200: { description: "Same shape as /admin/analytics/revenue" },
             400: { $ref: "#/components/responses/BadRequest" },
             401: { $ref: "#/components/responses/Unauthorized" },
             403: { $ref: "#/components/responses/Forbidden" },

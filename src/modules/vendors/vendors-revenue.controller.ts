@@ -9,8 +9,13 @@ const RANGE_DAYS: Record<string, number> = { "7d": 7, "30d": 30, "90d": 90 };
 const PAID_STATUSES = ["PAID", "CONFIRMED", "PROCESSING", "DISPATCHED", "IN_TRANSIT", "DELIVERED", "COMPLETED"] as const;
 
 function parseRange(raw: unknown): { range: "7d" | "30d" | "90d"; days: number } {
-  const value = typeof raw === "string" && VALID_RANGES.has(raw) ? raw : "30d";
-  return { range: value as "7d" | "30d" | "90d", days: RANGE_DAYS[value] };
+  if (raw === undefined) {
+    return { range: "30d", days: RANGE_DAYS["30d"] };
+  }
+  if (typeof raw !== "string" || !VALID_RANGES.has(raw)) {
+    throw new AppError("range must be 7d, 30d, or 90d", 400);
+  }
+  return { range: raw as "7d" | "30d" | "90d", days: RANGE_DAYS[raw] };
 }
 
 function dayKey(date: Date): string {

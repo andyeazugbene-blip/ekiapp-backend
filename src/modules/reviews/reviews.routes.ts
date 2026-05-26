@@ -1,6 +1,6 @@
 import { Router } from "express";
 
-import { authenticate } from "../../middlewares/authenticate";
+import { authenticate, requireRole } from "../../middlewares/authenticate";
 import { asyncHandler } from "../../shared/utils/async-handler";
 import { createReview, listMyReviews, listReviews } from "./reviews.controller";
 
@@ -12,5 +12,7 @@ reviewsRouter.get("/", asyncHandler(listReviews));
 // Authenticated: list own reviews. Must be registered BEFORE /:id-style routes.
 reviewsRouter.get("/me", authenticate, asyncHandler(listMyReviews));
 
-// Authenticated: create a review
-reviewsRouter.post("/", authenticate, asyncHandler(createReview));
+// Authenticated BUYER only: create a review.
+// VENDOR/ADMIN cannot create reviews against products (would be a conflict of interest
+// and is not what the mobile app supports).
+reviewsRouter.post("/", authenticate, requireRole("BUYER"), asyncHandler(createReview));

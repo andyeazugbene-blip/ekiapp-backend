@@ -16,6 +16,9 @@ interface PublicReview {
   productId: string | null;
   rating: number;
   comment: string | null;
+  /** Privacy-preserving display name (e.g. "Jane D."). Round 7 canonical name. */
+  buyerDisplayName: string;
+  /** @deprecated Round 6 alias of `buyerDisplayName`. Kept for one release. */
   buyerName: string;
   createdAt: Date;
 }
@@ -150,15 +153,20 @@ export const reviewsService = {
         });
     const nameMap = new Map(buyers.map((b) => [b.id, safeBuyerDisplayName(b.name)]));
 
-    const publicItems: PublicReview[] = items.map((r) => ({
-      id: r.id,
-      vendorId: r.vendorId,
-      productId: r.productId,
-      rating: r.rating,
-      comment: r.comment,
-      buyerName: nameMap.get(r.buyerId) ?? "Anonymous",
-      createdAt: r.createdAt,
-    }));
+    const publicItems: PublicReview[] = items.map((r) => {
+      const display = nameMap.get(r.buyerId) ?? "Anonymous";
+      return {
+        id: r.id,
+        vendorId: r.vendorId,
+        productId: r.productId,
+        rating: r.rating,
+        comment: r.comment,
+        buyerDisplayName: display,
+        // Backward-compatible alias used by the existing FE code path.
+        buyerName: display,
+        createdAt: r.createdAt,
+      };
+    });
 
     return {
       items: publicItems,

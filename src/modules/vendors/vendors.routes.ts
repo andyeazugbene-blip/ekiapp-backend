@@ -46,6 +46,10 @@ vendorsRouter.get("/me", requireRole("VENDOR", "ADMIN"), asyncHandler(getOwnVend
 vendorsRouter.patch("/me", requireRole("VENDOR", "ADMIN"), asyncHandler(updateOwnVendor));
 vendorsRouter.get("/me/dashboard", requireRole("VENDOR", "ADMIN"), asyncHandler(getVendorDashboard));
 vendorsRouter.get("/me/earnings", requireRole("VENDOR", "ADMIN"), asyncHandler(getVendorEarnings));
+// Revenue chart for the mobile vendor dashboard.
+// Canonical path is /me/analytics/revenue. /me/revenue is kept as an alias
+// for the previous round of frontend code that already shipped that path.
+vendorsRouter.get("/me/analytics/revenue", requireRole("VENDOR", "ADMIN"), asyncHandler(getVendorRevenue));
 vendorsRouter.get("/me/revenue", requireRole("VENDOR", "ADMIN"), asyncHandler(getVendorRevenue));
 vendorsRouter.get("/me/buyers", requireRole("VENDOR", "ADMIN"), asyncHandler(listVendorBuyers));
 vendorsRouter.get("/me/buyers/:id", requireRole("VENDOR", "ADMIN"), asyncHandler(getVendorBuyer));

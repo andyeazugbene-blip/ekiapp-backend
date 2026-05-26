@@ -83,6 +83,8 @@ adminRouter.use(authenticate, requireRole("ADMIN"));
 // Dashboard & Analytics
 adminRouter.get("/dashboard", asyncHandler(getAdminDashboard));
 adminRouter.get("/analytics", asyncHandler(getAdminAnalytics));
+// Canonical revenue chart endpoint. /revenue is kept as an alias.
+adminRouter.get("/analytics/revenue", asyncHandler(getAdminRevenue));
 adminRouter.get("/revenue", asyncHandler(getAdminRevenue));
 adminRouter.get("/audit-logs", asyncHandler(listAuditLogs));
 
