@@ -87,10 +87,11 @@ function renderStorePage(store: PublicStore, products: PublicProduct[]): string 
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta name="theme-color" content="#0f172a" />
-  <title>${escape(store.storeName)} · Neon</title>
+  <title>${escape(store.storeName)} · Waqti</title>
   <meta name="description" content="${escape(store.description ?? store.storeName)}" />
   <meta property="og:title" content="${escape(store.storeName)}" />
-  <meta property="og:description" content="${escape(store.description ?? "Discover this store on Neon.")}" />
+  <meta property="og:description" content="${escape(store.description ?? "Discover this store on Waqti.")}" />
+  <meta property="og:site_name" content="Waqti" />
   <meta property="og:type" content="website" />
   <meta property="og:url" content="${escape(store.shareUrl)}" />
   ${store.coverImage ? `<meta property="og:image" content="${escape(store.coverImage)}" />` : ""}

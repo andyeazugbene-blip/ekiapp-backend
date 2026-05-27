@@ -138,7 +138,8 @@ Tested OPTIONS preflight against `/api/auth/login` and `/api/admin/orders`.
 
 | Origin | `Access-Control-Allow-Origin` | Verdict |
 |---|---|---|
-| `https://neon.online` (allowed) | `https://neon.online` | ✅ correct echo |
+| `https://waqti.pro` (allowed apex) | `https://waqti.pro` | ✅ correct echo |
+| `https://www.waqti.pro` (allowed www) | `https://www.waqti.pro` | ✅ correct echo |
 | `https://evil.example` (untrusted) | `null` (header absent) | ✅ properly rejected |
 
 `Access-Control-Allow-Credentials: true` is set when ACAO is set — required for cookie-bearing requests but only with the explicit allowlist origin. Wildcards are never used. Verified on both public and admin endpoints.

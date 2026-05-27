@@ -9,4 +9,4 @@ process.env.STRIPE_SECRET_KEY = process.env.STRIPE_SECRET_KEY ?? "sk_test_fake";
 process.env.STRIPE_WEBHOOK_SECRET = process.env.STRIPE_WEBHOOK_SECRET ?? "whsec_test_fake";
 process.env.DATABASE_URL =
   process.env.DATABASE_URL ?? process.env.TEST_DATABASE_URL ?? "postgresql://test:test@localhost:5432/test";
-process.env.PUBLIC_STORE_BASE_URL = process.env.PUBLIC_STORE_BASE_URL ?? "https://neon.online";
+process.env.PUBLIC_STORE_BASE_URL = process.env.PUBLIC_STORE_BASE_URL ?? "https://waqti.pro";

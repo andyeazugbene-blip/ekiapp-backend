@@ -191,7 +191,7 @@ Already exhaustively covered in `docs/FINAL_SOFT_LAUNCH_CONFIRMATION.md`. Re-ver
 Already fixed in commit `0ef23d8` (round prior). Re-verified by:
 - **Live production scan** (zap-reports/manual-security-summary.md):
   - `/api/health`, `/api/products`, `/openapi.json`, `/api/docs` all show: HSTS ✓, X-Content-Type-Options ✓, X-Frame-Options ✓, Referrer-Policy ✓, X-Powered-By absent ✓
-  - CORS: `https://neon.online` echoed; `https://evil.example` receives no ACAO; never `*`
+  - CORS: trusted origins (`https://waqti.pro`, `https://www.waqti.pro`) echoed; `https://evil.example` receives no ACAO; never `*`
 - **Automated test** (`src/tests/security-headers.test.ts`, 9 tests): in-process supertest verifies the Helmet sub-set, x-powered-by suppression, and CORS allowlist behaviour.
 - Cookies: backend uses Bearer JWT, no `Set-Cookie` headers ever emitted. Cookie flag review N/A.
 

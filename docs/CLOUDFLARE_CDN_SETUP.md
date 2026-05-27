@@ -1,7 +1,7 @@
 # Cloudflare CDN Setup
 
 ## DNS Setup
-1. Add domain (neon.online) to Cloudflare
+1. Add domain (waqti.pro and www.waqti.pro) to Cloudflare
 2. Point A/CNAME records to Vercel
 3. Enable proxy mode (orange cloud) for CDN + DDoS protection
 

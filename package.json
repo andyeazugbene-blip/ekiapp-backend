@@ -31,6 +31,8 @@
     "reconcile:wallets": "tsx scripts/reconcile-wallets.ts",
     "r2:round-trip": "tsx scripts/r2-round-trip.ts",
     "register:smoke": "tsx scripts/register-smoke.ts",
+    "check:domains": "tsx scripts/check-domain-links.ts",
+    "check:no-old-domain": "tsx scripts/check-no-old-domain.ts",
     "prepare": "husky"
   },
   "prisma": {

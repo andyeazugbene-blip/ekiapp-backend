@@ -5,13 +5,13 @@
  *
  * It fetches the public store profile and products from the backend
  * (no auth required) and renders a responsive store page that works
- * on web (neon.online/store/<slug>) and inside the mobile app.
+ * on web (waqti.pro/store/<slug>) and inside the mobile app.
  *
  * Required env (Expo):
  *   EXPO_PUBLIC_API_BASE_URL=https://italian-market-place.vercel.app
  *
  * Optional env:
- *   EXPO_PUBLIC_STORE_BASE_URL=https://neon.online   (used for share links)
+ *   EXPO_PUBLIC_STORE_BASE_URL=https://waqti.pro   (used for share links)
  */
 
 import { useEffect, useState, useCallback } from "react";
@@ -71,7 +71,7 @@ interface PublicProduct {
 const API_BASE_URL =
   process.env.EXPO_PUBLIC_API_BASE_URL ?? "https://italian-market-place.vercel.app";
 const STORE_BASE_URL =
-  process.env.EXPO_PUBLIC_STORE_BASE_URL ?? "https://neon.online";
+  process.env.EXPO_PUBLIC_STORE_BASE_URL ?? "https://waqti.pro";
 
 // ─── Utilities ────────────────────────────────────────────────────────────
 
@@ -158,7 +158,9 @@ export default function StorePage(): JSX.Element {
 
   const handleOpenInApp = useCallback(() => {
     if (!store) return;
-    const deepLink = `neon://store/${store.storeSlug}`;
+    // Custom-scheme deep link. Pair with `waqti://` in app.json/app.config.ts
+    // and Universal/App Links on https://waqti.pro/store/<slug>.
+    const deepLink = `waqti://store/${store.storeSlug}`;
     Linking.openURL(deepLink).catch(() => {
       // fallback: stay on web
     });

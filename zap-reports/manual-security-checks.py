@@ -124,9 +124,10 @@ def main() -> None:
     check_headers("/api/docs", f"{BASE}/api/docs", headers)
 
     # 2. CORS preflight
-    check_cors("from neon.online (allowed)", "https://neon.online", f"{BASE}/api/auth/login", cors)
+    check_cors("from waqti.pro (allowed)", "https://waqti.pro", f"{BASE}/api/auth/login", cors)
+    check_cors("from www.waqti.pro (allowed)", "https://www.waqti.pro", f"{BASE}/api/auth/login", cors)
     check_cors("from evil.example (untrusted)", "https://evil.example", f"{BASE}/api/auth/login", cors)
-    check_cors("from neon.online (admin)", "https://neon.online", f"{BASE}/api/admin/orders", cors)
+    check_cors("from waqti.pro (admin)", "https://waqti.pro", f"{BASE}/api/admin/orders", cors)
 
     # 3. Triggered errors / stack traces
     check_stack_trace("invalid login body", f"{BASE}/api/auth/login", "POST", {}, errs)
