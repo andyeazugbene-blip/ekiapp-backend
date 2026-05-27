@@ -35,15 +35,19 @@ function renderProduct(product: PublicProduct): string {
   const imageEl = image
     ? `<img src="${escape(image)}" alt="${escape(product.title)}" loading="lazy" />`
     : `<div class="placeholder">No image</div>`;
-  const stock = product.stock > 0 ? "In stock" : "Sold out";
-  const stockClass = product.stock > 0 ? "in-stock" : "out-of-stock";
+  const inStock = product.stock > 0;
+  const stockBadge = inStock
+    ? ""
+    : `<span class="product-soldout">Sold out</span>`;
   return `
-  <li class="product">
-    <div class="product-image">${imageEl}</div>
+  <li class="product${inStock ? "" : " is-soldout"}">
+    <div class="product-image">
+      ${imageEl}
+      ${stockBadge}
+    </div>
     <div class="product-body">
       <h3 class="product-title">${escape(product.title)}</h3>
       <p class="product-price">${escape(formatPrice(product.priceInCents, product.currency))}</p>
-      <p class="product-stock ${stockClass}">${stock}</p>
     </div>
   </li>`;
 }
@@ -51,10 +55,16 @@ function renderProduct(product: PublicProduct): string {
 function renderStorePage(store: PublicStore, products: PublicProduct[]): string {
   const verifiedBadge =
     store.verificationStatus === "VERIFIED"
-      ? `<span class="badge verified" title="Verified vendor">✓ Verified</span>`
+      ? `<span class="badge badge-verified" title="Verified vendor">
+           <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
+             <path fill="currentColor" d="M8 0a8 8 0 1 0 0 16A8 8 0 0 0 8 0zm3.78 6.28-4.5 4.5a.75.75 0 0 1-1.06 0l-2-2a.75.75 0 1 1 1.06-1.06L6.75 9.19l3.97-3.97a.75.75 0 1 1 1.06 1.06z"/>
+           </svg>
+           Verified
+         </span>`
       : "";
 
   const location = [store.city, store.country].filter(Boolean).join(", ");
+  const productCount = store.totalProducts;
 
   const cover = store.coverImage
     ? `<div class="cover" style="background-image:url('${escape(store.coverImage)}')"></div>`
@@ -71,22 +81,27 @@ function renderStorePage(store: PublicStore, products: PublicProduct[]): string 
   const deliveryCountries =
     store.deliveryCountries.length > 0
       ? `<div class="delivery">
-           <span class="label">Delivers to:</span>
-           ${store.deliveryCountries.map((c) => `<span class="chip">${escape(c)}</span>`).join("")}
+           <span class="delivery-label">Ships to</span>
+           <div class="chips">
+             ${store.deliveryCountries.map((c) => `<span class="chip">${escape(c)}</span>`).join("")}
+           </div>
          </div>`
       : "";
 
   const productsHtml =
     products.length > 0
       ? `<ul class="products">${products.map(renderProduct).join("")}</ul>`
-      : `<p class="empty">This store has no products yet.</p>`;
+      : `<div class="empty">
+           <p class="empty-title">No products yet</p>
+           <p class="empty-sub">This store is just getting set up. Check back soon.</p>
+         </div>`;
 
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <meta name="theme-color" content="#0f172a" />
+  <meta name="theme-color" content="#1F4D40" />
   <title>${escape(store.storeName)} · Waqti</title>
   <meta name="description" content="${escape(store.description ?? store.storeName)}" />
   <meta property="og:title" content="${escape(store.storeName)}" />
@@ -97,89 +112,359 @@ function renderStorePage(store: PublicStore, products: PublicProduct[]): string 
   ${store.coverImage ? `<meta property="og:image" content="${escape(store.coverImage)}" />` : ""}
   <meta name="twitter:card" content="summary_large_image" />
   <link rel="canonical" href="${escape(store.shareUrl)}" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=Inter:wght@400;500;600;700&display=swap" />
   <style>
     *,*::before,*::after{box-sizing:border-box}
-    body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;color:#0f172a;background:#f8fafc;line-height:1.5}
-    .container{max-width:1100px;margin:0 auto;padding:0 16px}
-    .cover{height:200px;background:#1e293b;background-size:cover;background-position:center}
-    .cover-placeholder{background:linear-gradient(135deg,#6366f1,#0ea5e9)}
-    .header{margin-top:-48px;padding:0 16px}
-    .header-inner{display:flex;gap:16px;align-items:flex-end}
-    .avatar{width:96px;height:96px;border-radius:16px;border:4px solid #fff;background:#fff;object-fit:cover;flex-shrink:0;box-shadow:0 4px 16px rgba(15,23,42,.12)}
-    .avatar-placeholder{display:flex;align-items:center;justify-content:center;font-size:36px;font-weight:700;color:#6366f1;background:#eef2ff}
-    .meta{flex:1;padding-bottom:8px;min-width:0}
-    .meta h1{margin:0;font-size:24px;font-weight:700;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
-    .badge{font-size:12px;padding:2px 8px;border-radius:999px;font-weight:600}
-    .badge.verified{background:#dbeafe;color:#1d4ed8}
-    .location{margin:4px 0 0;color:#64748b;font-size:14px}
-    .description{margin:12px 0 0;color:#334155;font-size:15px}
-    .delivery{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin:12px 0 0}
-    .delivery .label{color:#64748b;font-size:13px;margin-right:4px}
-    .chip{font-size:12px;padding:2px 8px;border-radius:999px;background:#e2e8f0;color:#0f172a}
-    .actions{display:flex;gap:8px;flex-wrap:wrap;margin:16px 0 0}
-    .btn{padding:10px 16px;border-radius:10px;font-weight:600;font-size:14px;border:none;cursor:pointer;text-decoration:none;display:inline-block}
-    .btn-primary{background:#0f172a;color:#fff}
-    .btn-secondary{background:#fff;color:#0f172a;border:1px solid #cbd5e1}
-    .stats{margin:24px 0;color:#64748b;font-size:14px}
-    .products{list-style:none;padding:0;margin:0;display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:16px}
-    .product{background:#fff;border:1px solid #e2e8f0;border-radius:12px;overflow:hidden;display:flex;flex-direction:column}
-    .product-image{aspect-ratio:1/1;background:#f1f5f9;overflow:hidden}
-    .product-image img{width:100%;height:100%;object-fit:cover;display:block}
-    .placeholder{width:100%;height:100%;display:flex;align-items:center;justify-content:center;color:#94a3b8;font-size:13px}
-    .product-body{padding:12px}
-    .product-title{margin:0;font-size:15px;font-weight:600;line-height:1.3;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
-    .product-price{margin:6px 0 0;font-weight:700;color:#0f172a;font-size:16px}
-    .product-stock{margin:4px 0 0;font-size:12px}
-    .in-stock{color:#15803d}
-    .out-of-stock{color:#b91c1c}
-    .empty{color:#64748b;text-align:center;padding:40px 16px}
-    .footer{text-align:center;padding:32px 16px;color:#64748b;font-size:13px}
-    @media (max-width:600px){
-      .cover{height:140px}
-      .header{margin-top:-36px}
-      .avatar{width:72px;height:72px;border-radius:12px}
-      .meta h1{font-size:20px}
-      .products{grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:10px}
-      .product-body{padding:10px}
+    :root{
+      --bg:#FAF7F2;
+      --surface:#FFFFFF;
+      --surface-2:#F4EFE6;
+      --border:#E8E0D2;
+      --border-soft:#EFE8DA;
+      --text:#1F1B16;
+      --text-muted:#6B6256;
+      --accent:#1F4D40;
+      --accent-hover:#163A30;
+      --accent-soft:#E8F1ED;
+      --gold:#B89968;
+      --danger:#B5363A;
+    }
+    html,body{margin:0;padding:0}
+    body{
+      font-family:'Inter',-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+      color:var(--text);
+      background:var(--bg);
+      line-height:1.55;
+      font-size:16px;
+      -webkit-font-smoothing:antialiased;
+      -moz-osx-font-smoothing:grayscale;
+    }
+    .serif{font-family:'Fraunces',Georgia,'Times New Roman',serif;letter-spacing:-0.01em}
+    .container{max-width:1120px;margin:0 auto;padding:0 24px}
+
+    /* Top nav strip */
+    .topbar{
+      background:var(--surface);
+      border-bottom:1px solid var(--border-soft);
+      position:sticky;top:0;z-index:10;
+      backdrop-filter:saturate(180%) blur(12px);
+    }
+    .topbar-inner{
+      display:flex;align-items:center;justify-content:space-between;
+      height:56px;
+    }
+    .brand{
+      display:inline-flex;align-items:center;gap:8px;
+      font-family:'Fraunces',Georgia,serif;
+      font-weight:700;font-size:20px;letter-spacing:-0.02em;
+      color:var(--text);text-decoration:none;
+    }
+    .brand-dot{
+      width:8px;height:8px;border-radius:50%;
+      background:var(--accent);
+      display:inline-block;
+    }
+    .topbar-actions{display:flex;gap:8px;align-items:center}
+
+    /* Cover */
+    .cover{
+      height:280px;
+      background-color:var(--surface-2);
+      background-size:cover;background-position:center;
+      border-bottom:1px solid var(--border-soft);
+    }
+    .cover-placeholder{
+      background:radial-gradient(120% 120% at 50% 0%,#2D6B59 0%,#1F4D40 55%,#163A30 100%);
+    }
+
+    /* Header card */
+    .header{margin-top:-72px;position:relative;z-index:1}
+    .header-card{
+      background:var(--surface);
+      border:1px solid var(--border);
+      border-radius:20px;
+      padding:32px 36px 28px;
+      box-shadow:0 8px 32px rgba(31,27,22,.06);
+    }
+    .header-row{display:flex;gap:24px;align-items:flex-start}
+    .avatar{
+      width:104px;height:104px;border-radius:18px;
+      border:3px solid var(--surface);
+      background:var(--surface);
+      object-fit:cover;flex-shrink:0;
+      box-shadow:0 4px 16px rgba(31,27,22,.08);
+      margin-top:-56px;
+    }
+    .avatar-placeholder{
+      display:flex;align-items:center;justify-content:center;
+      font-family:'Fraunces',Georgia,serif;
+      font-size:42px;font-weight:700;
+      color:var(--accent);
+      background:var(--accent-soft);
+    }
+    .meta{flex:1;min-width:0}
+    .store-name{
+      margin:0;font-size:36px;font-weight:600;line-height:1.15;
+      letter-spacing:-0.02em;
+      display:flex;align-items:center;gap:12px;flex-wrap:wrap;
+    }
+    .badge{
+      display:inline-flex;align-items:center;gap:5px;
+      font-size:12px;font-weight:600;
+      padding:4px 10px;border-radius:999px;
+      vertical-align:middle;white-space:nowrap;
+    }
+    .badge-verified{
+      background:var(--accent-soft);
+      color:var(--accent);
+    }
+    .location{
+      margin:8px 0 0;color:var(--text-muted);font-size:14px;
+      display:flex;align-items:center;gap:6px;
+    }
+    .location svg{flex-shrink:0;opacity:.7}
+    .description{
+      margin:18px 0 0;color:var(--text);font-size:16px;line-height:1.6;
+      max-width:64ch;
+    }
+    .delivery{
+      margin:20px 0 0;
+      display:flex;flex-wrap:wrap;align-items:center;gap:10px;
+    }
+    .delivery-label{
+      font-size:12px;font-weight:600;color:var(--text-muted);
+      text-transform:uppercase;letter-spacing:0.06em;
+    }
+    .chips{display:flex;flex-wrap:wrap;gap:6px}
+    .chip{
+      font-size:13px;padding:5px 11px;border-radius:999px;
+      background:var(--surface-2);color:var(--text);
+      border:1px solid var(--border);
+    }
+    .actions{
+      display:flex;gap:10px;flex-wrap:wrap;
+      margin:24px 0 0;padding-top:24px;
+      border-top:1px solid var(--border-soft);
+    }
+    .btn{
+      padding:11px 20px;border-radius:12px;
+      font-weight:600;font-size:14px;
+      border:1px solid transparent;cursor:pointer;
+      text-decoration:none;display:inline-flex;align-items:center;gap:8px;
+      transition:all .15s ease;
+      font-family:inherit;
+    }
+    .btn-primary{background:var(--accent);color:#fff}
+    .btn-primary:hover{background:var(--accent-hover)}
+    .btn-secondary{
+      background:var(--surface);color:var(--text);
+      border-color:var(--border);
+    }
+    .btn-secondary:hover{
+      background:var(--surface-2);border-color:#D9CFBE;
+    }
+    .btn svg{width:14px;height:14px}
+
+    /* Products section */
+    .section{padding:56px 0 80px}
+    .section-header{
+      display:flex;align-items:baseline;justify-content:space-between;
+      margin-bottom:28px;gap:16px;flex-wrap:wrap;
+    }
+    .section-title{
+      margin:0;font-size:24px;font-weight:600;
+      letter-spacing:-0.01em;
+    }
+    .section-count{
+      color:var(--text-muted);font-size:14px;font-weight:500;
+    }
+    .products{
+      list-style:none;padding:0;margin:0;
+      display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:20px;
+    }
+    .product{
+      background:var(--surface);
+      border:1px solid var(--border);
+      border-radius:14px;
+      overflow:hidden;
+      display:flex;flex-direction:column;
+      transition:transform .18s ease, box-shadow .18s ease, border-color .18s ease;
+    }
+    .product:hover{
+      transform:translateY(-2px);
+      box-shadow:0 12px 28px rgba(31,27,22,.08);
+      border-color:#D9CFBE;
+    }
+    .product.is-soldout{opacity:.72}
+    .product-image{
+      aspect-ratio:1/1;background:var(--surface-2);overflow:hidden;
+      position:relative;
+    }
+    .product-image img{
+      width:100%;height:100%;object-fit:cover;display:block;
+      transition:transform .4s ease;
+    }
+    .product:hover .product-image img{transform:scale(1.04)}
+    .placeholder{
+      width:100%;height:100%;display:flex;align-items:center;justify-content:center;
+      color:var(--text-muted);font-size:13px;
+    }
+    .product-soldout{
+      position:absolute;top:12px;left:12px;
+      background:rgba(31,27,22,.85);color:#fff;
+      font-size:11px;font-weight:600;
+      padding:4px 10px;border-radius:999px;
+      letter-spacing:0.04em;text-transform:uppercase;
+      backdrop-filter:blur(4px);
+    }
+    .product-body{padding:16px 16px 18px}
+    .product-title{
+      margin:0;font-size:15px;font-weight:500;line-height:1.4;
+      color:var(--text);
+      display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;
+      min-height:42px;
+    }
+    .product-price{
+      margin:8px 0 0;font-weight:700;font-size:17px;
+      color:var(--text);
+      font-family:'Fraunces',Georgia,serif;
+      letter-spacing:-0.01em;
+    }
+
+    /* Empty */
+    .empty{
+      text-align:center;padding:64px 24px;
+      background:var(--surface);
+      border:1px dashed var(--border);
+      border-radius:16px;
+    }
+    .empty-title{
+      margin:0;font-family:'Fraunces',Georgia,serif;
+      font-size:20px;font-weight:600;color:var(--text);
+    }
+    .empty-sub{margin:6px 0 0;color:var(--text-muted);font-size:14px}
+
+    /* Toast */
+    .toast{
+      position:fixed;bottom:32px;left:50%;transform:translateX(-50%) translateY(8px);
+      background:var(--text);color:#fff;
+      padding:10px 16px;border-radius:10px;
+      font-size:14px;font-weight:500;
+      box-shadow:0 12px 28px rgba(0,0,0,.18);
+      opacity:0;pointer-events:none;
+      transition:opacity .18s ease, transform .18s ease;
+      z-index:50;
+    }
+    .toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+
+    /* Footer */
+    .footer{
+      border-top:1px solid var(--border-soft);
+      background:var(--surface);
+      padding:28px 0;text-align:center;
+      color:var(--text-muted);font-size:13px;
+    }
+    .footer a{color:var(--text);text-decoration:none;font-weight:600}
+    .footer a:hover{color:var(--accent)}
+
+    @media (max-width:720px){
+      .container{padding:0 16px}
+      .cover{height:200px}
+      .header{margin-top:-56px}
+      .header-card{padding:24px 20px 22px;border-radius:16px}
+      .header-row{flex-direction:column;gap:0}
+      .avatar{width:88px;height:88px;border-radius:14px;margin-top:-44px}
+      .store-name{font-size:28px;margin-top:14px}
+      .description{font-size:15px;margin-top:14px}
+      .actions{margin-top:20px;padding-top:20px}
+      .btn{flex:1;justify-content:center}
+      .section{padding:40px 0 56px}
+      .section-title{font-size:20px}
+      .products{grid-template-columns:repeat(2,1fr);gap:12px}
+      .product-body{padding:12px 12px 14px}
+      .product-title{font-size:14px;min-height:36px}
+      .product-price{font-size:15px}
     }
   </style>
 </head>
 <body>
+  <nav class="topbar">
+    <div class="container topbar-inner">
+      <span class="brand"><span class="brand-dot"></span> Waqti</span>
+    </div>
+  </nav>
+
   ${cover}
+
   <header class="header container">
-    <div class="header-inner">
-      ${avatar}
-      <div class="meta">
-        <h1>${escape(store.storeName)} ${verifiedBadge}</h1>
-        ${location ? `<p class="location">${escape(location)}</p>` : ""}
-        ${description}
-        ${deliveryCountries}
-        <div class="actions">
-          <button class="btn btn-secondary" id="copy-link" type="button">Copy link</button>
-          <a class="btn btn-primary" href="#products">View products</a>
+    <div class="header-card">
+      <div class="header-row">
+        ${avatar}
+        <div class="meta">
+          <h1 class="store-name serif">
+            ${escape(store.storeName)}${verifiedBadge ? " " + verifiedBadge : ""}
+          </h1>
+          ${location ? `<p class="location">
+            <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M8 0a5 5 0 0 0-5 5c0 4.5 5 11 5 11s5-6.5 5-11a5 5 0 0 0-5-5zm0 7a2 2 0 1 1 0-4 2 2 0 0 1 0 4z"/></svg>
+            ${escape(location)}
+          </p>` : ""}
+          ${description}
+          ${deliveryCountries}
+          <div class="actions">
+            <button class="btn btn-primary" id="copy-link" type="button">
+              <svg viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M9.5 1a.5.5 0 0 0 0 1H13v3.5a.5.5 0 0 0 1 0V1.5a.5.5 0 0 0-.5-.5h-4zM2 2.5A1.5 1.5 0 0 1 3.5 1h3a.5.5 0 0 1 0 1h-3a.5.5 0 0 0-.5.5v10a.5.5 0 0 0 .5.5h6a.5.5 0 0 0 .5-.5v-3a.5.5 0 0 1 1 0v3A1.5 1.5 0 0 1 9.5 14h-6A1.5 1.5 0 0 1 2 12.5v-10z"/><path fill="currentColor" d="M14.354 2.354a.5.5 0 0 0-.708-.708L7.5 7.793 5.354 5.646a.5.5 0 1 0-.708.708l2.5 2.5a.5.5 0 0 0 .708 0l6.5-6.5z"/></svg>
+              Copy share link
+            </button>
+            <a class="btn btn-secondary" href="#products">View products</a>
+          </div>
         </div>
       </div>
     </div>
   </header>
-  <main class="container">
-    <p class="stats">${store.totalProducts} active product${store.totalProducts === 1 ? "" : "s"}</p>
+
+  <main class="container section">
+    <div class="section-header">
+      <h2 class="section-title serif">Products</h2>
+      <span class="section-count">
+        ${productCount} ${productCount === 1 ? "item" : "items"}
+      </span>
+    </div>
     <section id="products">
       ${productsHtml}
     </section>
   </main>
+
   <footer class="footer">
-    Powered by <strong>Neon</strong>
+    <div class="container">
+      Powered by <a href="https://waqti.pro">Waqti</a>
+    </div>
   </footer>
+
+  <div class="toast" id="toast">Link copied to clipboard</div>
+
   <script>
     (function(){
       var btn=document.getElementById('copy-link');
-      if(!btn||!navigator.clipboard) return;
+      var toast=document.getElementById('toast');
+      if(!btn) return;
+      var url=${JSON.stringify(store.shareUrl)};
       btn.addEventListener('click',function(){
-        navigator.clipboard.writeText(${JSON.stringify(store.shareUrl)}).then(function(){
-          var prev=btn.textContent;
-          btn.textContent='Copied!';
-          setTimeout(function(){btn.textContent=prev;},1500);
-        });
+        function showToast(){
+          if(!toast) return;
+          toast.classList.add('show');
+          setTimeout(function(){toast.classList.remove('show');},1800);
+        }
+        if(navigator.clipboard && navigator.clipboard.writeText){
+          navigator.clipboard.writeText(url).then(showToast,function(){});
+        } else {
+          // Fallback for older browsers
+          var ta=document.createElement('textarea');
+          ta.value=url;ta.style.position='fixed';ta.style.opacity='0';
+          document.body.appendChild(ta);ta.select();
+          try{document.execCommand('copy');showToast();}catch(_){}
+          document.body.removeChild(ta);
+        }
       });
     })();
   </script>
@@ -193,19 +478,44 @@ function renderNotFound(slug: string): string {
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Store not found · Neon</title>
+  <title>Store not found · Waqti</title>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Inter:wght@400;500;600&display=swap" />
   <style>
-    body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;background:#f8fafc;color:#0f172a;display:flex;align-items:center;justify-content:center;min-height:100vh;text-align:center;padding:24px}
-    .card{max-width:420px}
-    h1{font-size:48px;margin:0 0 8px;color:#1e293b}
-    p{color:#64748b;margin:0 0 16px}
-    code{background:#e2e8f0;padding:2px 6px;border-radius:4px;font-family:monospace}
+    *,*::before,*::after{box-sizing:border-box}
+    body{
+      margin:0;font-family:'Inter',-apple-system,BlinkMacSystemFont,sans-serif;
+      background:#FAF7F2;color:#1F1B16;
+      display:flex;align-items:center;justify-content:center;
+      min-height:100vh;text-align:center;padding:24px;
+    }
+    .card{max-width:440px}
+    .number{
+      font-family:'Fraunces',Georgia,serif;
+      font-size:96px;line-height:1;font-weight:700;margin:0 0 8px;
+      color:#1F4D40;letter-spacing:-0.04em;
+    }
+    h1{
+      font-family:'Fraunces',Georgia,serif;
+      font-size:24px;font-weight:600;margin:8px 0 12px;color:#1F1B16;
+    }
+    p{color:#6B6256;margin:0 0 24px;line-height:1.55}
+    code{
+      background:#F4EFE6;padding:3px 8px;border-radius:6px;
+      font-family:'SF Mono',Menlo,Consolas,monospace;font-size:14px;
+    }
+    a{
+      display:inline-block;padding:11px 22px;border-radius:12px;
+      background:#1F4D40;color:#fff;text-decoration:none;font-weight:600;font-size:14px;
+    }
+    a:hover{background:#163A30}
   </style>
 </head>
 <body>
   <div class="card">
-    <h1>404</h1>
-    <p>The store <code>${escape(slug)}</code> could not be found or is currently unavailable.</p>
+    <p class="number">404</p>
+    <h1>Store not found</h1>
+    <p>The store <code>${escape(slug)}</code> could not be found, or it is currently unavailable.</p>
+    <a href="https://waqti.pro">Back to Waqti</a>
   </div>
 </body>
 </html>`;
@@ -213,9 +523,29 @@ function renderNotFound(slug: string): string {
 
 function renderError(): string {
   return `<!DOCTYPE html>
-<html lang="en"><head><meta charset="UTF-8" /><title>Error · Neon</title>
-<style>body{font-family:sans-serif;text-align:center;padding:40px;color:#0f172a}</style>
-</head><body><h1>Something went wrong</h1><p>Please try again in a moment.</p></body></html>`;
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Error · Waqti</title>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600&family=Inter:wght@400;500&display=swap" />
+  <style>
+    body{
+      margin:0;font-family:'Inter',-apple-system,BlinkMacSystemFont,sans-serif;
+      background:#FAF7F2;color:#1F1B16;text-align:center;
+      min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px;
+    }
+    h1{font-family:'Fraunces',Georgia,serif;font-size:28px;font-weight:600;margin:0 0 8px}
+    p{color:#6B6256;margin:0}
+  </style>
+</head>
+<body>
+  <div>
+    <h1>Something went wrong</h1>
+    <p>Please try again in a moment.</p>
+  </div>
+</body>
+</html>`;
 }
 
 /**
