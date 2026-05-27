@@ -10,6 +10,26 @@ function getRequiredEnv(name: string): string {
   return value;
 }
 
+function getJwtSecret(): string {
+  const value = getRequiredEnv("JWT_SECRET");
+  const nodeEnv = process.env.NODE_ENV ?? "development";
+  // In production, require a strong secret. 32 bytes ≈ 256 bits, which matches
+  // the HS256 output size and is the minimum length the spec recommends.
+  // Test/dev keep using the short fixture secret so the existing test fixtures
+  // (`test-secret-key-for-testing-only`) keep working.
+  if (nodeEnv === "production" && value.length < 32) {
+    throw new Error(
+      "JWT_SECRET is too short for production. Use at least 32 characters " +
+      "(e.g. `node -e \"console.log(require('crypto').randomBytes(48).toString('base64'))\"`).",
+    );
+  }
+  // Reject the obvious placeholder value that ships in .env.example.
+  if (value === "change_me_in_production") {
+    throw new Error("JWT_SECRET still set to the example placeholder. Generate a real secret.");
+  }
+  return value;
+}
+
 function getPort(): number {
   const rawPort = process.env.PORT ?? "4000";
   const port = Number(rawPort);
@@ -40,7 +60,7 @@ export const env = {
   stripeWebhookSecret: getRequiredEnv("STRIPE_WEBHOOK_SECRET"),
   defaultCurrency: process.env.DEFAULT_CURRENCY ?? "eur",
   platformFeeBps: getPlatformFeeBps(),
-  jwtSecret: getRequiredEnv("JWT_SECRET"),
+  jwtSecret: getJwtSecret(),
   jwtExpiresIn: process.env.JWT_EXPIRES_IN ?? "7d",
   publicStoreBaseUrl: (process.env.PUBLIC_STORE_BASE_URL ?? "https://neon.online").replace(/\/+$/, ""),
 } as const;

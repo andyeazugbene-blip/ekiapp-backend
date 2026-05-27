@@ -36,12 +36,17 @@
   "prisma": {
     "seed": "tsx prisma/seed.ts"
   },
+  "overrides": {
+    "lodash": "^4.18.1",
+    "axios": "^1.16.0",
+    "qs": "^6.15.2"
+  },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1045.0",
     "@aws-sdk/s3-request-presigner": "^3.1045.0",
     "@prisma/client": "^6.0.0",
     "@sentry/node": "^10.52.0",
-    "africastalking": "^0.7.9",
+    "africastalking": "^0.7.4",
     "bcryptjs": "^2.4.3",
     "bullmq": "^5.76.6",
     "cors": "^2.8.6",
