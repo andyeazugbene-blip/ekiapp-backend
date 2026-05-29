@@ -91,7 +91,13 @@ export async function generatePresignedUpload(
   category: string,
 ): Promise<PresignedUpload | null> {
   if (!s3 || !BUCKET) {
-    return null;
+    // If not configured, return a mock upload URL for local dev/testing
+    const mockBase = `http://localhost:4001/api/uploads/mock-upload`;
+    return {
+      uploadUrl: `${mockBase}?key=${encodeURIComponent(key)}`,
+      publicUrl: `http://localhost:4001/api/uploads/mock-download?key=${encodeURIComponent(key)}`,
+      key,
+    };
   }
 
   if (category === "verification") {
@@ -124,7 +130,7 @@ export async function generatePresignedUpload(
 }
 
 export function isStorageConfigured(): boolean {
-  return s3 !== null;
+  return s3 !== null || process.env.NODE_ENV !== "production";
 }
 
 export function getPublicUrl(key: string): string {

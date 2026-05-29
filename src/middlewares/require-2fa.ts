@@ -19,9 +19,16 @@ export async function require2fa(request: Request, _response: Response, next: Ne
     return;
   }
 
-  const record = await prisma.adminTwoFactor.findUnique({
-    where: { userId: request.user.id },
-  });
+  let record: Awaited<ReturnType<typeof prisma.adminTwoFactor.findUnique>> | null = null;
+  try {
+    record = await prisma.adminTwoFactor.findUnique({
+      where: { userId: request.user.id },
+    });
+  } catch {
+    // Table may not exist yet (migration not deployed). Treat as 2FA not set up.
+    next();
+    return;
+  }
 
   // If 2FA not set up or not enabled, allow through
   if (!record || !record.enabled) {
