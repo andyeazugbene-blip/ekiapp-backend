@@ -58,7 +58,7 @@ describe("publicStoresService.getStoreBySlug", () => {
       vendorId: "vendor-1",
       storeName: "Mama Chi Foodstuff",
       storeSlug: "mama-chi-foodstuff",
-      shareUrl: "https://waqti.pro/store/mama-chi-foodstuff",
+      shareUrl: "https://culinarytales.app/store/mama-chi-foodstuff",
       description: "Great food",
       avatar: "https://cdn/avatar.png",
       coverImage: null,

@@ -5,7 +5,7 @@
  *
  * Usage: npx tsx scripts/security-ratelimit-test.ts [url]
  */
-const BASE = process.argv[2] ?? "https://italian-market-place.vercel.app";
+const BASE = process.argv[2] ?? "https://ekiapp-backend.vercel.app";
 
 async function run() {
   console.log("=== RATE LIMIT SECURITY TEST ===\n");

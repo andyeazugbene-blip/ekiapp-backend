@@ -3,9 +3,9 @@
  * Verifies all critical services are operational before/after deploy.
  *
  * Usage: npx tsx scripts/launch-health-check.ts [url]
- * Default URL: https://italian-market-place.vercel.app
+ * Default URL: https://ekiapp-backend.vercel.app
  */
-const BASE = process.argv[2] ?? "https://italian-market-place.vercel.app";
+const BASE = process.argv[2] ?? "https://ekiapp-backend.vercel.app";
 
 async function main() {
   console.log("=== LAUNCH HEALTH CHECK ===");

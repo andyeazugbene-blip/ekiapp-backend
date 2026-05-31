@@ -5,7 +5,7 @@
  * If that succeeds, runs the full round-trip. Otherwise reports that operator
  * action is required.
  */
-const BASE = process.argv[2] ?? "https://italian-market-place.vercel.app";
+const BASE = process.argv[2] ?? "https://ekiapp-backend.vercel.app";
 
 async function tryLogin(email: string, password: string): Promise<string | null> {
   const res = await fetch(`${BASE}/api/auth/login`, {

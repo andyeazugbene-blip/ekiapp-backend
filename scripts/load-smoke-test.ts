@@ -5,7 +5,7 @@
  *
  * Usage: npx tsx scripts/load-smoke-test.ts [url]
  */
-const BASE = process.argv[2] ?? "https://italian-market-place.vercel.app";
+const BASE = process.argv[2] ?? "https://ekiapp-backend.vercel.app";
 const TOTAL_REQUESTS = 20;
 
 interface Result { path: string; status: number; latencyMs: number; error?: string }

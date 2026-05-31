@@ -14,7 +14,7 @@
  *   npx tsx scripts/round5-r2-probe.ts <BASE_URL> <JWT>
  */
 
-const BASE = process.argv[2] ?? "https://italian-market-place.vercel.app";
+const BASE = process.argv[2] ?? "https://ekiapp-backend.vercel.app";
 const TOKEN = process.argv[3];
 
 async function probe(label: string, headers: Record<string, string> = {}): Promise<void> {

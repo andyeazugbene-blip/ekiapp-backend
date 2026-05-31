@@ -62,5 +62,5 @@ export const env = {
   platformFeeBps: getPlatformFeeBps(),
   jwtSecret: getJwtSecret(),
   jwtExpiresIn: process.env.JWT_EXPIRES_IN ?? "7d",
-  publicStoreBaseUrl: (process.env.PUBLIC_STORE_BASE_URL ?? "https://waqti.pro").replace(/\/+$/, ""),
+  publicStoreBaseUrl: (process.env.PUBLIC_STORE_BASE_URL ?? "https://culinarytales.app").replace(/\/+$/, ""),
 } as const;

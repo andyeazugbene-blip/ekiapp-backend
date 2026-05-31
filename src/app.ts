@@ -55,9 +55,9 @@ app.use(requestIdMiddleware);
 // CORS - restrict origins in production, allow all in dev.
 const isProduction = process.env.NODE_ENV === "production";
 const defaultOrigins = [
-  "https://waqti.pro",
-  "https://www.waqti.pro",
-  "https://italian-market-place.vercel.app",
+  "https://culinarytales.app",
+  "https://www.culinarytales.app",
+  "https://ekiapp-backend.vercel.app",
 ];
 const allowedOrigins = process.env.CORS_ORIGINS
   ? process.env.CORS_ORIGINS.split(",").map((origin) => origin.trim())

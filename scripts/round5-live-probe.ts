@@ -14,7 +14,7 @@
  *   npx tsx scripts/round5-live-probe.ts <BASE_URL>
  */
 
-const BASE = process.argv[2] ?? "https://italian-market-place.vercel.app";
+const BASE = process.argv[2] ?? "https://ekiapp-backend.vercel.app";
 
 interface Json {
   [k: string]: unknown;

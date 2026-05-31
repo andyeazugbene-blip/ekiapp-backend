@@ -1,7 +1,7 @@
 import { PrismaClient, BuyerWalletTxType } from "@prisma/client";
 
 const prisma = new PrismaClient();
-const API_BASE = "https://italian-market-place.vercel.app/api";
+const API_BASE = "https://ekiapp-backend.vercel.app/api";
 const BUYER_EMAIL = "seed_qa_buyer002@example.com";
 const BUYER_PASSWORD = "SeedQA123!";
 const PRODUCT_IDS = ["cmps8eqwa0007ufpkh6otw2l7", "cmps8d2he0018ufwworgc870h"];

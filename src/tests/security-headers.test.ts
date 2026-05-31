@@ -17,7 +17,7 @@ let app: Express;
 beforeAll(async () => {
   // Force production-style CORS allowlist for these tests.
   process.env.NODE_ENV = "production";
-  process.env.CORS_ORIGINS = "https://waqti.pro,https://www.waqti.pro";
+  process.env.CORS_ORIGINS = "https://culinarytales.app,https://www.culinarytales.app";
   // Avoid Turnstile blackout when test sends bodies with no token.
   process.env.TURNSTILE_DISABLED = "true";
 
@@ -82,24 +82,24 @@ describe("Phase 9 — CORS allowlist", () => {
       .set("Access-Control-Request-Headers", "content-type");
     // Either no ACAO header at all, or an explicit allowed origin (not the evil one).
     const acao = res.headers["access-control-allow-origin"];
-    expect(acao === undefined || acao === "https://waqti.pro").toBe(true);
+    expect(acao === undefined || acao === "https://culinarytales.app").toBe(true);
     expect(acao).not.toBe("https://evil.example");
     expect(acao).not.toBe("*");
   });
 
-  it("trusted origin (waqti.pro apex) is echoed back", async () => {
+  it("trusted origin (culinarytales.app apex) is echoed back", async () => {
     const res = await request(app)
       .options("/api/auth/login")
-      .set("Origin", "https://waqti.pro")
+      .set("Origin", "https://culinarytales.app")
       .set("Access-Control-Request-Method", "POST");
-    expect(res.headers["access-control-allow-origin"]).toBe("https://waqti.pro");
+    expect(res.headers["access-control-allow-origin"]).toBe("https://culinarytales.app");
   });
 
-  it("trusted origin (www.waqti.pro) is echoed back", async () => {
+  it("trusted origin (www.culinarytales.app) is echoed back", async () => {
     const res = await request(app)
       .options("/api/auth/login")
-      .set("Origin", "https://www.waqti.pro")
+      .set("Origin", "https://www.culinarytales.app")
       .set("Access-Control-Request-Method", "POST");
-    expect(res.headers["access-control-allow-origin"]).toBe("https://www.waqti.pro");
+    expect(res.headers["access-control-allow-origin"]).toBe("https://www.culinarytales.app");
   });
 });

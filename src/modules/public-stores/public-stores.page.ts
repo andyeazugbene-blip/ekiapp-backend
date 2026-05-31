@@ -102,11 +102,11 @@ function renderStorePage(store: PublicStore, products: PublicProduct[]): string 
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta name="theme-color" content="#1F4D40" />
-  <title>${escape(store.storeName)} · Waqti</title>
+  <title>${escape(store.storeName)} - Culinary Tales</title>
   <meta name="description" content="${escape(store.description ?? store.storeName)}" />
   <meta property="og:title" content="${escape(store.storeName)}" />
-  <meta property="og:description" content="${escape(store.description ?? "Discover this store on Waqti.")}" />
-  <meta property="og:site_name" content="Waqti" />
+  <meta property="og:description" content="${escape(store.description ?? "Discover this store on Culinary Tales.")}" />
+  <meta property="og:site_name" content="Culinary Tales" />
   <meta property="og:type" content="website" />
   <meta property="og:url" content="${escape(store.shareUrl)}" />
   ${store.coverImage ? `<meta property="og:image" content="${escape(store.coverImage)}" />` : ""}
@@ -391,7 +391,7 @@ function renderStorePage(store: PublicStore, products: PublicProduct[]): string 
 <body>
   <nav class="topbar">
     <div class="container topbar-inner">
-      <span class="brand"><span class="brand-dot"></span> Waqti</span>
+      <span class="brand"><span class="brand-dot"></span> Culinary Tales</span>
     </div>
   </nav>
 
@@ -437,7 +437,7 @@ function renderStorePage(store: PublicStore, products: PublicProduct[]): string 
 
   <footer class="footer">
     <div class="container">
-      Powered by <a href="https://waqti.pro">Waqti</a>
+      Powered by <a href="https://culinarytales.app">Culinary Tales</a>
     </div>
   </footer>
 
@@ -478,7 +478,7 @@ function renderNotFound(slug: string): string {
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Store not found · Waqti</title>
+  <title>Store not found - Culinary Tales</title>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Inter:wght@400;500;600&display=swap" />
   <style>
     *,*::before,*::after{box-sizing:border-box}
@@ -515,7 +515,7 @@ function renderNotFound(slug: string): string {
     <p class="number">404</p>
     <h1>Store not found</h1>
     <p>The store <code>${escape(slug)}</code> could not be found, or it is currently unavailable.</p>
-    <a href="https://waqti.pro">Back to Waqti</a>
+    <a href="https://culinarytales.app">Back to Culinary Tales</a>
   </div>
 </body>
 </html>`;
@@ -527,7 +527,7 @@ function renderError(): string {
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Error · Waqti</title>
+  <title>Error - Culinary Tales</title>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600&family=Inter:wght@400;500&display=swap" />
   <style>
     body{

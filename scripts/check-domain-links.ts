@@ -2,12 +2,12 @@
  * Domain link health check.
  *
  * Probes the new production domains and the Vercel fallback to confirm:
- *   1. https://waqti.pro                                     → reachable
- *   2. https://www.waqti.pro                                 → reachable
- *   3. https://waqti.pro/store/<slug>                        → 200, no redirect loop
- *   4. https://www.waqti.pro/store/<slug>                    → 200, no redirect loop
- *   5. https://italian-market-place.vercel.app/store/<slug>  → 200 (canonical fallback)
- *   6. https://italian-market-place.vercel.app/api/health    → 200, body {"status":"ok"}
+ *   1. https://culinarytales.app                             → reachable
+ *   2. https://www.culinarytales.app                         → reachable
+ *   3. https://culinarytales.app/store/<slug>                → 200, no redirect loop
+ *   4. https://www.culinarytales.app/store/<slug>            → 200, no redirect loop
+ *   5. https://ekiapp-backend.vercel.app/store/<slug>        → 200 (canonical fallback)
+ *   6. https://ekiapp-backend.vercel.app/api/health          → 200, body {"status":"ok"}
  *
  * If TEST_VENDOR_SLUG is not provided, the script tries to fetch one from
  * GET /api/products and uses the first product's vendor slug. If no slug
@@ -26,17 +26,17 @@
  *   npx tsx scripts/check-domain-links.ts
  *
  * Env:
- *   DOMAIN_PRIMARY=https://waqti.pro
- *   DOMAIN_WWW=https://www.waqti.pro
- *   API_BASE=https://italian-market-place.vercel.app/api
- *   VERCEL_WEB=https://italian-market-place.vercel.app
+ *   DOMAIN_PRIMARY=https://culinarytales.app
+ *   DOMAIN_WWW=https://www.culinarytales.app
+ *   API_BASE=https://ekiapp-backend.vercel.app/api
+ *   VERCEL_WEB=https://ekiapp-backend.vercel.app
  *   TEST_VENDOR_SLUG=<optional override>
  */
 
-const PRIMARY = process.env.DOMAIN_PRIMARY ?? "https://waqti.pro";
-const WWW = process.env.DOMAIN_WWW ?? "https://www.waqti.pro";
-const API_BASE = process.env.API_BASE ?? "https://italian-market-place.vercel.app/api";
-const VERCEL_WEB = process.env.VERCEL_WEB ?? "https://italian-market-place.vercel.app";
+const PRIMARY = process.env.DOMAIN_PRIMARY ?? "https://culinarytales.app";
+const WWW = process.env.DOMAIN_WWW ?? "https://www.culinarytales.app";
+const API_BASE = process.env.API_BASE ?? "https://ekiapp-backend.vercel.app/api";
+const VERCEL_WEB = process.env.VERCEL_WEB ?? "https://ekiapp-backend.vercel.app";
 const FORCED_SLUG = process.env.TEST_VENDOR_SLUG;
 
 const REDIRECT_LIMIT = 6;
@@ -197,8 +197,8 @@ async function main(): Promise<void> {
   console.log("");
 
   const outcomes: CheckOutcome[] = [
-    classify("Apex (waqti.pro)", apex, { critical: false, expectStatuses: [200, 301, 302, 308, 404] }),
-    classify("WWW (www.waqti.pro)", www, { critical: false, expectStatuses: [200, 301, 302, 308, 404] }),
+    classify("Apex (culinarytales.app)", apex, { critical: false, expectStatuses: [200, 301, 302, 308, 404] }),
+    classify("WWW (www.culinarytales.app)", www, { critical: false, expectStatuses: [200, 301, 302, 308, 404] }),
     classify("API health", health, { critical: true, expectStatuses: [200] }),
   ];
 
@@ -214,7 +214,7 @@ async function main(): Promise<void> {
   }
 
   // At least one of apex/www/Vercel must serve the homepage with status 2xx/3xx
-  // for "domain reachable". Vercel always works, so this is mainly for waqti.pro.
+  // for "domain reachable". Vercel always works, so this is mainly for culinarytales.app.
   const anyDomainReachable = outcomes.some((o) =>
     /Apex|WWW|Vercel/.test(o.label) && o.ok,
   );
@@ -231,7 +231,7 @@ async function main(): Promise<void> {
   }
 
   // Old-domain regression check: response bodies for public pages must not
-  // contain "neon.online" (we swapped it to waqti.pro).
+  // contain "neon.online" (we swapped it to culinarytales.app).
   for (const r of [apex, www, health]) {
     if (r.hasOldDomain) {
       console.log(`❌ ${r.url} body still contains "neon.online"`);

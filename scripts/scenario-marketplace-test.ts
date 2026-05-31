@@ -10,7 +10,7 @@
 import Stripe from "stripe";
 import "dotenv/config";
 
-const BASE = process.argv[2] ?? "https://italian-market-place.vercel.app";
+const BASE = process.argv[2] ?? "https://ekiapp-backend.vercel.app";
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!);
 const PREFIX = "SCENARIO_QA_";
 const TS = Date.now();

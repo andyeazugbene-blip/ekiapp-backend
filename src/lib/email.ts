@@ -6,7 +6,7 @@ import { logger } from "./logger";
 // but not sent (safe for local dev).
 
 const apiKey = process.env.RESEND_API_KEY;
-const fromAddress = process.env.EMAIL_FROM ?? "Eki Marketplace <noreply@ekiapp.com>";
+const fromAddress = process.env.EMAIL_FROM ?? "Culinary Tales <noreply@culinarytales.app>";
 
 let resend: Resend | null = null;
 
