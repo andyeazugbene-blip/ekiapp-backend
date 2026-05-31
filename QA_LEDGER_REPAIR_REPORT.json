@@ -1,0 +1,11 @@
+{
+  "prefix": "SEED_QA_",
+  "apply": false,
+  "qaUsers": 13,
+  "qaVendors": 5,
+  "createdBuyerTransactions": 0,
+  "createdVendorTransactions": 0,
+  "updatedBuyerWallets": 0,
+  "updatedVendorWallets": 0,
+  "timestamp": "2026-05-30T11:15:43.213Z"
+}

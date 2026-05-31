@@ -8,6 +8,8 @@ import type {
 } from "./vendors.types";
 
 const PAYOUT_METHOD_TYPES = new Set<string>(Object.values(PayoutMethodType));
+const BUSINESS_TYPES = new Set(["individual", "registered"]);
+const SELLER_REGIONS = new Set(["africa", "abroad"]);
 
 function optionalString(value: unknown, field: string): string | undefined {
   if (value === undefined) return undefined;
@@ -26,6 +28,19 @@ function nullableString(value: unknown, field: string): string | null | undefine
   }
   const trimmed = value.trim();
   return trimmed.length === 0 ? null : trimmed;
+}
+
+function nullableEnum<T extends string>(
+  value: unknown,
+  field: string,
+  allowed: Set<string>,
+): T | null | undefined {
+  const normalized = nullableString(value, field);
+  if (normalized === undefined || normalized === null) return normalized;
+  if (!allowed.has(normalized)) {
+    throw new AppError(`Invalid ${field}`, 400);
+  }
+  return normalized as T;
 }
 
 export function validateCreateVendorInput(input: unknown): CreateVendorInput {
@@ -78,6 +93,20 @@ export function validateUpdateVendorInput(input: unknown): UpdateVendorInput {
   }
   if (raw.city !== undefined) {
     update.city = nullableString(raw.city, "city");
+  }
+  if (raw.businessType !== undefined) {
+    update.businessType = nullableEnum<NonNullable<UpdateVendorInput["businessType"]>>(
+      raw.businessType,
+      "businessType",
+      BUSINESS_TYPES,
+    );
+  }
+  if (raw.sellerRegion !== undefined) {
+    update.sellerRegion = nullableEnum<NonNullable<UpdateVendorInput["sellerRegion"]>>(
+      raw.sellerRegion,
+      "sellerRegion",
+      SELLER_REGIONS,
+    );
   }
   if (raw.avatar !== undefined) {
     update.avatar = nullableString(raw.avatar, "avatar");

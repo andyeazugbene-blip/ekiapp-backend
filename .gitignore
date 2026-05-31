@@ -9,3 +9,12 @@ dist
 coverage
 .vercel
 *.log
+
+# QA Seed Data Reports (contain credentials)
+QA_SEED_CREDENTIALS.md
+QA_SEED_REPORT.json
+QA_CLEANUP_REPORT.json
+QA_SEED_VALIDATION_REPORT.json
+ESCROW_SEED_REPORT.md
+OTP_SEED_REPORT.md
+OTP_SEED_REPORT.json

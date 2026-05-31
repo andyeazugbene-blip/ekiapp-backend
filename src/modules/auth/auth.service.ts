@@ -27,12 +27,7 @@ const LOCKOUT_DURATION_MS = 15 * 60 * 1000; // 15 minutes
 
 const JWT_SIGN_OPTIONS: SignOptions = { algorithm: "HS256", expiresIn: env.jwtExpiresIn as string & SignOptions["expiresIn"] };
 
-function signToken(user: { id: string; role: UserRole; email: string; tokenVersion: number }): string {
-  const payload: JwtPayload = { sub: user.id, role: user.role, email: user.email, tv: user.tokenVersion };
-  return jwt.sign(payload as object, env.jwtSecret, JWT_SIGN_OPTIONS);
-}
-
-function toAuthUser(user: {
+type AuthUserRecord = {
   id: string;
   email: string;
   name: string;
@@ -42,8 +37,23 @@ function toAuthUser(user: {
   role: UserRole;
   trustScore: number;
   createdAt: Date;
-}): AuthUser {
-  return {
+  vendor?: {
+    storeName: string;
+    storeSlug: string;
+    description: string | null;
+    businessType: string | null;
+    sellerRegion: string | null;
+    city: string | null;
+  } | null;
+};
+
+function signToken(user: { id: string; role: UserRole; email: string; tokenVersion: number }): string {
+  const payload: JwtPayload = { sub: user.id, role: user.role, email: user.email, tv: user.tokenVersion };
+  return jwt.sign(payload as object, env.jwtSecret, JWT_SIGN_OPTIONS);
+}
+
+function toAuthUser(user: AuthUserRecord): AuthUser {
+  const authUser: AuthUser = {
     id: user.id,
     email: user.email,
     name: user.name,
@@ -54,6 +64,17 @@ function toAuthUser(user: {
     trustScore: user.trustScore,
     createdAt: user.createdAt,
   };
+
+  if (user.role === UserRole.VENDOR && user.vendor) {
+    authUser.storeName = user.vendor.storeName;
+    authUser.storeSlug = user.vendor.storeSlug;
+    authUser.storeDescription = user.vendor.description;
+    authUser.businessType = user.vendor.businessType;
+    authUser.sellerRegion = user.vendor.sellerRegion;
+    authUser.city = user.vendor.city;
+  }
+
+  return authUser;
 }
 
 export const authService = {
@@ -97,7 +118,10 @@ export const authService = {
   },
 
   async login(input: LoginInput): Promise<{ user: AuthUser; token: string }> {
-    const user = await prisma.user.findUnique({ where: { email: input.email } });
+    const user = await prisma.user.findUnique({
+      where: { email: input.email },
+      include: { vendor: true },
+    });
 
     // Do not reveal whether email exists
     if (!user) {
@@ -146,7 +170,10 @@ export const authService = {
   },
 
   async getCurrentUser(userId: string): Promise<AuthUser> {
-    const user = await prisma.user.findUnique({ where: { id: userId } });
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      include: { vendor: true },
+    });
     if (!user) {
       throw new AppError("User not found", 404);
     }
@@ -162,6 +189,7 @@ export const authService = {
     const updated = await prisma.user.update({
       where: { id: userId },
       data: input,
+      include: { vendor: true },
     });
 
     return toAuthUser(updated);

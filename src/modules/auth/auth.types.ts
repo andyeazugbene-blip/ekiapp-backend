@@ -30,6 +30,12 @@ export interface AuthUser {
   role: UserRole;
   trustScore: number;
   createdAt: Date;
+  storeName?: string;
+  storeSlug?: string;
+  storeDescription?: string | null;
+  businessType?: string | null;
+  sellerRegion?: string | null;
+  city?: string | null;
 }
 
 export interface UpdateProfileInput {

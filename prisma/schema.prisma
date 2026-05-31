@@ -139,6 +139,8 @@ model Vendor {
   contactPhone          String?
   country               String?
   city                  String?
+  businessType          String?
+  sellerRegion          String?
   currency              String                   @default("EUR")
   avatar                String?
   coverImage            String?

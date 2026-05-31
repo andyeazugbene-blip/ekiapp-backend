@@ -15,6 +15,8 @@ export interface UpdateVendorInput {
   contactPhone?: string | null;
   country?: string | null;
   city?: string | null;
+  businessType?: "individual" | "registered" | null;
+  sellerRegion?: "africa" | "abroad" | null;
   avatar?: string | null;
   coverImage?: string | null;
 }

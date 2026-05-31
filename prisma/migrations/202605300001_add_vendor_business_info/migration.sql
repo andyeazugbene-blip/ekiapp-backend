@@ -1,0 +1,3 @@
+ALTER TABLE "Vendor"
+ADD COLUMN IF NOT EXISTS "businessType" TEXT,
+ADD COLUMN IF NOT EXISTS "sellerRegion" TEXT;

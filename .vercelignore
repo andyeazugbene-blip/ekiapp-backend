@@ -1,0 +1,10 @@
+node_modules
+dist
+coverage
+zap-reports
+.git
+.github
+.vscode
+.env
+.env.*
+*.log
