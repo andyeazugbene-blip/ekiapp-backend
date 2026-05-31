@@ -4,12 +4,19 @@ import helmet from "helmet";
 
 // Imported for its init side-effect; Sentry stays disabled if SENTRY_DSN is unset.
 import "./lib/sentry";
+import { swaggerSpec } from "./lib/swagger";
 import { errorHandler } from "./middlewares/error-handler";
 import { notFoundHandler } from "./middlewares/not-found";
 import { generalRateLimiter } from "./middlewares/rate-limit";
 import { requestIdMiddleware } from "./middlewares/request-id";
 import { requestLogger } from "./middlewares/request-logger";
 import { validateInputLength } from "./middlewares/validate-input-length";
+import {
+  getPublicHelpPage,
+  getPublicHomePage,
+  getPublicPrivacyPage,
+  getPublicTermsPage,
+} from "./modules/public-site/public-site.page";
 import { getPublicStorePage } from "./modules/public-stores/public-stores.page";
 import { apiRouter } from "./routes";
 
@@ -20,20 +27,18 @@ app.set("trust proxy", 1);
 
 // Hide the default `X-Powered-By: Express` header on every response.
 // Helmet does this for routes it runs on, but the bypass below for
-// /api/docs and /store/:slug skips Helmet, so we set it at the app
-// level to cover both paths in one place.
+// /api/docs and public HTML pages skips the default CSP path, so we set it
+// at the app level to cover both paths in one place.
 app.disable("x-powered-by");
 
-// Security headers. CSP must be relaxed on /api/docs (Swagger UI from CDN)
-// and /store/:slug (server-rendered page with inline copy-link script),
-// but the other passive-scan headers (X-Content-Type-Options,
-// X-Frame-Options, Referrer-Policy) still apply to those paths.
-const swaggerAndStorePaths = (req: { path: string }) =>
-  req.path === "/api/docs" || req.path.startsWith("/store/");
+// Security headers. CSP must be relaxed on /api/docs and server-rendered
+// public HTML pages that use inline scripts.
+const publicHtmlPaths = new Set(["/", "/help", "/privacy", "/terms"]);
+const swaggerAndPublicPagePaths = (req: { path: string }) =>
+  req.path === "/api/docs" || req.path.startsWith("/store/") || publicHtmlPaths.has(req.path);
 
 app.use((req, res, next) => {
-  if (swaggerAndStorePaths(req)) {
-    // Subset of helmet defaults — no CSP, no COEP. Still safe to send.
+  if (swaggerAndPublicPagePaths(req)) {
     helmet({
       contentSecurityPolicy: false,
       crossOriginEmbedderPolicy: false,
@@ -47,20 +52,18 @@ app.use((req, res, next) => {
 // Request ID (before everything else for tracing)
 app.use(requestIdMiddleware);
 
-// CORS — restrict origins in production, allow all in dev.
+// CORS - restrict origins in production, allow all in dev.
 const isProduction = process.env.NODE_ENV === "production";
-// Default production allowlist. Both apex and www are needed because the
-// Vercel deploy is reachable via either, and browsers send Origin verbatim.
-// Vercel fallback hostname is also allowed so the soft-launch URL keeps
-// working until DNS is fully cut over.
 const defaultOrigins = [
   "https://waqti.pro",
   "https://www.waqti.pro",
   "https://italian-market-place.vercel.app",
 ];
 const allowedOrigins = process.env.CORS_ORIGINS
-  ? process.env.CORS_ORIGINS.split(",").map((o) => o.trim())
-  : isProduction ? defaultOrigins : undefined;
+  ? process.env.CORS_ORIGINS.split(",").map((origin) => origin.trim())
+  : isProduction
+    ? defaultOrigins
+    : undefined;
 
 app.use(
   cors({
@@ -88,13 +91,23 @@ app.use(validateInputLength);
 app.use("/api", apiRouter);
 
 // Root-level OpenAPI spec aliases (for Postman, Insomnia, openapi-generator)
-import { swaggerSpec } from "./lib/swagger";
 app.get("/openapi.json", (_req, res) => res.json(swaggerSpec));
 app.get("/api-json", (_req, res) => res.json(swaggerSpec));
 app.get("/swagger.json", (_req, res) => res.json(swaggerSpec));
 
 // Public web routes (server-rendered pages outside /api).
-// /store/:slug is the public storefront page used by share links.
+app.get("/", (req, res, next) => {
+  Promise.resolve(getPublicHomePage(req, res)).catch(next);
+});
+app.get("/help", (req, res, next) => {
+  Promise.resolve(getPublicHelpPage(req, res)).catch(next);
+});
+app.get("/privacy", (req, res, next) => {
+  Promise.resolve(getPublicPrivacyPage(req, res)).catch(next);
+});
+app.get("/terms", (req, res, next) => {
+  Promise.resolve(getPublicTermsPage(req, res)).catch(next);
+});
 app.get("/store/:slug", (req, res, next) => {
   Promise.resolve(getPublicStorePage(req, res)).catch(next);
 });
