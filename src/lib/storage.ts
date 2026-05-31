@@ -8,22 +8,50 @@ import { logger } from "./logger";
 
 const BUCKET = process.env.S3_BUCKET;
 const REGION = process.env.S3_REGION ?? "auto";
-const ENDPOINT = process.env.S3_ENDPOINT; // Required for R2
+const RAW_ENDPOINT = process.env.S3_ENDPOINT?.trim(); // Required for R2
 const ACCESS_KEY = process.env.S3_ACCESS_KEY_ID;
 const SECRET_KEY = process.env.S3_SECRET_ACCESS_KEY;
 const PUBLIC_URL = process.env.S3_PUBLIC_URL ?? process.env.UPLOAD_BASE_URL ?? "";
+
+function normalizeEndpoint(rawEndpoint: string | undefined, bucket: string | undefined): string | undefined {
+  if (!rawEndpoint) {
+    return undefined;
+  }
+
+  const normalized = rawEndpoint.trim().replace(/\/+$/, "");
+
+  if (!bucket) {
+    return normalized;
+  }
+
+  const bucketSuffix = `/${bucket}`;
+
+  try {
+    const url = new URL(normalized);
+    if (url.pathname === bucketSuffix || url.pathname.endsWith(bucketSuffix)) {
+      url.pathname = url.pathname.replace(new RegExp(`${bucketSuffix}$`), "");
+      return url.toString().replace(/\/+$/, "");
+    }
+    return normalized;
+  } catch {
+    if (normalized.endsWith(bucketSuffix)) {
+      return normalized.slice(0, -bucketSuffix.length);
+    }
+    return normalized;
+  }
+}
+
+const ENDPOINT = normalizeEndpoint(RAW_ENDPOINT, BUCKET); // Required for R2
 
 // ─── Startup validation ──────────────────────────────────────────────────────
 
 let storageDisabled = false;
 
-// S3_ENDPOINT must NOT include the bucket name (common R2 misconfiguration)
-if (ENDPOINT && BUCKET && ENDPOINT.includes(BUCKET)) {
-  logger.error(
-    `S3_ENDPOINT must NOT include the bucket name. Got "${ENDPOINT}" which contains bucket "${BUCKET}". ` +
-    `Use the account-level endpoint (e.g. https://<accountId>.r2.cloudflarestorage.com). Storage DISABLED.`,
+if (RAW_ENDPOINT && ENDPOINT && RAW_ENDPOINT !== ENDPOINT) {
+  logger.warn(
+    `S3_ENDPOINT included a bucket path and was normalized for R2 compatibility. ` +
+    `Use the account-level endpoint when possible.`,
   );
-  storageDisabled = true;
 }
 
 // If S3_ENDPOINT is configured (R2/MinIO), S3_PUBLIC_URL is required — there is no

@@ -54,6 +54,8 @@ async function rawFetch(url: string, opts: RequestInit): Promise<Response> {
 }
 
 let adminToken = "";
+const ADMIN_EMAIL = process.env.ADMIN_EMAIL ?? "admin@ekiapp.com";
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD ?? "AdminDemo123!";
 const vendorData: { token: string; id: string; currency: string; products: string[] }[] = [];
 const buyerTokens: string[] = [];
 
@@ -66,7 +68,7 @@ async function run() {
 
   // ─── ADMIN ─────────────────────────────────────────────────────────
   console.log("── ADMIN ──\n");
-  const al = await api("POST", "/api/auth/login", { email: "admin-qa@test.com", password: "AdminQA123!" });
+  const al = await api("POST", "/api/auth/login", { email: ADMIN_EMAIL, password: ADMIN_PASSWORD });
   adminToken = al.d?.token ?? "";
   log("Admin login", adminToken ? "PASS" : "FAIL");
   if (!adminToken) { console.log("  Cannot proceed. Aborting."); return; }

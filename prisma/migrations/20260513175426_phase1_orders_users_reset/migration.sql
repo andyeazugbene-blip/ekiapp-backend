@@ -13,29 +13,35 @@
 -- the enum.
 
 
-ALTER TYPE "OrderStatus" ADD VALUE 'CONFIRMED';
-ALTER TYPE "OrderStatus" ADD VALUE 'PROCESSING';
-ALTER TYPE "OrderStatus" ADD VALUE 'DISPATCHED';
-ALTER TYPE "OrderStatus" ADD VALUE 'IN_TRANSIT';
-ALTER TYPE "OrderStatus" ADD VALUE 'DELIVERED';
-ALTER TYPE "OrderStatus" ADD VALUE 'CANCELLED';
-ALTER TYPE "OrderStatus" ADD VALUE 'REFUNDED';
+ALTER TYPE "OrderStatus" ADD VALUE IF NOT EXISTS 'CONFIRMED';
+ALTER TYPE "OrderStatus" ADD VALUE IF NOT EXISTS 'PROCESSING';
+ALTER TYPE "OrderStatus" ADD VALUE IF NOT EXISTS 'DISPATCHED';
+ALTER TYPE "OrderStatus" ADD VALUE IF NOT EXISTS 'IN_TRANSIT';
+ALTER TYPE "OrderStatus" ADD VALUE IF NOT EXISTS 'DELIVERED';
+ALTER TYPE "OrderStatus" ADD VALUE IF NOT EXISTS 'CANCELLED';
+ALTER TYPE "OrderStatus" ADD VALUE IF NOT EXISTS 'REFUNDED';
 
 -- AlterTable
-ALTER TABLE "Order" ADD COLUMN     "deliveredAt" TIMESTAMP(3),
-ADD COLUMN     "notes" TEXT,
-ADD COLUMN     "orderNumber" TEXT NOT NULL;
+ALTER TABLE "Order" ADD COLUMN IF NOT EXISTS "deliveredAt" TIMESTAMP(3),
+ADD COLUMN IF NOT EXISTS "notes" TEXT,
+ADD COLUMN IF NOT EXISTS "orderNumber" TEXT;
+
+UPDATE "Order"
+SET "orderNumber" = COALESCE(NULLIF("orderNumber", ''), 'EKI-' || SUBSTRING("id" FROM 1 FOR 8))
+WHERE "orderNumber" IS NULL OR "orderNumber" = '';
+
+ALTER TABLE "Order" ALTER COLUMN "orderNumber" SET NOT NULL;
 
 -- AlterTable
-ALTER TABLE "User" ADD COLUMN     "avatar" TEXT,
-ADD COLUMN     "country" TEXT,
-ADD COLUMN     "phone" TEXT;
+ALTER TABLE "User" ADD COLUMN IF NOT EXISTS "avatar" TEXT,
+ADD COLUMN IF NOT EXISTS "country" TEXT,
+ADD COLUMN IF NOT EXISTS "phone" TEXT;
 
 -- AlterTable
-ALTER TABLE "Vendor" ADD COLUMN     "city" TEXT;
+ALTER TABLE "Vendor" ADD COLUMN IF NOT EXISTS "city" TEXT;
 
 -- CreateTable
-CREATE TABLE "PasswordResetToken" (
+CREATE TABLE IF NOT EXISTS "PasswordResetToken" (
     "id" TEXT NOT NULL,
     "userId" TEXT NOT NULL,
     "token" TEXT NOT NULL,
@@ -47,13 +53,13 @@ CREATE TABLE "PasswordResetToken" (
 );
 
 -- CreateIndex
-CREATE UNIQUE INDEX "PasswordResetToken_token_key" ON "PasswordResetToken"("token");
+CREATE UNIQUE INDEX IF NOT EXISTS "PasswordResetToken_token_key" ON "PasswordResetToken"("token");
 
 -- CreateIndex
-CREATE INDEX "PasswordResetToken_userId_idx" ON "PasswordResetToken"("userId");
+CREATE INDEX IF NOT EXISTS "PasswordResetToken_userId_idx" ON "PasswordResetToken"("userId");
 
 -- CreateIndex
-CREATE INDEX "PasswordResetToken_expiresAt_idx" ON "PasswordResetToken"("expiresAt");
+CREATE INDEX IF NOT EXISTS "PasswordResetToken_expiresAt_idx" ON "PasswordResetToken"("expiresAt");
 
 -- CreateIndex
-CREATE UNIQUE INDEX "Order_orderNumber_key" ON "Order"("orderNumber");
+CREATE UNIQUE INDEX IF NOT EXISTS "Order_orderNumber_key" ON "Order"("orderNumber");

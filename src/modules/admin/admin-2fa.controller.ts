@@ -8,7 +8,10 @@ import { prisma } from "../../lib/prisma";
 import { AppError } from "../../shared/errors/app-error";
 
 const BACKUP_CODE_COUNT = 10;
-const BCRYPT_ROUNDS = 10;
+const BCRYPT_ROUNDS = Math.max(
+  4,
+  Number(process.env.ADMIN_2FA_BCRYPT_ROUNDS ?? (process.env.NODE_ENV === "test" ? "4" : "10")),
+);
 
 /**
  * POST /api/admin/2fa/setup
