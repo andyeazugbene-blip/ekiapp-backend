@@ -8,7 +8,7 @@ import { AppError } from "../../shared/errors/app-error";
 
 const OTP_EXPIRY_MINUTES = 10;
 const MAX_ATTEMPTS = 5;
-const VALID_PURPOSES = ["vendor_onboarding_email"] as const;
+const VALID_PURPOSES = ["vendor_onboarding_email", "guest_order_lookup"] as const;
 type OtpPurpose = (typeof VALID_PURPOSES)[number];
 
 /**

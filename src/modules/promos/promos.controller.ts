@@ -4,6 +4,7 @@ import { AppError } from "../../shared/errors/app-error";
 import { promosService } from "./promos.service";
 import {
   validateCreatePromoCodeInput,
+  validateCreateVendorPromoCodeInput,
   validateUpdatePromoCodeInput,
   validateValidatePromoInput,
 } from "./promos.validation";
@@ -29,6 +30,17 @@ export async function validatePromo(request: Request, response: Response): Promi
   const input = validateValidatePromoInput(request.body);
   const result = await promosService.validatePromo(requireUserId(request), input);
   response.status(200).json(result);
+}
+
+export async function createVendorPromoCode(request: Request, response: Response): Promise<void> {
+  const input = validateCreateVendorPromoCodeInput(request.body);
+  const promoCode = await promosService.createVendorPromoCode(requireUserId(request), input);
+  response.status(201).json({ promoCode });
+}
+
+export async function listVendorPromoCodes(request: Request, response: Response): Promise<void> {
+  const promoCodes = await promosService.listVendorPromoCodes(requireUserId(request));
+  response.status(200).json({ promoCodes });
 }
 
 // ─── Admin ───────────────────────────────────────────────────────────────────

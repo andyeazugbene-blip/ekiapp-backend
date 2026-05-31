@@ -3,7 +3,7 @@ import type { Request, Response } from "express";
 import { AppError } from "../../shared/errors/app-error";
 import { otpService } from "./otp.service";
 
-const VALID_PURPOSES = ["vendor_onboarding_email"] as const;
+const VALID_PURPOSES = ["vendor_onboarding_email", "guest_order_lookup"] as const;
 
 function validateSendOtpInput(body: unknown): { contact: string; purpose: string } {
   if (!body || typeof body !== "object") {
@@ -63,7 +63,7 @@ export async function sendOtp(request: Request, response: Response): Promise<voi
 
   // Always respond with success to prevent email enumeration
   try {
-    await otpService.sendOtp(contact, purpose as "vendor_onboarding_email");
+    await otpService.sendOtp(contact, purpose as (typeof VALID_PURPOSES)[number]);
   } catch {
     // Swallow errors to prevent enumeration — still return success
   }
@@ -85,6 +85,6 @@ export async function verifyOtp(request: Request, response: Response): Promise<v
     }
   }
 
-  await otpService.verifyOtp(contact, code, purpose as "vendor_onboarding_email");
+  await otpService.verifyOtp(contact, code, purpose as (typeof VALID_PURPOSES)[number]);
   response.status(200).json({ verified: true });
 }

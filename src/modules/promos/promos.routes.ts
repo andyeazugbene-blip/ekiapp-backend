@@ -1,12 +1,11 @@
 import { Router } from "express";
 
-import { authenticate } from "../../middlewares/authenticate";
+import { authenticate, requireRole } from "../../middlewares/authenticate";
 import { asyncHandler } from "../../shared/utils/async-handler";
-import { validatePromo } from "./promos.controller";
+import { createVendorPromoCode, listVendorPromoCodes, validatePromo } from "./promos.controller";
 
 export const promosRouter = Router();
 
-promosRouter.use(authenticate);
-
-// Buyer: validate a promo code
-promosRouter.post("/validate", asyncHandler(validatePromo));
+promosRouter.post("/validate", authenticate, asyncHandler(validatePromo));
+promosRouter.get("/me", authenticate, requireRole("VENDOR", "ADMIN"), asyncHandler(listVendorPromoCodes));
+promosRouter.post("/me", authenticate, requireRole("VENDOR", "ADMIN"), asyncHandler(createVendorPromoCode));

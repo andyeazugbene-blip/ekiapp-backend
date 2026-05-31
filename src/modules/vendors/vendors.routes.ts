@@ -28,6 +28,7 @@ import {
   listVendorBuyers,
 } from "./vendors-buyers.controller";
 import { vendorConfirmEscrowOrder, vendorDispatchOrder, registerBankAccount, listBankAccounts } from "../paystack/escrow.controller";
+import { getVendorPublicStoreAnalytics } from "../public-stores/public-stores.controller";
 import {
   getStripeConnectStatus,
   onboardStripeConnect,
@@ -51,6 +52,7 @@ vendorsRouter.get("/me/earnings", requireRole("VENDOR", "ADMIN"), asyncHandler(g
 // for the previous round of frontend code that already shipped that path.
 vendorsRouter.get("/me/analytics/revenue", requireRole("VENDOR", "ADMIN"), asyncHandler(getVendorRevenue));
 vendorsRouter.get("/me/revenue", requireRole("VENDOR", "ADMIN"), asyncHandler(getVendorRevenue));
+vendorsRouter.get("/me/public-store-analytics", requireRole("VENDOR", "ADMIN"), asyncHandler(getVendorPublicStoreAnalytics));
 vendorsRouter.get("/me/buyers", requireRole("VENDOR", "ADMIN"), asyncHandler(listVendorBuyers));
 vendorsRouter.get("/me/buyers/:id", requireRole("VENDOR", "ADMIN"), asyncHandler(getVendorBuyer));
 vendorsRouter.post("/me/payout-methods", requireRole("VENDOR", "ADMIN"), asyncHandler(createPayoutMethod));

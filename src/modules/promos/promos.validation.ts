@@ -1,7 +1,12 @@
 import { PromoType } from "@prisma/client";
 
 import { AppError } from "../../shared/errors/app-error";
-import type { CreatePromoCodeInput, UpdatePromoCodeInput, ValidatePromoInput } from "./promos.types";
+import type {
+  CreatePromoCodeInput,
+  CreateVendorPromoCodeInput,
+  UpdatePromoCodeInput,
+  ValidatePromoInput,
+} from "./promos.types";
 
 const PROMO_TYPES = new Set<string>(Object.values(PromoType));
 
@@ -114,4 +119,32 @@ export function validateValidatePromoInput(input: unknown): ValidatePromoInput {
   }
 
   return { code: raw.code.trim().toUpperCase(), orderAmount };
+}
+
+export function validateCreateVendorPromoCodeInput(input: unknown): CreateVendorPromoCodeInput {
+  const base = validateCreatePromoCodeInput(input);
+  const raw = input as Record<string, unknown>;
+
+  const audience = typeof raw.audience === "string" ? raw.audience.trim().toLowerCase() : "all";
+  if (!["all", "repeat", "new", "country"].includes(audience)) {
+    throw new AppError("Invalid audience", 400);
+  }
+
+  const productIds = Array.isArray(raw.productIds)
+    ? raw.productIds
+        .filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+        .map((value) => value.trim())
+    : [];
+
+  const audienceCountry =
+    typeof raw.audienceCountry === "string" && raw.audienceCountry.trim().length > 0
+      ? raw.audienceCountry.trim()
+      : undefined;
+
+  return {
+    ...base,
+    productIds,
+    audience: audience as CreateVendorPromoCodeInput["audience"],
+    audienceCountry,
+  };
 }
