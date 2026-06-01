@@ -7,8 +7,18 @@ import { requireTurnstile } from "../middlewares/turnstile";
 const mockFetch = vi.fn();
 vi.stubGlobal("fetch", mockFetch);
 
-function createMockReq(body: Record<string, unknown> = {}, ip = "127.0.0.1"): Request {
-  return { body, ip } as unknown as Request;
+function createMockReq(
+  body: Record<string, unknown> = {},
+  ip = "127.0.0.1",
+  headers: Record<string, string> = {},
+): Request {
+  return {
+    body,
+    ip,
+    header(name: string) {
+      return headers[name.toLowerCase()] ?? headers[name] ?? undefined;
+    },
+  } as unknown as Request;
 }
 
 function createMockRes(): Response {
@@ -121,6 +131,25 @@ describe("Turnstile Middleware (unit)", () => {
     const next = vi.fn();
     requireTurnstile(createMockReq(), createMockRes(), next);
     expect(next).toHaveBeenCalledWith();
+  });
+
+  it("skips validation for native mobile app requests in production", () => {
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("TURNSTILE_SECRET_KEY", "test-secret");
+    vi.stubEnv("TURNSTILE_DISABLED", "");
+
+    const next = vi.fn();
+    requireTurnstile(
+      createMockReq({}, "127.0.0.1", {
+        "x-client-app": "eki-mobile",
+        "x-client-platform": "ios",
+      }),
+      createMockRes(),
+      next,
+    );
+
+    expect(next).toHaveBeenCalledWith();
+    expect(mockFetch).not.toHaveBeenCalled();
   });
 
   it("returns 503 with TURNSTILE_VERIFY_UNAVAILABLE on network failure in production", async () => {

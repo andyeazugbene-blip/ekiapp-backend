@@ -107,6 +107,22 @@ describe("POST /api/auth/register — Turnstile gating", () => {
     expect(res.body.token).toBe("fake.jwt.token");
   });
 
+  it("returns 201 for native app registration without a Turnstile token", async () => {
+    vi.stubEnv("NODE_ENV", "production");
+    vi.stubEnv("TURNSTILE_SECRET_KEY", "test-secret");
+    vi.stubEnv("TURNSTILE_DISABLED", "");
+
+    const res = await request(app)
+      .post("/api/auth/register")
+      .set("x-client-app", "eki-mobile")
+      .set("x-client-platform", "android")
+      .send(VALID_BODY);
+
+    expect(res.status).toBe(201);
+    expect(mockRegister).toHaveBeenCalledTimes(1);
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
   it("returns 201 when valid Turnstile token is accepted", async () => {
     vi.stubEnv("NODE_ENV", "production");
     vi.stubEnv("TURNSTILE_SECRET_KEY", "test-secret");

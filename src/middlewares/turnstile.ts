@@ -5,11 +5,23 @@ import { AppError } from "../shared/errors/app-error";
 
 const TURNSTILE_VERIFY_URL = "https://challenges.cloudflare.com/turnstile/v0/siteverify";
 
+function isNativeAppRequest(request: Request): boolean {
+  const clientApp = request.header("x-client-app")?.toLowerCase() ?? "";
+  const clientPlatform = request.header("x-client-platform")?.toLowerCase() ?? "";
+
+  if (clientApp !== "eki-mobile") {
+    return false;
+  }
+
+  return clientPlatform === "ios" || clientPlatform === "android" || clientPlatform === "native";
+}
+
 /**
  * Cloudflare Turnstile CAPTCHA validation middleware.
  *
  * Behavior matrix:
  *   1. TURNSTILE_DISABLED=true                       → skip validation entirely.
+ *   1b. Native app request                           → skip validation (Turnstile is web-only).
  *   2. TURNSTILE_SECRET_KEY missing in dev/test      → skip (no friction in local).
  *   3. TURNSTILE_SECRET_KEY missing in production    → 503 with TURNSTILE_NOT_CONFIGURED
  *      (operator must set the key OR explicitly set TURNSTILE_DISABLED=true).
@@ -27,6 +39,11 @@ export function requireTurnstile(request: Request, _response: Response, next: Ne
 
   // 1. Explicit kill switch (used during frontend rollout)
   if (disabled) {
+    next();
+    return;
+  }
+
+  if (isNativeAppRequest(request)) {
     next();
     return;
   }
