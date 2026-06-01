@@ -3,7 +3,12 @@ import { OrderStatus, UserRole } from "@prisma/client";
 import { env } from "../../config/env";
 import { prisma } from "../../lib/prisma";
 import { CURSOR_ORDER_BY } from "../../shared/constants";
-import type { AdminAnalyticsData, AdminDashboardData, ListAuditLogsQuery } from "./admin-dashboard.types";
+import type {
+  AdminAnalyticsData,
+  AdminAuditLogItem,
+  AdminDashboardData,
+  ListAuditLogsQuery,
+} from "./admin-dashboard.types";
 
 function startOfDay(): Date {
   const d = new Date();
@@ -184,6 +189,22 @@ export const adminDashboardService = {
       nextCursor = next?.id ?? null;
     }
 
-    return { items, nextCursor };
+    const actorIds = Array.from(new Set(items.map((item) => item.actorId).filter(Boolean)));
+    const users = actorIds.length
+      ? await prisma.user.findMany({
+          where: { id: { in: actorIds } },
+          select: { id: true, name: true, email: true, role: true },
+        })
+      : [];
+    const userMap = new Map(users.map((user) => [user.id, user]));
+
+    const enriched: AdminAuditLogItem[] = items.map((item) => ({
+      ...item,
+      entityId: item.entityId ?? null,
+      metadata: item.metadata ?? null,
+      actor: userMap.get(item.actorId) ?? null,
+    }));
+
+    return { items: enriched, nextCursor };
   },
 };

@@ -75,6 +75,10 @@ import {
   setup2fa,
   verify2fa,
 } from "./admin-2fa.controller";
+import {
+  listAdminPlans,
+  upsertAdminPlan,
+} from "../subscriptions/subscriptions.controller";
 
 export const adminRouter = Router();
 
@@ -126,6 +130,11 @@ adminRouter.delete("/delivery-zones/:id", asyncHandler(deleteDeliveryZone));
 adminRouter.get("/promo-codes", asyncHandler(adminListPromoCodes));
 adminRouter.post("/promo-codes", asyncHandler(adminCreatePromoCode));
 adminRouter.patch("/promo-codes/:id", asyncHandler(adminUpdatePromoCode));
+
+// Subscription plan management
+adminRouter.get("/subscription-plans", asyncHandler(listAdminPlans));
+adminRouter.post("/subscription-plans", asyncHandler(upsertAdminPlan));
+adminRouter.patch("/subscription-plans/:plan", asyncHandler(upsertAdminPlan));
 
 // Review moderation
 adminRouter.get("/reviews", asyncHandler(adminListReviews));

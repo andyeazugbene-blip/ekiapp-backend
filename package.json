@@ -26,6 +26,7 @@
     "test:scenario": "tsx scripts/scenario-marketplace-test.ts",
     "test:scenario:low": "tsx scripts/scenario-marketplace-test.ts",
     "test:security:ratelimit": "tsx scripts/security-ratelimit-test.ts",
+    "audit:security": "tsx scripts/security-audit.ts",
     "cleanup:scenario": "tsx scripts/cleanup-scenario-products.ts",
     "seed:qa": "tsx scripts/seed-qa-data.ts",
     "cleanup:qa": "tsx scripts/cleanup-qa-data.ts",

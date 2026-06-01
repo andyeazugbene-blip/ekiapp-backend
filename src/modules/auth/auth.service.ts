@@ -47,9 +47,26 @@ type AuthUserRecord = {
   } | null;
 };
 
+interface AuthRequestMeta {
+  ip?: string | null;
+  userAgent?: string | null;
+}
+
 function signToken(user: { id: string; role: UserRole; email: string; tokenVersion: number }): string {
   const payload: JwtPayload = { sub: user.id, role: user.role, email: user.email, tv: user.tokenVersion };
   return jwt.sign(payload as object, env.jwtSecret, JWT_SIGN_OPTIONS);
+}
+
+async function writeAuditLogSafe(data: {
+  actorId: string;
+  action: string;
+  entityType: string;
+  entityId?: string | null;
+  metadata?: Record<string, unknown>;
+}): Promise<void> {
+  const auditModel = (prisma as unknown as { auditLog?: { create: (args: any) => Promise<unknown> } }).auditLog;
+  if (!auditModel?.create) return;
+  await auditModel.create({ data }).catch(() => undefined);
 }
 
 function toAuthUser(user: AuthUserRecord): AuthUser {
@@ -117,7 +134,7 @@ export const authService = {
     return { user: toAuthUser(user), token: signToken(user) };
   },
 
-  async login(input: LoginInput): Promise<{ user: AuthUser; token: string }> {
+  async login(input: LoginInput, meta?: AuthRequestMeta): Promise<{ user: AuthUser; token: string }> {
     const user = await prisma.user.findUnique({
       where: { email: input.email },
       include: { vendor: true },
@@ -131,6 +148,13 @@ export const authService = {
     // Check account lockout
     if (user.lockedUntil && user.lockedUntil > new Date()) {
       logger.warn("Login attempt on locked account", { userId: user.id });
+      await writeAuditLogSafe({
+        actorId: user.id,
+        action: "LOGIN_BLOCKED_LOCKOUT",
+        entityType: "User",
+        entityId: user.id,
+        metadata: { ip: meta?.ip ?? null, userAgent: meta?.userAgent ?? null },
+      });
       throw new AppError("Account temporarily locked. Try again later.", 423);
     }
 
@@ -146,6 +170,18 @@ export const authService = {
         data: {
           failedLoginAttempts: newAttempts,
           ...(shouldLock ? { lockedUntil: new Date(Date.now() + LOCKOUT_DURATION_MS) } : {}),
+        },
+      });
+
+      await writeAuditLogSafe({
+        actorId: user.id,
+        action: shouldLock ? "LOGIN_FAILED_LOCKED" : "LOGIN_FAILED",
+        entityType: "User",
+        entityId: user.id,
+        metadata: {
+          attempts: newAttempts,
+          ip: meta?.ip ?? null,
+          userAgent: meta?.userAgent ?? null,
         },
       });
 
@@ -165,6 +201,14 @@ export const authService = {
       }
       await prisma.user.update({ where: { id: user.id }, data });
     }
+
+    await writeAuditLogSafe({
+      actorId: user.id,
+      action: "LOGIN_SUCCESS",
+      entityType: "User",
+      entityId: user.id,
+      metadata: { ip: meta?.ip ?? null, userAgent: meta?.userAgent ?? null, role: user.role },
+    });
 
     return { user: toAuthUser(user), token: signToken(user) };
   },

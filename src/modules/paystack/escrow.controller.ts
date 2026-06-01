@@ -48,6 +48,19 @@ export async function buyerConfirmDelivery(request: Request, response: Response)
 }
 
 /**
+ * POST /api/orders/:id/resend-delivery-otp
+ * Buyer requests a fresh delivery OTP on their phone.
+ */
+export async function resendBuyerDeliveryOtp(request: Request, response: Response): Promise<void> {
+  if (!request.user) throw new AppError("Unauthorized", 401);
+  const orderId = String(request.params.id ?? "");
+  if (!orderId) throw new AppError("Order ID required", 400);
+
+  const result = await escrowService.resendBuyerDeliveryOtp(request.user.id, orderId);
+  response.status(200).json(result);
+}
+
+/**
  * POST /api/vendors/me/bank-accounts
  * Register a bank account for Paystack payouts.
  */

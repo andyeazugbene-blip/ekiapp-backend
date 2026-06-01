@@ -1,5 +1,6 @@
 import { PrismaClient, UserRole } from "@prisma/client";
 import bcrypt from "bcryptjs";
+import { DEFAULT_PLAN_CONFIGS } from "../src/modules/subscriptions/subscriptions.types";
 
 const prisma = new PrismaClient();
 
@@ -75,6 +76,16 @@ async function main() {
     update: { plan: "FREE", status: "ACTIVE" },
     create: { vendorId: vendor.id, plan: "FREE", status: "ACTIVE" },
   });
+
+  await Promise.all(
+    Object.values(DEFAULT_PLAN_CONFIGS).map((plan) =>
+      prisma.subscriptionPlanConfig.upsert({
+        where: { plan: plan.plan },
+        update: plan,
+        create: plan,
+      }),
+    ),
+  );
 
   // ─── Delivery Zones ────────────────────────────────────────────────────
   const italyZone = await prisma.deliveryZone.upsert({

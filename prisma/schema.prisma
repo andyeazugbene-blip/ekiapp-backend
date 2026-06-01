@@ -781,6 +781,32 @@ model VendorSubscription {
   @@index([plan])
 }
 
+model SubscriptionPlanConfig {
+  id                 String           @id @default(cuid())
+  plan               SubscriptionPlan @unique
+  slug               String           @unique
+  name               String
+  description        String?
+  monthlyPriceCents  Int              @default(0)
+  currency           String           @default("GBP")
+  maxProducts        Int              @default(10)
+  maxImagesPerProduct Int             @default(3)
+  maxOrders          Int?
+  analytics          Boolean          @default(false)
+  prioritySupport    Boolean          @default(false)
+  flashSales         Boolean          @default(false)
+  bundles            Boolean          @default(false)
+  discounts          Boolean          @default(false)
+  marketingTools     Boolean          @default(false)
+  canReceiveOrders   Boolean          @default(true)
+  isActive           Boolean          @default(true)
+  displayOrder       Int              @default(0)
+  createdAt          DateTime         @default(now())
+  updatedAt          DateTime         @updatedAt
+
+  @@index([isActive, displayOrder])
+}
+
 // ─── Push Notifications (Expo) ──────────────────────────────────────────────
 
 model PushToken {

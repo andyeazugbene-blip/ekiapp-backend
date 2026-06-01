@@ -18,7 +18,10 @@ export async function register(request: Request, response: Response): Promise<vo
 
 export async function login(request: Request, response: Response): Promise<void> {
   const input = validateLoginInput(request.body);
-  const result = await authService.login(input);
+  const result = await authService.login(input, {
+    ip: request.ip,
+    userAgent: typeof request.headers["user-agent"] === "string" ? request.headers["user-agent"] : null,
+  });
   response.status(200).json(result);
 }
 

@@ -32,6 +32,7 @@ import {
 } from "@prisma/client";
 import * as bcrypt from "bcryptjs";
 import "dotenv/config";
+import { DEFAULT_PLAN_CONFIGS } from "../src/modules/subscriptions/subscriptions.types";
 
 const prisma = new PrismaClient();
 
@@ -135,6 +136,16 @@ async function main() {
     notifications: [],
     reviews: [],
   };
+
+  await Promise.all(
+    Object.values(DEFAULT_PLAN_CONFIGS).map((plan) =>
+      prisma.subscriptionPlanConfig.upsert({
+        where: { plan: plan.plan },
+        update: plan,
+        create: plan,
+      }),
+    ),
+  );
 
   // ─── ADMIN ──────────────────────────────────────────────────────────────
 

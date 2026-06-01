@@ -9,7 +9,7 @@ import {
   listVendorOrders,
   updateVendorOrderStatus,
 } from "./orders.controller";
-import { buyerConfirmDelivery } from "../paystack/escrow.controller";
+import { buyerConfirmDelivery, resendBuyerDeliveryOtp } from "../paystack/escrow.controller";
 import { openDispute } from "../paystack/dispute.controller";
 
 export const ordersRouter = Router();
@@ -22,6 +22,7 @@ ordersRouter.get("/:id", asyncHandler(getBuyerOrder));
 
 // Buyer: confirm delivery with OTP (escrow orders)
 ordersRouter.post("/:id/confirm-delivery", asyncHandler(buyerConfirmDelivery));
+ordersRouter.post("/:id/resend-delivery-otp", asyncHandler(resendBuyerDeliveryOtp));
 
 // Buyer: open dispute on escrow order
 ordersRouter.post("/:id/dispute", asyncHandler(openDispute));

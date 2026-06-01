@@ -352,7 +352,9 @@ async function main() {
     if (!vendor.wallet) continue;
 
     const vendorOrders = orders.filter(o => o.vendorId === vendor.id);
-    const pendingOrders = vendorOrders.filter(o => ["PAID", "PROCESSING", "DISPATCHED", "IN_TRANSIT", "DELIVERED"].includes(o.status));
+    const pendingOrders = vendorOrders.filter((o) =>
+      ["CONFIRMED", "PAID", "PROCESSING", "DISPATCHED", "IN_TRANSIT", "DELIVERED"].includes(o.status),
+    );
     const completedOrders = vendorOrders.filter(o => o.status === "COMPLETED");
 
     const expectedPending = pendingOrders.reduce((sum, o) => sum + o.vendorEarnings, 0);

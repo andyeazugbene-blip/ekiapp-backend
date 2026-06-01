@@ -2,8 +2,11 @@ import type { Request, Response } from "express";
 
 import { AppError } from "../../shared/errors/app-error";
 import { subscriptionsService } from "./subscriptions.service";
-import { validateActivateSubscriptionInput, validateCreateSubscriptionInput } from "./subscriptions.validation";
-import { PLAN_LIMITS } from "./subscriptions.types";
+import {
+  validateActivateSubscriptionInput,
+  validateCreateSubscriptionInput,
+  validateSubscriptionPlanConfigInput,
+} from "./subscriptions.validation";
 
 function requireUserId(request: Request): string {
   if (!request.user) {
@@ -18,11 +21,23 @@ export async function getSubscription(request: Request, response: Response): Pro
 }
 
 export async function getPlans(_request: Request, response: Response): Promise<void> {
-  const plans = Object.entries(PLAN_LIMITS).map(([key, limits]) => ({
-    plan: key,
-    ...limits,
-  }));
+  const plans = await subscriptionsService.listPublicPlans();
   response.status(200).json({ plans });
+}
+
+export async function listAdminPlans(_request: Request, response: Response): Promise<void> {
+  const plans = await subscriptionsService.listAdminPlans();
+  response.status(200).json({ plans });
+}
+
+export async function upsertAdminPlan(request: Request, response: Response): Promise<void> {
+  if (!request.user) {
+    throw new AppError("Unauthorized", 401);
+  }
+
+  const input = validateSubscriptionPlanConfigInput(request.body);
+  const plan = await subscriptionsService.upsertPlanConfig(request.user.id, input);
+  response.status(200).json({ plan });
 }
 
 export async function activateSubscription(request: Request, response: Response): Promise<void> {

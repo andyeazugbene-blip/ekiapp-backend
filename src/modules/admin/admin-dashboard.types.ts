@@ -46,3 +46,19 @@ export interface ListAuditLogsQuery {
   limit: number;
   cursor?: string;
 }
+
+export interface AdminAuditLogItem {
+  id: string;
+  actorId: string;
+  action: string;
+  entityType: string;
+  entityId: string | null;
+  metadata: unknown;
+  createdAt: Date;
+  actor: {
+    id: string;
+    name: string;
+    email: string;
+    role: string;
+  } | null;
+}

@@ -4,8 +4,9 @@ import { logger } from "./logger";
  * SMS provider using Africa's Talking official SDK.
  * Falls back to logging in dev if SMS_API_KEY is not configured.
  *
- * IMPORTANT: The delivery OTP is NEVER sent via SMS. It is only shown
- * on the vendor's screen and told verbally to the rider.
+ * Delivery OTP can be sent to buyers via SMS for escrow confirmation.
+ * Failures must never block the order workflow; we log and keep the
+ * manual fallback available where needed.
  */
 
 const SMS_API_KEY = process.env.SMS_API_KEY ?? "";

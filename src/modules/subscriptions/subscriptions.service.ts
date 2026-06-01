@@ -1,10 +1,81 @@
-import type { SubscriptionPlan, VendorSubscription } from "@prisma/client";
+import type { SubscriptionPlan, SubscriptionPlanConfig, VendorSubscription } from "@prisma/client";
 
 import { prisma } from "../../lib/prisma";
 import { stripe } from "../../lib/stripe";
 import { AppError } from "../../shared/errors/app-error";
-import { PLAN_LIMITS } from "./subscriptions.types";
-import type { ActivateSubscriptionInput } from "./subscriptions.types";
+import { DEFAULT_PLAN_CONFIGS } from "./subscriptions.types";
+import type { ActivateSubscriptionInput, SubscriptionPlanConfigInput } from "./subscriptions.types";
+
+type PlanConfigRecord = SubscriptionPlanConfig;
+type PlanConfigModel = {
+  count: () => Promise<number>;
+  upsert: (args: any) => Promise<PlanConfigRecord>;
+  findUnique: (args: any) => Promise<PlanConfigRecord | null>;
+  findMany: (args?: any) => Promise<PlanConfigRecord[]>;
+  findFirst: (args: any) => Promise<PlanConfigRecord | null>;
+  create: (args: any) => Promise<PlanConfigRecord>;
+};
+
+function getPlanModel(): PlanConfigModel | null {
+  return ((prisma as unknown as { subscriptionPlanConfig?: PlanConfigModel }).subscriptionPlanConfig ?? null);
+}
+
+async function ensureDefaultPlanConfigs(): Promise<void> {
+  const planModel = getPlanModel();
+  if (!planModel) return;
+
+  const existing = await planModel.count();
+  if (existing > 0) return;
+
+  await Promise.all(
+    Object.values(DEFAULT_PLAN_CONFIGS).map((plan) =>
+      planModel.upsert({
+        where: { plan: plan.plan },
+        update: {},
+        create: plan,
+      }),
+    ),
+  );
+}
+
+async function getPlanConfig(plan: SubscriptionPlan): Promise<PlanConfigRecord> {
+  await ensureDefaultPlanConfigs();
+
+  const planModel = getPlanModel();
+  if (!planModel) {
+    return DEFAULT_PLAN_CONFIGS[plan] as unknown as PlanConfigRecord;
+  }
+
+  const config = await planModel.findUnique({ where: { plan } });
+  if (config) return config;
+
+  const fallback = DEFAULT_PLAN_CONFIGS[plan];
+  return planModel.create({ data: fallback });
+}
+
+function formatPlanResponse(config: PlanConfigRecord) {
+  return {
+    id: config.id,
+    plan: config.plan,
+    slug: config.slug,
+    name: config.name,
+    description: config.description,
+    monthlyPriceCents: config.monthlyPriceCents,
+    currency: config.currency,
+    maxProducts: config.maxProducts,
+    maxImagesPerProduct: config.maxImagesPerProduct,
+    maxOrders: config.maxOrders,
+    analytics: config.analytics,
+    prioritySupport: config.prioritySupport,
+    flashSales: config.flashSales,
+    bundles: config.bundles,
+    discounts: config.discounts,
+    marketingTools: config.marketingTools,
+    canReceiveOrders: config.canReceiveOrders,
+    isActive: config.isActive,
+    displayOrder: config.displayOrder,
+  };
+}
 
 export const subscriptionsService = {
   async getSubscription(userId: string): Promise<VendorSubscription> {
@@ -16,7 +87,6 @@ export const subscriptionsService = {
       throw new AppError("Vendor profile required", 403);
     }
 
-    // Get or create subscription (default FREE)
     let subscription = await prisma.vendorSubscription.findUnique({
       where: { vendorId: vendor.id },
     });
@@ -34,21 +104,77 @@ export const subscriptionsService = {
     return subscription;
   },
 
-  /**
-   * Activate a plan. Soft-launch policy:
-   *   - FREE: activated immediately (no payment).
-   *   - Paid plans (GROWTH/PRO/BASIC/PREMIUM): rejected with a controlled
-   *     SUBSCRIPTIONS_NOT_AVAILABLE error and a clear next-step pointer to
-   *     POST /api/subscriptions/checkout (Stripe Checkout). Activation only
-   *     happens after the Stripe webhook confirms payment succeeded —
-   *     never via this endpoint directly.
-   *
-   * The frontend therefore never sees a "fake active" paid subscription.
-   */
+  async listPublicPlans() {
+    await ensureDefaultPlanConfigs();
+    const planModel = getPlanModel();
+    if (!planModel) {
+      return Object.values(DEFAULT_PLAN_CONFIGS).filter((plan) => plan.isActive).map((plan) => formatPlanResponse(plan as unknown as PlanConfigRecord));
+    }
+    const plans = await planModel.findMany({
+      where: { isActive: true },
+      orderBy: [{ displayOrder: "asc" }, { createdAt: "asc" }],
+    });
+    return plans.map(formatPlanResponse);
+  },
+
+  async listAdminPlans() {
+    await ensureDefaultPlanConfigs();
+    const planModel = getPlanModel();
+    if (!planModel) {
+      return Object.values(DEFAULT_PLAN_CONFIGS).map((plan) => formatPlanResponse(plan as unknown as PlanConfigRecord));
+    }
+    const plans = await planModel.findMany({
+      orderBy: [{ displayOrder: "asc" }, { createdAt: "asc" }],
+    });
+    return plans.map(formatPlanResponse);
+  },
+
+  async upsertPlanConfig(adminId: string, input: SubscriptionPlanConfigInput) {
+    await ensureDefaultPlanConfigs();
+    const planModel = getPlanModel();
+    if (!planModel) {
+      throw new AppError("Subscription plan storage is unavailable", 503);
+    }
+
+    const existingSlug = await planModel.findFirst({
+      where: {
+        slug: input.slug,
+        NOT: { plan: input.plan },
+      },
+      select: { id: true },
+    });
+    if (existingSlug) {
+      throw new AppError("Another plan already uses this slug", 409);
+    }
+
+    const plan = await planModel.upsert({
+      where: { plan: input.plan },
+      update: input,
+      create: input,
+    });
+
+    await prisma.auditLog.create({
+      data: {
+        actorId: adminId,
+        action: "SUBSCRIPTION_PLAN_UPSERTED",
+        entityType: "SubscriptionPlanConfig",
+        entityId: plan.id,
+        metadata: {
+          plan: input.plan,
+          slug: input.slug,
+          isActive: input.isActive,
+          monthlyPriceCents: input.monthlyPriceCents,
+        },
+      },
+    });
+
+    return formatPlanResponse(plan);
+  },
+
   async activatePlan(
     userId: string,
     input: ActivateSubscriptionInput,
-  ): Promise<{ subscription: VendorSubscription; limits: (typeof PLAN_LIMITS)[SubscriptionPlan] }> {
+  ): Promise<{ subscription: VendorSubscription; limits: ReturnType<typeof formatPlanResponse> }> {
     const vendor = await prisma.vendor.findUnique({
       where: { userId },
       select: { id: true },
@@ -57,9 +183,10 @@ export const subscriptionsService = {
       throw new AppError("Vendor profile required", 403);
     }
 
+    const planConfig = await getPlanConfig(input.plan);
     if (input.plan !== "FREE") {
       throw new AppError(
-        "Paid subscriptions require checkout. Call POST /api/subscriptions/checkout to start a Stripe Checkout session; activation happens after the webhook confirms payment.",
+        "Paid subscriptions require website checkout. Complete the purchase on the website and the app will unlock features after the backend activates the plan.",
         409,
         null,
         "SUBSCRIPTIONS_NOT_AVAILABLE",
@@ -88,21 +215,17 @@ export const subscriptionsService = {
       },
     });
 
-    return { subscription, limits: PLAN_LIMITS[input.plan] };
+    return { subscription, limits: formatPlanResponse(planConfig) };
   },
 
-  /**
-   * Enforce product count limit based on current subscription plan.
-   * Call this before creating a new product.
-   */
   async enforceProductLimit(vendorId: string): Promise<void> {
     const subscription = await prisma.vendorSubscription.findUnique({
       where: { vendorId },
     });
     const plan: SubscriptionPlan = subscription?.plan ?? "FREE";
-    const limits = PLAN_LIMITS[plan];
+    const limits = await getPlanConfig(plan);
 
-    if (limits.maxProducts === -1) return; // unlimited
+    if (limits.maxProducts === -1) return;
 
     const currentCount = await prisma.product.count({
       where: { vendorId, isActive: true },
@@ -110,15 +233,12 @@ export const subscriptionsService = {
 
     if (currentCount >= limits.maxProducts) {
       throw new AppError(
-        `Your ${plan} plan allows a maximum of ${limits.maxProducts} active products. Upgrade your plan to add more.`,
+        `Your ${limits.name} plan allows a maximum of ${limits.maxProducts} active products.`,
         403,
       );
     }
   },
 
-  /**
-   * Check if a vendor's plan allows a specific feature.
-   */
   async checkFeatureAccess(
     vendorId: string,
     feature: "analytics" | "flashSales" | "bundles" | "discounts",
@@ -127,7 +247,8 @@ export const subscriptionsService = {
       where: { vendorId },
     });
     const plan: SubscriptionPlan = subscription?.plan ?? "FREE";
-    return PLAN_LIMITS[plan][feature];
+    const limits = await getPlanConfig(plan);
+    return Boolean(limits[feature]);
   },
 
   async createCheckoutSession(
@@ -146,10 +267,13 @@ export const subscriptionsService = {
       throw new AppError("Vendor profile required", 403);
     }
 
-    const planConfig = PLAN_LIMITS[plan];
+    const planConfig = await getPlanConfig(plan);
+    if (!planConfig.isActive) {
+      throw new AppError("This plan is currently unavailable", 409);
+    }
+
     const frontendUrl = process.env.FRONTEND_URL ?? "http://localhost:3000";
 
-    // Get or create Stripe customer
     let subscription = await prisma.vendorSubscription.findUnique({
       where: { vendorId: vendor.id },
     });
@@ -180,17 +304,16 @@ export const subscriptionsService = {
       }
     }
 
-    // Create Stripe Checkout Session for subscription
     const session = await stripe.checkout.sessions.create({
       customer: customerId,
       mode: "subscription",
       line_items: [
         {
           price_data: {
-            currency: "usd",
+            currency: planConfig.currency.toLowerCase(),
             product_data: {
-              name: `Eki ${plan.charAt(0) + plan.slice(1).toLowerCase()} Plan`,
-              description: `Monthly subscription — ${plan.toLowerCase()} tier`,
+              name: `${planConfig.name} Plan`,
+              description: planConfig.description ?? `${planConfig.name} vendor subscription`,
             },
             unit_amount: planConfig.monthlyPriceCents,
             recurring: { interval: "month" },
@@ -235,7 +358,6 @@ export const subscriptionsService = {
       throw new AppError("Subscription already cancelled", 409);
     }
 
-    // Cancel in Stripe if we have a subscription ID
     if (subscription.stripeSubscriptionId) {
       await stripe.subscriptions.update(subscription.stripeSubscriptionId, {
         cancel_at_period_end: true,
@@ -281,12 +403,42 @@ export const subscriptionsService = {
 
   async getPlanLimits(userId: string): Promise<{
     plan: SubscriptionPlan;
-    limits: (typeof PLAN_LIMITS)[SubscriptionPlan];
+    limits: ReturnType<typeof formatPlanResponse> & {
+      currentProducts: number;
+      currentOrders: number;
+      ordersRemaining: number | null;
+      canSendOffers: boolean;
+      canAccessAnalytics: boolean;
+    };
   }> {
     const sub = await this.getSubscription(userId);
+    const limits = await getPlanConfig(sub.plan);
+    const vendor = await prisma.vendor.findUnique({
+      where: { userId },
+      select: { id: true },
+    });
+    if (!vendor) {
+      throw new AppError("Vendor profile required", 403);
+    }
+
+    const [currentProducts, currentOrders] = await Promise.all([
+      prisma.product.count({ where: { vendorId: vendor.id, isActive: true } }),
+      prisma.order.count({ where: { vendorId: vendor.id } }),
+    ]);
+
+    const ordersRemaining =
+      limits.maxOrders == null || limits.maxOrders === -1 ? null : Math.max(limits.maxOrders - currentOrders, 0);
+
     return {
       plan: sub.plan,
-      limits: PLAN_LIMITS[sub.plan],
+      limits: {
+        ...formatPlanResponse(limits),
+        currentProducts,
+        currentOrders,
+        ordersRemaining,
+        canSendOffers: limits.marketingTools || limits.flashSales || limits.bundles || limits.discounts,
+        canAccessAnalytics: limits.analytics,
+      },
     };
   },
 };
