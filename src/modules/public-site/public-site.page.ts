@@ -283,7 +283,7 @@ function renderLayout(page: PageDefinition): string {
 
   <footer class="foot">
     <div class="shell">
-      Culinary Tales public storefront and support pages. For order-specific help, email <a href="mailto:support@culinarytales.app">support@culinarytales.app</a>.
+      Culinary Tales public storefront and support pages. For order-specific help, email <a href="mailto:adminandy@eki.app">adminandy@eki.app</a>.
     </div>
   </footer>
 </body>
@@ -328,10 +328,12 @@ const homePage: PageDefinition = {
     {
       title: "Support links",
       bullets: [
+        "Support: /support",
         "Help: /help",
         "Privacy: /privacy",
         "Terms: /terms",
-        "Email: support@culinarytales.app",
+        "Account deletion: /account-deletion",
+        "Email: adminandy@eki.app",
       ],
     },
   ],
@@ -343,10 +345,11 @@ const helpPage: PageDefinition = {
   eyebrow: "Support",
   heading: "Get help with orders, payouts, OTP, and disputes.",
   intro:
-    "For support, contact support@culinarytales.app. The support team aims to respond within 24 hours, and order-specific issues may require the order number or checkout email used during purchase.",
+    "For support, contact adminandy@eki.app. The support team aims to respond within 24 hours, and order-specific issues may require the order number or checkout email used during purchase.",
   actions: [
-    { href: "mailto:support@culinarytales.app", label: "Email support" },
+    { href: "mailto:adminandy@eki.app", label: "Email support" },
     { href: "/terms", label: "Read terms", variant: "secondary" },
+    { href: "/account-deletion", label: "Account deletion", variant: "secondary" },
   ],
   sections: [
     {
@@ -384,6 +387,88 @@ const helpPage: PageDefinition = {
   ],
 };
 
+
+const supportPage: PageDefinition = {
+  title: "Support | Culinary Tales",
+  description: "Customer support, order help, and escalation information for Culinary Tales.",
+  eyebrow: "Support",
+  heading: "Contact support and get order help fast.",
+  intro:
+    "Use this page for order help, payout questions, delivery issues, OTP problems, and account support. For the fastest resolution, include your order number or registered email address.",
+  actions: [
+    { href: "mailto:adminandy@eki.app", label: "Email support" },
+    { href: "/help", label: "Read help center", variant: "secondary" },
+  ],
+  sections: [
+    {
+      title: "Support channels",
+      bullets: [
+        "Email: adminandy@eki.app",
+        "Help center: /help",
+        "Privacy policy: /privacy",
+        "Terms of service: /terms",
+      ],
+    },
+    {
+      title: "What to include",
+      bullets: [
+        "Order number for order-related issues",
+        "Vendor or store name when reporting a listing or fulfillment problem",
+        "The email address or phone number used for checkout or account access",
+        "Screenshots when reporting payment or UI issues",
+      ],
+    },
+    {
+      title: "Security and account recovery",
+      bullets: [
+        "If you suspect account misuse, contact support immediately from the email linked to the account.",
+        "Admin can suspend accounts, review audit logs, and freeze risky activity during investigation.",
+        "For deletion requests, use /account-deletion for the current policy and supported flow.",
+      ],
+    },
+  ],
+};
+
+const accountDeletionPage: PageDefinition = {
+  title: "Account deletion | Culinary Tales",
+  description: "How account deletion works on Culinary Tales, including retention and support expectations.",
+  eyebrow: "Account deletion",
+  heading: "Delete your account and understand what stays for compliance.",
+  intro:
+    "Authenticated users can request account deletion from inside the app. Some order, payment, and fraud-prevention records may be retained where required by law or legitimate operational need.",
+  actions: [
+    { href: "mailto:adminandy@eki.app", label: "Contact support" },
+    { href: "/privacy", label: "Read privacy policy", variant: "secondary" },
+  ],
+  sections: [
+    {
+      title: "What deletion removes",
+      bullets: [
+        "Access to the buyer, vendor, or admin account",
+        "Active sessions and saved account profile access",
+        "In-app access to account-specific messaging and settings after deletion is completed",
+      ],
+    },
+    {
+      title: "What may be retained",
+      bullets: [
+        "Order, refund, payout, and payment records required for accounting or legal compliance",
+        "Security and audit logs needed to investigate abuse or fraud",
+        "Records tied to unresolved disputes, chargebacks, or escrow obligations until those cases are closed",
+      ],
+    },
+    {
+      title: "How to request deletion",
+      bullets: [
+        "Open the mobile app and use the Delete Account flow from profile/settings.",
+        "If you cannot access the app, contact adminandy@eki.app from the registered email address.",
+        "Support may request verification before fulfilling a deletion request.",
+      ],
+    },
+  ],
+};
+
+
 const privacyPage: PageDefinition = {
   title: "Privacy policy | Culinary Tales",
   description: "How Culinary Tales handles account, order, payment, support, and operational data.",
@@ -392,8 +477,8 @@ const privacyPage: PageDefinition = {
   intro:
     "This page summarizes the operational privacy posture of Culinary Tales based on the current product and backend implementation. It explains what data we process, why we process it, and the user controls currently available in the product.",
   actions: [
-    { href: "mailto:support@culinarytales.app", label: "Privacy questions" },
-    { href: "/help", label: "Support", variant: "secondary" },
+    { href: "mailto:adminandy@eki.app", label: "Privacy questions" },
+    { href: "/support", label: "Support", variant: "secondary" },
   ],
   sections: [
     {
@@ -433,7 +518,7 @@ const privacyPage: PageDefinition = {
         "Authenticated users can export account data through the data-export endpoint",
         "Authenticated users can request account deletion, with financial records retained where legally required",
         "Order and payment records may be retained for compliance, fraud prevention, and accounting obligations",
-        "For privacy requests or correction requests, contact support@culinarytales.app",
+        "For privacy requests or correction requests, contact adminandy@eki.app",
       ],
     },
   ],
@@ -448,7 +533,7 @@ const termsPage: PageDefinition = {
     "These terms summarize how Culinary Tales operates as a marketplace platform for vendor storefronts, secure checkout, order tracking, escrow-sensitive flows, and support. By using the platform, buyers and vendors agree to follow these platform rules.",
   actions: [
     { href: "/privacy", label: "Read privacy policy", variant: "secondary" },
-    { href: "mailto:support@culinarytales.app", label: "Contact support" },
+    { href: "mailto:adminandy@eki.app", label: "Contact support" },
   ],
   sections: [
     {
@@ -486,7 +571,7 @@ const termsPage: PageDefinition = {
     {
       title: "Support and policy changes",
       bullets: [
-        "Support is available at support@culinarytales.app.",
+        "Support is available at adminandy@eki.app.",
         "Operational policies may change as the platform matures, including payout, support, and fraud-prevention controls.",
         "If you do not agree with a platform change, stop using the service and contact support for account assistance.",
       ],
@@ -508,10 +593,18 @@ export async function getPublicHelpPage(_request: Request, response: Response): 
   sendPage(response, helpPage);
 }
 
+export async function getPublicSupportPage(_request: Request, response: Response): Promise<void> {
+  sendPage(response, supportPage);
+}
+
 export async function getPublicPrivacyPage(_request: Request, response: Response): Promise<void> {
   sendPage(response, privacyPage);
 }
 
 export async function getPublicTermsPage(_request: Request, response: Response): Promise<void> {
   sendPage(response, termsPage);
+}
+
+export async function getPublicAccountDeletionPage(_request: Request, response: Response): Promise<void> {
+  sendPage(response, accountDeletionPage);
 }

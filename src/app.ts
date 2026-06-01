@@ -12,9 +12,11 @@ import { requestIdMiddleware } from "./middlewares/request-id";
 import { requestLogger } from "./middlewares/request-logger";
 import { validateInputLength } from "./middlewares/validate-input-length";
 import {
+  getPublicAccountDeletionPage,
   getPublicHelpPage,
   getPublicHomePage,
   getPublicPrivacyPage,
+  getPublicSupportPage,
   getPublicTermsPage,
 } from "./modules/public-site/public-site.page";
 import { getPublicStorePage } from "./modules/public-stores/public-stores.page";
@@ -33,7 +35,7 @@ app.disable("x-powered-by");
 
 // Security headers. CSP must be relaxed on /api/docs and server-rendered
 // public HTML pages that use inline scripts.
-const publicHtmlPaths = new Set(["/", "/help", "/privacy", "/terms"]);
+const publicHtmlPaths = new Set(["/", "/help", "/support", "/privacy", "/terms", "/account-deletion"]);
 const swaggerAndPublicPagePaths = (req: { path: string }) =>
   req.path === "/api/docs" || req.path.startsWith("/store/") || publicHtmlPaths.has(req.path);
 
@@ -59,18 +61,25 @@ const defaultOrigins = [
   "https://www.culinarytales.app",
   "https://ekiapp-backend.vercel.app",
 ];
-const allowedOrigins = process.env.CORS_ORIGINS
-  ? process.env.CORS_ORIGINS.split(",").map((origin) => origin.trim())
-  : isProduction
-    ? defaultOrigins
-    : undefined;
+const localAdminOrigins = [
+  "http://localhost:3000",
+  "http://127.0.0.1:3000",
+  "http://localhost:3001",
+  "http://127.0.0.1:3001",
+];
+const configuredOrigins = process.env.CORS_ORIGINS
+  ? process.env.CORS_ORIGINS.split(",").map((origin) => origin.trim()).filter(Boolean)
+  : [];
+const allowedOrigins = isProduction
+  ? Array.from(new Set([...defaultOrigins, ...configuredOrigins, ...localAdminOrigins]))
+  : undefined;
 
 app.use(
   cors({
     origin: allowedOrigins ?? true,
     credentials: true,
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization", "X-Request-ID"],
+    allowedHeaders: ["Content-Type", "Authorization", "X-Request-ID", "x-2fa-code", "X-Client-App", "X-Client-Platform"],
   }),
 );
 
@@ -102,11 +111,17 @@ app.get("/", (req, res, next) => {
 app.get("/help", (req, res, next) => {
   Promise.resolve(getPublicHelpPage(req, res)).catch(next);
 });
+app.get("/support", (req, res, next) => {
+  Promise.resolve(getPublicSupportPage(req, res)).catch(next);
+});
 app.get("/privacy", (req, res, next) => {
   Promise.resolve(getPublicPrivacyPage(req, res)).catch(next);
 });
 app.get("/terms", (req, res, next) => {
   Promise.resolve(getPublicTermsPage(req, res)).catch(next);
+});
+app.get("/account-deletion", (req, res, next) => {
+  Promise.resolve(getPublicAccountDeletionPage(req, res)).catch(next);
 });
 app.get("/store/:slug", (req, res, next) => {
   Promise.resolve(getPublicStorePage(req, res)).catch(next);
