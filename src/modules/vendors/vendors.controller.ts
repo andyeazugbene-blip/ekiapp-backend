@@ -25,6 +25,23 @@ function withShareUrl<T extends Pick<Vendor, "storeSlug">>(vendor: T): T & { sha
   return { ...vendor, shareUrl: buildVendorShareUrl(vendor.storeSlug) };
 }
 
+export async function listPublicVendors(request: Request, response: Response): Promise<void> {
+  const limit = Number(request.query.limit) || 20;
+  const search = typeof request.query.search === "string" ? request.query.search : undefined;
+  const sort = request.query.sort === "newest" ? "newest" : "popular";
+  const vendors = await vendorsService.listPublicVendors({ limit, search, sort });
+  response.status(200).json({ items: vendors.map((vendor) => withShareUrl(vendor)) });
+}
+
+export async function getPublicVendor(request: Request, response: Response): Promise<void> {
+  const id = typeof request.params.id === "string" ? request.params.id : "";
+  if (!id) {
+    throw new AppError("Invalid id", 400);
+  }
+  const vendor = await vendorsService.getPublicVendorById(id);
+  response.status(200).json({ vendor: withShareUrl(vendor) });
+}
+
 export async function createVendor(request: Request, response: Response): Promise<void> {
   const userId = requireUserId(request);
   const input = validateCreateVendorInput(request.body);

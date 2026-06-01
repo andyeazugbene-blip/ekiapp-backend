@@ -36,6 +36,7 @@ export interface AuthUser {
   businessType?: string | null;
   sellerRegion?: string | null;
   city?: string | null;
+  coverImage?: string | null;
 }
 
 export interface UpdateProfileInput {

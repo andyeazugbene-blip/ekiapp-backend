@@ -104,12 +104,21 @@ export const productsService = {
 
   async listActiveProducts(
     query: ListProductsQuery,
-  ): Promise<{ items: Product[]; nextCursor: string | null }> {
+  ): Promise<{ items: Array<Product & { vendor: { storeName: string; city: string | null; userId: string } }>; nextCursor: string | null }> {
     const items = await prisma.product.findMany({
       where: {
         isActive: true,
         ...(query.category ? { category: query.category } : {}),
         ...(query.vendorId ? { vendorId: query.vendorId } : {}),
+      },
+      include: {
+        vendor: {
+          select: {
+            storeName: true,
+            city: true,
+            userId: true,
+          },
+        },
       },
       orderBy: CURSOR_ORDER_BY,
       take: query.limit + 1,
@@ -125,8 +134,19 @@ export const productsService = {
     return { items, nextCursor };
   },
 
-  async getProductById(productId: string): Promise<Product> {
-    const product = await prisma.product.findUnique({ where: { id: productId } });
+  async getProductById(productId: string): Promise<Product & { vendor: { storeName: string; city: string | null; userId: string } }> {
+    const product = await prisma.product.findUnique({
+      where: { id: productId },
+      include: {
+        vendor: {
+          select: {
+            storeName: true,
+            city: true,
+            userId: true,
+          },
+        },
+      },
+    });
     if (!product || !product.isActive) {
       throw new AppError("Product not found", 404);
     }

@@ -39,6 +39,99 @@ async function generateUniqueStoreSlug(storeName: string): Promise<string> {
 }
 
 export const vendorsService = {
+  async listPublicVendors(input?: { search?: string; limit?: number; sort?: "newest" | "popular" }): Promise<any[]> {
+    const search = input?.search?.trim();
+    const limit = Math.min(Math.max(input?.limit ?? 20, 1), 100);
+    const sort = input?.sort ?? "popular";
+
+    const vendors = await prisma.vendor.findMany({
+      where: {
+        isSuspended: false,
+        verificationStatus: "VERIFIED",
+        ...(search
+          ? {
+              OR: [
+                { storeName: { contains: search, mode: "insensitive" } },
+                { description: { contains: search, mode: "insensitive" } },
+                { city: { contains: search, mode: "insensitive" } },
+                { country: { contains: search, mode: "insensitive" } },
+              ],
+            }
+          : {}),
+      },
+      include: {
+        user: { select: { id: true, name: true, avatar: true } },
+        _count: { select: { products: true } },
+      },
+      orderBy: sort === "newest" ? { createdAt: "desc" } : { createdAt: "desc" },
+      take: limit,
+    });
+
+    const vendorIds = vendors.map((vendor) => vendor.id);
+    const orderCounts = vendorIds.length
+      ? await prisma.order.groupBy({
+          by: ["vendorId"],
+          where: {
+            vendorId: { in: vendorIds },
+            status: { notIn: ["PENDING", "FAILED", "CANCELLED"] },
+          },
+          _count: { _all: true },
+        })
+      : [];
+
+    const orderCountMap = new Map(orderCounts.map((entry) => [entry.vendorId ?? "", entry._count._all]));
+
+    const serialized = vendors.map((vendor) => ({
+      ...vendor,
+      ownerName: vendor.user?.name ?? "",
+      totalProducts: vendor._count.products,
+      totalOrders: orderCountMap.get(vendor.id) ?? 0,
+      rating: 0,
+    }));
+
+    if (sort === "popular") {
+      serialized.sort((left, right) => {
+        const leftScore = (left.totalOrders ?? 0) * 5 + (left.totalProducts ?? 0) * 2 + (left.user?.avatar ? 4 : 0);
+        const rightScore = (right.totalOrders ?? 0) * 5 + (right.totalProducts ?? 0) * 2 + (right.user?.avatar ? 4 : 0);
+        return rightScore - leftScore || right.createdAt.getTime() - left.createdAt.getTime();
+      });
+    }
+
+    return serialized;
+  },
+
+  async getPublicVendorById(id: string): Promise<any> {
+    const vendor = await prisma.vendor.findFirst({
+      where: {
+        id,
+        isSuspended: false,
+        verificationStatus: "VERIFIED",
+      },
+      include: {
+        user: { select: { id: true, name: true, avatar: true } },
+        _count: { select: { products: true } },
+      },
+    });
+    if (!vendor) {
+      throw new AppError("Vendor not found", 404);
+    }
+
+    const totalOrders = await prisma.order.count({
+      where: {
+        vendorId: vendor.id,
+        status: { notIn: ["PENDING", "FAILED", "CANCELLED"] },
+      },
+    });
+
+    return {
+      ...vendor,
+      ownerName: vendor.user?.name ?? "",
+      totalProducts: vendor._count.products,
+      totalOrders,
+      rating: 0,
+    };
+  },
+
   async createVendor(userId: string, input: CreateVendorInput): Promise<Vendor> {
     const existing = await prisma.vendor.findUnique({ where: { userId } });
     if (existing) {
@@ -76,7 +169,7 @@ export const vendorsService = {
   async getOwnVendor(userId: string): Promise<Vendor> {
     const vendor = await prisma.vendor.findUnique({
       where: { userId },
-      include: { wallet: true },
+      include: { wallet: true, user: true },
     });
     if (!vendor) {
       throw new AppError("Vendor profile not found", 404);

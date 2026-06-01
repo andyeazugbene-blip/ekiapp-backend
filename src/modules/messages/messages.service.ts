@@ -1,5 +1,3 @@
-import type { Conversation, Message } from "@prisma/client";
-
 import { prisma } from "../../lib/prisma";
 import { CURSOR_ORDER_BY } from "../../shared/constants";
 import { AppError } from "../../shared/errors/app-error";
@@ -14,11 +12,120 @@ function sortParticipants(a: string, b: string): [string, string] {
   return a < b ? [a, b] : [b, a];
 }
 
+async function serializeConversationForUser(userId: string, conversationId: string) {
+  const conversation = await prisma.conversation.findUnique({
+    where: { id: conversationId },
+    include: {
+      messages: {
+        orderBy: { createdAt: "desc" },
+        take: 1,
+      },
+    },
+  });
+
+  if (!conversation) {
+    throw new AppError("Conversation not found", 404);
+  }
+
+  const orderRecord = conversation.orderId
+    ? await prisma.order.findUnique({
+        where: { id: conversation.orderId },
+        select: { id: true, orderNumber: true },
+      })
+    : null;
+
+  const participantId = conversation.participantA === userId ? conversation.participantB : conversation.participantA;
+  const [participantUser, unreadCount] = await Promise.all([
+    prisma.user.findUnique({
+      where: { id: participantId },
+      include: {
+        vendor: {
+          select: {
+            id: true,
+            storeName: true,
+            avatar: true,
+            coverImage: true,
+          },
+        },
+      },
+    }),
+    prisma.message.count({
+      where: {
+        conversationId: conversation.id,
+        senderId: participantId,
+        readAt: null,
+      },
+    }),
+  ]);
+
+  if (!participantUser) {
+    throw new AppError("Participant not found", 404);
+  }
+
+  return {
+    id: conversation.id,
+    participantId,
+    participantName: participantUser.vendor?.storeName ?? participantUser.name,
+    participantStoreName: participantUser.vendor?.storeName ?? null,
+    participantAvatar: participantUser.vendor?.avatar ?? participantUser.avatar ?? participantUser.vendor?.coverImage ?? null,
+    participantRole: participantUser.role.toLowerCase(),
+    participantUser: {
+      id: participantUser.id,
+      name: participantUser.name,
+      avatar: participantUser.avatar,
+      role: participantUser.role,
+      vendor: participantUser.vendor,
+    },
+    lastMessage: conversation.messages[0]?.text ?? "",
+    lastMessageAt: conversation.lastMessageAt ?? conversation.updatedAt ?? conversation.createdAt,
+    unreadCount,
+    orderId: conversation.orderId || undefined,
+    orderNumber: orderRecord?.orderNumber ?? undefined,
+    createdAt: conversation.createdAt,
+    updatedAt: conversation.updatedAt,
+  };
+}
+
+async function serializeMessage(messageId: string) {
+  const message = await prisma.message.findUnique({ where: { id: messageId } });
+
+  if (!message) {
+    throw new AppError("Message not found", 404);
+  }
+
+  const sender = await prisma.user.findUnique({
+    where: { id: message.senderId },
+    include: {
+      vendor: {
+        select: {
+          id: true,
+          storeName: true,
+          avatar: true,
+          coverImage: true,
+        },
+      },
+    },
+  });
+
+  return {
+    ...message,
+    sender: sender
+      ? {
+          id: sender.id,
+          name: sender.name,
+          avatar: sender.avatar,
+          role: sender.role,
+          vendor: sender.vendor,
+        }
+      : null,
+  };
+}
+
 export const messagesService = {
   async createConversation(
     userId: string,
     input: CreateConversationInput,
-  ): Promise<Conversation> {
+  ): Promise<any> {
     if (userId === input.participantId) {
       throw new AppError("Cannot create conversation with yourself", 400);
     }
@@ -52,7 +159,7 @@ export const messagesService = {
           text: input.initialMessage,
         });
       }
-      return existing;
+      return serializeConversationForUser(userId, existing.id);
     }
 
     const conversation = await prisma.conversation.create({
@@ -75,13 +182,13 @@ export const messagesService = {
       });
     }
 
-    return conversation;
+    return serializeConversationForUser(userId, conversation.id);
   },
 
   async listConversations(
     userId: string,
     query: ListConversationsQuery,
-  ): Promise<{ items: Conversation[]; nextCursor: string | null }> {
+  ): Promise<{ items: any[]; nextCursor: string | null }> {
     const items = await prisma.conversation.findMany({
       where: {
         OR: [{ participantA: userId }, { participantB: userId }],
@@ -97,14 +204,15 @@ export const messagesService = {
       nextCursor = next?.id ?? null;
     }
 
-    return { items, nextCursor };
+    const enrichedItems = await Promise.all(items.map((item) => serializeConversationForUser(userId, item.id)));
+    return { items: enrichedItems, nextCursor };
   },
 
   async listMessages(
     userId: string,
     conversationId: string,
     query: ListMessagesQuery,
-  ): Promise<{ items: Message[]; nextCursor: string | null }> {
+  ): Promise<{ items: any[]; nextCursor: string | null }> {
     // Verify user is a participant
     const conversation = await prisma.conversation.findUnique({
       where: { id: conversationId },
@@ -129,14 +237,15 @@ export const messagesService = {
       nextCursor = next?.id ?? null;
     }
 
-    return { items: items.reverse(), nextCursor };
+    const enrichedItems = await Promise.all(items.reverse().map((item) => serializeMessage(item.id)));
+    return { items: enrichedItems, nextCursor };
   },
 
   async sendMessage(
     userId: string,
     conversationId: string,
     input: SendMessageInput,
-  ): Promise<Message> {
+  ): Promise<any> {
     const conversation = await prisma.conversation.findUnique({
       where: { id: conversationId },
     });
@@ -162,7 +271,7 @@ export const messagesService = {
       }),
     ]);
 
-    return message;
+    return serializeMessage(message.id);
   },
 
   async markConversationRead(userId: string, conversationId: string): Promise<void> {

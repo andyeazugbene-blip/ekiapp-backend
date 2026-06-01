@@ -14,7 +14,9 @@ import {
 import {
   createPayoutMethod,
   createVendor,
+  getPublicVendor,
   getOwnVendor,
+  listPublicVendors,
   listPayoutMethods,
   updateOwnVendor,
 } from "./vendors.controller";
@@ -36,6 +38,9 @@ import {
 } from "./stripe-connect.controller";
 
 export const vendorsRouter = Router();
+
+vendorsRouter.get("/", asyncHandler(listPublicVendors));
+vendorsRouter.get("/:id([A-Za-z0-9]{10,})", asyncHandler(getPublicVendor));
 
 vendorsRouter.use(authenticate);
 

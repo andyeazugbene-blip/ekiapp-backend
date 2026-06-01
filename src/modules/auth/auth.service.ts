@@ -44,6 +44,8 @@ type AuthUserRecord = {
     businessType: string | null;
     sellerRegion: string | null;
     city: string | null;
+    avatar: string | null;
+    coverImage: string | null;
   } | null;
 };
 
@@ -89,6 +91,8 @@ function toAuthUser(user: AuthUserRecord): AuthUser {
     authUser.businessType = user.vendor.businessType;
     authUser.sellerRegion = user.vendor.sellerRegion;
     authUser.city = user.vendor.city;
+    authUser.avatar = user.vendor.avatar ?? user.avatar;
+    authUser.coverImage = user.vendor.coverImage;
   }
 
   return authUser;
