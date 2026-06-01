@@ -20,9 +20,15 @@ import {
   ReviewStatus,
   PromoType,
   EscrowType,
+  NotificationType,
+  PayoutMethodType,
+  PayoutRequestStatus,
   PaystackTxStatus,
+  ShipmentStatus,
   WalletTransactionType,
   BuyerWalletTxType,
+  SubscriptionPlan,
+  SubscriptionStatus,
 } from "@prisma/client";
 import * as bcrypt from "bcryptjs";
 import "dotenv/config";
@@ -95,6 +101,8 @@ const PRODUCT_NAMES = [
 ];
 
 const CATEGORIES = ["food", "spices", "oils", "grains", "sauces", "snacks", "beverages", "beauty"];
+const VENDOR_PLANS: SubscriptionPlan[] = ["FREE", "GROWTH", "PRO"];
+const SHIPMENT_READY_STATUSES: OrderStatus[] = ["PROCESSING", "DELIVERED", "COMPLETED", "REFUNDED", "DISPUTED"];
 
 // ─── MAIN ───────────────────────────────────────────────────────────────────
 
@@ -118,9 +126,13 @@ async function main() {
     admin: null,
     buyers: [],
     vendors: [],
+    subscriptions: [],
     products: [],
     coupons: [],
     orders: [],
+    payoutRequests: [],
+    conversations: [],
+    notifications: [],
     reviews: [],
   };
 
@@ -287,10 +299,50 @@ async function main() {
     } else {
       log("VENDOR", `Profile exists: ${storeName}`);
     }
-    
+
+    const plan = VENDOR_PLANS[(i - 1) % VENDOR_PLANS.length];
+    await prisma.vendorSubscription.upsert({
+      where: { vendorId: vendor.id },
+      update: {
+        plan,
+        status: SubscriptionStatus.ACTIVE,
+        currentPeriodStart: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000),
+        currentPeriodEnd: new Date(Date.now() + 23 * 24 * 60 * 60 * 1000),
+      },
+      create: {
+        vendorId: vendor.id,
+        plan,
+        status: SubscriptionStatus.ACTIVE,
+        currentPeriodStart: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000),
+        currentPeriodEnd: new Date(Date.now() + 23 * 24 * 60 * 60 * 1000),
+      },
+    });
+
+    const payoutMethodLabel = `${PREFIX} Default Bank ${num}`;
+    let payoutMethod = await prisma.payoutMethod.findFirst({
+      where: { vendorId: vendor.id, label: payoutMethodLabel },
+    });
+    if (!payoutMethod) {
+      payoutMethod = await prisma.payoutMethod.create({
+        data: {
+          vendorId: vendor.id,
+          type: PayoutMethodType.BANK_TRANSFER,
+          label: payoutMethodLabel,
+          isDefault: true,
+          details: {
+            bankName: "QA Seed Bank",
+            accountName: `${PREFIX}Vendor ${num}`,
+            accountNumberMasked: `****${num}`,
+            country: country.name,
+          },
+        },
+      });
+    }
+
     vendors.push({ ...vendor, user });
     credentials.push(`Vendor ${num}: ${email} / ${vendorPassword}`);
-    report.vendors.push({ id: vendor.id, email, storeName, currency: country.currency });
+    report.vendors.push({ id: vendor.id, email, storeName, currency: country.currency, plan });
+    report.subscriptions.push({ vendorId: vendor.id, plan, payoutMethodId: payoutMethod.id });
   }
 
   // ─── PRODUCTS ───────────────────────────────────────────────────────────
@@ -350,6 +402,65 @@ async function main() {
   }
   
   report.products = products.map(p => ({ id: p.id, title: p.title, price: p.priceInCents, stock: p.stock }));
+
+  // --- VENDOR PROMO CODES ---
+
+  console.log("\n--- VENDOR PROMO CODES ---\n");
+
+  for (let i = 0; i < Math.min(vendors.length, 3); i++) {
+    const vendor = vendors[i];
+    const product = products.find((item) => item.vendorId === vendor.id);
+    if (!product) continue;
+
+    const code = `${PREFIX}VENDOR${String(i + 1).padStart(2, "0")}`;
+    const existingPromo = await prisma.promoCode.findUnique({ where: { code } });
+    const metadata = {
+      productIds: [product.id],
+      audience: i % 2 === 0 ? "all" : "repeat",
+      shareUrl: `https://culinarytales.app/store/${vendor.storeSlug}?promo=${code}&product=${product.id}`,
+    };
+
+    const promo =
+      existingPromo ??
+      (await prisma.promoCode.create({
+        data: {
+          code,
+          type: PromoType.PERCENTAGE,
+          value: 10 + i * 5,
+          minOrderAmount: 2000,
+          maxUses: 50,
+          validFrom: new Date(Date.now() - 24 * 60 * 60 * 1000),
+          validUntil: new Date(Date.now() + 21 * 24 * 60 * 60 * 1000),
+          isActive: true,
+        },
+      }));
+
+    const existingAuditLog = await prisma.auditLog.findFirst({
+      where: {
+        actorId: vendor.id,
+        action: "vendor.promo.created",
+        entityType: "PROMO_CODE",
+        entityId: promo.id,
+      },
+    });
+
+    if (!existingAuditLog) {
+      await prisma.auditLog.create({
+        data: {
+          actorId: vendor.id,
+          action: "vendor.promo.created",
+          entityType: "PROMO_CODE",
+          entityId: promo.id,
+          metadata,
+        },
+      });
+      log("PROMO", `Created vendor promo: ${code}`);
+    } else {
+      log("PROMO", `Vendor promo exists: ${code}`);
+    }
+
+    report.coupons.push(code);
+  }
 
   // ─── COUPONS ────────────────────────────────────────────────────────────
 
@@ -455,65 +566,93 @@ async function main() {
     const vendorEarnings = subtotal - platformFee;
     const total = subtotal + deliveryFee;
     
-    const order = await prisma.order.create({
-      data: {
+    const existingOrder = await prisma.order.findFirst({
+      where: {
         buyerId: buyer.id,
         vendorId: vendor.id,
         status,
-        subtotalAmount: subtotal,
-        deliveryFeeAmount: deliveryFee,
-        platformFeeAmount: platformFee,
-        vendorEarnings,
-        totalAmount: total,
-        currency: product.currency,
-        escrowType: vendor.currency === "NGN" ? EscrowType.DOMESTIC_AFRICA : EscrowType.NONE,
-        deliveredAt: ["DELIVERED", "COMPLETED"].includes(status) ? new Date(Date.now() - 2 * 24 * 60 * 60 * 1000) : null,
         items: {
-          create: {
+          some: {
             productId: product.id,
-            vendorId: vendor.id,
             quantity,
-            unitAmount: product.priceInCents,
-            totalAmount: subtotal,
-            currency: product.currency,
             productTitle: product.title,
           },
         },
       },
     });
+
+    const order =
+      existingOrder ??
+      (await prisma.order.create({
+        data: {
+          buyerId: buyer.id,
+          vendorId: vendor.id,
+          status,
+          subtotalAmount: subtotal,
+          deliveryFeeAmount: deliveryFee,
+          platformFeeAmount: platformFee,
+          vendorEarnings,
+          totalAmount: total,
+          currency: product.currency,
+          escrowType: vendor.currency === "NGN" ? EscrowType.DOMESTIC_AFRICA : EscrowType.NONE,
+          deliveredAt: ["DELIVERED", "COMPLETED"].includes(status) ? new Date(Date.now() - 2 * 24 * 60 * 60 * 1000) : null,
+          items: {
+            create: {
+              productId: product.id,
+              vendorId: vendor.id,
+              quantity,
+              unitAmount: product.priceInCents,
+              totalAmount: subtotal,
+              currency: product.currency,
+              productTitle: product.title,
+            },
+          },
+        },
+      }));
     
     // Create payment for paid orders
     if (["PAID", "PROCESSING", "DELIVERED", "COMPLETED", "REFUNDED", "DISPUTED"].includes(status)) {
-      await prisma.payment.create({
-        data: {
-          orderId: order.id,
-          amount: total,
-          platformFeeAmount: platformFee,
-          vendorEarningsAmount: vendorEarnings,
-          currency: product.currency,
-          status: PaymentStatus.SUCCEEDED,
-          provider: vendor.currency === "NGN" ? "paystack" : "stripe",
-          stripePaymentIntentId: vendor.currency !== "NGN" ? `pi_seedqa_${order.id}` : null,
-          processedAt: new Date(),
-        },
-      });
+      const payment =
+        (await prisma.payment.findUnique({ where: { orderId: order.id } })) ??
+        (await prisma.payment.create({
+          data: {
+            orderId: order.id,
+            amount: total,
+            platformFeeAmount: platformFee,
+            vendorEarningsAmount: vendorEarnings,
+            currency: product.currency,
+            status: PaymentStatus.SUCCEEDED,
+            provider: vendor.currency === "NGN" ? "paystack" : "stripe",
+            stripePaymentIntentId: vendor.currency !== "NGN" ? `pi_seedqa_${order.id}` : null,
+            processedAt: new Date(),
+          },
+        }));
       
       // Create Paystack transaction for NGN orders
       if (vendor.currency === "NGN") {
-        await prisma.paystackTransaction.create({
-          data: {
-            orderId: order.id,
-            reference: `seedqa_paystack_${order.id}`,
-            amount: total,
-            currency: "NGN",
-            status: PaystackTxStatus.SUCCESS,
-          },
+        const existingPaystackTx = await prisma.paystackTransaction.findUnique({
+          where: { reference: `seedqa_paystack_${order.id}` },
         });
+        if (!existingPaystackTx) {
+          await prisma.paystackTransaction.create({
+            data: {
+              orderId: order.id,
+              reference: `seedqa_paystack_${order.id}`,
+              amount: total,
+              currency: "NGN",
+              status: PaystackTxStatus.SUCCESS,
+            },
+          });
+        }
       }
       
       // Mirror the real wallet ledger semantics for seeded paid orders.
       const wallet = await prisma.wallet.findUnique({ where: { vendorId: vendor.id } });
       if (wallet) {
+        const existingLedgerCount = await prisma.walletTransaction.count({
+          where: { orderId: order.id },
+        });
+        if (existingLedgerCount === 0) {
         if (status === "COMPLETED") {
           await prisma.walletTransaction.create({
             data: {
@@ -561,6 +700,35 @@ async function main() {
             data: { pendingBalance: { increment: vendorEarnings } },
           });
         }
+        }
+      }
+    }
+
+    if (SHIPMENT_READY_STATUSES.includes(status)) {
+      const existingShipment = await prisma.shipment.findUnique({
+        where: { orderId: order.id },
+      });
+      if (!existingShipment) {
+        await prisma.shipment.create({
+          data: {
+            orderId: order.id,
+            vendorId: vendor.id,
+            trackingNumber: `${PREFIX.replace(/[^A-Z0-9]/gi, "").slice(0, 8)}TRK${String(i + 1).padStart(4, "0")}`,
+            carrier: vendor.currency === "NGN" ? "GIG Logistics" : "Royal Mail",
+            status:
+              status === "PROCESSING"
+                ? ShipmentStatus.PROCESSING
+                : status === "DELIVERED" || status === "COMPLETED"
+                  ? ShipmentStatus.DELIVERED
+                  : ShipmentStatus.IN_TRANSIT,
+            estimatedDeliveryAt: new Date(Date.now() + (i + 2) * 24 * 60 * 60 * 1000),
+            dispatchedAt: status !== "PROCESSING" ? new Date(Date.now() - 24 * 60 * 60 * 1000) : null,
+            deliveredAt:
+              status === "DELIVERED" || status === "COMPLETED"
+                ? new Date(Date.now() - 12 * 60 * 60 * 1000)
+                : null,
+          },
+        });
       }
     }
     
@@ -569,6 +737,157 @@ async function main() {
   }
   
   report.orders = orders.map(o => ({ id: o.id, orderNumber: o.orderNumber, status: o.status }));
+
+  // --- PAYOUT REQUESTS ---
+
+  console.log("\n--- PAYOUT REQUESTS ---\n");
+
+  const payoutStatuses: PayoutRequestStatus[] = ["PENDING", "APPROVED", "PAID"];
+  for (let i = 0; i < Math.min(vendors.length, payoutStatuses.length); i++) {
+    const vendor = vendors[i];
+    const payoutMethod = await prisma.payoutMethod.findFirst({
+      where: { vendorId: vendor.id },
+      orderBy: { createdAt: "asc" },
+    });
+    if (!payoutMethod) continue;
+
+    const existing = await prisma.payoutRequest.findFirst({
+      where: {
+        vendorId: vendor.id,
+        notes: `${PREFIX} payout request ${i + 1}`,
+      },
+    });
+
+    if (existing) {
+      report.payoutRequests.push({ id: existing.id, vendorId: vendor.id, status: existing.status });
+      log("PAYOUT", `Exists: ${existing.id} (${existing.status})`);
+      continue;
+    }
+
+    const status = payoutStatuses[i];
+    const payoutRequest = await prisma.payoutRequest.create({
+      data: {
+        vendorId: vendor.id,
+        payoutMethodId: payoutMethod.id,
+        amount: 1500 + i * 500,
+        currency: vendor.currency,
+        status,
+        notes: `${PREFIX} payout request ${i + 1}`,
+        approvedById: status === "APPROVED" || status === "PAID" ? admin.id : null,
+        approvedAt: status === "APPROVED" || status === "PAID" ? new Date(Date.now() - 2 * 60 * 60 * 1000) : null,
+        paidById: status === "PAID" ? admin.id : null,
+        paidAt: status === "PAID" ? new Date(Date.now() - 60 * 60 * 1000) : null,
+      },
+    });
+
+    report.payoutRequests.push({ id: payoutRequest.id, vendorId: vendor.id, status: payoutRequest.status });
+    log("PAYOUT", `Created: ${payoutRequest.id} (${status})`);
+  }
+
+  // --- CONVERSATIONS & MESSAGES ---
+
+  console.log("\n--- CONVERSATIONS ---\n");
+
+  for (const order of orders.slice(0, Math.min(4, orders.length))) {
+    const vendorParticipantId = vendors.find((item) => item.id === order.vendorId)?.user.id;
+    if (!vendorParticipantId) continue;
+
+    const [participantA, participantB] = [order.buyerId, vendorParticipantId].sort();
+    let conversation = await prisma.conversation.findFirst({
+      where: { participantA, participantB, orderId: order.id },
+    });
+
+    if (!conversation) {
+      conversation = await prisma.conversation.create({
+        data: {
+          participantA,
+          participantB,
+          orderId: order.id,
+          type: "BUYER_VENDOR",
+          lastMessageAt: new Date(),
+        },
+      });
+    }
+
+    const existingMessages = await prisma.message.count({ where: { conversationId: conversation.id } });
+    if (existingMessages === 0) {
+      await prisma.message.createMany({
+        data: [
+          {
+            conversationId: conversation.id,
+            senderId: order.buyerId,
+            text: `${PREFIX} Buyer question about order ${order.orderNumber}`,
+            attachments: [],
+          },
+          {
+            conversationId: conversation.id,
+            senderId: vendorParticipantId,
+            text: `${PREFIX} Vendor reply for ${order.orderNumber}`,
+            attachments: [],
+            readAt: new Date(),
+          },
+        ],
+      });
+      await prisma.conversation.update({
+        where: { id: conversation.id },
+        data: { lastMessageAt: new Date() },
+      });
+    }
+
+    report.conversations.push({ id: conversation.id, orderId: order.id });
+    log("CHAT", `Ready: ${conversation.id} (${order.orderNumber})`);
+  }
+
+  // --- NOTIFICATIONS ---
+
+  console.log("\n--- NOTIFICATIONS ---\n");
+
+  const notificationSeeds = [
+    {
+      userId: buyers[0]?.id,
+      type: NotificationType.ORDER_PAID,
+      title: "Order confirmed",
+      body: `${PREFIX} Your latest order is now confirmed.`,
+    },
+    {
+      userId: vendors[0]?.user.id,
+      type: NotificationType.PAYOUT_REQUESTED,
+      title: "New payout request",
+      body: `${PREFIX} A payout request is waiting for review.`,
+    },
+    {
+      userId: admin.id,
+      type: NotificationType.PAYOUT_APPROVED,
+      title: "Admin QA alert",
+      body: `${PREFIX} Review the latest payout and dispute queue.`,
+    },
+  ].filter((item) => Boolean(item.userId));
+
+  for (const item of notificationSeeds) {
+    const existing = await prisma.notification.findFirst({
+      where: {
+        userId: item.userId!,
+        title: item.title,
+      },
+    });
+
+    if (!existing) {
+      const notification = await prisma.notification.create({
+        data: {
+          userId: item.userId!,
+          type: item.type,
+          title: item.title,
+          body: item.body,
+          data: { prefix: PREFIX },
+        },
+      });
+      report.notifications.push({ id: notification.id, userId: notification.userId, type: notification.type });
+      log("NOTIFY", `Created: ${notification.title}`);
+    } else {
+      report.notifications.push({ id: existing.id, userId: existing.userId, type: existing.type });
+      log("NOTIFY", `Exists: ${existing.title}`);
+    }
+  }
 
   // ─── REVIEWS ────────────────────────────────────────────────────────────
 

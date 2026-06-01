@@ -222,6 +222,22 @@ async function main() {
     warnCount++;
   }
 
+  const vendorPromoAuditLogs = await prisma.auditLog.findMany({
+    where: {
+      action: "vendor.promo.created",
+      entityType: "PROMO_CODE",
+      metadata: { not: null },
+    },
+  });
+
+  if (vendorPromoAuditLogs.length > 0) {
+    log("COUPONS", "PASS", `Vendor promo history seeded (${vendorPromoAuditLogs.length})`);
+    passCount++;
+  } else {
+    log("COUPONS", "WARN", "No vendor promo history found");
+    warnCount++;
+  }
+
   // ─── VALIDATE ORDERS ────────────────────────────────────────────────────
 
   console.log("\n── ORDERS ──\n");
@@ -280,6 +296,20 @@ async function main() {
   } else {
     log("ORDERS", "FAIL", `Some paid orders missing payments: ${paidOrders.length} paid, ${ordersWithPayment.length} with payment`);
     failCount++;
+  }
+
+  const shipmentOrders = orders.filter((order) =>
+    ["PROCESSING", "DELIVERED", "COMPLETED", "REFUNDED", "DISPUTED"].includes(order.status),
+  );
+  const shipments = await prisma.shipment.findMany({
+    where: { orderId: { in: shipmentOrders.map((order) => order.id) } },
+  });
+  if (shipments.length >= shipmentOrders.length && shipmentOrders.length > 0) {
+    log("ORDERS", "PASS", `Shipment records seeded (${shipments.length})`);
+    passCount++;
+  } else if (shipmentOrders.length > 0) {
+    log("ORDERS", "WARN", `Expected ${shipmentOrders.length} shipment records, found ${shipments.length}`);
+    warnCount++;
   }
 
   // ─── VALIDATE REVIEWS ───────────────────────────────────────────────────
@@ -343,6 +373,92 @@ async function main() {
 
   // ─── SUMMARY ────────────────────────────────────────────────────────────
 
+  // --- VALIDATE SUBSCRIPTIONS & PAYOUTS ---
+
+  console.log("\n--- SUBSCRIPTIONS & PAYOUTS ---\n");
+
+  const subscriptions = await prisma.vendorSubscription.findMany({
+    where: { vendorId: { in: vendors.map((vendor) => vendor.id) } },
+  });
+  if (subscriptions.length === vendors.length) {
+    log("SUBSCRIPTIONS", "PASS", `All vendors have subscriptions (${subscriptions.length})`);
+    passCount++;
+  } else {
+    log("SUBSCRIPTIONS", "FAIL", `Expected ${vendors.length} subscriptions, found ${subscriptions.length}`);
+    failCount++;
+  }
+
+  const payoutMethods = await prisma.payoutMethod.findMany({
+    where: { vendorId: { in: vendors.map((vendor) => vendor.id) } },
+  });
+  if (payoutMethods.length >= vendors.length) {
+    log("PAYOUTS", "PASS", `Payout methods seeded (${payoutMethods.length})`);
+    passCount++;
+  } else {
+    log("PAYOUTS", "FAIL", `Expected at least ${vendors.length} payout methods, found ${payoutMethods.length}`);
+    failCount++;
+  }
+
+  const payoutRequests = await prisma.payoutRequest.findMany({
+    where: { vendorId: { in: vendors.map((vendor) => vendor.id) } },
+  });
+  if (payoutRequests.length > 0) {
+    log("PAYOUTS", "PASS", `Payout requests seeded (${payoutRequests.length})`);
+    passCount++;
+  } else {
+    log("PAYOUTS", "WARN", "No payout requests found");
+    warnCount++;
+  }
+
+  // --- VALIDATE CONVERSATIONS & NOTIFICATIONS ---
+
+  console.log("\n--- CHAT & NOTIFICATIONS ---\n");
+
+  const conversations = await prisma.conversation.findMany({
+    where: {
+      OR: [
+        { participantA: { in: buyers.map((buyer) => buyer.id) } },
+        { participantB: { in: buyers.map((buyer) => buyer.id) } },
+      ],
+    },
+    include: { messages: true },
+  });
+
+  if (conversations.length > 0) {
+    log("CHAT", "PASS", `Conversations seeded (${conversations.length})`);
+    passCount++;
+  } else {
+    log("CHAT", "WARN", "No conversations found");
+    warnCount++;
+  }
+
+  const messages = conversations.flatMap((conversation) => conversation.messages);
+  if (messages.length > 0) {
+    log("CHAT", "PASS", `Messages seeded (${messages.length})`);
+    passCount++;
+  } else {
+    log("CHAT", "WARN", "No messages found");
+    warnCount++;
+  }
+
+  const notifications = await prisma.notification.findMany({
+    where: {
+      OR: [
+        { userId: { in: buyers.map((buyer) => buyer.id) } },
+        { userId: { in: vendors.map((vendor) => vendor.userId) } },
+        ...(admin ? [{ userId: admin.id }] : []),
+      ],
+    },
+  });
+
+  if (notifications.length > 0) {
+    log("NOTIFY", "PASS", `Notifications seeded (${notifications.length})`);
+    passCount++;
+  } else {
+    log("NOTIFY", "WARN", "No notifications found");
+    warnCount++;
+  }
+
   console.log("\n═══════════════════════════════════════════════════════════");
   console.log("  VALIDATION SUMMARY");
   console.log("═══════════════════════════════════════════════════════════");
@@ -376,7 +492,9 @@ async function main() {
       products: products.length,
       activeProducts: activeProducts.length,
       coupons: coupons.length,
+      vendorPromoHistory: vendorPromoAuditLogs.length,
       orders: orders.length,
+      shipments: shipments.length,
       reviews: reviews.length,
     },
   };
