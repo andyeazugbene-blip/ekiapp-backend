@@ -27,6 +27,33 @@ export async function listUsers(request: Request, response: Response): Promise<v
   response.status(200).json(await adminListingsService.listUsers(q(request)));
 }
 
+export async function suspendUser(request: Request, response: Response): Promise<void> {
+  const userId = requireIdParam(request);
+  const reason = typeof request.body?.reason === "string" ? request.body.reason.trim() : undefined;
+  const user = await adminListingsService.suspendUser(userId, reason);
+  await recordAudit({
+    actorId: requireUserId(request),
+    action: "user.suspend",
+    entityType: "User",
+    entityId: userId,
+    metadata: { reason: reason ?? null, role: user.role },
+  });
+  response.status(200).json({ user });
+}
+
+export async function unsuspendUser(request: Request, response: Response): Promise<void> {
+  const userId = requireIdParam(request);
+  const user = await adminListingsService.unsuspendUser(userId);
+  await recordAudit({
+    actorId: requireUserId(request),
+    action: "user.unsuspend",
+    entityType: "User",
+    entityId: userId,
+    metadata: { role: user.role },
+  });
+  response.status(200).json({ user });
+}
+
 export async function listVendors(request: Request, response: Response): Promise<void> {
   response.status(200).json(await adminListingsService.listVendors(q(request)));
 }

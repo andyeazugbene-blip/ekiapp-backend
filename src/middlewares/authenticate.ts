@@ -46,6 +46,10 @@ export function authenticate(request: Request, _response: Response, next: NextFu
         next(new AppError("Token revoked. Please log in again.", 401));
         return;
       }
+      if (result.suspended) {
+        next(new AppError("Your account has been suspended. Contact support.", 423));
+        return;
+      }
       // Use DB role (not JWT claim) so role changes take effect immediately
       request.user = { id: payload.sub, role: result.role ?? payload.role, email: payload.email };
       next();
@@ -98,7 +102,7 @@ export function optionalAuthenticate(request: Request, _response: Response, next
   authService
     .verifyTokenVersion(payload.sub, payload.tv ?? 0)
     .then((result) => {
-      if (result.valid) {
+      if (result.valid && !result.suspended) {
         request.user = { id: payload.sub, role: result.role ?? payload.role, email: payload.email };
       }
       next();

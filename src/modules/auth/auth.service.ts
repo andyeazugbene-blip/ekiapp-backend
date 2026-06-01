@@ -34,6 +34,8 @@ type AuthUserRecord = {
   phone: string | null;
   avatar: string | null;
   country: string | null;
+  isSuspended: boolean;
+  suspendedReason: string | null;
   role: UserRole;
   trustScore: number;
   createdAt: Date;
@@ -147,6 +149,21 @@ export const authService = {
     // Do not reveal whether email exists
     if (!user) {
       throw new AppError("Invalid credentials", 401);
+    }
+
+    if (user.isSuspended) {
+      await writeAuditLogSafe({
+        actorId: user.id,
+        action: "LOGIN_BLOCKED_SUSPENDED",
+        entityType: "User",
+        entityId: user.id,
+        metadata: {
+          ip: meta?.ip ?? null,
+          userAgent: meta?.userAgent ?? null,
+          reason: user.suspendedReason ?? null,
+        },
+      });
+      throw new AppError("Your account has been suspended. Contact support.", 423);
     }
 
     // Check account lockout
@@ -356,13 +373,16 @@ export const authService = {
    * Verify that the token's tokenVersion matches the user's current version.
    * Called by authenticate middleware on every request.
    */
-  async verifyTokenVersion(userId: string, tokenVersion: number): Promise<{ valid: boolean; role?: UserRole }> {
+  async verifyTokenVersion(
+    userId: string,
+    tokenVersion: number,
+  ): Promise<{ valid: boolean; role?: UserRole; suspended?: boolean }> {
     const user = await prisma.user.findUnique({
       where: { id: userId },
-      select: { tokenVersion: true, role: true },
+      select: { tokenVersion: true, role: true, isSuspended: true },
     });
     if (!user) return { valid: false };
-    return { valid: user.tokenVersion === tokenVersion, role: user.role };
+    return { valid: user.tokenVersion === tokenVersion, role: user.role, suspended: user.isSuspended };
   },
 
   /**

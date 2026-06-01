@@ -62,6 +62,8 @@ import {
   listPayments,
   listProducts,
   listUsers,
+  suspendUser,
+  unsuspendUser,
   listVendors,
   listWalletTransactions,
   rejectVendor,
@@ -147,6 +149,8 @@ adminRouter.patch("/disputes/:id/resolve", asyncHandler(adminResolveDispute));
 
 // Trust score management
 adminRouter.patch("/users/:id/trust-score", asyncHandler(adminAdjustTrustScore));
+adminRouter.patch("/users/:id/suspend", asyncHandler(require2fa), asyncHandler(suspendUser));
+adminRouter.patch("/users/:id/unsuspend", asyncHandler(require2fa), asyncHandler(unsuspendUser));
 
 // Escrow health monitoring
 adminRouter.get("/escrow/health", asyncHandler(getEscrowHealth));

@@ -74,6 +74,8 @@ export const adminListingsService = {
             email: true,
             name: true,
             role: true,
+            isSuspended: true,
+            suspendedReason: true,
             createdAt: true,
             updatedAt: true,
           },
@@ -228,6 +230,75 @@ export const adminListingsService = {
     return prisma.product.update({
       where: { id: productId },
       data: { isActive: false },
+    });
+  },
+
+  async suspendUser(userId: string, reason?: string) {
+    const user = await prisma.user.findUnique({ where: { id: userId } });
+    if (!user) throw new AppError("User not found", 404);
+    if (user.role === UserRole.ADMIN) throw new AppError("Admin accounts cannot be suspended here", 409);
+    if (user.isSuspended) throw new AppError("User is already suspended", 409);
+
+    return prisma.$transaction(async (tx) => {
+      const updatedUser = await tx.user.update({
+        where: { id: userId },
+        data: {
+          isSuspended: true,
+          suspendedReason: reason ?? null,
+          tokenVersion: { increment: 1 },
+        },
+      });
+
+      if (updatedUser.role === UserRole.VENDOR) {
+        const vendor = await tx.vendor.findUnique({ where: { userId } });
+        if (vendor && !vendor.isSuspended) {
+          await tx.vendor.update({
+            where: { id: vendor.id },
+            data: {
+              isSuspended: true,
+              suspendedReason: reason ?? "Suspended by admin",
+            },
+          });
+          await tx.product.updateMany({
+            where: { vendorId: vendor.id, isActive: true },
+            data: { isActive: false },
+          });
+        }
+      }
+
+      return updatedUser;
+    });
+  },
+
+  async unsuspendUser(userId: string) {
+    const user = await prisma.user.findUnique({ where: { id: userId } });
+    if (!user) throw new AppError("User not found", 404);
+    if (!user.isSuspended) throw new AppError("User is not suspended", 409);
+
+    return prisma.$transaction(async (tx) => {
+      const updatedUser = await tx.user.update({
+        where: { id: userId },
+        data: {
+          isSuspended: false,
+          suspendedReason: null,
+          tokenVersion: { increment: 1 },
+        },
+      });
+
+      if (updatedUser.role === UserRole.VENDOR) {
+        const vendor = await tx.vendor.findUnique({ where: { userId } });
+        if (vendor?.isSuspended) {
+          await tx.vendor.update({
+            where: { id: vendor.id },
+            data: {
+              isSuspended: false,
+              suspendedReason: null,
+            },
+          });
+        }
+      }
+
+      return updatedUser;
     });
   },
 };

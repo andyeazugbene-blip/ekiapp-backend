@@ -114,6 +114,8 @@ model User {
   tokenVersion        Int            @default(0)
   failedLoginAttempts Int            @default(0)
   lockedUntil         DateTime?
+  isSuspended         Boolean        @default(false)
+  suspendedReason     String?
   emailVerifiedAt     DateTime?
   trustScore          Int            @default(50)
   role                UserRole       @default(BUYER)
@@ -127,6 +129,7 @@ model User {
 
   @@index([role, createdAt])
   @@index([createdAt])
+  @@index([isSuspended])
 }
 
 model Vendor {
