@@ -13,11 +13,14 @@ import { requestLogger } from "./middlewares/request-logger";
 import { validateInputLength } from "./middlewares/validate-input-length";
 import {
   getPublicAccountDeletionPage,
+  getPublicFindOrderPage,
   getPublicHelpPage,
   getPublicHomePage,
   getPublicPrivacyPage,
   getPublicSupportPage,
   getPublicTermsPage,
+  requestPublicOrderLookup,
+  verifyPublicOrderLookup,
 } from "./modules/public-site/public-site.page";
 import { getPublicStorePage } from "./modules/public-stores/public-stores.page";
 import { apiRouter } from "./routes";
@@ -35,7 +38,7 @@ app.disable("x-powered-by");
 
 // Security headers. CSP must be relaxed on /api/docs and server-rendered
 // public HTML pages that use inline scripts.
-const publicHtmlPaths = new Set(["/", "/help", "/support", "/privacy", "/terms", "/account-deletion"]);
+const publicHtmlPaths = new Set(["/", "/find-order", "/help", "/support", "/privacy", "/terms", "/account-deletion"]);
 const swaggerAndPublicPagePaths = (req: { path: string }) =>
   req.path === "/api/docs" || req.path.startsWith("/store/") || publicHtmlPaths.has(req.path);
 
@@ -98,6 +101,12 @@ app.use(validateInputLength);
 
 // Routes
 app.use("/api", apiRouter);
+app.post("/api/public/order-lookup/request", (req, res, next) => {
+  Promise.resolve(requestPublicOrderLookup(req, res)).catch(next);
+});
+app.post("/api/public/order-lookup/verify", (req, res, next) => {
+  Promise.resolve(verifyPublicOrderLookup(req, res)).catch(next);
+});
 
 // Root-level OpenAPI spec aliases (for Postman, Insomnia, openapi-generator)
 app.get("/openapi.json", (_req, res) => res.json(swaggerSpec));
@@ -107,6 +116,9 @@ app.get("/swagger.json", (_req, res) => res.json(swaggerSpec));
 // Public web routes (server-rendered pages outside /api).
 app.get("/", (req, res, next) => {
   Promise.resolve(getPublicHomePage(req, res)).catch(next);
+});
+app.get("/find-order", (req, res, next) => {
+  Promise.resolve(getPublicFindOrderPage(req, res)).catch(next);
 });
 app.get("/help", (req, res, next) => {
   Promise.resolve(getPublicHelpPage(req, res)).catch(next);

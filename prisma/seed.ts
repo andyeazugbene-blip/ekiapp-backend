@@ -219,10 +219,10 @@ async function main() {
   const [
     egusi,
     driedFish,
-    locustBeans,
+    _locustBeans,
     palmOil,
     yamFlour,
-    shitoSauce,
+    _shitoSauce,
   ] = await Promise.all([
     prisma.product.create({
       data: {
