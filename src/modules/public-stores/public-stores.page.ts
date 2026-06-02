@@ -30,6 +30,13 @@ function formatPrice(priceInCents: number, currency: string): string {
   }
 }
 
+function truncate(value: string | null | undefined, maxLength: number): string {
+  if (!value) return "";
+  const normalized = value.trim();
+  if (normalized.length <= maxLength) return normalized;
+  return `${normalized.slice(0, maxLength - 1).trimEnd()}...`;
+}
+
 function renderProduct(product: PublicProduct): string {
   const image = product.images[0];
   const imageEl = image
@@ -39,6 +46,7 @@ function renderProduct(product: PublicProduct): string {
   const stockBadge = inStock
     ? ""
     : `<span class="product-soldout">Sold out</span>`;
+  const summary = truncate(product.description, 96);
   return `
   <li class="product${inStock ? "" : " is-soldout"}">
     <button class="product-image product-open" type="button" data-product="${escape(product.id)}">
@@ -49,10 +57,11 @@ function renderProduct(product: PublicProduct): string {
       <button class="product-copy product-open" type="button" data-product="${escape(product.id)}">
         <h3 class="product-title">${escape(product.title)}</h3>
       </button>
-      <p class="product-meta">${escape(product.category || "Foodstuff")} · ${inStock ? "Ready to order" : "Currently unavailable"}</p>
+      <p class="product-meta">${escape(product.category || "Foodstuff")} - ${inStock ? "Ready to order" : "Currently unavailable"}</p>
+      ${summary ? `<p class="product-summary">${escape(summary)}</p>` : ""}
       <p class="product-price">${escape(formatPrice(product.priceInCents, product.currency))}</p>
       <div class="product-actions">
-        <button class="btn btn-card product-open" type="button" data-product="${escape(product.id)}">View product</button>
+        <button class="btn btn-card product-open" type="button" data-product="${escape(product.id)}">See details</button>
         ${
           inStock
             ? `<button class="btn btn-primary product-add" type="button" data-product="${escape(product.id)}">Add to cart</button>`
@@ -325,7 +334,13 @@ function renderStorePage(store: PublicStore, products: PublicProduct[]): string 
       align-items:start;
     }
     .store-content{min-width:0}
-    .cart-panel{
+    .sidebar-stack{
+      display:flex;
+      flex-direction:column;
+      gap:18px;
+    }
+    .cart-panel,
+    .track-panel{
       position:sticky;
       top:88px;
     }
@@ -447,6 +462,127 @@ function renderStorePage(store: PublicStore, products: PublicProduct[]): string 
       font-size:12px;
       line-height:1.55;
     }
+    .track-card{
+      background:var(--surface);
+      border:1px solid var(--border);
+      border-radius:18px;
+      padding:22px;
+      box-shadow:0 8px 24px rgba(31,27,22,.05);
+    }
+    .track-copy{
+      margin:10px 0 0;
+      color:var(--text-muted);
+      font-size:14px;
+      line-height:1.55;
+    }
+    .tracker-form{
+      margin-top:16px;
+      display:flex;
+      flex-direction:column;
+      gap:10px;
+    }
+    .tracker-label{
+      display:block;
+      color:var(--text-muted);
+      font-size:12px;
+      font-weight:600;
+      margin:0 0 6px;
+    }
+    .tracker-input{
+      width:100%;
+      border:1px solid var(--border);
+      border-radius:12px;
+      padding:12px 14px;
+      font:inherit;
+      color:var(--text);
+      background:#fff;
+    }
+    .tracker-input:focus{
+      outline:none;
+      border-color:#cbb58d;
+      box-shadow:0 0 0 3px rgba(184,153,104,.18);
+    }
+    .tracker-actions{
+      display:flex;
+      gap:10px;
+      flex-wrap:wrap;
+    }
+    .tracker-status{
+      min-height:20px;
+      font-size:13px;
+      color:var(--text-muted);
+    }
+    .tracker-status.is-error{color:var(--danger)}
+    .tracker-status.is-success{color:var(--accent)}
+    .tracker-results{
+      margin-top:14px;
+      display:flex;
+      flex-direction:column;
+      gap:10px;
+    }
+    .tracker-result-card{
+      border:1px solid var(--border-soft);
+      border-radius:14px;
+      background:#FBFAF7;
+      padding:14px;
+    }
+    .tracker-result-top{
+      display:flex;
+      justify-content:space-between;
+      gap:12px;
+      align-items:flex-start;
+      flex-wrap:wrap;
+    }
+    .tracker-result-title{
+      margin:0;
+      font-size:15px;
+      font-weight:700;
+      color:var(--text);
+    }
+    .tracker-result-meta{
+      margin:5px 0 0;
+      font-size:12px;
+      color:var(--text-muted);
+    }
+    .tracker-badge{
+      display:inline-flex;
+      align-items:center;
+      border-radius:999px;
+      padding:5px 10px;
+      font-size:11px;
+      font-weight:700;
+      text-transform:uppercase;
+      letter-spacing:.04em;
+      background:var(--accent-soft);
+      color:var(--accent);
+    }
+    .tracker-result-grid{
+      margin-top:12px;
+      display:grid;
+      grid-template-columns:repeat(2,minmax(0,1fr));
+      gap:10px;
+    }
+    .tracker-result-cell{
+      border:1px solid var(--border-soft);
+      border-radius:12px;
+      background:#fff;
+      padding:10px 12px;
+    }
+    .tracker-result-label{
+      display:block;
+      font-size:11px;
+      text-transform:uppercase;
+      letter-spacing:.05em;
+      color:var(--text-muted);
+      margin-bottom:4px;
+      font-weight:700;
+    }
+    .tracker-result-value{
+      display:block;
+      font-size:14px;
+      color:var(--text);
+      line-height:1.45;
+    }
     .section-header{
       display:flex;align-items:baseline;justify-content:space-between;
       margin-bottom:28px;gap:16px;flex-wrap:wrap;
@@ -528,6 +664,13 @@ function renderStorePage(store: PublicStore, products: PublicProduct[]): string 
       color:var(--text-muted);
       font-size:12px;
       line-height:1.45;
+    }
+    .product-summary{
+      margin:10px 0 0;
+      color:var(--text-muted);
+      font-size:13px;
+      line-height:1.55;
+      min-height:40px;
     }
     .product-actions{
       margin-top:14px;
@@ -696,17 +839,20 @@ function renderStorePage(store: PublicStore, products: PublicProduct[]): string 
       .btn{flex:1;justify-content:center}
       .section{padding:40px 0 56px}
       .store-layout{grid-template-columns:1fr}
-      .cart-panel{position:static}
+      .sidebar-stack{gap:14px}
+      .cart-panel,.track-panel{position:static}
       .section-title{font-size:20px}
       .products{grid-template-columns:repeat(2,1fr);gap:12px}
       .product-body{padding:12px 12px 14px}
       .product-title{font-size:14px;min-height:36px}
+      .product-summary{min-height:0}
       .product-price{font-size:15px}
       .product-modal-card{margin:18px 14px}
       .product-modal-media{height:220px}
       .modal-title{font-size:24px}
       .modal-footer{align-items:stretch}
       .modal-actions{width:100%}
+      .tracker-result-grid{grid-template-columns:1fr}
     }
   </style>
 </head>
@@ -754,6 +900,7 @@ function renderStorePage(store: PublicStore, products: PublicProduct[]): string 
             </button>
             <a class="btn btn-secondary" href="#products">View products</a>
             <a class="btn btn-secondary" href="#cart-panel">Open cart</a>
+            <a class="btn btn-secondary" href="#track-order">Track my order</a>
           </div>
         </div>
       </div>
@@ -772,28 +919,56 @@ function renderStorePage(store: PublicStore, products: PublicProduct[]): string 
         ${productsHtml}
       </section>
 
-      <aside class="cart-panel" id="cart-panel">
-        <div class="cart-card">
-          <p class="cart-kicker">Buyer checkout</p>
-          <h2 class="cart-title serif">Order from this browser link</h2>
-          <p class="cart-copy">Open any product, add it to your cart, then continue with buyer checkout in the app or web flow.</p>
-          <div class="cart-items" id="cart-items">
-            <div class="cart-empty">
-              <p class="cart-empty-title">Your cart is empty</p>
-              <p class="cart-empty-copy">Add a product to start your order.</p>
+      <div class="sidebar-stack">
+        <aside class="cart-panel" id="cart-panel">
+          <div class="cart-card">
+            <p class="cart-kicker">Buyer basket</p>
+            <h2 class="cart-title serif">See your cart clearly</h2>
+            <p class="cart-copy">Add products, review exactly what is inside, then jump into tracking or continue your buyer checkout with the same store link.</p>
+            <div class="cart-items" id="cart-items">
+              <div class="cart-empty">
+                <p class="cart-empty-title">Your cart is empty</p>
+                <p class="cart-empty-copy">Add a product to start your order.</p>
+              </div>
+            </div>
+            <div class="cart-summary">
+              <div class="cart-row"><span>Items</span><strong id="cart-count">0</strong></div>
+              <div class="cart-row"><span>Subtotal</span><strong id="cart-total">${escape(formatPrice(0, products[0]?.currency || "GBP"))}</strong></div>
+            </div>
+            <div class="cart-panel-actions">
+              <button class="btn btn-primary" type="button" id="checkout-btn" disabled>Review basket</button>
+              <button class="btn btn-secondary" type="button" id="copy-store-link">Copy store link</button>
+            </div>
+            <p class="cart-note">Tip: use the tracker below with the same checkout email any time you want to reopen a paid order.</p>
+          </div>
+        </aside>
+
+        <aside class="track-panel" id="track-order">
+          <div class="track-card">
+            <p class="cart-kicker">Order tracking</p>
+            <h2 class="cart-title serif">Track an order from email</h2>
+            <p class="track-copy">Enter the email used when the order was placed. We will send a 6-digit code, then show the matching order cards right here.</p>
+            <div class="tracker-form">
+              <div>
+                <label class="tracker-label" for="track-email">Checkout email</label>
+                <input class="tracker-input" id="track-email" type="email" placeholder="you@example.com" />
+              </div>
+              <div class="tracker-actions">
+                <button class="btn btn-primary" type="button" id="track-request-btn">Email my tracking code</button>
+              </div>
+              <div id="track-code-wrap" hidden>
+                <label class="tracker-label" for="track-code">6-digit code</label>
+                <input class="tracker-input" id="track-code" type="text" inputmode="numeric" pattern="[0-9]*" placeholder="123456" maxlength="6" />
+              </div>
+              <div class="tracker-actions" id="track-verify-actions" hidden>
+                <button class="btn btn-primary" type="button" id="track-verify-btn">Verify and open orders</button>
+              </div>
+              <p class="tracker-status" id="track-status">Your secure order cards will appear here after verification.</p>
+              <div class="tracker-results" id="track-results"></div>
             </div>
           </div>
-          <div class="cart-summary">
-            <div class="cart-row"><span>Items</span><strong id="cart-count">0</strong></div>
-            <div class="cart-row"><span>Subtotal</span><strong id="cart-total">${escape(formatPrice(0, products[0]?.currency || "GBP"))}</strong></div>
-          </div>
-          <div class="cart-panel-actions">
-            <button class="btn btn-primary" type="button" id="checkout-btn" disabled>Continue checkout</button>
-            <button class="btn btn-secondary" type="button" id="copy-store-link">Copy store link</button>
-          </div>
-          <p class="cart-note">For now this shared page keeps buyers on the storefront and prepares the basket cleanly for checkout.</p>
-        </div>
-      </aside>
+        </aside>
+      </div>
     </div>
   </main>
 
@@ -849,6 +1024,14 @@ function renderStorePage(store: PublicStore, products: PublicProduct[]): string 
       var cartCountEl=document.getElementById('cart-count');
       var cartTotalEl=document.getElementById('cart-total');
       var checkoutBtn=document.getElementById('checkout-btn');
+      var trackEmail=document.getElementById('track-email');
+      var trackCodeWrap=document.getElementById('track-code-wrap');
+      var trackCode=document.getElementById('track-code');
+      var trackRequestBtn=document.getElementById('track-request-btn');
+      var trackVerifyActions=document.getElementById('track-verify-actions');
+      var trackVerifyBtn=document.getElementById('track-verify-btn');
+      var trackStatus=document.getElementById('track-status');
+      var trackResults=document.getElementById('track-results');
       if(!btn) return;
       var url=${JSON.stringify(store.shareUrl)};
       var products=${serializedProducts};
@@ -856,6 +1039,79 @@ function renderStorePage(store: PublicStore, products: PublicProduct[]): string 
       var storeLocation=${JSON.stringify(locationLabel)};
       var cart={};
       var activeProductId=null;
+
+      function escapeHtml(value){
+        return String(value == null ? '' : value)
+          .replace(/&/g,'&amp;')
+          .replace(/</g,'&lt;')
+          .replace(/>/g,'&gt;')
+          .replace(/"/g,'&quot;')
+          .replace(/'/g,'&#39;');
+      }
+
+      function setTrackerStatus(message,state){
+        if(!trackStatus) return;
+        trackStatus.textContent=message || '';
+        trackStatus.className='tracker-status'+(state ? ' is-'+state : '');
+      }
+
+      function formatOrderStatus(status){
+        var value=String(status || '').replace(/_/g,' ').toLowerCase();
+        if(!value) return 'Processing';
+        return value.charAt(0).toUpperCase()+value.slice(1);
+      }
+
+      function renderTrackerResults(orders){
+        if(!trackResults) return;
+        if(!orders || !orders.length){
+          trackResults.innerHTML='';
+          return;
+        }
+
+        trackResults.innerHTML=orders.map(function(order){
+          var itemCount=Array.isArray(order.items) ? order.items.reduce(function(total,item){
+            return total + Number(item.quantity || 0);
+          },0) : 0;
+          return '<article class="tracker-result-card">'
+            + '<div class="tracker-result-top">'
+            + '<div>'
+            + '<p class="tracker-result-title">'+escapeHtml(order.orderNumber || 'Tracked order')+'</p>'
+            + '<p class="tracker-result-meta">'+escapeHtml(order.vendorName || storeName)+' - '+escapeHtml(order.createdAt ? new Date(order.createdAt).toLocaleDateString() : 'Recent order')+'</p>'
+            + '</div>'
+            + '<span class="tracker-badge">'+escapeHtml(formatOrderStatus(order.status))+'</span>'
+            + '</div>'
+            + '<div class="tracker-result-grid">'
+            + '<div class="tracker-result-cell"><span class="tracker-result-label">Total</span><span class="tracker-result-value">'+escapeHtml(money((Number(order.total || 0) * 100), order.currency || 'GBP'))+'</span></div>'
+            + '<div class="tracker-result-cell"><span class="tracker-result-label">Items</span><span class="tracker-result-value">'+escapeHtml(String(itemCount || 0))+'</span></div>'
+            + '<div class="tracker-result-cell"><span class="tracker-result-label">Delivery</span><span class="tracker-result-value">'+escapeHtml(order.estimatedDeliveryLabel || 'Tracking available in your buyer flow')+'</span></div>'
+            + '<div class="tracker-result-cell"><span class="tracker-result-label">Destination</span><span class="tracker-result-value">'+escapeHtml(order.contact && order.contact.city ? order.contact.city+', '+order.contact.country : 'Saved checkout address')+'</span></div>'
+            + '</div>'
+            + '</article>';
+        }).join('');
+      }
+
+      function postJson(path,payload){
+        return fetch(url + path,{
+          method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body:JSON.stringify(payload || {})
+        }).then(function(response){
+          return response.json().catch(function(){ return {}; }).then(function(data){
+            if(!response.ok){
+              throw new Error(data && data.message ? data.message : 'Request failed');
+            }
+            return data;
+          });
+        });
+      }
+
+      function trackEvent(payload){
+        fetch(url + '/events',{
+          method:'POST',
+          headers:{'Content-Type':'application/json'},
+          body:JSON.stringify(payload || {})
+        }).catch(function(){});
+      }
 
       function showToast(element){
         if(!element) return;
@@ -910,7 +1166,7 @@ function renderStorePage(store: PublicStore, products: PublicProduct[]): string 
           totalCents+=(product.priceInCents||0)*qty;
           currency=product.currency || currency;
           return '<div class="cart-item">'
-            + '<div><p class="cart-item-title">'+product.title+'</p><p class="cart-item-meta">Qty '+qty+' · '+money(product.priceInCents,product.currency)+'</p></div>'
+            + '<div><p class="cart-item-title">'+escapeHtml(product.title)+'</p><p class="cart-item-meta">Qty '+qty+' - '+escapeHtml(money(product.priceInCents,product.currency))+'</p></div>'
             + '<div class="cart-item-actions">'
             + '<button class="qty-btn" type="button" data-cart-dec="'+product.id+'">-</button>'
             + '<span class="qty-value">'+qty+'</span>'
@@ -929,6 +1185,7 @@ function renderStorePage(store: PublicStore, products: PublicProduct[]): string 
         cart[productId]=(cart[productId]||0)+1;
         renderCart();
         showToast(cartToast);
+        trackEvent({ event:'add_to_cart', productId:product.id, productName:product.title, quantity:cart[productId] });
       }
 
       function setModalProduct(productId){
@@ -936,7 +1193,7 @@ function renderStorePage(store: PublicStore, products: PublicProduct[]): string 
         if(!product || !modal) return;
         activeProductId=productId;
         if(modalTitle) modalTitle.textContent=product.title || '';
-        if(modalMeta) modalMeta.textContent=(product.category || 'Foodstuff')+' · Ships from '+storeLocation;
+        if(modalMeta) modalMeta.textContent=(product.category || 'Foodstuff')+' - Ships from '+storeLocation;
         if(modalDescription) modalDescription.textContent=product.description || 'Freshly packed and ready for secure checkout.';
         if(modalPrice) modalPrice.textContent=money(product.priceInCents,product.currency);
         if(modalStock) modalStock.textContent=product.stock > 0 ? 'In stock' : 'Sold out';
@@ -946,7 +1203,7 @@ function renderStorePage(store: PublicStore, products: PublicProduct[]): string 
         }
         if(modalImageWrap){
           modalImageWrap.innerHTML=product.images && product.images[0]
-            ? '<img src="'+product.images[0]+'" alt="'+product.title+'" />'
+            ? '<img src="'+escapeHtml(product.images[0])+'" alt="'+escapeHtml(product.title)+'" />'
             : '<div class="placeholder placeholder-modal">No image</div>';
         }
         modal.classList.add('show');
@@ -1007,12 +1264,81 @@ function renderStorePage(store: PublicStore, products: PublicProduct[]): string 
 
       if(checkoutBtn){
         checkoutBtn.addEventListener('click',function(){
+          var cartPanel=document.getElementById('cart-panel');
+          if(cartPanel) cartPanel.scrollIntoView({behavior:'smooth',block:'start'});
+          cartToast.textContent='Your basket is ready below. Use the tracker card any time after payment.';
           showToast(cartToast);
-          cartToast.textContent='Checkout flow is being handed over to the buyer order flow.';
-          setTimeout(function(){ cartToast.textContent='Added to cart'; },1900);
+          setTimeout(function(){ cartToast.textContent='Added to cart'; },2200);
         });
       }
 
+      if(trackRequestBtn){
+        trackRequestBtn.addEventListener('click',function(){
+          var email=trackEmail && trackEmail.value ? String(trackEmail.value).trim().toLowerCase() : '';
+          if(!email || email.indexOf('@')===-1){
+            setTrackerStatus('Enter the checkout email you used for the order.','error');
+            return;
+          }
+
+          setTrackerStatus('Sending your tracking code...','');
+          if(trackRequestBtn) trackRequestBtn.disabled=true;
+
+          postJson('/order-lookup/request',{ email:email })
+            .then(function(){
+              if(trackCodeWrap) trackCodeWrap.hidden=false;
+              if(trackVerifyActions) trackVerifyActions.hidden=false;
+              setTrackerStatus('We sent a 6-digit code if matching orders exist for this email.','success');
+              trackEvent({ event:'track_order', source:'direct' });
+              if(trackCode && trackCode.focus) trackCode.focus();
+            })
+            .catch(function(error){
+              setTrackerStatus(error && error.message ? error.message : 'Could not send the tracking code.','error');
+            })
+            .finally(function(){
+              if(trackRequestBtn) trackRequestBtn.disabled=false;
+            });
+        });
+      }
+
+      if(trackVerifyBtn){
+        trackVerifyBtn.addEventListener('click',function(){
+          var email=trackEmail && trackEmail.value ? String(trackEmail.value).trim().toLowerCase() : '';
+          var code=trackCode && trackCode.value ? String(trackCode.value).trim() : '';
+          if(!email || email.indexOf('@')===-1){
+            setTrackerStatus('Enter the checkout email you used for the order.','error');
+            return;
+          }
+          if(!/^\\d{6}$/.test(code)){
+            setTrackerStatus('Enter the 6-digit code from your email.','error');
+            return;
+          }
+
+          setTrackerStatus('Verifying your code...','');
+          if(trackVerifyBtn) trackVerifyBtn.disabled=true;
+
+          postJson('/order-lookup/verify',{ email:email, code:code })
+            .then(function(data){
+              var orders=data && Array.isArray(data.orders) ? data.orders : [];
+              if(!orders.length){
+                renderTrackerResults([]);
+                setTrackerStatus('No matching orders were found for that email and code.','error');
+                return;
+              }
+              renderTrackerResults(orders);
+              setTrackerStatus('Your tracked orders are ready below.','success');
+              if(trackResults) trackResults.scrollIntoView({behavior:'smooth',block:'start'});
+            })
+            .catch(function(error){
+              renderTrackerResults([]);
+              setTrackerStatus(error && error.message ? error.message : 'Could not verify that code.','error');
+            })
+            .finally(function(){
+              if(trackVerifyBtn) trackVerifyBtn.disabled=false;
+            });
+        });
+      }
+
+      trackEvent({ event:'open', source:'direct' });
       renderCart();
     })();
   </script>
@@ -1097,7 +1423,7 @@ function renderError(): string {
 }
 
 /**
- * GET /store/:slug — server-rendered public storefront page.
+ * GET /store/:slug - server-rendered public storefront page.
  * Loads the public store and the first page of active products and returns
  * fully-rendered HTML so share links work without any client-side JS.
  */
