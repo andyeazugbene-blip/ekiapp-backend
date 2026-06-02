@@ -37,34 +37,44 @@ function truncate(value: string | null | undefined, maxLength: number): string {
   return `${normalized.slice(0, maxLength - 1).trimEnd()}...`;
 }
 
+function buildProductCode(title: string): string {
+  const initials = title
+    .split(/\s+/)
+    .map((part) => part.trim().charAt(0))
+    .filter(Boolean)
+    .slice(0, 2)
+    .join("");
+
+  return (initials || title.replace(/[^a-z0-9]/gi, "").slice(0, 2) || "EK").toUpperCase();
+}
+
 function renderProduct(product: PublicProduct): string {
   const image = product.images[0];
+  const productCode = buildProductCode(product.title);
   const imageEl = image
     ? `<img src="${escape(image)}" alt="${escape(product.title)}" loading="lazy" />`
     : `<div class="placeholder">No image</div>`;
   const inStock = product.stock > 0;
-  const stockBadge = inStock
-    ? ""
-    : `<span class="product-soldout">Sold out</span>`;
-  const summary = truncate(product.description, 96);
+  const stockBadge = `<span class="product-stock${inStock ? "" : " is-soldout"}">${inStock ? `${Math.max(product.stock, 1)} in stock` : "Sold out"}</span>`;
+  const summary = truncate(product.description, 72);
   return `
   <li class="product${inStock ? "" : " is-soldout"}">
     <button class="product-image product-open" type="button" data-product="${escape(product.id)}">
       ${imageEl}
+      <span class="product-code">${escape(productCode)}</span>
       ${stockBadge}
     </button>
     <div class="product-body">
       <button class="product-copy product-open" type="button" data-product="${escape(product.id)}">
         <h3 class="product-title">${escape(product.title)}</h3>
       </button>
-      <p class="product-meta">${escape(product.category || "Foodstuff")} - ${inStock ? "Ready to order" : "Currently unavailable"}</p>
+      <p class="product-meta">${escape(product.category || "Foodstuff")} · 2-4 days</p>
       ${summary ? `<p class="product-summary">${escape(summary)}</p>` : ""}
-      <p class="product-price">${escape(formatPrice(product.priceInCents, product.currency))}</p>
       <div class="product-actions">
-        <button class="btn btn-card product-open" type="button" data-product="${escape(product.id)}">See details</button>
+        <p class="product-price">${escape(formatPrice(product.priceInCents, product.currency))}</p>
         ${
           inStock
-            ? `<button class="btn btn-primary product-add" type="button" data-product="${escape(product.id)}">Add to cart</button>`
+            ? `<button class="product-add-icon product-add" type="button" data-product="${escape(product.id)}" aria-label="Add ${escape(product.title)} to cart">+</button>`
             : `<button class="btn btn-disabled" type="button" disabled>Sold out</button>`
         }
       </div>
@@ -79,7 +89,7 @@ function renderStorePage(store: PublicStore, products: PublicProduct[]): string 
            <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
              <path fill="currentColor" d="M8 0a8 8 0 1 0 0 16A8 8 0 0 0 8 0zm3.78 6.28-4.5 4.5a.75.75 0 0 1-1.06 0l-2-2a.75.75 0 1 1 1.06-1.06L6.75 9.19l3.97-3.97a.75.75 0 1 1 1.06 1.06z"/>
            </svg>
-           Verified
+           Verified Vendor
          </span>`
       : "";
 
@@ -87,10 +97,6 @@ function renderStorePage(store: PublicStore, products: PublicProduct[]): string 
   const productCount = store.totalProducts;
   const locationLabel = escape(location || store.country || "United Kingdom");
   const serializedProducts = JSON.stringify(products);
-
-  const cover = store.coverImage
-    ? `<div class="cover" style="background-image:url('${escape(store.coverImage)}')"></div>`
-    : `<div class="cover cover-placeholder"></div>`;
 
   const avatar = store.avatar
     ? `<img class="avatar" src="${escape(store.avatar)}" alt="${escape(store.storeName)}" />`
@@ -109,7 +115,6 @@ function renderStorePage(store: PublicStore, products: PublicProduct[]): string 
            </div>
          </div>`
       : "";
-
   const productsHtml =
     products.length > 0
       ? `<ul class="products">${products.map(renderProduct).join("")}</ul>`
@@ -163,71 +168,72 @@ function renderStorePage(store: PublicStore, products: PublicProduct[]): string 
       -moz-osx-font-smoothing:grayscale;
     }
     .serif{font-family:'Fraunces',Georgia,'Times New Roman',serif;letter-spacing:-0.01em}
-    .container{max-width:1120px;margin:0 auto;padding:0 24px}
+    .container{max-width:1240px;margin:0 auto;padding:0 18px}
 
     /* Top nav strip */
     .topbar{
-      background:var(--surface);
-      border-bottom:1px solid var(--border-soft);
-      position:sticky;top:0;z-index:10;
-      backdrop-filter:saturate(180%) blur(12px);
+      padding:0;
+      background:#174C3A;
+      position:sticky;top:0;z-index:20;
+      border-bottom:1px solid rgba(255,255,255,.08);
     }
     .topbar-inner{
       display:flex;align-items:center;justify-content:space-between;
-      height:56px;
+      min-height:42px;
+      gap:12px;
     }
     .brand{
-      display:inline-flex;align-items:center;gap:8px;
-      font-family:'Fraunces',Georgia,serif;
-      font-weight:700;font-size:20px;letter-spacing:-0.02em;
-      color:var(--text);text-decoration:none;
+      display:inline-flex;align-items:center;
+      font-weight:800;font-size:22px;letter-spacing:-0.04em;
+      color:#fff;text-decoration:none;
     }
-    .brand-dot{
-      width:8px;height:8px;border-radius:50%;
-      background:var(--accent);
-      display:inline-block;
+    .topbar-caption{
+      flex:1;
+      text-align:center;
+      color:rgba(255,255,255,.78);
+      font-size:10px;
+      font-weight:600;
     }
     .topbar-actions{display:flex;gap:8px;align-items:center}
-
-    /* Cover */
-    .cover{
-      height:280px;
-      background-color:var(--surface-2);
-      background-size:cover;background-position:center;
-      border-bottom:1px solid var(--border-soft);
+    .topbar-cart{
+      min-height:28px;
+      padding:0 14px;
+      border-radius:999px;
+      border:0;
+      background:rgba(255,255,255,.14);
+      color:#fff;
+      font:inherit;
+      font-size:11px;
+      font-weight:700;
+      cursor:pointer;
     }
-    .cover-placeholder{
-      background:radial-gradient(120% 120% at 50% 0%,#2D6B59 0%,#1F4D40 55%,#163A30 100%);
-    }
+    .topbar-cart:hover{background:rgba(255,255,255,.2)}
 
     /* Header card */
-    .header{margin-top:-72px;position:relative;z-index:1}
+    .header{padding:14px 0 8px;position:relative;z-index:1}
     .header-card{
       background:var(--surface);
-      border:1px solid var(--border);
-      border-radius:20px;
-      padding:32px 36px 28px;
-      box-shadow:0 8px 32px rgba(31,27,22,.06);
+      border:1px solid #E2EAE5;
+      border-radius:10px;
+      padding:18px 18px 14px;
+      box-shadow:0 8px 24px rgba(20,42,34,.04);
     }
-    .header-row{display:flex;gap:24px;align-items:flex-start}
+    .header-row{display:flex;gap:16px;align-items:flex-start}
     .avatar{
-      width:104px;height:104px;border-radius:18px;
-      border:3px solid var(--surface);
-      background:var(--surface);
+      width:56px;height:56px;border-radius:12px;
+      border:0;
+      background:#174C3A;
       object-fit:cover;flex-shrink:0;
-      box-shadow:0 4px 16px rgba(31,27,22,.08);
-      margin-top:-56px;
     }
     .avatar-placeholder{
       display:flex;align-items:center;justify-content:center;
-      font-family:'Fraunces',Georgia,serif;
-      font-size:42px;font-weight:700;
-      color:var(--accent);
-      background:var(--accent-soft);
+      font-size:20px;font-weight:800;
+      color:#fff;
+      background:#174C3A;
     }
     .meta{flex:1;min-width:0}
     .store-name{
-      margin:0;font-size:36px;font-weight:600;line-height:1.15;
+      margin:0;font-size:28px;font-weight:700;line-height:1.12;
       letter-spacing:-0.02em;
       display:flex;align-items:center;gap:12px;flex-wrap:wrap;
     }
@@ -242,61 +248,48 @@ function renderStorePage(store: PublicStore, products: PublicProduct[]): string 
       color:var(--accent);
     }
     .location{
-      margin:8px 0 0;color:var(--text-muted);font-size:14px;
+      margin:6px 0 0;color:var(--text-muted);font-size:12px;
       display:flex;align-items:center;gap:6px;
     }
     .location svg{flex-shrink:0;opacity:.7}
     .description{
-      margin:18px 0 0;color:var(--text);font-size:16px;line-height:1.6;
-      max-width:64ch;
+      margin:10px 0 0;color:var(--text-muted);font-size:13px;line-height:1.55;
+      max-width:none;
     }
     .delivery{
-      margin:20px 0 0;
+      margin:12px 0 0;
       display:flex;flex-wrap:wrap;align-items:center;gap:10px;
     }
     .delivery-label{
-      font-size:12px;font-weight:600;color:var(--text-muted);
+      font-size:12px;font-weight:700;color:var(--text-muted);
       text-transform:uppercase;letter-spacing:0.06em;
     }
     .chips{display:flex;flex-wrap:wrap;gap:6px}
     .chip{
-      font-size:13px;padding:5px 11px;border-radius:999px;
-      background:var(--surface-2);color:var(--text);
-      border:1px solid var(--border);
+      font-size:12px;padding:6px 12px;border-radius:999px;
+      background:#F3EEE3;color:var(--text);
+      border:1px solid #E7DDCC;
     }
-    .actions{
-      display:flex;gap:10px;flex-wrap:wrap;
-      margin:24px 0 0;padding-top:24px;
-      border-top:1px solid var(--border-soft);
+    .info-strip{
+      margin-top:12px;
+      min-height:34px;
+      border-radius:6px;
+      border:1px solid #CFE3D8;
+      background:#F3FBF6;
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      gap:14px;
+      color:#174C3A;
+      font-size:11px;
+      font-weight:600;
+      flex-wrap:wrap;
+      padding:8px 10px;
     }
-    .stats{
-      margin:22px 0 0;
-      display:grid;
-      grid-template-columns:repeat(3,minmax(0,1fr));
-      gap:12px;
-    }
-    .stat{
-      border:1px solid var(--border-soft);
-      border-radius:14px;
-      background:#FBFAF7;
-      padding:14px 16px;
-      min-width:0;
-    }
-    .stat-value{
-      display:block;
-      color:var(--accent);
+    .info-strip a{
+      color:#174C3A;
+      text-decoration:none;
       font-weight:700;
-      font-size:18px;
-      line-height:1.25;
-      white-space:nowrap;
-      overflow:hidden;
-      text-overflow:ellipsis;
-    }
-    .stat-label{
-      display:block;
-      color:var(--text-muted);
-      font-size:12px;
-      margin-top:5px;
     }
     .btn{
       padding:11px 20px;border-radius:12px;
@@ -326,11 +319,11 @@ function renderStorePage(store: PublicStore, products: PublicProduct[]): string 
     .btn svg{width:14px;height:14px}
 
     /* Products section */
-    .section{padding:56px 0 80px}
+    .section{padding:18px 0 80px}
     .store-layout{
       display:grid;
-      grid-template-columns:minmax(0,1fr) 340px;
-      gap:28px;
+      grid-template-columns:minmax(0,1fr) 320px;
+      gap:18px;
       align-items:start;
     }
     .store-content{min-width:0}
@@ -342,14 +335,14 @@ function renderStorePage(store: PublicStore, products: PublicProduct[]): string 
     .cart-panel,
     .track-panel{
       position:sticky;
-      top:88px;
+      top:58px;
     }
     .cart-card{
       background:var(--surface);
       border:1px solid var(--border);
-      border-radius:18px;
-      padding:22px;
-      box-shadow:0 8px 24px rgba(31,27,22,.05);
+      border-radius:14px;
+      padding:18px;
+      box-shadow:0 8px 24px rgba(31,27,22,.04);
     }
     .cart-kicker{
       margin:0;
@@ -361,7 +354,7 @@ function renderStorePage(store: PublicStore, products: PublicProduct[]): string 
     }
     .cart-title{
       margin:10px 0 0;
-      font-size:24px;
+      font-size:22px;
       line-height:1.15;
       font-weight:600;
     }
@@ -465,9 +458,9 @@ function renderStorePage(store: PublicStore, products: PublicProduct[]): string 
     .track-card{
       background:var(--surface);
       border:1px solid var(--border);
-      border-radius:18px;
-      padding:22px;
-      box-shadow:0 8px 24px rgba(31,27,22,.05);
+      border-radius:14px;
+      padding:18px;
+      box-shadow:0 8px 24px rgba(31,27,22,.04);
     }
     .track-copy{
       margin:10px 0 0;
@@ -585,23 +578,23 @@ function renderStorePage(store: PublicStore, products: PublicProduct[]): string 
     }
     .section-header{
       display:flex;align-items:baseline;justify-content:space-between;
-      margin-bottom:28px;gap:16px;flex-wrap:wrap;
+      margin-bottom:16px;gap:16px;flex-wrap:wrap;
     }
     .section-title{
-      margin:0;font-size:24px;font-weight:600;
+      margin:0;font-size:17px;font-weight:700;
       letter-spacing:-0.01em;
     }
     .section-count{
-      color:var(--text-muted);font-size:14px;font-weight:500;
+      color:var(--text-muted);font-size:12px;font-weight:500;
     }
     .products{
       list-style:none;padding:0;margin:0;
-      display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:20px;
+      display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px;
     }
     .product{
       background:var(--surface);
       border:1px solid var(--border);
-      border-radius:14px;
+      border-radius:10px;
       overflow:hidden;
       display:flex;flex-direction:column;
       transition:transform .18s ease, box-shadow .18s ease, border-color .18s ease;
@@ -626,7 +619,7 @@ function renderStorePage(store: PublicStore, products: PublicProduct[]): string 
     }
     .product.is-soldout{opacity:.72}
     .product-image{
-      aspect-ratio:1/1;background:var(--surface-2);overflow:hidden;
+      aspect-ratio:1.28/1;background:#EEF8EE;overflow:hidden;
       position:relative;
     }
     .product-image img{
@@ -646,38 +639,91 @@ function renderStorePage(store: PublicStore, products: PublicProduct[]): string 
       letter-spacing:0.04em;text-transform:uppercase;
       backdrop-filter:blur(4px);
     }
-    .product-body{padding:16px 16px 18px}
+    .product-code{
+      position:absolute;
+      left:50%;
+      top:50%;
+      transform:translate(-50%,-50%);
+      display:inline-flex;
+      align-items:center;
+      justify-content:center;
+      min-width:46px;
+      min-height:24px;
+      padding:0 10px;
+      border-radius:8px;
+      background:#CFE8D6;
+      color:#2E664F;
+      font-size:11px;
+      font-weight:700;
+      letter-spacing:.02em;
+      z-index:2;
+    }
+    .product-stock{
+      position:absolute;
+      top:8px;
+      right:8px;
+      display:inline-flex;
+      align-items:center;
+      min-height:20px;
+      padding:0 7px;
+      border-radius:999px;
+      background:#2D6A4F;
+      color:#fff;
+      font-size:9px;
+      font-weight:700;
+      z-index:2;
+    }
+    .product-stock.is-soldout{background:#6E675E}
+    .product-body{padding:12px}
     .product-title{
-      margin:0;font-size:15px;font-weight:500;line-height:1.4;
+      margin:0;font-size:13px;font-weight:700;line-height:1.35;
       color:var(--text);
       display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;
-      min-height:42px;
+      min-height:36px;
     }
     .product-price{
-      margin:8px 0 0;font-weight:700;font-size:17px;
+      margin:0;font-weight:700;font-size:18px;
       color:var(--text);
       font-family:'Fraunces',Georgia,serif;
       letter-spacing:-0.01em;
     }
     .product-meta{
-      margin:6px 0 0;
+      margin:4px 0 0;
       color:var(--text-muted);
-      font-size:12px;
+      font-size:10px;
       line-height:1.45;
     }
     .product-summary{
-      margin:10px 0 0;
+      margin:8px 0 0;
       color:var(--text-muted);
-      font-size:13px;
+      font-size:11px;
       line-height:1.55;
-      min-height:40px;
+      min-height:34px;
     }
     .product-actions{
-      margin-top:14px;
+      margin-top:8px;
       display:flex;
       gap:10px;
-      flex-wrap:wrap;
+      align-items:center;
+      justify-content:space-between;
     }
+    .product-add-icon{
+      width:24px;
+      height:24px;
+      min-width:24px;
+      border-radius:6px;
+      border:0;
+      background:#174C3A;
+      color:#fff;
+      font-size:18px;
+      font-weight:700;
+      line-height:1;
+      display:inline-flex;
+      align-items:center;
+      justify-content:center;
+      cursor:pointer;
+    }
+    .product-add-icon:hover{background:#123A2D}
 
     /* Empty */
     .empty{
@@ -827,24 +873,23 @@ function renderStorePage(store: PublicStore, products: PublicProduct[]): string 
 
     @media (max-width:720px){
       .container{padding:0 16px}
-      .cover{height:200px}
-      .header{margin-top:-56px}
-      .header-card{padding:24px 20px 22px;border-radius:16px}
-      .header-row{flex-direction:column;gap:0}
-      .avatar{width:88px;height:88px;border-radius:14px;margin-top:-44px}
-      .store-name{font-size:28px;margin-top:14px}
-      .description{font-size:15px;margin-top:14px}
-      .stats{grid-template-columns:1fr}
-      .actions{margin-top:20px;padding-top:20px}
-      .btn{flex:1;justify-content:center}
-      .section{padding:40px 0 56px}
+      .topbar-caption{display:none}
+      .topbar-inner{min-height:48px}
+      .topbar-cart{padding:0 12px}
+      .header-card{padding:16px;border-radius:12px}
+      .header-row{flex-direction:column;gap:12px}
+      .avatar{width:52px;height:52px;border-radius:10px}
+      .store-name{font-size:24px}
+      .description{font-size:14px}
+      .btn{justify-content:center}
+      .section{padding:12px 0 56px}
       .store-layout{grid-template-columns:1fr}
       .sidebar-stack{gap:14px}
       .cart-panel,.track-panel{position:static}
-      .section-title{font-size:20px}
+      .section-title{font-size:18px}
       .products{grid-template-columns:repeat(2,1fr);gap:12px}
-      .product-body{padding:12px 12px 14px}
-      .product-title{font-size:14px;min-height:36px}
+      .product-body{padding:10px 10px 12px}
+      .product-title{font-size:13px;min-height:34px}
       .product-summary{min-height:0}
       .product-price{font-size:15px}
       .product-modal-card{margin:18px 14px}
@@ -859,11 +904,13 @@ function renderStorePage(store: PublicStore, products: PublicProduct[]): string 
 <body>
   <nav class="topbar">
     <div class="container topbar-inner">
-      <span class="brand"><span class="brand-dot"></span> Culinary Tales</span>
+      <a class="brand" href="${escape(store.shareUrl)}">eki.</a>
+      <span class="topbar-caption">Auto-synced from Eki app</span>
+      <div class="topbar-actions">
+        <button class="topbar-cart" id="topbar-cart" type="button">View Cart (0)</button>
+      </div>
     </div>
   </nav>
-
-  ${cover}
 
   <header class="header container">
     <div class="header-card">
@@ -879,28 +926,19 @@ function renderStorePage(store: PublicStore, products: PublicProduct[]): string 
           </p>` : ""}
           ${description}
           ${deliveryCountries}
-          <div class="stats">
-            <div class="stat">
-              <span class="stat-value">${products.length}</span>
-              <span class="stat-label">Live products</span>
-            </div>
-            <div class="stat">
-              <span class="stat-value">${store.verificationStatus === "VERIFIED" ? "Verified" : "New"}</span>
-              <span class="stat-label">Store status</span>
-            </div>
-            <div class="stat">
-              <span class="stat-value">${locationLabel}</span>
-              <span class="stat-label">Ships from</span>
-            </div>
+          <div class="info-strip">
+            <span>Secure checkout</span>
+            <span>·</span>
+            <span>Instant confirmation</span>
+            <span>·</span>
+            <a href="#track-order">Track in Eki</a>
           </div>
-          <div class="actions">
-            <button class="btn btn-primary" id="copy-link" type="button">
+          <div class="actions" style="margin-top:14px;display:flex;gap:10px;flex-wrap:wrap;">
+            <button class="btn btn-card" id="copy-link" type="button">
               <svg viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M9.5 1a.5.5 0 0 0 0 1H13v3.5a.5.5 0 0 0 1 0V1.5a.5.5 0 0 0-.5-.5h-4zM2 2.5A1.5 1.5 0 0 1 3.5 1h3a.5.5 0 0 1 0 1h-3a.5.5 0 0 0-.5.5v10a.5.5 0 0 0 .5.5h6a.5.5 0 0 0 .5-.5v-3a.5.5 0 0 1 1 0v3A1.5 1.5 0 0 1 9.5 14h-6A1.5 1.5 0 0 1 2 12.5v-10z"/><path fill="currentColor" d="M14.354 2.354a.5.5 0 0 0-.708-.708L7.5 7.793 5.354 5.646a.5.5 0 1 0-.708.708l2.5 2.5a.5.5 0 0 0 .708 0l6.5-6.5z"/></svg>
               Copy share link
             </button>
             <a class="btn btn-secondary" href="#products">View products</a>
-            <a class="btn btn-secondary" href="#cart-panel">Open cart</a>
-            <a class="btn btn-secondary" href="#track-order">Track my order</a>
           </div>
         </div>
       </div>
@@ -911,7 +949,7 @@ function renderStorePage(store: PublicStore, products: PublicProduct[]): string 
     <div class="store-layout">
       <section class="store-content" id="products">
         <div class="section-header">
-          <h2 class="section-title serif">Products</h2>
+          <h2 class="section-title">All Products</h2>
           <span class="section-count">
             ${productCount} ${productCount === 1 ? "item" : "items"}
           </span>
@@ -922,9 +960,9 @@ function renderStorePage(store: PublicStore, products: PublicProduct[]): string 
       <div class="sidebar-stack">
         <aside class="cart-panel" id="cart-panel">
           <div class="cart-card">
-            <p class="cart-kicker">Buyer basket</p>
-            <h2 class="cart-title serif">See your cart clearly</h2>
-            <p class="cart-copy">Add products, review exactly what is inside, then jump into tracking or continue your buyer checkout with the same store link.</p>
+            <p class="cart-kicker">Your basket</p>
+            <h2 class="cart-title serif">Ready to check out</h2>
+            <p class="cart-copy">See exactly what is in your cart, then continue with this store's secure buyer checkout.</p>
             <div class="cart-items" id="cart-items">
               <div class="cart-empty">
                 <p class="cart-empty-title">Your cart is empty</p>
@@ -936,17 +974,17 @@ function renderStorePage(store: PublicStore, products: PublicProduct[]): string 
               <div class="cart-row"><span>Subtotal</span><strong id="cart-total">${escape(formatPrice(0, products[0]?.currency || "GBP"))}</strong></div>
             </div>
             <div class="cart-panel-actions">
-              <button class="btn btn-primary" type="button" id="checkout-btn" disabled>Review basket</button>
+              <button class="btn btn-primary" type="button" id="checkout-btn" disabled>View Cart</button>
               <button class="btn btn-secondary" type="button" id="copy-store-link">Copy store link</button>
             </div>
-            <p class="cart-note">Tip: use the tracker below with the same checkout email any time you want to reopen a paid order.</p>
+            <p class="cart-note">Tip: use the order tracker below with the same checkout email any time you want to reopen a paid order.</p>
           </div>
         </aside>
 
         <aside class="track-panel" id="track-order">
           <div class="track-card">
-            <p class="cart-kicker">Order tracking</p>
-            <h2 class="cart-title serif">Track an order from email</h2>
+            <p class="cart-kicker">Find your order</p>
+            <h2 class="cart-title serif">Track from your email</h2>
             <p class="track-copy">Enter the email used when the order was placed. We will send a 6-digit code, then show the matching order cards right here.</p>
             <div class="tracker-form">
               <div>
@@ -1009,6 +1047,7 @@ function renderStorePage(store: PublicStore, products: PublicProduct[]): string 
       var btn=document.getElementById('copy-link');
       var toast=document.getElementById('toast');
       var cartToast=document.getElementById('cart-toast');
+      var topbarCart=document.getElementById('topbar-cart');
       var copyStoreLink=document.getElementById('copy-store-link');
       var modal=document.getElementById('product-modal');
       var closeModalBtn=document.getElementById('close-product-modal');
@@ -1135,6 +1174,13 @@ function renderStorePage(store: PublicStore, products: PublicProduct[]): string 
         copyStoreLink.addEventListener('click',function(){ btn.click(); });
       }
 
+      if(topbarCart){
+        topbarCart.addEventListener('click',function(){
+          var cartPanel=document.getElementById('cart-panel');
+          if(cartPanel) cartPanel.scrollIntoView({behavior:'smooth',block:'start'});
+        });
+      }
+
       function money(priceInCents,currency){
         try{
           return new Intl.NumberFormat('en-US',{style:'currency',currency:(currency||'GBP').toUpperCase()}).format((priceInCents||0)/100);
@@ -1151,6 +1197,7 @@ function renderStorePage(store: PublicStore, products: PublicProduct[]): string 
           cartCountEl.textContent='0';
           cartTotalEl.textContent=money(0, products[0] && products[0].currency || 'GBP');
           checkoutBtn.disabled=true;
+          if(topbarCart) topbarCart.textContent='View Cart (0)';
           return;
         }
 
@@ -1177,6 +1224,7 @@ function renderStorePage(store: PublicStore, products: PublicProduct[]): string 
         cartCountEl.textContent=String(totalCount);
         cartTotalEl.textContent=money(totalCents,currency);
         checkoutBtn.disabled=false;
+        if(topbarCart) topbarCart.textContent='View Cart ('+String(totalCount)+')';
       }
 
       function addToCart(productId){
