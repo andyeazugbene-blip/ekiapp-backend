@@ -41,13 +41,24 @@ function renderProduct(product: PublicProduct): string {
     : `<span class="product-soldout">Sold out</span>`;
   return `
   <li class="product${inStock ? "" : " is-soldout"}">
-    <div class="product-image">
+    <button class="product-image product-open" type="button" data-product="${escape(product.id)}">
       ${imageEl}
       ${stockBadge}
-    </div>
+    </button>
     <div class="product-body">
-      <h3 class="product-title">${escape(product.title)}</h3>
+      <button class="product-copy product-open" type="button" data-product="${escape(product.id)}">
+        <h3 class="product-title">${escape(product.title)}</h3>
+      </button>
+      <p class="product-meta">${escape(product.category || "Foodstuff")} · ${inStock ? "Ready to order" : "Currently unavailable"}</p>
       <p class="product-price">${escape(formatPrice(product.priceInCents, product.currency))}</p>
+      <div class="product-actions">
+        <button class="btn btn-card product-open" type="button" data-product="${escape(product.id)}">View product</button>
+        ${
+          inStock
+            ? `<button class="btn btn-primary product-add" type="button" data-product="${escape(product.id)}">Add to cart</button>`
+            : `<button class="btn btn-disabled" type="button" disabled>Sold out</button>`
+        }
+      </div>
     </div>
   </li>`;
 }
@@ -65,6 +76,8 @@ function renderStorePage(store: PublicStore, products: PublicProduct[]): string 
 
   const location = [store.city, store.country].filter(Boolean).join(", ");
   const productCount = store.totalProducts;
+  const locationLabel = escape(location || store.country || "United Kingdom");
+  const serializedProducts = JSON.stringify(products);
 
   const cover = store.coverImage
     ? `<div class="cover" style="background-image:url('${escape(store.coverImage)}')"></div>`
@@ -76,7 +89,7 @@ function renderStorePage(store: PublicStore, products: PublicProduct[]): string 
 
   const description = store.description
     ? `<p class="description">${escape(store.description)}</p>`
-    : "";
+    : `<p class="description">Authentic foodstuff ready for secure browser ordering and quick order tracking.</p>`;
 
   const deliveryCountries =
     store.deliveryCountries.length > 0
@@ -247,6 +260,35 @@ function renderStorePage(store: PublicStore, products: PublicProduct[]): string 
       margin:24px 0 0;padding-top:24px;
       border-top:1px solid var(--border-soft);
     }
+    .stats{
+      margin:22px 0 0;
+      display:grid;
+      grid-template-columns:repeat(3,minmax(0,1fr));
+      gap:12px;
+    }
+    .stat{
+      border:1px solid var(--border-soft);
+      border-radius:14px;
+      background:#FBFAF7;
+      padding:14px 16px;
+      min-width:0;
+    }
+    .stat-value{
+      display:block;
+      color:var(--accent);
+      font-weight:700;
+      font-size:18px;
+      line-height:1.25;
+      white-space:nowrap;
+      overflow:hidden;
+      text-overflow:ellipsis;
+    }
+    .stat-label{
+      display:block;
+      color:var(--text-muted);
+      font-size:12px;
+      margin-top:5px;
+    }
     .btn{
       padding:11px 20px;border-radius:12px;
       font-weight:600;font-size:14px;
@@ -257,6 +299,14 @@ function renderStorePage(store: PublicStore, products: PublicProduct[]): string 
     }
     .btn-primary{background:var(--accent);color:#fff}
     .btn-primary:hover{background:var(--accent-hover)}
+    .btn-card{
+      background:var(--surface);color:var(--accent);
+      border-color:var(--border);
+    }
+    .btn-card:hover{background:var(--accent-soft)}
+    .btn-disabled{
+      background:#EAE6DE;color:#8B8275;border-color:#E0D7C9;cursor:not-allowed;
+    }
     .btn-secondary{
       background:var(--surface);color:var(--text);
       border-color:var(--border);
@@ -268,6 +318,135 @@ function renderStorePage(store: PublicStore, products: PublicProduct[]): string 
 
     /* Products section */
     .section{padding:56px 0 80px}
+    .store-layout{
+      display:grid;
+      grid-template-columns:minmax(0,1fr) 340px;
+      gap:28px;
+      align-items:start;
+    }
+    .store-content{min-width:0}
+    .cart-panel{
+      position:sticky;
+      top:88px;
+    }
+    .cart-card{
+      background:var(--surface);
+      border:1px solid var(--border);
+      border-radius:18px;
+      padding:22px;
+      box-shadow:0 8px 24px rgba(31,27,22,.05);
+    }
+    .cart-kicker{
+      margin:0;
+      color:var(--text-muted);
+      font-size:11px;
+      font-weight:700;
+      text-transform:uppercase;
+      letter-spacing:.08em;
+    }
+    .cart-title{
+      margin:10px 0 0;
+      font-size:24px;
+      line-height:1.15;
+      font-weight:600;
+    }
+    .cart-copy{
+      margin:10px 0 0;
+      color:var(--text-muted);
+      font-size:14px;
+      line-height:1.55;
+    }
+    .cart-items{
+      margin-top:20px;
+      display:flex;
+      flex-direction:column;
+      gap:10px;
+    }
+    .cart-empty{
+      border:1px dashed var(--border);
+      border-radius:14px;
+      padding:18px 16px;
+      background:#FBFAF7;
+    }
+    .cart-empty-title{
+      margin:0;
+      font-weight:600;
+      font-size:15px;
+    }
+    .cart-empty-copy{
+      margin:6px 0 0;
+      color:var(--text-muted);
+      font-size:13px;
+    }
+    .cart-item{
+      display:flex;
+      justify-content:space-between;
+      gap:12px;
+      border:1px solid var(--border-soft);
+      border-radius:14px;
+      padding:12px 14px;
+      background:#FBFAF7;
+    }
+    .cart-item-title{
+      margin:0;
+      font-size:14px;
+      font-weight:600;
+      line-height:1.4;
+    }
+    .cart-item-meta{
+      margin:5px 0 0;
+      color:var(--text-muted);
+      font-size:12px;
+    }
+    .cart-item-actions{
+      display:flex;
+      align-items:center;
+      gap:8px;
+      flex-shrink:0;
+    }
+    .qty-btn{
+      width:28px;
+      height:28px;
+      border-radius:999px;
+      border:1px solid var(--border);
+      background:var(--surface);
+      color:var(--accent);
+      font:inherit;
+      cursor:pointer;
+    }
+    .qty-value{
+      min-width:14px;
+      text-align:center;
+      font-size:13px;
+      font-weight:700;
+    }
+    .cart-summary{
+      margin-top:18px;
+      padding-top:16px;
+      border-top:1px solid var(--border-soft);
+      display:flex;
+      flex-direction:column;
+      gap:10px;
+    }
+    .cart-row{
+      display:flex;
+      justify-content:space-between;
+      gap:16px;
+      font-size:14px;
+      color:var(--text);
+    }
+    .cart-panel-actions{
+      display:flex;
+      flex-direction:column;
+      gap:10px;
+      margin-top:16px;
+    }
+    .cart-note{
+      margin:12px 0 0;
+      color:var(--text-muted);
+      font-size:12px;
+      line-height:1.55;
+    }
     .section-header{
       display:flex;align-items:baseline;justify-content:space-between;
       margin-bottom:28px;gap:16px;flex-wrap:wrap;
@@ -295,6 +474,19 @@ function renderStorePage(store: PublicStore, products: PublicProduct[]): string 
       transform:translateY(-2px);
       box-shadow:0 12px 28px rgba(31,27,22,.08);
       border-color:#D9CFBE;
+    }
+    .product-copy,
+    .product-image{
+      appearance:none;
+      border:0;
+      padding:0;
+      margin:0;
+      text-align:left;
+      background:transparent;
+      cursor:pointer;
+      width:100%;
+      font:inherit;
+      color:inherit;
     }
     .product.is-soldout{opacity:.72}
     .product-image{
@@ -331,6 +523,18 @@ function renderStorePage(store: PublicStore, products: PublicProduct[]): string 
       font-family:'Fraunces',Georgia,serif;
       letter-spacing:-0.01em;
     }
+    .product-meta{
+      margin:6px 0 0;
+      color:var(--text-muted);
+      font-size:12px;
+      line-height:1.45;
+    }
+    .product-actions{
+      margin-top:14px;
+      display:flex;
+      gap:10px;
+      flex-wrap:wrap;
+    }
 
     /* Empty */
     .empty{
@@ -357,6 +561,116 @@ function renderStorePage(store: PublicStore, products: PublicProduct[]): string 
       z-index:50;
     }
     .toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+    #cart-toast{bottom:88px}
+
+    /* Product modal */
+    .product-modal{
+      position:fixed;
+      inset:0;
+      display:none;
+      z-index:60;
+    }
+    .product-modal.show{display:block}
+    .product-modal-backdrop{
+      position:absolute;
+      inset:0;
+      background:rgba(15,20,18,.58);
+    }
+    .product-modal-card{
+      position:relative;
+      max-width:860px;
+      margin:48px auto;
+      background:var(--surface);
+      border-radius:24px;
+      overflow:hidden;
+      border:1px solid var(--border);
+      box-shadow:0 24px 48px rgba(0,0,0,.18);
+    }
+    .modal-close{
+      position:absolute;
+      top:18px;
+      right:18px;
+      width:40px;
+      height:40px;
+      border-radius:999px;
+      border:0;
+      background:rgba(255,255,255,.92);
+      font-size:28px;
+      line-height:1;
+      color:var(--text);
+      cursor:pointer;
+      z-index:1;
+    }
+    .product-modal-media{
+      height:300px;
+      background:var(--surface-2);
+    }
+    .product-modal-media img{
+      width:100%;
+      height:100%;
+      object-fit:cover;
+      display:block;
+    }
+    .placeholder-modal{
+      font-size:15px;
+      min-height:300px;
+    }
+    .product-modal-body{
+      padding:24px;
+    }
+    .modal-eyebrow{
+      margin:0;
+      color:var(--text-muted);
+      font-size:11px;
+      font-weight:700;
+      text-transform:uppercase;
+      letter-spacing:.08em;
+    }
+    .modal-title{
+      margin:10px 0 0;
+      font-size:30px;
+      line-height:1.15;
+      font-weight:600;
+    }
+    .modal-meta{
+      margin:10px 0 0;
+      color:var(--text-muted);
+      font-size:14px;
+    }
+    .modal-description{
+      margin:14px 0 0;
+      font-size:15px;
+      line-height:1.65;
+    }
+    .modal-footer{
+      margin-top:22px;
+      display:flex;
+      justify-content:space-between;
+      gap:16px;
+      align-items:flex-end;
+      flex-wrap:wrap;
+    }
+    .modal-price{
+      margin:0;
+      font-family:'Fraunces',Georgia,serif;
+      font-size:26px;
+      font-weight:700;
+      line-height:1.1;
+    }
+    .modal-stock{
+      margin:8px 0 0;
+      color:var(--accent);
+      font-size:12px;
+      font-weight:700;
+      text-transform:uppercase;
+      letter-spacing:.04em;
+    }
+    .modal-actions{
+      display:flex;
+      gap:10px;
+      flex-wrap:wrap;
+      justify-content:flex-end;
+    }
 
     /* Footer */
     .footer{
@@ -377,14 +691,22 @@ function renderStorePage(store: PublicStore, products: PublicProduct[]): string 
       .avatar{width:88px;height:88px;border-radius:14px;margin-top:-44px}
       .store-name{font-size:28px;margin-top:14px}
       .description{font-size:15px;margin-top:14px}
+      .stats{grid-template-columns:1fr}
       .actions{margin-top:20px;padding-top:20px}
       .btn{flex:1;justify-content:center}
       .section{padding:40px 0 56px}
+      .store-layout{grid-template-columns:1fr}
+      .cart-panel{position:static}
       .section-title{font-size:20px}
       .products{grid-template-columns:repeat(2,1fr);gap:12px}
       .product-body{padding:12px 12px 14px}
       .product-title{font-size:14px;min-height:36px}
       .product-price{font-size:15px}
+      .product-modal-card{margin:18px 14px}
+      .product-modal-media{height:220px}
+      .modal-title{font-size:24px}
+      .modal-footer{align-items:stretch}
+      .modal-actions{width:100%}
     }
   </style>
 </head>
@@ -411,12 +733,27 @@ function renderStorePage(store: PublicStore, products: PublicProduct[]): string 
           </p>` : ""}
           ${description}
           ${deliveryCountries}
+          <div class="stats">
+            <div class="stat">
+              <span class="stat-value">${products.length}</span>
+              <span class="stat-label">Live products</span>
+            </div>
+            <div class="stat">
+              <span class="stat-value">${store.verificationStatus === "VERIFIED" ? "Verified" : "New"}</span>
+              <span class="stat-label">Store status</span>
+            </div>
+            <div class="stat">
+              <span class="stat-value">${locationLabel}</span>
+              <span class="stat-label">Ships from</span>
+            </div>
+          </div>
           <div class="actions">
             <button class="btn btn-primary" id="copy-link" type="button">
               <svg viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M9.5 1a.5.5 0 0 0 0 1H13v3.5a.5.5 0 0 0 1 0V1.5a.5.5 0 0 0-.5-.5h-4zM2 2.5A1.5 1.5 0 0 1 3.5 1h3a.5.5 0 0 1 0 1h-3a.5.5 0 0 0-.5.5v10a.5.5 0 0 0 .5.5h6a.5.5 0 0 0 .5-.5v-3a.5.5 0 0 1 1 0v3A1.5 1.5 0 0 1 9.5 14h-6A1.5 1.5 0 0 1 2 12.5v-10z"/><path fill="currentColor" d="M14.354 2.354a.5.5 0 0 0-.708-.708L7.5 7.793 5.354 5.646a.5.5 0 1 0-.708.708l2.5 2.5a.5.5 0 0 0 .708 0l6.5-6.5z"/></svg>
               Copy share link
             </button>
             <a class="btn btn-secondary" href="#products">View products</a>
+            <a class="btn btn-secondary" href="#cart-panel">Open cart</a>
           </div>
         </div>
       </div>
@@ -424,15 +761,40 @@ function renderStorePage(store: PublicStore, products: PublicProduct[]): string 
   </header>
 
   <main class="container section">
-    <div class="section-header">
-      <h2 class="section-title serif">Products</h2>
-      <span class="section-count">
-        ${productCount} ${productCount === 1 ? "item" : "items"}
-      </span>
+    <div class="store-layout">
+      <section class="store-content" id="products">
+        <div class="section-header">
+          <h2 class="section-title serif">Products</h2>
+          <span class="section-count">
+            ${productCount} ${productCount === 1 ? "item" : "items"}
+          </span>
+        </div>
+        ${productsHtml}
+      </section>
+
+      <aside class="cart-panel" id="cart-panel">
+        <div class="cart-card">
+          <p class="cart-kicker">Buyer checkout</p>
+          <h2 class="cart-title serif">Order from this browser link</h2>
+          <p class="cart-copy">Open any product, add it to your cart, then continue with buyer checkout in the app or web flow.</p>
+          <div class="cart-items" id="cart-items">
+            <div class="cart-empty">
+              <p class="cart-empty-title">Your cart is empty</p>
+              <p class="cart-empty-copy">Add a product to start your order.</p>
+            </div>
+          </div>
+          <div class="cart-summary">
+            <div class="cart-row"><span>Items</span><strong id="cart-count">0</strong></div>
+            <div class="cart-row"><span>Subtotal</span><strong id="cart-total">${escape(formatPrice(0, products[0]?.currency || "GBP"))}</strong></div>
+          </div>
+          <div class="cart-panel-actions">
+            <button class="btn btn-primary" type="button" id="checkout-btn" disabled>Continue checkout</button>
+            <button class="btn btn-secondary" type="button" id="copy-store-link">Copy store link</button>
+          </div>
+          <p class="cart-note">For now this shared page keeps buyers on the storefront and prepares the basket cleanly for checkout.</p>
+        </div>
+      </aside>
     </div>
-    <section id="products">
-      ${productsHtml}
-    </section>
   </main>
 
   <footer class="footer">
@@ -442,30 +804,216 @@ function renderStorePage(store: PublicStore, products: PublicProduct[]): string 
   </footer>
 
   <div class="toast" id="toast">Link copied to clipboard</div>
+  <div class="toast" id="cart-toast">Added to cart</div>
+  <div class="product-modal" id="product-modal" aria-hidden="true">
+    <div class="product-modal-backdrop" data-close-product-modal="true"></div>
+    <div class="product-modal-card" role="dialog" aria-modal="true" aria-labelledby="product-modal-title">
+      <button class="modal-close" type="button" id="close-product-modal" aria-label="Close product preview">&times;</button>
+      <div class="product-modal-media" id="product-modal-image-wrap"></div>
+      <div class="product-modal-body">
+        <p class="modal-eyebrow">Shared product</p>
+        <h3 class="modal-title serif" id="product-modal-title"></h3>
+        <p class="modal-meta" id="product-modal-meta"></p>
+        <p class="modal-description" id="product-modal-description"></p>
+        <div class="modal-footer">
+          <div>
+            <p class="modal-price" id="product-modal-price"></p>
+            <p class="modal-stock" id="product-modal-stock"></p>
+          </div>
+          <div class="modal-actions">
+            <button class="btn btn-secondary" type="button" id="modal-close-secondary">Keep browsing</button>
+            <button class="btn btn-primary" type="button" id="modal-add-button">Add to cart</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
 
   <script>
     (function(){
       var btn=document.getElementById('copy-link');
       var toast=document.getElementById('toast');
+      var cartToast=document.getElementById('cart-toast');
+      var copyStoreLink=document.getElementById('copy-store-link');
+      var modal=document.getElementById('product-modal');
+      var closeModalBtn=document.getElementById('close-product-modal');
+      var closeModalSecondary=document.getElementById('modal-close-secondary');
+      var modalImageWrap=document.getElementById('product-modal-image-wrap');
+      var modalTitle=document.getElementById('product-modal-title');
+      var modalMeta=document.getElementById('product-modal-meta');
+      var modalDescription=document.getElementById('product-modal-description');
+      var modalPrice=document.getElementById('product-modal-price');
+      var modalStock=document.getElementById('product-modal-stock');
+      var modalAddButton=document.getElementById('modal-add-button');
+      var cartItemsEl=document.getElementById('cart-items');
+      var cartCountEl=document.getElementById('cart-count');
+      var cartTotalEl=document.getElementById('cart-total');
+      var checkoutBtn=document.getElementById('checkout-btn');
       if(!btn) return;
       var url=${JSON.stringify(store.shareUrl)};
+      var products=${serializedProducts};
+      var storeName=${JSON.stringify(store.storeName)};
+      var storeLocation=${JSON.stringify(locationLabel)};
+      var cart={};
+      var activeProductId=null;
+
+      function showToast(element){
+        if(!element) return;
+        element.classList.add('show');
+        setTimeout(function(){element.classList.remove('show');},1800);
+      }
+
       btn.addEventListener('click',function(){
-        function showToast(){
-          if(!toast) return;
-          toast.classList.add('show');
-          setTimeout(function(){toast.classList.remove('show');},1800);
-        }
         if(navigator.clipboard && navigator.clipboard.writeText){
-          navigator.clipboard.writeText(url).then(showToast,function(){});
+          navigator.clipboard.writeText(url).then(function(){showToast(toast);},function(){});
         } else {
-          // Fallback for older browsers
           var ta=document.createElement('textarea');
           ta.value=url;ta.style.position='fixed';ta.style.opacity='0';
           document.body.appendChild(ta);ta.select();
-          try{document.execCommand('copy');showToast();}catch(_){}
+          try{document.execCommand('copy');showToast(toast);}catch(_){}
           document.body.removeChild(ta);
         }
       });
+
+      if(copyStoreLink){
+        copyStoreLink.addEventListener('click',function(){ btn.click(); });
+      }
+
+      function money(priceInCents,currency){
+        try{
+          return new Intl.NumberFormat('en-US',{style:'currency',currency:(currency||'GBP').toUpperCase()}).format((priceInCents||0)/100);
+        }catch(_){
+          return ((priceInCents||0)/100).toFixed(2)+' '+String(currency||'GBP').toUpperCase();
+        }
+      }
+
+      function renderCart(){
+        var ids=Object.keys(cart);
+        if(!cartItemsEl || !cartCountEl || !cartTotalEl || !checkoutBtn) return;
+        if(ids.length===0){
+          cartItemsEl.innerHTML='<div class="cart-empty"><p class="cart-empty-title">Your cart is empty</p><p class="cart-empty-copy">Add a product to start your order.</p></div>';
+          cartCountEl.textContent='0';
+          cartTotalEl.textContent=money(0, products[0] && products[0].currency || 'GBP');
+          checkoutBtn.disabled=true;
+          return;
+        }
+
+        var totalCount=0;
+        var totalCents=0;
+        var currency=products[0] && products[0].currency || 'GBP';
+
+        cartItemsEl.innerHTML=ids.map(function(id){
+          var product=products.find(function(item){ return item.id===id; });
+          if(!product) return '';
+          var qty=cart[id] || 0;
+          totalCount+=qty;
+          totalCents+=(product.priceInCents||0)*qty;
+          currency=product.currency || currency;
+          return '<div class="cart-item">'
+            + '<div><p class="cart-item-title">'+product.title+'</p><p class="cart-item-meta">Qty '+qty+' · '+money(product.priceInCents,product.currency)+'</p></div>'
+            + '<div class="cart-item-actions">'
+            + '<button class="qty-btn" type="button" data-cart-dec="'+product.id+'">-</button>'
+            + '<span class="qty-value">'+qty+'</span>'
+            + '<button class="qty-btn" type="button" data-cart-inc="'+product.id+'">+</button>'
+            + '</div></div>';
+        }).join('');
+
+        cartCountEl.textContent=String(totalCount);
+        cartTotalEl.textContent=money(totalCents,currency);
+        checkoutBtn.disabled=false;
+      }
+
+      function addToCart(productId){
+        var product=products.find(function(item){ return item.id===productId; });
+        if(!product) return;
+        cart[productId]=(cart[productId]||0)+1;
+        renderCart();
+        showToast(cartToast);
+      }
+
+      function setModalProduct(productId){
+        var product=products.find(function(item){ return item.id===productId; });
+        if(!product || !modal) return;
+        activeProductId=productId;
+        if(modalTitle) modalTitle.textContent=product.title || '';
+        if(modalMeta) modalMeta.textContent=(product.category || 'Foodstuff')+' · Ships from '+storeLocation;
+        if(modalDescription) modalDescription.textContent=product.description || 'Freshly packed and ready for secure checkout.';
+        if(modalPrice) modalPrice.textContent=money(product.priceInCents,product.currency);
+        if(modalStock) modalStock.textContent=product.stock > 0 ? 'In stock' : 'Sold out';
+        if(modalAddButton){
+          modalAddButton.disabled=!(product.stock > 0);
+          modalAddButton.textContent=product.stock > 0 ? 'Add to cart' : 'Sold out';
+        }
+        if(modalImageWrap){
+          modalImageWrap.innerHTML=product.images && product.images[0]
+            ? '<img src="'+product.images[0]+'" alt="'+product.title+'" />'
+            : '<div class="placeholder placeholder-modal">No image</div>';
+        }
+        modal.classList.add('show');
+        modal.setAttribute('aria-hidden','false');
+        document.body.style.overflow='hidden';
+      }
+
+      function closeModal(){
+        if(!modal) return;
+        modal.classList.remove('show');
+        modal.setAttribute('aria-hidden','true');
+        document.body.style.overflow='';
+      }
+
+      document.querySelectorAll('[data-product]').forEach(function(node){
+        node.addEventListener('click',function(){
+          var id=node.getAttribute('data-product');
+          if(id) setModalProduct(id);
+        });
+      });
+
+      document.querySelectorAll('.product-add').forEach(function(node){
+        node.addEventListener('click',function(event){
+          event.stopPropagation();
+          var id=node.getAttribute('data-product');
+          if(id) addToCart(id);
+        });
+      });
+
+      document.addEventListener('click',function(event){
+        var inc=event.target && event.target.getAttribute && event.target.getAttribute('data-cart-inc');
+        var dec=event.target && event.target.getAttribute && event.target.getAttribute('data-cart-dec');
+        if(inc){ addToCart(inc); return; }
+        if(dec){
+          if(cart[dec]) cart[dec]=Math.max(cart[dec]-1,0);
+          if(cart[dec]===0) delete cart[dec];
+          renderCart();
+        }
+      });
+
+      if(closeModalBtn) closeModalBtn.addEventListener('click',closeModal);
+      if(closeModalSecondary) closeModalSecondary.addEventListener('click',closeModal);
+      if(modal){
+        modal.addEventListener('click',function(event){
+          if(event.target && event.target.getAttribute && event.target.getAttribute('data-close-product-modal')==='true'){
+            closeModal();
+          }
+        });
+      }
+      if(modalAddButton){
+        modalAddButton.addEventListener('click',function(){
+          if(activeProductId) addToCart(activeProductId);
+          closeModal();
+          var cartPanel=document.getElementById('cart-panel');
+          if(cartPanel) cartPanel.scrollIntoView({behavior:'smooth',block:'start'});
+        });
+      }
+
+      if(checkoutBtn){
+        checkoutBtn.addEventListener('click',function(){
+          showToast(cartToast);
+          cartToast.textContent='Checkout flow is being handed over to the buyer order flow.';
+          setTimeout(function(){ cartToast.textContent='Added to cart'; },1900);
+        });
+      }
+
+      renderCart();
     })();
   </script>
 </body>
