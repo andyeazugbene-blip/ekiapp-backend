@@ -1,5 +1,5 @@
-import type { PayoutMethod, Prisma, Vendor } from "@prisma/client";
-import { UserRole } from "@prisma/client";
+import { Prisma, UserRole } from "@prisma/client";
+import type { PayoutMethod, Vendor } from "@prisma/client";
 
 import { env } from "../../config/env";
 import { prisma } from "../../lib/prisma";
@@ -36,6 +36,30 @@ async function generateUniqueStoreSlug(storeName: string): Promise<string> {
     });
     return existing !== null;
   });
+}
+
+async function ensureStoreNameAvailable(storeName: string, excludeVendorId?: string): Promise<void> {
+  const existing = await prisma.vendor.findFirst({
+    where: {
+      storeName: {
+        equals: storeName,
+        mode: "insensitive",
+      },
+      ...(excludeVendorId ? { NOT: { id: excludeVendorId } } : {}),
+    },
+    select: { id: true },
+  });
+
+  if (existing) {
+    throw new AppError("Store name already exists", 409);
+  }
+}
+
+function isUniqueViolation(error: unknown, field: string): boolean {
+  return error instanceof Prisma.PrismaClientKnownRequestError
+    && error.code === "P2002"
+    && Array.isArray(error.meta?.target)
+    && error.meta.target.includes(field);
 }
 
 export const vendorsService = {
@@ -138,32 +162,48 @@ export const vendorsService = {
       throw new AppError("Vendor profile already exists", 409);
     }
 
-    const storeSlug = await generateUniqueStoreSlug(input.storeName);
+    await ensureStoreNameAvailable(input.storeName);
 
-    return prisma.$transaction(async (tx) => {
-      const vendor = await tx.vendor.create({
-        data: {
-          userId,
-          storeName: input.storeName,
-          storeSlug,
-          description: input.description,
-          contactEmail: input.contactEmail,
-          contactPhone: input.contactPhone,
-          country: input.country,
-          currency: currencyFromCountry(input.country),
-        },
-      });
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const storeSlug = await generateUniqueStoreSlug(input.storeName);
 
-      await ensureWallet(vendor.id, tx);
+      try {
+        return await prisma.$transaction(async (tx) => {
+          const vendor = await tx.vendor.create({
+            data: {
+              userId,
+              storeName: input.storeName,
+              storeSlug,
+              description: input.description,
+              contactEmail: input.contactEmail,
+              contactPhone: input.contactPhone,
+              country: input.country,
+              currency: currencyFromCountry(input.country),
+            },
+          });
 
-      // Only promote buyers to vendors; never demote admins or other elevated roles.
-      await tx.user.updateMany({
-        where: { id: userId, role: UserRole.BUYER },
-        data: { role: UserRole.VENDOR },
-      });
+          await ensureWallet(vendor.id, tx);
 
-      return vendor;
-    });
+          // Only promote buyers to vendors; never demote admins or other elevated roles.
+          await tx.user.updateMany({
+            where: { id: userId, role: UserRole.BUYER },
+            data: { role: UserRole.VENDOR },
+          });
+
+          return vendor;
+        });
+      } catch (error) {
+        if (isUniqueViolation(error, "storeSlug")) {
+          continue;
+        }
+        if (isUniqueViolation(error, "storeName")) {
+          throw new AppError("Store name already exists", 409);
+        }
+        throw error;
+      }
+    }
+
+    throw new AppError("Unable to create a unique store slug. Please try again.", 409);
   },
 
   async getOwnVendor(userId: string): Promise<Vendor> {
@@ -183,13 +223,27 @@ export const vendorsService = {
       throw new AppError("Vendor profile not found", 404);
     }
 
+    if (
+      input.storeName
+      && input.storeName.trim().toLowerCase() !== vendor.storeName.trim().toLowerCase()
+    ) {
+      await ensureStoreNameAvailable(input.storeName, vendor.id);
+    }
+
     // If storeName changes, only regenerate the slug when the vendor has not
     // explicitly set one yet (legacy rows). We do NOT change a slug that is
     // already in use because share links would break.
-    return prisma.vendor.update({
-      where: { id: vendor.id },
-      data: input,
-    });
+    try {
+      return await prisma.vendor.update({
+        where: { id: vendor.id },
+        data: input,
+      });
+    } catch (error) {
+      if (isUniqueViolation(error, "storeName")) {
+        throw new AppError("Store name already exists", 409);
+      }
+      throw error;
+    }
   },
 
   async createPayoutMethod(

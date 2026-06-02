@@ -1,6 +1,12 @@
 import { describe, it, expect } from "vitest";
 
-import { validateRegisterInput, validateLoginInput, validateForgotPasswordInput, validateResetPasswordInput } from "../modules/auth/auth.validation";
+import {
+  validateRegisterInput,
+  validateLoginInput,
+  validateForgotPasswordInput,
+  validateResetPasswordInput,
+  validateUpdateProfileInput,
+} from "../modules/auth/auth.validation";
 
 describe("Auth Validation", () => {
   describe("validateRegisterInput", () => {
@@ -37,6 +43,16 @@ describe("Auth Validation", () => {
       });
       expect(result.email).toBe("test@example.com");
     });
+
+    it("normalizes phone to a canonical format", () => {
+      const result = validateRegisterInput({
+        email: "test@example.com",
+        password: "Password1",
+        name: "Test User",
+        phone: "+233 56 554 4556",
+      });
+      expect(result.phone).toBe("+233565544556");
+    });
   });
 
   describe("validateLoginInput", () => {
@@ -70,6 +86,13 @@ describe("Auth Validation", () => {
 
     it("rejects short password", () => {
       expect(() => validateResetPasswordInput({ token: "abc", password: "short" })).toThrow();
+    });
+  });
+
+  describe("validateUpdateProfileInput", () => {
+    it("normalizes phone updates", () => {
+      const result = validateUpdateProfileInput({ phone: "+233 (56) 554-4556" });
+      expect(result.phone).toBe("+233565544556");
     });
   });
 });

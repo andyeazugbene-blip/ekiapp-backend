@@ -2,7 +2,7 @@ import crypto from "crypto";
 
 import bcrypt from "bcryptjs";
 import jwt, { type SignOptions } from "jsonwebtoken";
-import { UserRole } from "@prisma/client";
+import { Prisma, UserRole } from "@prisma/client";
 
 import { env } from "../../config/env";
 import { enqueueEmail } from "../../lib/email-queue";
@@ -61,6 +61,31 @@ function signToken(user: { id: string; role: UserRole; email: string; tokenVersi
   return jwt.sign(payload as object, env.jwtSecret, JWT_SIGN_OPTIONS);
 }
 
+function isUniqueViolation(error: unknown, field: string): boolean {
+  return error instanceof Prisma.PrismaClientKnownRequestError
+    && error.code === "P2002"
+    && Array.isArray(error.meta?.target)
+    && error.meta.target.includes(field);
+}
+
+async function ensurePhoneIsAvailable(phone: string | null | undefined, excludeUserId?: string): Promise<void> {
+  if (!phone) {
+    return;
+  }
+
+  const existing = await prisma.user.findFirst({
+    where: {
+      phone,
+      ...(excludeUserId ? { NOT: { id: excludeUserId } } : {}),
+    },
+    select: { id: true },
+  });
+
+  if (existing) {
+    throw new AppError("Phone already registered", 409);
+  }
+}
+
 async function writeAuditLogSafe(data: {
   actorId: string;
   action: string;
@@ -107,18 +132,30 @@ export const authService = {
       throw new AppError("Email already registered", 409);
     }
 
-    const passwordHash = await bcrypt.hash(input.password, BCRYPT_ROUNDS);
+    await ensurePhoneIsAvailable(input.phone);
 
-    const user = await prisma.user.create({
-      data: {
-        email: input.email,
-        name: input.name,
-        password: passwordHash,
-        phone: input.phone,
-        country: input.country,
-        role: UserRole.BUYER,
-      },
-    });
+    const passwordHash = await bcrypt.hash(input.password, BCRYPT_ROUNDS);
+    let user;
+    try {
+      user = await prisma.user.create({
+        data: {
+          email: input.email,
+          name: input.name,
+          password: passwordHash,
+          phone: input.phone,
+          country: input.country,
+          role: UserRole.BUYER,
+        },
+      });
+    } catch (error) {
+      if (isUniqueViolation(error, "email")) {
+        throw new AppError("Email already registered", 409);
+      }
+      if (isUniqueViolation(error, "phone")) {
+        throw new AppError("Phone already registered", 409);
+      }
+      throw error;
+    }
 
     // Send welcome email (non-blocking)
     const welcome = emailTemplates.welcomeBuyer({ name: user.name });
@@ -251,11 +288,23 @@ export const authService = {
       throw new AppError("User not found", 404);
     }
 
-    const updated = await prisma.user.update({
-      where: { id: userId },
-      data: input,
-      include: { vendor: true },
-    });
+    if (input.phone && input.phone !== user.phone) {
+      await ensurePhoneIsAvailable(input.phone, userId);
+    }
+
+    let updated;
+    try {
+      updated = await prisma.user.update({
+        where: { id: userId },
+        data: input,
+        include: { vendor: true },
+      });
+    } catch (error) {
+      if (isUniqueViolation(error, "phone")) {
+        throw new AppError("Phone already registered", 409);
+      }
+      throw error;
+    }
 
     return toAuthUser(updated);
   },

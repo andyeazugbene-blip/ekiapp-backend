@@ -45,6 +45,14 @@ describe("Input Validation", () => {
       expect(result.storeName).toBe("My Store");
     });
 
+    it("normalizes vendor contact phone", () => {
+      const result = validateCreateVendorInput({
+        storeName: "My Store",
+        contactPhone: "+233 56 554 4556",
+      });
+      expect(result.contactPhone).toBe("+233565544556");
+    });
+
     it("rejects empty storeName", () => {
       expect(() => validateCreateVendorInput({ storeName: "" })).toThrow();
     });

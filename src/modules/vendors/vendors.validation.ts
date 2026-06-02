@@ -1,6 +1,7 @@
 import { PayoutMethodType } from "@prisma/client";
 
 import { AppError } from "../../shared/errors/app-error";
+import { normalizePhoneNumber } from "../../shared/utils/phone";
 import type {
   CreatePayoutMethodInput,
   CreateVendorInput,
@@ -58,7 +59,9 @@ export function validateCreateVendorInput(input: unknown): CreateVendorInput {
     storeName,
     description: optionalString(raw.description, "description"),
     contactEmail: optionalString(raw.contactEmail, "contactEmail"),
-    contactPhone: optionalString(raw.contactPhone, "contactPhone"),
+    contactPhone: typeof raw.contactPhone === "string" && raw.contactPhone.trim().length > 0
+      ? normalizePhoneNumber(raw.contactPhone, "contactPhone")
+      : undefined,
     country: optionalString(raw.country, "country"),
   };
 }
@@ -86,7 +89,15 @@ export function validateUpdateVendorInput(input: unknown): UpdateVendorInput {
     update.contactEmail = nullableString(raw.contactEmail, "contactEmail");
   }
   if (raw.contactPhone !== undefined) {
-    update.contactPhone = nullableString(raw.contactPhone, "contactPhone");
+    if (raw.contactPhone === null) {
+      update.contactPhone = null;
+    } else if (typeof raw.contactPhone === "string") {
+      update.contactPhone = raw.contactPhone.trim().length > 0
+        ? normalizePhoneNumber(raw.contactPhone, "contactPhone")
+        : null;
+    } else {
+      throw new AppError("Invalid contactPhone", 400);
+    }
   }
   if (raw.country !== undefined) {
     update.country = nullableString(raw.country, "country");

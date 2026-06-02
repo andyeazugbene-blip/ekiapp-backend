@@ -1,4 +1,5 @@
 import { AppError } from "../../shared/errors/app-error";
+import { normalizePhoneNumber } from "../../shared/utils/phone";
 import type {
   ForgotPasswordInput,
   LoginInput,
@@ -52,7 +53,7 @@ export function validateRegisterInput(input: unknown): RegisterInput {
     email: (email as string).toLowerCase().trim(),
     password: password as string,
     name: (name as string).trim(),
-    phone: typeof phone === "string" && phone.trim().length > 0 ? phone.trim() : undefined,
+    phone: typeof phone === "string" && phone.trim().length > 0 ? normalizePhoneNumber(phone, "phone") : undefined,
     country: typeof country === "string" && country.trim().length > 0 ? country.trim() : undefined,
   };
 }
@@ -93,7 +94,14 @@ export function validateUpdateProfileInput(input: unknown): UpdateProfileInput {
   }
 
   if (raw.phone !== undefined) {
-    update.phone = raw.phone === null ? null : typeof raw.phone === "string" ? raw.phone.trim() || null : null;
+    update.phone =
+      raw.phone === null
+        ? null
+        : typeof raw.phone === "string"
+          ? raw.phone.trim().length > 0
+            ? normalizePhoneNumber(raw.phone, "phone")
+            : null
+          : null;
   }
 
   if (raw.avatar !== undefined) {
