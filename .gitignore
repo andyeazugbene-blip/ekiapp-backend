@@ -20,3 +20,4 @@ OTP_SEED_REPORT.md
 OTP_SEED_REPORT.json
 
 .vercel
+.env*.local
