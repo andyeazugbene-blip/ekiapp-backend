@@ -163,6 +163,7 @@ model Vendor {
   payoutMethods         PayoutMethod[]
   payoutRequests        PayoutRequest[]
   bankAccounts          VendorBankAccount[]
+  promoCodes            PromoCode[]
   createdAt             DateTime                 @default(now())
   updatedAt             DateTime                 @updatedAt
 
@@ -705,20 +706,24 @@ enum PromoType {
 }
 
 model PromoCode {
-  id             String           @id @default(cuid())
-  code           String           @unique
+  id             String            @id @default(cuid())
+  vendorId       String
+  code           String
   type           PromoType
   value          Int
   minOrderAmount Int?
   maxUses        Int?
-  usedCount      Int              @default(0)
-  validFrom      DateTime         @default(now())
+  usedCount      Int               @default(0)
+  validFrom      DateTime          @default(now())
   validUntil     DateTime?
-  isActive       Boolean          @default(true)
+  isActive       Boolean           @default(true)
+  vendor         Vendor            @relation(fields: [vendorId], references: [id], onDelete: Restrict)
   redemptions    PromoRedemption[]
-  createdAt      DateTime         @default(now())
-  updatedAt      DateTime         @updatedAt
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
 
+  @@unique([vendorId, code])
+  @@index([vendorId, isActive])
   @@index([code, isActive])
   @@index([isActive, validFrom, validUntil])
 }

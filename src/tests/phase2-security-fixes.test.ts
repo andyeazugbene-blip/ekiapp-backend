@@ -16,9 +16,10 @@ import bcrypt from "bcryptjs";
 
 vi.mock("../lib/prisma", () => ({
   prisma: {
-    promoCode: { findUnique: vi.fn(), findUniqueOrThrow: vi.fn(), update: vi.fn(), updateMany: vi.fn() },
+    promoCode: { findUnique: vi.fn(), findFirst: vi.fn(), findUniqueOrThrow: vi.fn(), findFirstOrThrow: vi.fn(), update: vi.fn(), updateMany: vi.fn() },
     promoRedemption: { findUnique: vi.fn(), create: vi.fn() },
     order: { findUnique: vi.fn(), count: vi.fn() },
+    vendor: { findUnique: vi.fn() },
     referral: { findUnique: vi.fn(), create: vi.fn(), update: vi.fn(), updateMany: vi.fn(), count: vi.fn() },
     user: { findUnique: vi.fn(), update: vi.fn(), create: vi.fn() },
     buyerWallet: { findUnique: vi.fn(), create: vi.fn(), update: vi.fn(), upsert: vi.fn() },
@@ -82,9 +83,11 @@ beforeEach(() => vi.clearAllMocks());
 describe("Promo code redemption race (P2.1)", () => {
   it("atomic updateMany prevents concurrent over-redemption", async () => {
     const { promosService } = await import("../modules/promos/promos.service");
-    const promoFindUnique = prisma.promoCode.findUnique as unknown as ReturnType<typeof vi.fn>;
+    const promoFindUnique = prisma.promoCode.findFirst as unknown as ReturnType<typeof vi.fn>;
+    const vendorFindUnique = prisma.vendor.findUnique as unknown as ReturnType<typeof vi.fn>;
     const redemptionFindUnique = prisma.promoRedemption.findUnique as unknown as ReturnType<typeof vi.fn>;
 
+    vendorFindUnique.mockResolvedValue({ id: "vendor-1", storeSlug: "store-1", isSuspended: false });
     // Mock validatePromo to succeed
     promoFindUnique.mockResolvedValue({
       id: "promo-1",
@@ -104,21 +107,23 @@ describe("Promo code redemption race (P2.1)", () => {
     $transaction.mockImplementation(async (cb: (tx: unknown) => unknown) => {
       const tx = {
         $executeRaw: vi.fn().mockResolvedValue(0), // 0 rows updated = exhausted
-        promoCode: { findUniqueOrThrow: vi.fn() },
+        promoCode: { findFirstOrThrow: vi.fn() },
         promoRedemption: { create: vi.fn() },
       };
       return cb(tx);
     });
 
     await expect(
-      promosService.redeemPromo("buyer-1", "DEAL50", 10000),
+      promosService.redeemPromo("buyer-1", "DEAL50", 10000, undefined, { vendorId: "vendor-1" }),
     ).rejects.toThrow("Promo no longer available");
   });
 
   it("expired promo rejected at validation", async () => {
     const { promosService } = await import("../modules/promos/promos.service");
-    const promoFindUnique = prisma.promoCode.findUnique as unknown as ReturnType<typeof vi.fn>;
+    const promoFindUnique = prisma.promoCode.findFirst as unknown as ReturnType<typeof vi.fn>;
+    const vendorFindUnique = prisma.vendor.findUnique as unknown as ReturnType<typeof vi.fn>;
 
+    vendorFindUnique.mockResolvedValue({ id: "vendor-1", storeSlug: "store-1", isSuspended: false });
     promoFindUnique.mockResolvedValue({
       id: "promo-2",
       code: "EXPIRED",
@@ -133,15 +138,17 @@ describe("Promo code redemption race (P2.1)", () => {
     });
 
     await expect(
-      promosService.validatePromo("buyer-1", { code: "EXPIRED", orderAmount: 5000 }),
+      promosService.validatePromo("buyer-1", { code: "EXPIRED", orderAmount: 5000, vendorId: "vendor-1" }),
     ).rejects.toThrow("Promo code has expired");
   });
 
   it("per-user duplicate promo rejected", async () => {
     const { promosService } = await import("../modules/promos/promos.service");
-    const promoFindUnique = prisma.promoCode.findUnique as unknown as ReturnType<typeof vi.fn>;
+    const promoFindUnique = prisma.promoCode.findFirst as unknown as ReturnType<typeof vi.fn>;
+    const vendorFindUnique = prisma.vendor.findUnique as unknown as ReturnType<typeof vi.fn>;
     const redemptionFindUnique = prisma.promoRedemption.findUnique as unknown as ReturnType<typeof vi.fn>;
 
+    vendorFindUnique.mockResolvedValue({ id: "vendor-1", storeSlug: "store-1", isSuspended: false });
     promoFindUnique.mockResolvedValue({
       id: "promo-3",
       code: "ONCE",
@@ -157,7 +164,7 @@ describe("Promo code redemption race (P2.1)", () => {
     redemptionFindUnique.mockResolvedValue({ id: "red-1" }); // Already used
 
     await expect(
-      promosService.validatePromo("buyer-1", { code: "ONCE", orderAmount: 5000 }),
+      promosService.validatePromo("buyer-1", { code: "ONCE", orderAmount: 5000, vendorId: "vendor-1" }),
     ).rejects.toThrow("You have already used this promo code");
   });
 });

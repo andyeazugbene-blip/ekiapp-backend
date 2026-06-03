@@ -1,5 +1,6 @@
 import cors from "cors";
 import express from "express";
+import path from "path";
 import helmet from "helmet";
 
 // Imported for its init side-effect; Sentry stays disabled if SENTRY_DSN is unset.
@@ -121,6 +122,9 @@ app.get("/api-json", (_req, res) => res.json(swaggerSpec));
 app.get("/swagger.json", (_req, res) => res.json(swaggerSpec));
 
 // Public web routes (server-rendered pages outside /api).
+app.get("/assets/public-site/home-phone-mockup.png", (_req, res) => {
+  res.type("png").sendFile(path.join(__dirname, "modules", "public-site", "home-phone-mockup.png"));
+});
 app.get("/", (req, res, next) => {
   Promise.resolve(getPublicHomePage(req, res)).catch(next);
 });

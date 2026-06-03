@@ -424,7 +424,7 @@ async function main() {
     if (!product) continue;
 
     const code = `${PREFIX}VENDOR${String(i + 1).padStart(2, "0")}`;
-    const existingPromo = await prisma.promoCode.findUnique({ where: { code } });
+    const existingPromo = await prisma.promoCode.findFirst({ where: { vendorId: vendor.id, code } });
     const metadata = {
       productIds: [product.id],
       audience: i % 2 === 0 ? "all" : "repeat",
@@ -435,6 +435,7 @@ async function main() {
       existingPromo ??
       (await prisma.promoCode.create({
         data: {
+          vendorId: vendor.id,
           code,
           type: PromoType.PERCENTAGE,
           value: 10 + i * 5,
@@ -484,28 +485,29 @@ async function main() {
     { code: `${PREFIX}LIMIT1`, type: PromoType.PERCENTAGE, value: 15, maxUses: 1, validUntil: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000) },
   ];
   
-  for (const coupon of coupons) {
-    const existing = await prisma.promoCode.findUnique({ where: { code: coupon.code } });
+  for (const [couponIndex, coupon] of coupons.entries()) {
+    const vendor = vendors[couponIndex % vendors.length];
+    if (!vendor) continue;
+    const existing = await prisma.promoCode.findFirst({
+      where: { vendorId: vendor.id, code: coupon.code },
+    });
     
     if (!existing) {
       await prisma.promoCode.create({
         data: {
+          vendorId: vendor.id,
           ...coupon,
           isActive: !coupon.code.includes("EXPIRED"),
         },
       });
-      log("COUPON", `Created: ${coupon.code}`);
+      log("COUPON", `Created: ${coupon.code} for ${vendor.storeSlug}`);
     } else {
-      log("COUPON", `Exists: ${coupon.code}`);
+      log("COUPON", `Exists: ${coupon.code} for ${vendor.storeSlug}`);
     }
     
     report.coupons.push(coupon.code);
   }
 
-  // ─── CARTS ──────────────────────────────────────────────────────────────
-
-  console.log("\n── CARTS ──\n");
-  
   // Cart scenarios
   const cartScenarios = [
     { buyerIndex: 0, products: [] }, // Empty cart

@@ -1,6 +1,11 @@
 import type { PromoType } from "@prisma/client";
 
-export interface CreatePromoCodeInput {
+export interface StoreScopedPromoInput {
+  vendorId?: string;
+  storeSlug?: string;
+}
+
+export interface CreatePromoCodeInput extends StoreScopedPromoInput {
   code: string;
   type: PromoType;
   value: number;
@@ -16,7 +21,7 @@ export interface UpdatePromoCodeInput {
   validUntil?: string | null;
 }
 
-export interface ValidatePromoInput {
+export interface ValidatePromoInput extends StoreScopedPromoInput {
   code: string;
   orderAmount: number;
 }
@@ -27,6 +32,8 @@ export interface PromoValidationResult {
   code: string;
   type: PromoType;
   value: number;
+  vendorId: string;
+  storeSlug: string;
 }
 
 export interface CreateVendorPromoCodeInput extends CreatePromoCodeInput {
@@ -37,6 +44,8 @@ export interface CreateVendorPromoCodeInput extends CreatePromoCodeInput {
 
 export interface VendorPromoCodeView {
   id: string;
+  vendorId: string;
+  storeSlug: string;
   code: string;
   type: PromoType;
   value: number;

@@ -308,6 +308,7 @@ async function main() {
     prisma.promoCode.createMany({
       data: [
         {
+          vendorId: vendorOne.id,
           code: "QUEEN10",
           type: PromoType.PERCENTAGE,
           value: 10,
@@ -316,6 +317,7 @@ async function main() {
           isActive: true,
         },
         {
+          vendorId: vendorOne.id,
           code: "QUEEN5OFF",
           type: PromoType.FIXED_AMOUNT,
           value: usd(5),
@@ -324,6 +326,7 @@ async function main() {
           isActive: true,
         },
         {
+          vendorId: vendorTwo.id,
           code: "LAGOS10",
           type: PromoType.PERCENTAGE,
           value: 10,
@@ -332,6 +335,7 @@ async function main() {
           isActive: true,
         },
         {
+          vendorId: vendorTwo.id,
           code: "LAGOS5OFF",
           type: PromoType.FIXED_AMOUNT,
           value: usd(5),

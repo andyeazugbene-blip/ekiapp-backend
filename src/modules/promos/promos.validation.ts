@@ -10,6 +10,16 @@ import type {
 
 const PROMO_TYPES = new Set<string>(Object.values(PromoType));
 
+function parseStoreScope(raw: Record<string, unknown>): { vendorId?: string; storeSlug?: string } {
+  const vendorId = typeof raw.vendorId === "string" && raw.vendorId.trim().length > 0
+    ? raw.vendorId.trim()
+    : undefined;
+  const storeSlug = typeof raw.storeSlug === "string" && raw.storeSlug.trim().length > 0
+    ? raw.storeSlug.trim().toLowerCase()
+    : undefined;
+  return { vendorId, storeSlug };
+}
+
 export function validateCreatePromoCodeInput(input: unknown): CreatePromoCodeInput {
   if (!input || typeof input !== "object") {
     throw new AppError("Invalid request body", 400);
@@ -62,6 +72,7 @@ export function validateCreatePromoCodeInput(input: unknown): CreatePromoCodeInp
   }
 
   return {
+    ...parseStoreScope(raw),
     code: raw.code.trim().toUpperCase(),
     type: raw.type as PromoType,
     value,
@@ -118,7 +129,12 @@ export function validateValidatePromoInput(input: unknown): ValidatePromoInput {
     throw new AppError("orderAmount must be a positive integer (cents)", 400);
   }
 
-  return { code: raw.code.trim().toUpperCase(), orderAmount };
+  const scope = parseStoreScope(raw);
+  if (!scope.vendorId && !scope.storeSlug) {
+    throw new AppError("vendorId or storeSlug is required", 400);
+  }
+
+  return { ...scope, code: raw.code.trim().toUpperCase(), orderAmount };
 }
 
 export function validateCreateVendorPromoCodeInput(input: unknown): CreateVendorPromoCodeInput {

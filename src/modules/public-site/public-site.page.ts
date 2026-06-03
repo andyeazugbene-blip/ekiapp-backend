@@ -36,6 +36,7 @@ type PublicTrackedOrder = {
   orderNumber: string;
   createdAt: string;
   buyerEmail: string;
+  buyerPhone: string | null;
   currency: string;
   total: number;
   vendorName: string;
@@ -119,30 +120,36 @@ function normalizeLookupContact(value: string): string {
 }
 
 function normalizePhoneDigits(value: string): string {
-  return value.replace(/[^\d+]/g, "").trim();
+  return value.replace(/\D/g, "");
+}
+
+function phoneMatches(inputDigits: string, storedPhone: string | null): boolean {
+  const storedDigits = normalizePhoneDigits(storedPhone ?? "");
+  if (!inputDigits || !storedDigits) return false;
+  if (storedDigits === inputDigits) return true;
+  const significantDigits = inputDigits.length >= 8 ? inputDigits.slice(-8) : inputDigits;
+  return significantDigits.length >= 6 && storedDigits.endsWith(significantDigits);
 }
 
 async function findOrdersByContact(contact: string): Promise<PublicTrackedOrder[]> {
   const normalizedContact = normalizeLookupContact(contact);
   const normalizedPhone = normalizePhoneDigits(contact);
+  const isEmail = normalizedContact.includes("@");
+
   const orders = await prisma.order.findMany({
     where: {
       status: { in: [...TRACKABLE_ORDER_STATUSES] },
-      buyer: normalizedContact.includes("@")
+      buyer: isEmail
         ? { email: normalizedContact }
         : normalizedPhone
-          ? {
-              OR: [
-                { phone: normalizedPhone },
-                { phone: contact.trim() },
-              ],
-            }
+          ? { phone: { not: null } }
           : { email: "__not_found__@eki.app" },
     },
     include: {
       buyer: {
         select: {
           email: true,
+          phone: true,
         },
       },
       items: {
@@ -153,11 +160,16 @@ async function findOrdersByContact(contact: string): Promise<PublicTrackedOrder[
       },
     },
     orderBy: { createdAt: "desc" },
+    take: isEmail ? 50 : 250,
   });
+
+  const matchedOrders = isEmail
+    ? orders
+    : orders.filter((order) => phoneMatches(normalizedPhone, order.buyer.phone));
 
   const vendorIds = Array.from(
     new Set(
-      orders
+      matchedOrders
         .map((order) => order.vendorId)
         .filter((vendorId): vendorId is string => Boolean(vendorId)),
     ),
@@ -177,13 +189,14 @@ async function findOrdersByContact(contact: string): Promise<PublicTrackedOrder[
     : [];
   const vendorMap = new Map(vendors.map((vendor) => [vendor.id, vendor]));
 
-  return orders.map((order) => {
+  return matchedOrders.map((order) => {
     const vendor = order.vendorId ? vendorMap.get(order.vendorId) : null;
     return {
       id: order.id,
       orderNumber: order.orderNumber,
       createdAt: order.createdAt.toISOString(),
       buyerEmail: order.buyer.email,
+      buyerPhone: order.buyer.phone,
       currency: order.currency,
       total: order.totalAmount / 100,
       vendorName: vendor?.storeName ?? "Saved vendor",
@@ -198,6 +211,14 @@ async function findOrdersByContact(contact: string): Promise<PublicTrackedOrder[
   });
 }
 
+function maskEmail(email: string): string {
+  const [name = "", domain = ""] = email.split("@");
+  if (!domain) return "the email linked to that order";
+  const head = name.slice(0, 2);
+  const tail = name.length > 4 ? name.slice(-1) : "";
+  const maskLength = Math.max(2, Math.min(6, name.length - head.length - tail.length));
+  return `${head}${"*".repeat(maskLength)}${tail}@${domain}`;
+}
 async function resolveLookupOtpEmail(contact: string): Promise<string | null> {
   const orders = await findOrdersByContact(contact);
   if (orders.length === 0) {
@@ -335,7 +356,7 @@ function renderHomePage(): string {
     .brand{display:inline-flex;align-items:center;justify-content:center;min-width:40px;height:22px;padding:0 11px;border-radius:5px;background:#3C8A61;font-size:14px;font-weight:800;letter-spacing:-0.03em}
     .nav-links{display:flex;gap:26px;font-size:12px;color:rgba(255,255,255,.82)}
     .sign-btn{min-width:74px;height:32px;border-radius:6px;border:1px solid rgba(255,255,255,.65);display:inline-flex;align-items:center;justify-content:center;font-size:12px;font-weight:600}
-    .hero{display:grid;grid-template-columns:minmax(0,1.1fr) 300px;gap:48px;align-items:center;padding:28px 0 30px}
+    .hero{display:grid;grid-template-columns:minmax(0,1fr) minmax(260px,440px);gap:42px;align-items:center;padding:28px 0 30px;overflow:hidden}
     .hero-copy{padding:22px 0 30px}
     .hero h1{margin:0;font-size:56px;line-height:1.04;letter-spacing:-0.05em;max-width:10.6ch}
     .hero p{margin:18px 0 0;max-width:480px;color:rgba(255,255,255,.85);font-size:15px;line-height:1.55}
@@ -346,10 +367,8 @@ function renderHomePage(): string {
     .btn-caption{font-size:10px;line-height:1.1;opacity:.72}
     .btn-title{font-size:22px;font-weight:700;line-height:1.05;letter-spacing:-.03em}
     .qr-copy{margin-top:15px;color:rgba(255,255,255,.68);font-size:12px}
-    .phone-stage{display:flex;justify-content:center}
-    .phone-card{width:122px;height:234px;border-radius:14px;background:linear-gradient(180deg,#3C8A61 0%, #2C7A56 100%);box-shadow:0 22px 44px rgba(10,24,20,.18);display:flex;align-items:center;justify-content:center;position:relative}
-    .phone-icon{width:26px;height:52px;border-radius:6px;background:#0F1B20;border:2px solid rgba(255,255,255,.7);padding:4px;display:grid;grid-template-columns:repeat(3,1fr);gap:2px}
-    .app-dot{border-radius:2px}
+    .phone-stage{display:flex;justify-content:center;align-items:center;min-height:330px;overflow:visible}
+    .phone-mockup{display:block;width:min(100%,430px);max-height:500px;object-fit:contain;filter:drop-shadow(0 28px 42px rgba(3,21,16,.28))}
     .hero-bottom{background:#fff;border-top:1px solid var(--border)}
     .love-section{padding:18px 0 28px}
     .love-section h2{margin:0;text-align:center;font-size:20px;line-height:1.2;letter-spacing:-.03em}
@@ -363,7 +382,7 @@ function renderHomePage(): string {
     .find-btn:hover{background:#F8FCF9}
     @media (max-width: 920px){
       .hero{grid-template-columns:1fr;gap:28px}
-      .phone-stage{justify-content:flex-start}
+      .phone-stage{justify-content:center;min-height:300px}.phone-mockup{max-height:430px}
       .hero h1{font-size:46px;max-width:none}
       .feature-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
     }
@@ -405,22 +424,7 @@ function renderHomePage(): string {
             <div class="qr-copy">Or scan the QR code in the app to get started instantly</div>
           </div>
           <div class="phone-stage" aria-hidden="true">
-            <div class="phone-card">
-              <div class="phone-icon">
-                <span class="app-dot" style="background:#FCB54A"></span>
-                <span class="app-dot" style="background:#5FD0FF"></span>
-                <span class="app-dot" style="background:#F65B6A"></span>
-                <span class="app-dot" style="background:#9A6AFF"></span>
-                <span class="app-dot" style="background:#8EE05E"></span>
-                <span class="app-dot" style="background:#FFD84B"></span>
-                <span class="app-dot" style="background:#5FD0FF"></span>
-                <span class="app-dot" style="background:#F65B6A"></span>
-                <span class="app-dot" style="background:#8EE05E"></span>
-                <span class="app-dot" style="background:#FFD84B"></span>
-                <span class="app-dot" style="background:#9A6AFF"></span>
-                <span class="app-dot" style="background:#5FD0FF"></span>
-              </div>
-            </div>
+            <img class="phone-mockup" src="/assets/public-site/home-phone-mockup.png" alt="" loading="eager" />
           </div>
         </div>
       </div>
@@ -430,22 +434,22 @@ function renderHomePage(): string {
         <h2>Why thousands love Eki</h2>
         <div class="feature-grid">
           <article class="feature">
-            <div class="feature-icon">🛒</div>
+            <div class="feature-icon">OK</div>
             <h3>Shop from verified vendors</h3>
             <p>Every vendor is reviewed and verified before listing on Eki.</p>
           </article>
           <article class="feature">
-            <div class="feature-icon">📦</div>
+            <div class="feature-icon">TRK</div>
             <h3>Live order tracking</h3>
             <p>Track your foodstuff order from vendor confirmation to dispatch and delivery.</p>
           </article>
           <article class="feature">
-            <div class="feature-icon">🔒</div>
+            <div class="feature-icon">SEC</div>
             <h3>Secure Eki checkout</h3>
             <p>Your order and payment record are handled securely through Eki.</p>
           </article>
           <article class="feature">
-            <div class="feature-icon">🔁</div>
+            <div class="feature-icon">RE</div>
             <h3>One-tap reorder</h3>
             <p>Saved your favourite vendors? Reorder last basket in a single tap.</p>
           </article>
@@ -828,10 +832,14 @@ function renderFindOrderPage(): string {
         requestBtn.disabled = true;
         setStatus(requestStatus, "Sending your one-time code...", "");
         postJson(requestPath, { contact: contact })
-          .then(function () {
+          .then(function (data) {
+            if (data && data.found === false) {
+              setStatus(requestStatus, data.message || "No order found for this email or phone number.", "error");
+              return;
+            }
             setStatus(requestStatus, "", "");
             if (otpLead) {
-              otpLead.textContent = "We sent a 6-digit code to the email linked to that order.";
+              otpLead.textContent = "We sent a 6-digit code to " + (data && data.emailHint ? data.emailHint : "the email linked to that order") + ".";
             }
             otpInputs.forEach(function (input, inputIndex) {
               input.value = "";
@@ -1088,16 +1096,22 @@ export async function getPublicFindOrderPage(_request: Request, response: Respon
 
 export async function requestPublicOrderLookup(request: Request, response: Response): Promise<void> {
   const contact = validateLookupContact(request.body);
-  try {
-    const otpEmail = await resolveLookupOtpEmail(contact);
-    if (otpEmail) {
-      await otpService.sendOtp(otpEmail, "guest_order_lookup");
-    }
-  } catch {
-    // Avoid account/order enumeration: always return success.
+  const otpEmail = await resolveLookupOtpEmail(contact);
+
+  if (!otpEmail) {
+    response.status(200).json({
+      found: false,
+      message: "No order found for this email or phone number.",
+    });
+    return;
   }
 
-  response.status(200).json({ message: "If matching orders exist, a verification code has been sent." });
+  await otpService.sendOtp(otpEmail, "guest_order_lookup");
+  response.status(200).json({
+    found: true,
+    emailHint: maskEmail(otpEmail),
+    message: "Verification code sent.",
+  });
 }
 
 export async function verifyPublicOrderLookup(request: Request, response: Response): Promise<void> {

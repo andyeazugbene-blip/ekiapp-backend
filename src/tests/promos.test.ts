@@ -46,9 +46,10 @@ describe("Promo Validation", () => {
 
   describe("validateValidatePromoInput", () => {
     it("accepts valid input", () => {
-      const result = validateValidatePromoInput({ code: "AFRO10", orderAmount: 5000 });
+      const result = validateValidatePromoInput({ code: "AFRO10", orderAmount: 5000, storeSlug: "queen-african-foods" });
       expect(result.code).toBe("AFRO10");
       expect(result.orderAmount).toBe(5000);
+      expect(result.storeSlug).toBe("queen-african-foods");
     });
 
     it("rejects missing code", () => {

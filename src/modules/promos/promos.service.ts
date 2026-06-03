@@ -1,4 +1,4 @@
-import type { PromoCode, Prisma } from "@prisma/client";
+﻿import type { Prisma, PromoCode } from "@prisma/client";
 
 import { prisma } from "../../lib/prisma";
 import { CURSOR_ORDER_BY } from "../../shared/constants";
@@ -8,10 +8,17 @@ import type {
   CreatePromoCodeInput,
   CreateVendorPromoCodeInput,
   PromoValidationResult,
+  StoreScopedPromoInput,
   UpdatePromoCodeInput,
   ValidatePromoInput,
   VendorPromoCodeView,
 } from "./promos.types";
+
+type PromoVendor = {
+  id: string;
+  storeSlug: string;
+  isSuspended: boolean;
+};
 
 type VendorPromoMetadata = {
   productIds: string[];
@@ -67,6 +74,8 @@ function toVendorPromoCodeView(
 
   return {
     id: promo.id,
+    vendorId: promo.vendorId,
+    storeSlug,
     code: promo.code,
     type: promo.type,
     value: promo.value,
@@ -84,7 +93,7 @@ function toVendorPromoCodeView(
   };
 }
 
-async function requireVendorByUserId(userId: string): Promise<{ id: string; storeSlug: string; isSuspended: boolean }> {
+async function requireVendorByUserId(userId: string): Promise<PromoVendor> {
   const vendor = await prisma.vendor.findUnique({
     where: { userId },
     select: {
@@ -101,15 +110,66 @@ async function requireVendorByUserId(userId: string): Promise<{ id: string; stor
   return vendor;
 }
 
+async function requirePromoVendor(input: StoreScopedPromoInput): Promise<PromoVendor> {
+  const vendorId = input.vendorId?.trim();
+  const storeSlug = input.storeSlug?.trim().toLowerCase();
+
+  if (!vendorId && !storeSlug) {
+    throw new AppError("vendorId or storeSlug is required", 400);
+  }
+
+  const vendor = vendorId
+    ? await prisma.vendor.findUnique({
+        where: { id: vendorId },
+        select: { id: true, storeSlug: true, isSuspended: true },
+      })
+    : await prisma.vendor.findUnique({
+        where: { storeSlug: storeSlug ?? "" },
+        select: { id: true, storeSlug: true, isSuspended: true },
+      });
+
+  if (!vendor || vendor.isSuspended) {
+    throw new AppError("Store not found", 404);
+  }
+
+  return vendor;
+}
+
+async function resolvePromoVendorForRedemption(
+  context: StoreScopedPromoInput,
+  orderId?: string,
+): Promise<PromoVendor> {
+  if (context.vendorId || context.storeSlug) {
+    return requirePromoVendor(context);
+  }
+
+  if (orderId) {
+    const order = await prisma.order.findUnique({
+      where: { id: orderId },
+      select: { vendorId: true },
+    });
+    if (order?.vendorId) {
+      return requirePromoVendor({ vendorId: order.vendorId });
+    }
+  }
+
+  throw new AppError("vendorId or storeSlug is required", 400);
+}
+
 export const promosService = {
   async createPromoCode(input: CreatePromoCodeInput): Promise<PromoCode> {
-    const existing = await prisma.promoCode.findUnique({ where: { code: input.code } });
+    const vendor = await requirePromoVendor(input);
+    const existing = await prisma.promoCode.findFirst({
+      where: { vendorId: vendor.id, code: input.code },
+      select: { id: true },
+    });
     if (existing) {
-      throw new AppError("Promo code already exists", 409);
+      throw new AppError("Promo code already exists for this store", 409);
     }
 
     return prisma.promoCode.create({
       data: {
+        vendorId: vendor.id,
         code: input.code,
         type: input.type,
         value: input.value,
@@ -145,9 +205,12 @@ export const promosService = {
 
   async createVendorPromoCode(userId: string, input: CreateVendorPromoCodeInput): Promise<VendorPromoCodeView> {
     const vendor = await requireVendorByUserId(userId);
-    const existing = await prisma.promoCode.findUnique({ where: { code: input.code } });
+    const existing = await prisma.promoCode.findFirst({
+      where: { vendorId: vendor.id, code: input.code },
+      select: { id: true },
+    });
     if (existing) {
-      throw new AppError("Promo code already exists", 409);
+      throw new AppError("Promo code already exists for this store", 409);
     }
 
     const productIds = Array.from(new Set(input.productIds));
@@ -181,6 +244,7 @@ export const promosService = {
     const promo = await prisma.$transaction(async (tx) => {
       const createdPromo = await tx.promoCode.create({
         data: {
+          vendorId: vendor.id,
           code: input.code,
           type: input.type,
           value: input.value,
@@ -202,6 +266,8 @@ export const promosService = {
             audience: input.audience,
             audienceCountry: input.audienceCountry ?? null,
             shareUrl,
+            vendorId: vendor.id,
+            storeSlug: vendor.storeSlug,
           } as Prisma.InputJsonValue,
         },
       });
@@ -215,58 +281,52 @@ export const promosService = {
   async listVendorPromoCodes(userId: string): Promise<VendorPromoCodeView[]> {
     const vendor = await requireVendorByUserId(userId);
 
-    const auditLogs = await prisma.auditLog.findMany({
-      where: {
-        actorId: vendor.id,
-        entityType: "PROMO_CODE",
-        action: "vendor.promo.created",
-        entityId: { not: null },
-      },
-      orderBy: CURSOR_ORDER_BY,
-      select: {
-        entityId: true,
-        metadata: true,
-      },
-    });
+    const [promoCodes, auditLogs] = await Promise.all([
+      prisma.promoCode.findMany({
+        where: { vendorId: vendor.id },
+        orderBy: CURSOR_ORDER_BY,
+      }),
+      prisma.auditLog.findMany({
+        where: {
+          actorId: vendor.id,
+          entityType: "PROMO_CODE",
+          action: "vendor.promo.created",
+          entityId: { not: null },
+        },
+        orderBy: CURSOR_ORDER_BY,
+        select: {
+          entityId: true,
+          metadata: true,
+        },
+      }),
+    ]);
 
-    const promoIds = auditLogs
-      .map((log) => log.entityId)
-      .filter((value): value is string => typeof value === "string" && value.length > 0);
+    const metadataMap = new Map(
+      auditLogs
+        .filter((log) => Boolean(log.entityId))
+        .map((log) => [log.entityId as string, parseVendorPromoMetadata(log.metadata)]),
+    );
 
-    if (promoIds.length === 0) {
-      return [];
-    }
-
-    const promoCodes = await prisma.promoCode.findMany({
-      where: {
-        id: { in: promoIds },
-      },
-    });
-
-    const promoMap = new Map(promoCodes.map((promo) => [promo.id, promo]));
-
-    return auditLogs
-      .map((log) => {
-        if (!log.entityId) return null;
-        const promo = promoMap.get(log.entityId);
-        if (!promo) return null;
-        return toVendorPromoCodeView(
-          promo,
-          parseVendorPromoMetadata(log.metadata),
-          vendor.storeSlug,
-        );
-      })
-      .filter((promo): promo is VendorPromoCodeView => Boolean(promo));
+    return promoCodes.map((promo) =>
+      toVendorPromoCodeView(
+        promo,
+        metadataMap.get(promo.id) ?? { productIds: [], audience: "all" },
+        vendor.storeSlug,
+      ),
+    );
   },
 
   async validatePromo(
     buyerId: string,
     input: ValidatePromoInput,
   ): Promise<PromoValidationResult> {
-    const promo = await prisma.promoCode.findUnique({ where: { code: input.code } });
+    const vendor = await requirePromoVendor(input);
+    const promo = await prisma.promoCode.findFirst({
+      where: { vendorId: vendor.id, code: input.code },
+    });
 
     if (!promo || !promo.isActive) {
-      throw new AppError("Invalid promo code", 400);
+      throw new AppError("Invalid promo code for this store", 400);
     }
 
     const now = new Date();
@@ -303,6 +363,8 @@ export const promosService = {
       code: promo.code,
       type: promo.type,
       value: promo.value,
+      vendorId: vendor.id,
+      storeSlug: vendor.storeSlug,
     };
   },
 
@@ -311,8 +373,10 @@ export const promosService = {
     code: string,
     orderAmount: number,
     orderId?: string,
+    context: StoreScopedPromoInput = {},
   ): Promise<number> {
-    const result = await this.validatePromo(buyerId, { code, orderAmount });
+    const vendor = await resolvePromoVendorForRedemption(context, orderId);
+    const result = await this.validatePromo(buyerId, { code, orderAmount, vendorId: vendor.id });
 
     const now = new Date();
     return prisma.$transaction(async (tx) => {
@@ -330,6 +394,7 @@ export const promosService = {
         UPDATE "PromoCode"
         SET "usedCount" = "usedCount" + 1, "updatedAt" = NOW()
         WHERE "code" = ${code}
+          AND "vendorId" = ${vendor.id}
           AND "isActive" = true
           AND "validFrom" <= ${now}
           AND ("validUntil" IS NULL OR "validUntil" >= ${now})
@@ -340,7 +405,9 @@ export const promosService = {
         throw new AppError("Promo no longer available", 409);
       }
 
-      const promo = await tx.promoCode.findUniqueOrThrow({ where: { code } });
+      const promo = await tx.promoCode.findFirstOrThrow({
+        where: { code, vendorId: vendor.id },
+      });
 
       await tx.promoRedemption.create({
         data: {
