@@ -24,6 +24,7 @@ export interface SubscriptionPlanConfigInput {
   name: string;
   description?: string | null;
   monthlyPriceCents: number;
+  platformFeeBps: number;
   currency: string;
   maxProducts: number;
   maxImagesPerProduct: number;
@@ -51,6 +52,7 @@ export const DEFAULT_PLAN_CONFIGS: Record<SubscriptionPlan, SubscriptionPlanConf
     name: "Free",
     description: "Starter access for new vendors.",
     monthlyPriceCents: 0,
+    platformFeeBps: 1200,
     currency: "GBP",
     maxProducts: 10,
     maxImagesPerProduct: 3,
@@ -71,6 +73,7 @@ export const DEFAULT_PLAN_CONFIGS: Record<SubscriptionPlan, SubscriptionPlanConf
     name: "Basic",
     description: "Legacy plan kept for compatibility.",
     monthlyPriceCents: 1999,
+    platformFeeBps: 1100,
     currency: "GBP",
     maxProducts: 50,
     maxImagesPerProduct: 8,
@@ -91,6 +94,7 @@ export const DEFAULT_PLAN_CONFIGS: Record<SubscriptionPlan, SubscriptionPlanConf
     name: "Growth",
     description: "Growth plan with analytics and marketing tools.",
     monthlyPriceCents: 2999,
+    platformFeeBps: 900,
     currency: "GBP",
     maxProducts: 100,
     maxImagesPerProduct: 10,
@@ -111,6 +115,7 @@ export const DEFAULT_PLAN_CONFIGS: Record<SubscriptionPlan, SubscriptionPlanConf
     name: "Premium",
     description: "Legacy premium plan kept for compatibility.",
     monthlyPriceCents: 4999,
+    platformFeeBps: 800,
     currency: "GBP",
     maxProducts: -1,
     maxImagesPerProduct: 20,
@@ -131,6 +136,7 @@ export const DEFAULT_PLAN_CONFIGS: Record<SubscriptionPlan, SubscriptionPlanConf
     name: "Pro",
     description: "Full access for advanced vendors.",
     monthlyPriceCents: 7999,
+    platformFeeBps: 650,
     currency: "GBP",
     maxProducts: -1,
     maxImagesPerProduct: 30,

@@ -791,6 +791,7 @@ model SubscriptionPlanConfig {
   name               String
   description        String?
   monthlyPriceCents  Int              @default(0)
+  platformFeeBps     Int              @default(1000)
   currency           String           @default("GBP")
   maxProducts        Int              @default(10)
   maxImagesPerProduct Int             @default(3)

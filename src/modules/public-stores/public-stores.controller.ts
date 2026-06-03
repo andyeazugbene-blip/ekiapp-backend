@@ -93,6 +93,52 @@ function parseLookupVerification(body: unknown): { email: string; code: string }
   };
 }
 
+function parseCheckoutBody(body: unknown) {
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    throw new AppError("Invalid request body", 400);
+  }
+
+  const raw = body as Record<string, unknown>;
+  const requireText = (field: string) => {
+    const value = typeof raw[field] === "string" ? raw[field].trim() : "";
+    if (!value) {
+      throw new AppError(`${field} is required`, 400);
+    }
+    return value;
+  };
+
+  const items = Array.isArray(raw.items)
+    ? raw.items.map((item) => {
+        if (!item || typeof item !== "object" || Array.isArray(item)) {
+          throw new AppError("Each cart item must be valid", 400);
+        }
+        const entry = item as Record<string, unknown>;
+        const productId = typeof entry.productId === "string" ? entry.productId.trim() : "";
+        const quantity = Number(entry.quantity);
+        if (!productId || !Number.isInteger(quantity) || quantity < 1) {
+          throw new AppError("Each cart item must include a productId and quantity", 400);
+        }
+        return { productId, quantity };
+      })
+    : [];
+
+  if (items.length === 0) {
+    throw new AppError("Your cart is empty", 400);
+  }
+
+  return {
+    firstName: requireText("firstName"),
+    lastName: requireText("lastName"),
+    email: requireText("email").toLowerCase(),
+    phone: requireText("phone"),
+    streetAddress: requireText("streetAddress"),
+    city: requireText("city"),
+    postcode: requireText("postcode"),
+    country: requireText("country"),
+    items,
+  };
+}
+
 export async function getPublicStore(request: Request, response: Response): Promise<void> {
   const slug = parseSlug(request);
   const store = await publicStoresService.getStoreBySlug(slug);
@@ -144,4 +190,11 @@ export async function verifyPublicStoreOrderLookup(request: Request, response: R
   const { email, code } = parseLookupVerification(request.body);
   const orders = await publicStoresService.verifyGuestOrderLookup(slug, email, code);
   response.status(200).json({ orders });
+}
+
+export async function createPublicStoreCheckoutSession(request: Request, response: Response): Promise<void> {
+  const slug = parseSlug(request);
+  const input = parseCheckoutBody(request.body);
+  const result = await publicStoresService.createGuestCheckoutSession(slug, input);
+  response.status(201).json(result);
 }

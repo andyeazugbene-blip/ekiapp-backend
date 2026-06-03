@@ -35,6 +35,7 @@ type PublicTrackedOrder = {
   id: string;
   orderNumber: string;
   createdAt: string;
+  buyerEmail: string;
   currency: string;
   total: number;
   vendorName: string;
@@ -113,14 +114,37 @@ function renderOrderPayload(order: PublicTrackedOrder) {
   };
 }
 
-async function findOrdersByEmail(email: string): Promise<PublicTrackedOrder[]> {
-  const normalizedEmail = email.trim().toLowerCase();
+function normalizeLookupContact(value: string): string {
+  return value.trim().toLowerCase();
+}
+
+function normalizePhoneDigits(value: string): string {
+  return value.replace(/[^\d+]/g, "").trim();
+}
+
+async function findOrdersByContact(contact: string): Promise<PublicTrackedOrder[]> {
+  const normalizedContact = normalizeLookupContact(contact);
+  const normalizedPhone = normalizePhoneDigits(contact);
   const orders = await prisma.order.findMany({
     where: {
       status: { in: [...TRACKABLE_ORDER_STATUSES] },
-      buyer: { email: normalizedEmail },
+      buyer: normalizedContact.includes("@")
+        ? { email: normalizedContact }
+        : normalizedPhone
+          ? {
+              OR: [
+                { phone: normalizedPhone },
+                { phone: contact.trim() },
+              ],
+            }
+          : { email: "__not_found__@eki.app" },
     },
     include: {
+      buyer: {
+        select: {
+          email: true,
+        },
+      },
       items: {
         select: {
           productTitle: true,
@@ -159,6 +183,7 @@ async function findOrdersByEmail(email: string): Promise<PublicTrackedOrder[]> {
       id: order.id,
       orderNumber: order.orderNumber,
       createdAt: order.createdAt.toISOString(),
+      buyerEmail: order.buyer.email,
       currency: order.currency,
       total: order.totalAmount / 100,
       vendorName: vendor?.storeName ?? "Saved vendor",
@@ -171,6 +196,14 @@ async function findOrdersByEmail(email: string): Promise<PublicTrackedOrder[]> {
       })),
     };
   });
+}
+
+async function resolveLookupOtpEmail(contact: string): Promise<string | null> {
+  const orders = await findOrdersByContact(contact);
+  if (orders.length === 0) {
+    return null;
+  }
+  return orders[0]?.buyerEmail ?? null;
 }
 
 function renderLegalSection(section: PageSection): string {
@@ -351,10 +384,8 @@ function renderHomePage(): string {
           <div class="topbar-inner">
             <a href="/" class="brand">eki</a>
             <nav class="nav-links" aria-label="Top navigation">
-              <a href="/find-order">Buyers</a>
-              <a href="/store/queen-african-foods">Vendors</a>
+              <a href="/store">Vendors</a>
             </nav>
-            <a href="/" class="sign-btn">Sign in</a>
           </div>
         </header>
         <div class="hero">
@@ -550,10 +581,8 @@ function renderFindOrderPage(): string {
     <div class="wrap nav-inner">
       <a href="/" class="brand">eki</a>
       <nav class="nav-links" aria-label="Top navigation">
-        <a href="/find-order">Buyers</a>
-        <a href="/store/queen-african-foods">Vendors</a>
+        <a href="/store">Vendors</a>
       </nav>
-      <a href="/" class="sign-btn">Sign in</a>
     </div>
   </header>
   <main class="main">
@@ -565,7 +594,7 @@ function renderFindOrderPage(): string {
         <h1 class="panel-title small">Find your order.</h1>
         <p class="panel-subtitle">Enter the phone number or email you used at checkout.</p>
         <div class="field">
-          <input id="lookup-email" type="email" placeholder="Phone or email address" autocomplete="email" />
+          <input id="lookup-email" type="text" placeholder="Phone or email address" autocomplete="email" />
         </div>
         <button id="lookup-request" class="primary-btn" type="button">Continue</button>
         <div class="hint-box">No password needed. We will send a one-time code to verify it is you.</div>
@@ -675,7 +704,7 @@ function renderFindOrderPage(): string {
         results: document.getElementById("step-results")
       };
       var otpInputs = Array.prototype.slice.call(document.querySelectorAll(".otp-input"));
-      var currentEmail = "";
+      var currentContact = "";
 
       function setPanel(name) {
         Object.keys(panels).forEach(function (key) {
@@ -732,7 +761,7 @@ function renderFindOrderPage(): string {
           orderChip.textContent = "Order " + (firstOrder.orderNumber || "");
         }
         if (trackCopy) {
-          trackCopy.textContent = humanizeStatus(firstOrder.status) + " · " + firstOrder.vendorName;
+          trackCopy.textContent = humanizeStatus(firstOrder.status) + " - " + firstOrder.vendorName;
         }
         if (saveVendorTitle) {
           saveVendorTitle.textContent = "Save " + firstOrder.vendorName;
@@ -790,19 +819,19 @@ function renderFindOrderPage(): string {
       });
 
       function requestCode() {
-        var email = lookupEmail && lookupEmail.value ? String(lookupEmail.value).trim().toLowerCase() : "";
-        if (!email || email.indexOf("@") === -1) {
-          setStatus(requestStatus, "Enter the email you used when you checked out.", "error");
+        var contact = lookupEmail && lookupEmail.value ? String(lookupEmail.value).trim() : "";
+        if (!contact) {
+          setStatus(requestStatus, "Enter the phone number or email you used when you checked out.", "error");
           return;
         }
-        currentEmail = email;
+        currentContact = contact;
         requestBtn.disabled = true;
         setStatus(requestStatus, "Sending your one-time code...", "");
-        postJson(requestPath, { email: email })
+        postJson(requestPath, { contact: contact })
           .then(function () {
             setStatus(requestStatus, "", "");
             if (otpLead) {
-              otpLead.textContent = "We sent a 6-digit code to " + email + ".";
+              otpLead.textContent = "We sent a 6-digit code to the email linked to that order.";
             }
             otpInputs.forEach(function (input, inputIndex) {
               input.value = "";
@@ -821,9 +850,9 @@ function renderFindOrderPage(): string {
 
       function verifyCode() {
         var code = joinOtp();
-        if (!currentEmail) {
+        if (!currentContact) {
           setPanel("find");
-          setStatus(requestStatus, "Enter your checkout email first.", "error");
+          setStatus(requestStatus, "Enter your checkout phone number or email first.", "error");
           return;
         }
         if (!/^\\d{6}$/.test(code)) {
@@ -832,11 +861,11 @@ function renderFindOrderPage(): string {
         }
         verifyBtn.disabled = true;
         setStatus(verifyStatus, "Checking your code...", "");
-        postJson(verifyPath, { email: currentEmail, code: code })
+        postJson(verifyPath, { contact: currentContact, code: code })
           .then(function (data) {
             var orders = Array.isArray(data.orders) ? data.orders : [];
             if (!orders.length) {
-              setStatus(verifyStatus, "No tracked orders were found for that email.", "error");
+              setStatus(verifyStatus, "No tracked orders were found for that contact.", "error");
               return;
             }
             renderResults(orders);
@@ -853,13 +882,13 @@ function renderFindOrderPage(): string {
 
       if (requestBtn) requestBtn.addEventListener("click", requestCode);
       if (resendBtn) resendBtn.addEventListener("click", function () {
-        if (!currentEmail) {
+        if (!currentContact) {
           setPanel("find");
           return;
         }
-        postJson(requestPath, { email: currentEmail })
+        postJson(requestPath, { contact: currentContact })
           .then(function () {
-            setStatus(verifyStatus, "We sent a new code to " + currentEmail + ".", "success");
+            setStatus(verifyStatus, "We sent a new code to the email linked to that order.", "success");
           })
           .catch(function (error) {
             setStatus(verifyStatus, error && error.message ? error.message : "Could not resend your code.", "error");
@@ -1021,27 +1050,32 @@ function sendHtml(response: Response, html: string): void {
   response.status(200).send(html);
 }
 
-function validateEmail(body: unknown): string {
+function validateLookupContact(body: unknown): string {
   if (!body || typeof body !== "object" || Array.isArray(body)) {
     throw new AppError("Invalid request body", 400);
   }
   const raw = body as Record<string, unknown>;
-  if (typeof raw.email !== "string" || !raw.email.trim() || !raw.email.includes("@")) {
-    throw new AppError("Valid email address required", 400);
+  const contact = typeof raw.contact === "string"
+    ? raw.contact.trim()
+    : typeof raw.email === "string"
+      ? raw.email.trim()
+      : "";
+  if (!contact) {
+    throw new AppError("Phone or email is required", 400);
   }
-  return raw.email.trim().toLowerCase();
+  return contact;
 }
 
-function validateVerification(body: unknown): { email: string; code: string } {
+function validateVerification(body: unknown): { contact: string; code: string } {
   if (!body || typeof body !== "object" || Array.isArray(body)) {
     throw new AppError("Invalid request body", 400);
   }
   const raw = body as Record<string, unknown>;
-  const email = validateEmail(body);
+  const contact = validateLookupContact(body);
   if (typeof raw.code !== "string" || !/^\d{6}$/.test(raw.code.trim())) {
     throw new AppError("Code must be a 6-digit number", 400);
   }
-  return { email, code: raw.code.trim() };
+  return { contact, code: raw.code.trim() };
 }
 
 export async function getPublicHomePage(_request: Request, response: Response): Promise<void> {
@@ -1053,11 +1087,11 @@ export async function getPublicFindOrderPage(_request: Request, response: Respon
 }
 
 export async function requestPublicOrderLookup(request: Request, response: Response): Promise<void> {
-  const email = validateEmail(request.body);
+  const contact = validateLookupContact(request.body);
   try {
-    const orders = await findOrdersByEmail(email);
-    if (orders.length > 0) {
-      await otpService.sendOtp(email, "guest_order_lookup");
+    const otpEmail = await resolveLookupOtpEmail(contact);
+    if (otpEmail) {
+      await otpService.sendOtp(otpEmail, "guest_order_lookup");
     }
   } catch {
     // Avoid account/order enumeration: always return success.
@@ -1067,9 +1101,13 @@ export async function requestPublicOrderLookup(request: Request, response: Respo
 }
 
 export async function verifyPublicOrderLookup(request: Request, response: Response): Promise<void> {
-  const { email, code } = validateVerification(request.body);
-  await otpService.verifyOtp(email, code, "guest_order_lookup");
-  const orders = await findOrdersByEmail(email);
+  const { contact, code } = validateVerification(request.body);
+  const otpEmail = await resolveLookupOtpEmail(contact);
+  if (!otpEmail) {
+    throw new AppError("No matching orders found for that contact", 404);
+  }
+  await otpService.verifyOtp(otpEmail, code, "guest_order_lookup");
+  const orders = await findOrdersByContact(contact);
   response.status(200).json({ orders: orders.map(renderOrderPayload) });
 }
 
@@ -1092,3 +1130,5 @@ export async function getPublicTermsPage(_request: Request, response: Response):
 export async function getPublicAccountDeletionPage(_request: Request, response: Response): Promise<void> {
   sendHtml(response, renderLegalPage(accountDeletionPage));
 }
+
+

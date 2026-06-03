@@ -51,13 +51,16 @@ function requireString(value: unknown, field: string): string {
   return value.trim();
 }
 
-function requireInteger(value: unknown, field: string, options?: { min?: number }): number {
+function requireInteger(value: unknown, field: string, options?: { min?: number; max?: number }): number {
   if (!Number.isInteger(value)) {
     throw new AppError(`${field} must be an integer`, 400);
   }
   const number = Number(value);
   if (options?.min !== undefined && number < options.min) {
     throw new AppError(`${field} must be at least ${options.min}`, 400);
+  }
+  if (options?.max !== undefined && number > options.max) {
+    throw new AppError(`${field} must be at most ${options.max}`, 400);
   }
   return number;
 }
@@ -84,6 +87,7 @@ export function validateSubscriptionPlanConfigInput(input: unknown): Subscriptio
     name: requireString(raw.name, "name"),
     description: typeof raw.description === "string" ? raw.description.trim() : null,
     monthlyPriceCents: requireInteger(raw.monthlyPriceCents, "monthlyPriceCents", { min: 0 }),
+    platformFeeBps: requireInteger(raw.platformFeeBps, "platformFeeBps", { min: 0, max: 10000 }),
     currency: requireString(raw.currency, "currency").toUpperCase(),
     maxProducts: requireInteger(raw.maxProducts, "maxProducts"),
     maxImagesPerProduct: requireInteger(raw.maxImagesPerProduct, "maxImagesPerProduct", { min: 1 }),

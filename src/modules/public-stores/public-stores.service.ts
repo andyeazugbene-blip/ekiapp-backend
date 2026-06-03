@@ -1,9 +1,15 @@
+import crypto from "crypto";
+
+import bcrypt from "bcryptjs";
 import { Prisma } from "@prisma/client";
 
 import { prisma } from "../../lib/prisma";
-import { CURSOR_ORDER_BY } from "../../shared/constants";
+import { stripe } from "../../lib/stripe";
+import { CURSOR_ORDER_BY, MAX_VENDOR_WEIGHT_GRAMS } from "../../shared/constants";
 import { AppError } from "../../shared/errors/app-error";
+import { calculatePlatformFee as calcPlatformFee } from "../../shared/pricing";
 import { otpService } from "../auth/otp.service";
+import { resolveVendorPlatformFeeBps } from "../subscriptions/subscription-plan-utils";
 import { buildVendorShareUrl } from "../vendors/vendors.service";
 import type {
   ListPublicProductsQuery,
@@ -18,6 +24,8 @@ import type {
   PublicStoreTrackedOrderStatus,
   TrackPublicStoreEventInput,
 } from "./public-stores.types";
+
+const BCRYPT_ROUNDS = 12;
 
 const SOURCE_KEYS: PublicStoreSourceKey[] = ["instagram", "whatsapp", "sms", "direct", "tiktok", "more", "unknown"];
 const TRACKABLE_ORDER_STATUSES = ["PAID", "PAYMENT_SECURED", "CONFIRMED", "VENDOR_CONFIRMED", "PROCESSING", "DISPATCHED", "IN_TRANSIT", "DELIVERED", "COMPLETED"] as const;
@@ -43,8 +51,33 @@ type ParsedStoreEvent = {
   items?: PublicStoreEventItemInput[];
 };
 
+interface PublicStoreCheckoutItemInput {
+  productId: string;
+  quantity: number;
+}
+
+interface PublicStoreCheckoutInput {
+  firstName: string;
+  lastName: string;
+  email: string;
+  phone: string;
+  streetAddress: string;
+  city: string;
+  postcode: string;
+  country: string;
+  items: PublicStoreCheckoutItemInput[];
+}
+
 function normalizeStoreSlugKey(value: string): string {
   return value.trim().toLowerCase().replace(/[^a-z0-9]/g, "");
+}
+
+function normalizeEmail(value: string): string {
+  return value.trim().toLowerCase();
+}
+
+function normalizeText(value: string): string {
+  return value.trim();
 }
 
 function normalizeSource(value?: string): PublicStoreSourceKey {
@@ -447,7 +480,191 @@ async function listPublicStoreOrdersForContact(vendor: VendorStoreRecord, email:
   return orders.map((order) => mapTrackedOrder(order, vendor));
 }
 
+async function findPublicProductForVendor(vendorId: string, productId: string): Promise<PublicProduct> {
+  const product = await prisma.product.findFirst({
+    where: {
+      id: productId,
+      vendorId,
+      isActive: true,
+    },
+    select: {
+      id: true,
+      vendorId: true,
+      title: true,
+      description: true,
+      priceInCents: true,
+      currency: true,
+      images: true,
+      category: true,
+      stock: true,
+      weightGrams: true,
+      createdAt: true,
+    },
+  });
+
+  if (!product) {
+    throw new AppError("Product not found", 404);
+  }
+
+  return product;
+}
+
+async function findTrackedOrderByNumber(vendor: VendorStoreRecord, orderNumber: string): Promise<PublicStoreTrackedOrder> {
+  const order = await prisma.order.findFirst({
+    where: {
+      vendorId: vendor.id,
+      orderNumber,
+    },
+    include: {
+      buyer: {
+        select: {
+          name: true,
+          email: true,
+          phone: true,
+          id: true,
+        },
+      },
+      items: {
+        select: {
+          productId: true,
+          productTitle: true,
+          quantity: true,
+          unitAmount: true,
+          totalAmount: true,
+        },
+      },
+    },
+  });
+
+  if (!order) {
+    throw new AppError("Order not found", 404);
+  }
+
+  return mapTrackedOrder(order, vendor);
+}
+
+async function ensureGuestBuyer(input: PublicStoreCheckoutInput) {
+  const email = normalizeEmail(input.email);
+  const phone = normalizeText(input.phone);
+  const name = `${normalizeText(input.firstName)} ${normalizeText(input.lastName)}`.trim() || email.split("@")[0] || "Guest buyer";
+
+  const existing = await prisma.user.findUnique({
+    where: { email },
+    select: {
+      id: true,
+      email: true,
+      name: true,
+      phone: true,
+      country: true,
+      role: true,
+    },
+  });
+
+  if (existing) {
+    if (!existing.phone && phone) {
+      const phoneConflict = await prisma.user.findFirst({
+        where: { phone, NOT: { id: existing.id } },
+        select: { id: true },
+      });
+
+      if (!phoneConflict) {
+        await prisma.user.update({
+          where: { id: existing.id },
+          data: {
+            phone,
+            country: existing.country ?? normalizeText(input.country),
+            name: existing.name || name,
+          },
+        });
+      }
+    }
+
+    return { id: existing.id, email };
+  }
+
+  const password = crypto.randomBytes(24).toString("hex");
+  const passwordHash = await bcrypt.hash(password, BCRYPT_ROUNDS);
+  const phoneConflict = phone
+    ? await prisma.user.findFirst({
+        where: { phone },
+        select: { id: true },
+      })
+    : null;
+
+  const created = await prisma.user.create({
+    data: {
+      email,
+      name,
+      password: passwordHash,
+      phone: phoneConflict ? null : phone || null,
+      country: normalizeText(input.country) || null,
+      role: "BUYER",
+    },
+    select: { id: true, email: true },
+  });
+
+  return created;
+}
+
 export const publicStoresService = {
+  async listPublicStores(limit = 48): Promise<PublicStore[]> {
+    const vendors = await prisma.vendor.findMany({
+      where: {
+        isSuspended: false,
+      },
+      orderBy: [{ verificationStatus: "asc" }, { createdAt: "desc" }],
+      take: limit,
+      select: {
+        id: true,
+        storeName: true,
+        storeSlug: true,
+        description: true,
+        avatar: true,
+        coverImage: true,
+        city: true,
+        country: true,
+        verificationStatus: true,
+        createdAt: true,
+      },
+    });
+
+    const stores = await Promise.all(
+      vendors.map(async (vendor) => {
+        const [totalProducts, deliveryZones] = await Promise.all([
+          prisma.product.count({
+            where: { vendorId: vendor.id, isActive: true },
+          }),
+          prisma.deliveryZone.findMany({
+            where: { vendorId: vendor.id, isActive: true },
+            select: { country: true },
+            distinct: ["country"],
+          }),
+        ]);
+
+        return {
+          vendorId: vendor.id,
+          storeName: vendor.storeName,
+          storeSlug: vendor.storeSlug,
+          shareUrl: buildVendorShareUrl(vendor.storeSlug),
+          description: vendor.description,
+          avatar: vendor.avatar,
+          coverImage: vendor.coverImage,
+          city: vendor.city,
+          country: vendor.country,
+          verificationStatus: vendor.verificationStatus,
+          rating: null,
+          totalProducts,
+          deliveryCountries: deliveryZones
+            .map((zone) => zone.country)
+            .filter((country): country is string => Boolean(country)),
+          createdAt: vendor.createdAt,
+        } satisfies PublicStore;
+      }),
+    );
+
+    return stores;
+  },
+
   async getStoreBySlug(slug: string): Promise<PublicStore> {
     const vendorRecord = await findVendorBySlug(slug);
     const vendor = await prisma.vendor.findUnique({
@@ -541,6 +758,275 @@ export const publicStoresService = {
     }
 
     return { items, nextCursor };
+  },
+
+  async getStoreProductById(slug: string, productId: string): Promise<PublicProduct> {
+    const vendor = await findVendorBySlug(slug);
+    return findPublicProductForVendor(vendor.id, productId);
+  },
+
+  async createGuestCheckoutSession(
+    slug: string,
+    input: PublicStoreCheckoutInput,
+  ): Promise<{ checkoutUrl: string; orderNumber: string; checkoutId: string }> {
+    const vendor = await findVendorBySlug(slug);
+    const itemsInput = input.items
+      .map((item) => ({
+        productId: normalizeText(item.productId),
+        quantity: Number(item.quantity),
+      }))
+      .filter((item) => item.productId && Number.isInteger(item.quantity) && item.quantity > 0);
+
+    if (itemsInput.length === 0) {
+      throw new AppError("Your cart is empty", 400);
+    }
+
+    const products = await prisma.product.findMany({
+      where: {
+        vendorId: vendor.id,
+        isActive: true,
+        id: { in: itemsInput.map((item) => item.productId) },
+      },
+      select: {
+        id: true,
+        vendorId: true,
+        title: true,
+        priceInCents: true,
+        currency: true,
+        stock: true,
+        weightGrams: true,
+      },
+    });
+
+    if (products.length !== itemsInput.length) {
+      throw new AppError("Some products are no longer available", 400);
+    }
+
+    const productMap = new Map(products.map((product) => [product.id, product]));
+    const currencySet = new Set(products.map((product) => product.currency.toLowerCase()));
+    if (currencySet.size !== 1) {
+      throw new AppError("All products in this checkout must use the same currency", 400);
+    }
+    const currency = products[0]?.currency.toLowerCase() ?? "eur";
+
+    const normalizedCountry = normalizeText(input.country);
+    if (!normalizedCountry) {
+      throw new AppError("Delivery country is required", 400);
+    }
+
+    const baseZone = await prisma.deliveryZone.findFirst({
+      where: {
+        vendorId: vendor.id,
+        country: { equals: normalizedCountry, mode: "insensitive" },
+        isActive: true,
+      },
+    });
+
+    if (!baseZone) {
+      throw new AppError(`Delivery to "${normalizedCountry}" is not available`, 400);
+    }
+
+    if (baseZone.currency.toLowerCase() !== currency) {
+      throw new AppError("Delivery zone currency mismatch", 400);
+    }
+
+    const pricedItems = itemsInput.map((item) => {
+      const product = productMap.get(item.productId);
+      if (!product) {
+        throw new AppError("Some products are no longer available", 400);
+      }
+      if (product.stock < item.quantity) {
+        throw new AppError(`Insufficient stock for "${product.title}"`, 409);
+      }
+      return {
+        productId: product.id,
+        vendorId: product.vendorId,
+        productTitle: product.title,
+        quantity: item.quantity,
+        unitAmount: product.priceInCents,
+        totalAmount: product.priceInCents * item.quantity,
+        currency: product.currency,
+        weightGrams: (product.weightGrams ?? 0) * item.quantity,
+      };
+    });
+
+    const subtotalAmount = pricedItems.reduce((sum, item) => sum + item.totalAmount, 0);
+    const totalWeight = pricedItems.reduce((sum, item) => sum + item.weightGrams, 0);
+    if (totalWeight > MAX_VENDOR_WEIGHT_GRAMS) {
+      throw new AppError(
+        `Order weight exceeds the maximum of ${MAX_VENDOR_WEIGHT_GRAMS / 1000}kg. Please reduce items.`,
+        400,
+      );
+    }
+
+    const deliveryFeeAmount = baseZone.baseFeeAmount + Math.ceil(totalWeight / 1000) * baseZone.feePerKgAmount;
+    const platformFeeBps = await resolveVendorPlatformFeeBps(vendor.id);
+    const platformFeeAmount = calcPlatformFee(subtotalAmount, platformFeeBps);
+    const vendorEarningsAmount = subtotalAmount - platformFeeAmount;
+    const totalAmount = subtotalAmount + deliveryFeeAmount;
+    const buyer = await ensureGuestBuyer(input);
+    const deliveryAddress = [normalizeText(input.streetAddress), normalizeText(input.city), normalizeText(input.postcode), normalizedCountry]
+      .filter(Boolean)
+      .join(", ");
+
+    const { checkoutId, orderId, orderNumber } = await prisma.$transaction(async (tx) => {
+      for (const item of pricedItems) {
+        const updated = await tx.product.updateMany({
+          where: { id: item.productId, vendorId: vendor.id, isActive: true, stock: { gte: item.quantity } },
+          data: { stock: { decrement: item.quantity } },
+        });
+        if (updated.count !== 1) {
+          throw new AppError(`Insufficient stock for "${item.productTitle}"`, 409);
+        }
+      }
+
+      const checkout = await tx.checkout.create({
+        data: {
+          buyerId: buyer.id,
+          totalAmount,
+          currency,
+          status: "PENDING",
+          metadata: {
+            source: "public_store",
+            storeSlug: vendor.storeSlug,
+            buyerEmail: buyer.email,
+            buyerPhone: normalizeText(input.phone),
+            deliveryAddress,
+            deliveryCountry: normalizedCountry,
+          } as Prisma.InputJsonValue,
+        },
+        select: { id: true },
+      });
+
+      const orderNumber = `EKI-${new Date().getFullYear()}-${crypto.randomBytes(4).toString("hex").toUpperCase()}`;
+      const order = await tx.order.create({
+        data: {
+          checkoutId: checkout.id,
+          buyerId: buyer.id,
+          vendorId: vendor.id,
+          orderNumber,
+          status: "PENDING",
+          subtotalAmount,
+          deliveryFeeAmount,
+          platformFeeAmount,
+          vendorEarnings: vendorEarningsAmount,
+          totalAmount,
+          currency,
+          deliveryZoneId: baseZone.id,
+          deliveryAddress,
+        },
+        select: { id: true, orderNumber: true },
+      });
+
+      await tx.orderItem.createMany({
+        data: pricedItems.map((item) => ({
+          orderId: order.id,
+          productId: item.productId,
+          vendorId: vendor.id,
+          quantity: item.quantity,
+          unitAmount: item.unitAmount,
+          totalAmount: item.totalAmount,
+          currency: item.currency,
+          productTitle: item.productTitle,
+        })),
+      });
+
+      await tx.payment.create({
+        data: {
+          orderId: order.id,
+          amount: totalAmount,
+          platformFeeAmount,
+          vendorEarningsAmount,
+          currency,
+          status: "PENDING",
+          provider: "stripe",
+        },
+      });
+
+      return { checkoutId: checkout.id, orderId: order.id, orderNumber: order.orderNumber };
+    }, { isolationLevel: "Serializable" });
+
+    const publicBaseUrl = process.env.FRONTEND_URL ?? "https://www.culinarytales.app";
+
+    const session = await stripe.checkout.sessions.create({
+      mode: "payment",
+      customer_email: normalizeEmail(input.email),
+      success_url: `${publicBaseUrl}/store/${vendor.storeSlug}/confirmed?session_id={CHECKOUT_SESSION_ID}`,
+      cancel_url: `${publicBaseUrl}/store/${vendor.storeSlug}/checkout?cancelled=true`,
+      metadata: {
+        kind: "public_store_checkout",
+        checkoutId,
+        buyerId: buyer.id,
+        orderIds: orderId,
+        vendorIds: vendor.id,
+        orderNumber,
+        storeSlug: vendor.storeSlug,
+        walletDeduction: "0",
+      },
+      payment_intent_data: {
+        metadata: {
+          kind: "public_store_checkout",
+          checkoutId,
+          buyerId: buyer.id,
+          orderIds: orderId,
+          vendorIds: vendor.id,
+          orderNumber,
+          storeSlug: vendor.storeSlug,
+          walletDeduction: "0",
+        },
+      },
+      line_items: [
+        ...pricedItems.map((item) => ({
+          quantity: item.quantity,
+          price_data: {
+            currency,
+            unit_amount: item.unitAmount,
+            product_data: {
+              name: item.productTitle,
+              metadata: { productId: item.productId },
+            },
+          },
+        })),
+        ...(deliveryFeeAmount > 0
+          ? [{
+              quantity: 1,
+              price_data: {
+                currency,
+                unit_amount: deliveryFeeAmount,
+                product_data: {
+                  name: "Delivery",
+                  description: normalizedCountry,
+                },
+              },
+            }]
+          : []),
+      ],
+    });
+
+    if (!session.url) {
+      throw new AppError("Could not create checkout session", 502);
+    }
+
+    return {
+      checkoutUrl: session.url,
+      orderNumber,
+      checkoutId,
+    };
+  },
+
+  async getStoreOrderByNumber(slug: string, orderNumber: string): Promise<PublicStoreTrackedOrder> {
+    const vendor = await findVendorBySlug(slug);
+    return findTrackedOrderByNumber(vendor, orderNumber);
+  },
+
+  async getStoreOrderByCheckoutSession(slug: string, sessionId: string): Promise<PublicStoreTrackedOrder> {
+    const vendor = await findVendorBySlug(slug);
+    const session = await stripe.checkout.sessions.retrieve(sessionId);
+    const orderNumber = session.metadata?.orderNumber;
+    if (!orderNumber) {
+      throw new AppError("Order not found", 404);
+    }
+    return findTrackedOrderByNumber(vendor, orderNumber);
   },
 
   async recordEvent(slug: string, input: TrackPublicStoreEventInput, viewerId?: string): Promise<PublicStoreAnalyticsSummary> {

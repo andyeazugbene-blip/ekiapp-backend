@@ -2,13 +2,13 @@ import crypto from "crypto";
 
 import type { Prisma } from "@prisma/client";
 
-import { env } from "../../config/env";
 import { logger } from "../../lib/logger";
 import { prisma } from "../../lib/prisma";
 import { stripe } from "../../lib/stripe";
 import { AppError } from "../../shared/errors/app-error";
 import { calculatePlatformFee as calcPlatformFee } from "../../shared/pricing";
 import { referralsService } from "../referrals/referrals.service";
+import { resolveVendorPlatformFeeBps } from "../subscriptions/subscription-plan-utils";
 import { validateCreatePaymentIntentFromCartInput } from "./payments.validation";
 import type { CreatePaymentIntentResponse, PricedOrderItem } from "./payments.types";
 
@@ -134,7 +134,8 @@ class PaymentsService {
       const effectiveZone = vendorZone ?? zone;
 
       const deliveryFee = effectiveZone.baseFeeAmount + Math.ceil(totalWeight / 1000) * effectiveZone.feePerKgAmount;
-      const platformFee = calcPlatformFee(subtotal, env.platformFeeBps);
+      const platformFeeBps = await resolveVendorPlatformFeeBps(vendorId);
+      const platformFee = calcPlatformFee(subtotal, platformFeeBps);
       const vendorEarnings = subtotal - platformFee;
 
       vendorGroups.push({

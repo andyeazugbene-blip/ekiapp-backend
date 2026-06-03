@@ -1,0 +1,2 @@
+ALTER TABLE "SubscriptionPlanConfig"
+ADD COLUMN "platformFeeBps" INTEGER NOT NULL DEFAULT 1000;

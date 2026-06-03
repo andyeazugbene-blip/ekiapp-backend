@@ -1,15 +1,10 @@
 import type { Request, Response } from "express";
 
 import { publicStoresService } from "./public-stores.service";
-import type { PublicProduct, PublicStore } from "./public-stores.types";
+import type { PublicProduct, PublicStore, PublicStoreTrackedOrder } from "./public-stores.types";
 
-const PAGE_PRODUCTS_LIMIT = 24;
+const PAGE_PRODUCTS_LIMIT = 48;
 
-/**
- * Minimal HTML escaping for untrusted user-supplied content rendered in
- * server-side templates. Prevents XSS via vendor-controlled fields like
- * storeName, description, etc.
- */
 function escape(value: unknown): string {
   if (value === null || value === undefined) return "";
   return String(value)
@@ -21,1470 +16,1100 @@ function escape(value: unknown): string {
 }
 
 function formatPrice(priceInCents: number, currency: string): string {
-  const amount = priceInCents / 100;
-  const code = currency.toUpperCase();
   try {
-    return new Intl.NumberFormat("en-US", { style: "currency", currency: code }).format(amount);
+    return new Intl.NumberFormat("en-GB", { style: "currency", currency: currency.toUpperCase() }).format(priceInCents / 100);
   } catch {
-    return `${amount.toFixed(2)} ${code}`;
+    return `${(priceInCents / 100).toFixed(2)} ${currency.toUpperCase()}`;
   }
 }
 
-function truncate(value: string | null | undefined, maxLength: number): string {
-  if (!value) return "";
-  const normalized = value.trim();
-  if (normalized.length <= maxLength) return normalized;
-  return `${normalized.slice(0, maxLength - 1).trimEnd()}...`;
+function formatMoney(value: number, currency: string): string {
+  try {
+    return new Intl.NumberFormat("en-GB", { style: "currency", currency: currency.toUpperCase() }).format(value);
+  } catch {
+    return `${value.toFixed(2)} ${currency.toUpperCase()}`;
+  }
 }
 
-function buildProductCode(title: string): string {
-  const initials = title
+function formatWeight(weightGrams: number | null | undefined): string {
+  if (!weightGrams || weightGrams <= 0) return "500g pack";
+  if (weightGrams >= 1000 && weightGrams % 1000 === 0) return `${weightGrams / 1000}kg`;
+  if (weightGrams >= 1000) return `${(weightGrams / 1000).toFixed(1)}kg`;
+  return `${weightGrams}g`;
+}
+
+function productCode(title: string): string {
+  const code = title
     .split(/\s+/)
     .map((part) => part.trim().charAt(0))
     .filter(Boolean)
     .slice(0, 2)
-    .join("");
-
-  return (initials || title.replace(/[^a-z0-9]/gi, "").slice(0, 2) || "EK").toUpperCase();
+    .join("")
+    .toUpperCase();
+  return code || "EK";
 }
 
-function renderProduct(product: PublicProduct): string {
+function productImage(product: PublicProduct): string {
   const image = product.images[0];
-  const productCode = buildProductCode(product.title);
-  const imageEl = image
-    ? `<img src="${escape(image)}" alt="${escape(product.title)}" loading="lazy" />`
-    : `<div class="placeholder">No image</div>`;
-  const inStock = product.stock > 0;
-  const stockBadge = `<span class="product-stock${inStock ? "" : " is-soldout"}">${inStock ? `${Math.max(product.stock, 1)} in stock` : "Sold out"}</span>`;
-  const summary = truncate(product.description, 72);
-  return `
-  <li class="product${inStock ? "" : " is-soldout"}">
-    <button class="product-image product-open" type="button" data-product="${escape(product.id)}">
-      ${imageEl}
-      <span class="product-code">${escape(productCode)}</span>
-      ${stockBadge}
-    </button>
-    <div class="product-body">
-      <button class="product-copy product-open" type="button" data-product="${escape(product.id)}">
-        <h3 class="product-title">${escape(product.title)}</h3>
-      </button>
-      <p class="product-meta">${escape(product.category || "Foodstuff")} · 2-4 days</p>
-      ${summary ? `<p class="product-summary">${escape(summary)}</p>` : ""}
-      <div class="product-actions">
-        <p class="product-price">${escape(formatPrice(product.priceInCents, product.currency))}</p>
-        ${
-          inStock
-            ? `<button class="product-add-icon product-add" type="button" data-product="${escape(product.id)}" aria-label="Add ${escape(product.title)} to cart">+</button>`
-            : `<button class="btn btn-disabled" type="button" disabled>Sold out</button>`
-        }
-      </div>
-    </div>
-  </li>`;
+  if (image) {
+    return `<img src="${escape(image)}" alt="${escape(product.title)}" loading="lazy" />`;
+  }
+  return `<div class="placeholder-pill">${escape(productCode(product.title))}</div>`;
 }
 
-function renderStorePage(store: PublicStore, products: PublicProduct[]): string {
-  const verifiedBadge =
-    store.verificationStatus === "VERIFIED"
-      ? `<span class="badge badge-verified" title="Verified vendor">
-           <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
-             <path fill="currentColor" d="M8 0a8 8 0 1 0 0 16A8 8 0 0 0 8 0zm3.78 6.28-4.5 4.5a.75.75 0 0 1-1.06 0l-2-2a.75.75 0 1 1 1.06-1.06L6.75 9.19l3.97-3.97a.75.75 0 1 1 1.06 1.06z"/>
-           </svg>
-           Verified Vendor
-         </span>`
-      : "";
+function statusSteps(status: PublicStoreTrackedOrder["status"]) {
+  const steps = [
+    { key: "placed", label: "Order placed", helper: "Order received" },
+    { key: "accepted", label: "Vendor confirmed", helper: "Order approved" },
+    { key: "preparing", label: "Preparing your order", helper: "In progress..." },
+    { key: "dispatched", label: "Dispatched", helper: "Pending" },
+    { key: "delivered", label: "Delivered", helper: "Pending" },
+  ] as const;
 
-  const location = [store.city, store.country].filter(Boolean).join(", ");
-  const productCount = store.totalProducts;
-  const locationLabel = escape(location || store.country || "United Kingdom");
-  const serializedProducts = JSON.stringify(products);
+  const order = ["placed", "accepted", "preparing", "dispatched", "delivered"];
+  const activeIndex = Math.max(order.indexOf(status), 0);
 
-  const avatar = store.avatar
-    ? `<img class="avatar" src="${escape(store.avatar)}" alt="${escape(store.storeName)}" />`
-    : `<div class="avatar avatar-placeholder">${escape(store.storeName.slice(0, 1).toUpperCase())}</div>`;
+  return steps.map((step, index) => ({
+    ...step,
+    complete: index < activeIndex,
+    active: index === activeIndex,
+  }));
+}
 
-  const description = store.description
-    ? `<p class="description">${escape(store.description)}</p>`
-    : `<p class="description">Authentic foodstuff ready for secure browser ordering and quick order tracking.</p>`;
-
-  const deliveryCountries =
-    store.deliveryCountries.length > 0
-      ? `<div class="delivery">
-           <span class="delivery-label">Ships to</span>
-           <div class="chips">
-             ${store.deliveryCountries.map((c) => `<span class="chip">${escape(c)}</span>`).join("")}
-           </div>
-         </div>`
-      : "";
-  const productsHtml =
-    products.length > 0
-      ? `<ul class="products">${products.map(renderProduct).join("")}</ul>`
-      : `<div class="empty">
-           <p class="empty-title">No products yet</p>
-           <p class="empty-sub">This store is just getting set up. Check back soon.</p>
-         </div>`;
-
+function baseStyles(title: string, description: string, extraHead = ""): string {
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <meta name="theme-color" content="#1F4D40" />
-  <title>${escape(store.storeName)} - Culinary Tales</title>
-  <meta name="description" content="${escape(store.description ?? store.storeName)}" />
-  <meta property="og:title" content="${escape(store.storeName)}" />
-  <meta property="og:description" content="${escape(store.description ?? "Discover this store on Culinary Tales.")}" />
-  <meta property="og:site_name" content="Culinary Tales" />
-  <meta property="og:type" content="website" />
-  <meta property="og:url" content="${escape(store.shareUrl)}" />
-  ${store.coverImage ? `<meta property="og:image" content="${escape(store.coverImage)}" />` : ""}
-  <meta name="twitter:card" content="summary_large_image" />
-  <link rel="canonical" href="${escape(store.shareUrl)}" />
+  <meta name="theme-color" content="#134f3b" />
+  <title>${escape(title)}</title>
+  <meta name="description" content="${escape(description)}" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=Inter:wght@400;500;600;700&display=swap" />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" />
+  ${extraHead}
   <style>
     *,*::before,*::after{box-sizing:border-box}
-    :root{
-      --bg:#FAF7F2;
-      --surface:#FFFFFF;
-      --surface-2:#F4EFE6;
-      --border:#E8E0D2;
-      --border-soft:#EFE8DA;
-      --text:#1F1B16;
-      --text-muted:#6B6256;
-      --accent:#1F4D40;
-      --accent-hover:#163A30;
-      --accent-soft:#E8F1ED;
-      --gold:#B89968;
-      --danger:#B5363A;
-    }
     html,body{margin:0;padding:0}
     body{
-      font-family:'Inter',-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
-      color:var(--text);
-      background:var(--bg);
-      line-height:1.55;
-      font-size:16px;
+      font-family:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+      background:#f6faf6;
+      color:#111827;
+      line-height:1.45;
       -webkit-font-smoothing:antialiased;
-      -moz-osx-font-smoothing:grayscale;
     }
-    .serif{font-family:'Fraunces',Georgia,'Times New Roman',serif;letter-spacing:-0.01em}
-    .container{max-width:1240px;margin:0 auto;padding:0 18px}
-
-    /* Top nav strip */
+    a{text-decoration:none;color:inherit}
+    button,input{font:inherit}
+    button{cursor:pointer}
+    .shell{min-height:100vh;background:#fff}
     .topbar{
-      padding:0;
-      background:#174C3A;
-      position:sticky;top:0;z-index:20;
-      border-bottom:1px solid rgba(255,255,255,.08);
+      background:#134f3b;
+      color:#fff;
+      min-height:28px;
+      border-bottom:1px solid rgba(255,255,255,.12);
     }
     .topbar-inner{
-      display:flex;align-items:center;justify-content:space-between;
-      min-height:42px;
+      max-width:1200px;
+      margin:0 auto;
+      padding:4px 10px;
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
       gap:12px;
     }
     .brand{
-      display:inline-flex;align-items:center;
-      font-weight:800;font-size:22px;letter-spacing:-0.04em;
-      color:#fff;text-decoration:none;
+      display:inline-flex;
+      align-items:center;
+      min-width:44px;
+      height:20px;
+      padding:0 10px;
+      border-radius:4px;
+      background:rgba(255,255,255,.12);
+      font-weight:800;
+      font-size:12px;
+      letter-spacing:-0.02em;
     }
-    .topbar-caption{
+    .mini-copy{
       flex:1;
       text-align:center;
-      color:rgba(255,255,255,.78);
-      font-size:10px;
+      font-size:8px;
+      color:rgba(255,255,255,.85);
       font-weight:600;
     }
-    .topbar-actions{display:flex;gap:8px;align-items:center}
-    .topbar-cart{
-      min-height:28px;
-      padding:0 14px;
-      border-radius:999px;
-      border:0;
-      background:rgba(255,255,255,.14);
-      color:#fff;
-      font:inherit;
-      font-size:11px;
-      font-weight:700;
-      cursor:pointer;
-    }
-    .topbar-cart:hover{background:rgba(255,255,255,.2)}
-
-    /* Header card */
-    .header{padding:14px 0 8px;position:relative;z-index:1}
-    .header-card{
-      background:var(--surface);
-      border:1px solid #E2EAE5;
-      border-radius:10px;
-      padding:18px 18px 14px;
-      box-shadow:0 8px 24px rgba(20,42,34,.04);
-    }
-    .header-row{display:flex;gap:16px;align-items:flex-start}
-    .avatar{
-      width:56px;height:56px;border-radius:12px;
-      border:0;
-      background:#174C3A;
-      object-fit:cover;flex-shrink:0;
-    }
-    .avatar-placeholder{
-      display:flex;align-items:center;justify-content:center;
-      font-size:20px;font-weight:800;
-      color:#fff;
-      background:#174C3A;
-    }
-    .meta{flex:1;min-width:0}
-    .store-name{
-      margin:0;font-size:28px;font-weight:700;line-height:1.12;
-      letter-spacing:-0.02em;
-      display:flex;align-items:center;gap:12px;flex-wrap:wrap;
-    }
-    .badge{
-      display:inline-flex;align-items:center;gap:5px;
-      font-size:12px;font-weight:600;
-      padding:4px 10px;border-radius:999px;
-      vertical-align:middle;white-space:nowrap;
-    }
-    .badge-verified{
-      background:var(--accent-soft);
-      color:var(--accent);
-    }
-    .location{
-      margin:6px 0 0;color:var(--text-muted);font-size:12px;
-      display:flex;align-items:center;gap:6px;
-    }
-    .location svg{flex-shrink:0;opacity:.7}
-    .description{
-      margin:10px 0 0;color:var(--text-muted);font-size:13px;line-height:1.55;
-      max-width:none;
-    }
-    .delivery{
-      margin:12px 0 0;
-      display:flex;flex-wrap:wrap;align-items:center;gap:10px;
-    }
-    .delivery-label{
-      font-size:12px;font-weight:700;color:var(--text-muted);
-      text-transform:uppercase;letter-spacing:0.06em;
-    }
-    .chips{display:flex;flex-wrap:wrap;gap:6px}
-    .chip{
-      font-size:12px;padding:6px 12px;border-radius:999px;
-      background:#F3EEE3;color:var(--text);
-      border:1px solid #E7DDCC;
-    }
-    .info-strip{
-      margin-top:12px;
-      min-height:34px;
-      border-radius:6px;
-      border:1px solid #CFE3D8;
-      background:#F3FBF6;
-      display:flex;
-      align-items:center;
-      justify-content:center;
-      gap:14px;
-      color:#174C3A;
-      font-size:11px;
-      font-weight:600;
-      flex-wrap:wrap;
-      padding:8px 10px;
-    }
-    .info-strip a{
-      color:#174C3A;
-      text-decoration:none;
-      font-weight:700;
-    }
-    .btn{
-      padding:11px 20px;border-radius:12px;
-      font-weight:600;font-size:14px;
-      border:1px solid transparent;cursor:pointer;
-      text-decoration:none;display:inline-flex;align-items:center;gap:8px;
-      transition:all .15s ease;
-      font-family:inherit;
-    }
-    .btn-primary{background:var(--accent);color:#fff}
-    .btn-primary:hover{background:var(--accent-hover)}
-    .btn-card{
-      background:var(--surface);color:var(--accent);
-      border-color:var(--border);
-    }
-    .btn-card:hover{background:var(--accent-soft)}
-    .btn-disabled{
-      background:#EAE6DE;color:#8B8275;border-color:#E0D7C9;cursor:not-allowed;
-    }
-    .btn-secondary{
-      background:var(--surface);color:var(--text);
-      border-color:var(--border);
-    }
-    .btn-secondary:hover{
-      background:var(--surface-2);border-color:#D9CFBE;
-    }
-    .btn svg{width:14px;height:14px}
-
-    /* Products section */
-    .section{padding:18px 0 80px}
-    .store-layout{
-      display:grid;
-      grid-template-columns:minmax(0,1fr) 320px;
-      gap:18px;
-      align-items:start;
-    }
-    .store-content{min-width:0}
-    .sidebar-stack{
-      display:flex;
-      flex-direction:column;
-      gap:18px;
-    }
-    .cart-panel,
-    .track-panel{
-      position:sticky;
-      top:58px;
-    }
-    .cart-card{
-      background:var(--surface);
-      border:1px solid var(--border);
-      border-radius:14px;
-      padding:18px;
-      box-shadow:0 8px 24px rgba(31,27,22,.04);
-    }
-    .cart-kicker{
-      margin:0;
-      color:var(--text-muted);
-      font-size:11px;
-      font-weight:700;
-      text-transform:uppercase;
-      letter-spacing:.08em;
-    }
-    .cart-title{
-      margin:10px 0 0;
-      font-size:22px;
-      line-height:1.15;
-      font-weight:600;
-    }
-    .cart-copy{
-      margin:10px 0 0;
-      color:var(--text-muted);
-      font-size:14px;
-      line-height:1.55;
-    }
-    .cart-items{
-      margin-top:20px;
-      display:flex;
-      flex-direction:column;
-      gap:10px;
-    }
-    .cart-empty{
-      border:1px dashed var(--border);
-      border-radius:14px;
-      padding:18px 16px;
-      background:#FBFAF7;
-    }
-    .cart-empty-title{
-      margin:0;
-      font-weight:600;
-      font-size:15px;
-    }
-    .cart-empty-copy{
-      margin:6px 0 0;
-      color:var(--text-muted);
-      font-size:13px;
-    }
-    .cart-item{
-      display:flex;
-      justify-content:space-between;
-      gap:12px;
-      border:1px solid var(--border-soft);
-      border-radius:14px;
-      padding:12px 14px;
-      background:#FBFAF7;
-    }
-    .cart-item-title{
-      margin:0;
-      font-size:14px;
-      font-weight:600;
-      line-height:1.4;
-    }
-    .cart-item-meta{
-      margin:5px 0 0;
-      color:var(--text-muted);
-      font-size:12px;
-    }
-    .cart-item-actions{
-      display:flex;
-      align-items:center;
-      gap:8px;
-      flex-shrink:0;
-    }
-    .qty-btn{
-      width:28px;
-      height:28px;
-      border-radius:999px;
-      border:1px solid var(--border);
-      background:var(--surface);
-      color:var(--accent);
-      font:inherit;
-      cursor:pointer;
-    }
-    .qty-value{
-      min-width:14px;
-      text-align:center;
-      font-size:13px;
-      font-weight:700;
-    }
-    .cart-summary{
-      margin-top:18px;
-      padding-top:16px;
-      border-top:1px solid var(--border-soft);
-      display:flex;
-      flex-direction:column;
-      gap:10px;
-    }
-    .cart-row{
-      display:flex;
-      justify-content:space-between;
-      gap:16px;
-      font-size:14px;
-      color:var(--text);
-    }
-    .cart-panel-actions{
-      display:flex;
-      flex-direction:column;
-      gap:10px;
-      margin-top:16px;
-    }
-    .cart-note{
-      margin:12px 0 0;
-      color:var(--text-muted);
-      font-size:12px;
-      line-height:1.55;
-    }
-    .track-card{
-      background:var(--surface);
-      border:1px solid var(--border);
-      border-radius:14px;
-      padding:18px;
-      box-shadow:0 8px 24px rgba(31,27,22,.04);
-    }
-    .track-copy{
-      margin:10px 0 0;
-      color:var(--text-muted);
-      font-size:14px;
-      line-height:1.55;
-    }
-    .tracker-form{
-      margin-top:16px;
-      display:flex;
-      flex-direction:column;
-      gap:10px;
-    }
-    .tracker-label{
-      display:block;
-      color:var(--text-muted);
-      font-size:12px;
-      font-weight:600;
-      margin:0 0 6px;
-    }
-    .tracker-input{
-      width:100%;
-      border:1px solid var(--border);
-      border-radius:12px;
-      padding:12px 14px;
-      font:inherit;
-      color:var(--text);
-      background:#fff;
-    }
-    .tracker-input:focus{
-      outline:none;
-      border-color:#cbb58d;
-      box-shadow:0 0 0 3px rgba(184,153,104,.18);
-    }
-    .tracker-actions{
-      display:flex;
-      gap:10px;
-      flex-wrap:wrap;
-    }
-    .tracker-status{
-      min-height:20px;
-      font-size:13px;
-      color:var(--text-muted);
-    }
-    .tracker-status.is-error{color:var(--danger)}
-    .tracker-status.is-success{color:var(--accent)}
-    .tracker-results{
-      margin-top:14px;
-      display:flex;
-      flex-direction:column;
-      gap:10px;
-    }
-    .tracker-result-card{
-      border:1px solid var(--border-soft);
-      border-radius:14px;
-      background:#FBFAF7;
-      padding:14px;
-    }
-    .tracker-result-top{
-      display:flex;
-      justify-content:space-between;
-      gap:12px;
-      align-items:flex-start;
-      flex-wrap:wrap;
-    }
-    .tracker-result-title{
-      margin:0;
-      font-size:15px;
-      font-weight:700;
-      color:var(--text);
-    }
-    .tracker-result-meta{
-      margin:5px 0 0;
-      font-size:12px;
-      color:var(--text-muted);
-    }
-    .tracker-badge{
+    .top-btn{
       display:inline-flex;
       align-items:center;
-      border-radius:999px;
-      padding:5px 10px;
+      justify-content:center;
+      min-width:96px;
+      min-height:24px;
+      padding:0 12px;
+      border-radius:6px;
+      border:1px solid rgba(255,255,255,.45);
+      background:rgba(255,255,255,.08);
+      color:#fff;
       font-size:11px;
-      font-weight:700;
-      text-transform:uppercase;
-      letter-spacing:.04em;
-      background:var(--accent-soft);
-      color:var(--accent);
+      font-weight:600;
     }
-    .tracker-result-grid{
-      margin-top:12px;
-      display:grid;
-      grid-template-columns:repeat(2,minmax(0,1fr));
-      gap:10px;
-    }
-    .tracker-result-cell{
-      border:1px solid var(--border-soft);
-      border-radius:12px;
-      background:#fff;
-      padding:10px 12px;
-    }
-    .tracker-result-label{
-      display:block;
-      font-size:11px;
-      text-transform:uppercase;
-      letter-spacing:.05em;
-      color:var(--text-muted);
-      margin-bottom:4px;
-      font-weight:700;
-    }
-    .tracker-result-value{
-      display:block;
-      font-size:14px;
-      color:var(--text);
-      line-height:1.45;
-    }
-    .section-header{
-      display:flex;align-items:baseline;justify-content:space-between;
-      margin-bottom:16px;gap:16px;flex-wrap:wrap;
-    }
-    .section-title{
-      margin:0;font-size:17px;font-weight:700;
-      letter-spacing:-0.01em;
-    }
-    .section-count{
-      color:var(--text-muted);font-size:12px;font-weight:500;
-    }
-    .products{
-      list-style:none;padding:0;margin:0;
-      display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px;
-    }
-    .product{
-      background:var(--surface);
-      border:1px solid var(--border);
+    .container{max-width:1200px;margin:0 auto;padding:0 10px}
+    .store-band{padding:12px 0 10px}
+    .store-card{
+      display:flex;
+      gap:14px;
+      align-items:flex-start;
+      padding:12px 14px;
+      border:1px solid #dbe7dd;
       border-radius:10px;
-      overflow:hidden;
-      display:flex;flex-direction:column;
-      transition:transform .18s ease, box-shadow .18s ease, border-color .18s ease;
+      background:#fff;
     }
-    .product:hover{
-      transform:translateY(-2px);
-      box-shadow:0 12px 28px rgba(31,27,22,.08);
-      border-color:#D9CFBE;
+    .avatar{
+      width:40px;height:40px;border-radius:8px;background:#134f3b;color:#fff;
+      display:flex;align-items:center;justify-content:center;font-weight:800;font-size:12px;overflow:hidden;flex-shrink:0;
     }
-    .product-copy,
-    .product-image{
-      appearance:none;
-      border:0;
+    .avatar img{width:100%;height:100%;object-fit:cover}
+    .store-meta h1{margin:0;font-size:21px;line-height:1.1;font-weight:800}
+    .badge{
+      display:inline-flex;align-items:center;gap:4px;
+      padding:2px 7px;border-radius:999px;background:#e4f2e8;color:#16513b;font-size:10px;font-weight:700;
+      margin-left:8px;vertical-align:middle;
+    }
+    .store-meta .sub{
+      margin:4px 0 0;color:#6b7280;font-size:11px;
+    }
+    .store-meta .copy{
+      margin:4px 0 0;color:#6b7280;font-size:11px;max-width:780px;
+    }
+    .trust-strip{
+      margin:10px 0 0;
+      border:1px solid #d5ead7;
+      border-radius:4px;
+      padding:6px 10px;
+      color:#2d6a4f;
+      font-size:10px;
+      display:flex;
+      justify-content:center;
+      gap:28px;
+      flex-wrap:wrap;
+      background:#f4fbf5;
+    }
+    .section-head{
+      display:flex;justify-content:space-between;align-items:center;
+      margin:10px 0 8px;
+    }
+    .section-head h2{margin:0;font-size:13px;font-weight:800}
+    .muted{color:#6b7280;font-size:10px}
+    .products{
+      display:grid;
+      grid-template-columns:repeat(4,minmax(0,1fr));
+      gap:10px;
+      list-style:none;
       padding:0;
       margin:0;
-      text-align:left;
-      background:transparent;
-      cursor:pointer;
-      width:100%;
-      font:inherit;
-      color:inherit;
     }
-    .product.is-soldout{opacity:.72}
-    .product-image{
-      aspect-ratio:1.28/1;background:#EEF8EE;overflow:hidden;
+    .product-card{
+      border:1px solid #dbe7dd;
+      border-radius:0;
+      overflow:hidden;
+      background:#fff;
+    }
+    .product-top{
+      display:block;
       position:relative;
+      min-height:118px;
+      padding:14px;
+      background:#eef8ee;
+      border:0;
+      width:100%;
+      text-align:left;
     }
-    .product-image img{
-      width:100%;height:100%;object-fit:cover;display:block;
-      transition:transform .4s ease;
-    }
-    .product:hover .product-image img{transform:scale(1.04)}
-    .placeholder{
-      width:100%;height:100%;display:flex;align-items:center;justify-content:center;
-      color:var(--text-muted);font-size:13px;
-    }
-    .product-soldout{
-      position:absolute;top:12px;left:12px;
-      background:rgba(31,27,22,.85);color:#fff;
-      font-size:11px;font-weight:600;
-      padding:4px 10px;border-radius:999px;
-      letter-spacing:0.04em;text-transform:uppercase;
-      backdrop-filter:blur(4px);
-    }
-    .product-code{
-      position:absolute;
-      left:50%;
-      top:50%;
-      transform:translate(-50%,-50%);
-      display:inline-flex;
-      align-items:center;
-      justify-content:center;
-      min-width:46px;
-      min-height:24px;
-      padding:0 10px;
+    .product-top img{
+      width:100%;
+      height:90px;
+      object-fit:cover;
       border-radius:8px;
-      background:#CFE8D6;
-      color:#2E664F;
-      font-size:11px;
-      font-weight:700;
-      letter-spacing:.02em;
-      z-index:2;
+      display:block;
     }
-    .product-stock{
+    .placeholder-pill{
+      margin:28px auto 0;
+      width:max-content;
+      min-width:48px;
+      padding:7px 12px;
+      border-radius:8px;
+      background:#d6ecd9;
+      color:#2d6a4f;
+      font-size:12px;
+      font-weight:800;
+      letter-spacing:.04em;
+      text-align:center;
+    }
+    .stock-pill{
       position:absolute;
       top:8px;
       right:8px;
-      display:inline-flex;
-      align-items:center;
-      min-height:20px;
-      padding:0 7px;
+      padding:3px 8px;
       border-radius:999px;
-      background:#2D6A4F;
+      background:#2b7a4b;
       color:#fff;
-      font-size:9px;
+      font-size:8px;
       font-weight:700;
-      z-index:2;
     }
-    .product-stock.is-soldout{background:#6E675E}
-    .product-body{padding:12px}
+    .stock-pill.is-sold{background:#64748b}
+    .product-body{padding:8px 8px 10px}
     .product-title{
-      margin:0;font-size:13px;font-weight:700;line-height:1.35;
-      color:var(--text);
-      display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;
-      min-height:36px;
-    }
-    .product-price{
-      margin:0;font-weight:700;font-size:18px;
-      color:var(--text);
-      font-family:'Fraunces',Georgia,serif;
-      letter-spacing:-0.01em;
+      margin:0 0 2px;
+      font-size:11px;
+      font-weight:700;
+      line-height:1.3;
     }
     .product-meta{
-      margin:4px 0 0;
-      color:var(--text-muted);
-      font-size:10px;
-      line-height:1.45;
+      margin:0;
+      font-size:9px;
+      color:#6b7280;
     }
-    .product-summary{
-      margin:8px 0 0;
-      color:var(--text-muted);
-      font-size:11px;
-      line-height:1.55;
-      min-height:34px;
-    }
-    .product-actions{
+    .product-row{
       margin-top:8px;
       display:flex;
-      gap:10px;
       align-items:center;
       justify-content:space-between;
+      gap:10px;
     }
-    .product-add-icon{
-      width:24px;
-      height:24px;
-      min-width:24px;
-      border-radius:6px;
-      border:0;
-      background:#174C3A;
-      color:#fff;
-      font-size:18px;
-      font-weight:700;
-      line-height:1;
-      display:inline-flex;
+    .product-price{
+      margin:0;
+      font-size:12px;
+      font-weight:800;
+      color:#111827;
+    }
+    .icon-add{
+      width:20px;height:20px;border-radius:4px;border:0;
+      background:#134f3b;color:#fff;font-weight:800;font-size:14px;
+      display:inline-flex;align-items:center;justify-content:center;
+    }
+    .sticky-cart{
+      position:sticky;
+      bottom:0;
+      background:#fff;
+      border-top:1px solid #dbe7dd;
+      margin-top:18px;
+    }
+    .sticky-cart-inner{
+      max-width:1200px;
+      margin:0 auto;
+      padding:12px 10px;
+      display:flex;
+      justify-content:space-between;
+      align-items:flex-end;
+      gap:12px;
+    }
+    .sticky-copy small{display:block;color:#6b7280;font-size:9px}
+    .sticky-copy strong{display:block;font-size:18px;line-height:1.1}
+    .cart-btn{
+      display:inline-flex;align-items:center;justify-content:center;
+      min-width:108px;min-height:32px;padding:0 16px;border:0;border-radius:999px;
+      background:#134f3b;color:#fff;font-size:11px;font-weight:700;
+    }
+    .page-wrap{max-width:1200px;margin:0 auto;padding:0 10px}
+    .split{
+      display:grid;
+      grid-template-columns:minmax(0,58%) minmax(340px,42%);
+      min-height:calc(100vh - 28px);
+      background:#fff;
+    }
+    .panel-media{
+      background:#eef8ee;
+      padding:16px;
+      border-right:1px solid #dbe7dd;
+      position:relative;
+    }
+    .back-link{
+      width:24px;height:24px;border-radius:999px;border:0;background:#fff;color:#134f3b;
+      display:inline-flex;align-items:center;justify-content:center;font-size:16px;font-weight:800;
+      box-shadow:0 1px 4px rgba(0,0,0,.08);
+    }
+    .hero-image{
+      height:100%;
+      min-height:420px;
+      display:flex;
       align-items:center;
       justify-content:center;
-      cursor:pointer;
+      padding:30px;
     }
-    .product-add-icon:hover{background:#123A2D}
-
-    /* Empty */
-    .empty{
-      text-align:center;padding:64px 24px;
-      background:var(--surface);
-      border:1px dashed var(--border);
-      border-radius:16px;
+    .hero-image img{max-width:100%;max-height:420px;border-radius:18px;object-fit:cover}
+    .panel-copy{
+      padding:18px 22px 22px;
     }
-    .empty-title{
-      margin:0;font-family:'Fraunces',Georgia,serif;
-      font-size:20px;font-weight:600;color:var(--text);
+    .inline-badges{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+    .pill{
+      display:inline-flex;align-items:center;gap:6px;
+      padding:4px 9px;border-radius:999px;background:#e4f2e8;color:#16513b;
+      font-size:9px;font-weight:700;
     }
-    .empty-sub{margin:6px 0 0;color:var(--text-muted);font-size:14px}
-
-    /* Toast */
-    .toast{
-      position:fixed;bottom:32px;left:50%;transform:translateX(-50%) translateY(8px);
-      background:var(--text);color:#fff;
-      padding:10px 16px;border-radius:10px;
-      font-size:14px;font-weight:500;
-      box-shadow:0 12px 28px rgba(0,0,0,.18);
-      opacity:0;pointer-events:none;
-      transition:opacity .18s ease, transform .18s ease;
-      z-index:50;
-    }
-    .toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
-    #cart-toast{bottom:88px}
-
-    /* Product modal */
-    .product-modal{
-      position:fixed;
-      inset:0;
-      display:none;
-      z-index:60;
-    }
-    .product-modal.show{display:block}
-    .product-modal-backdrop{
-      position:absolute;
-      inset:0;
-      background:rgba(15,20,18,.58);
-    }
-    .product-modal-card{
-      position:relative;
-      max-width:860px;
-      margin:48px auto;
-      background:var(--surface);
-      border-radius:24px;
-      overflow:hidden;
-      border:1px solid var(--border);
-      box-shadow:0 24px 48px rgba(0,0,0,.18);
-    }
-    .modal-close{
-      position:absolute;
-      top:18px;
-      right:18px;
-      width:40px;
-      height:40px;
-      border-radius:999px;
-      border:0;
-      background:rgba(255,255,255,.92);
-      font-size:28px;
-      line-height:1;
-      color:var(--text);
-      cursor:pointer;
-      z-index:1;
-    }
-    .product-modal-media{
-      height:300px;
-      background:var(--surface-2);
-    }
-    .product-modal-media img{
-      width:100%;
-      height:100%;
-      object-fit:cover;
-      display:block;
-    }
-    .placeholder-modal{
-      font-size:15px;
-      min-height:300px;
-    }
-    .product-modal-body{
-      padding:24px;
-    }
-    .modal-eyebrow{
-      margin:0;
-      color:var(--text-muted);
+    .crumb{font-size:10px;color:#6b7280}
+    .panel-copy h1{margin:8px 0 4px;font-size:21px;line-height:1.15;font-weight:800}
+    .lead-row{display:flex;gap:16px;flex-wrap:wrap;color:#6b7280;font-size:10px}
+    .desc{
+      margin:16px 0 0;
+      padding:14px;
+      border-radius:4px;
+      background:#f7faf7;
+      color:#46505a;
       font-size:11px;
-      font-weight:700;
-      text-transform:uppercase;
+    }
+    .qty-row{margin-top:16px}
+    .qty-row label{display:block;font-size:10px;font-weight:600;margin-bottom:6px}
+    .qty-control{
+      display:inline-flex;align-items:center;gap:8px;border:1px solid #dbe7dd;border-radius:8px;padding:4px 6px;background:#fff;
+    }
+    .qty-control button{
+      width:24px;height:24px;border:0;background:#f3f5f4;border-radius:6px;color:#134f3b;font-size:14px;font-weight:700;
+    }
+    .qty-control span{min-width:16px;text-align:center;font-size:12px;font-weight:700}
+    .secure-strip{
+      margin-top:12px;
+      border:1px solid #cfe7d6;
+      background:#f4fbf5;
+      color:#2d6a4f;
+      font-size:10px;
+      border-radius:4px;
+      padding:6px 10px;
+      display:flex;justify-content:center;gap:18px;flex-wrap:wrap;
+    }
+    .primary-action{
+      width:100%;
+      min-height:40px;
+      margin-top:10px;
+      border:0;border-radius:6px;
+      background:#134f3b;color:#fff;
+      font-size:13px;font-weight:700;
+    }
+    .page-card{
+      max-width:1140px;
+      margin:22px auto;
+      padding:0 10px;
+    }
+    .checkout-grid{
+      display:grid;
+      grid-template-columns:minmax(0,1fr) 320px;
+      gap:20px;
+      align-items:start;
+    }
+    .checkout-title{margin:0;font-size:18px;font-weight:800}
+    .checkout-sub{margin:4px 0 16px;color:#6b7280;font-size:11px}
+    .form-card{
+      border:1px solid #e3ece5;
+      border-radius:10px;
+      background:#fff;
+      padding:14px;
+      margin-bottom:12px;
+    }
+    .section-label{
+      font-size:9px;
+      font-weight:800;
       letter-spacing:.08em;
-    }
-    .modal-title{
-      margin:10px 0 0;
-      font-size:30px;
-      line-height:1.15;
-      font-weight:600;
-    }
-    .modal-meta{
-      margin:10px 0 0;
-      color:var(--text-muted);
-      font-size:14px;
-    }
-    .modal-description{
-      margin:14px 0 0;
-      font-size:15px;
-      line-height:1.65;
-    }
-    .modal-footer{
-      margin-top:22px;
-      display:flex;
-      justify-content:space-between;
-      gap:16px;
-      align-items:flex-end;
-      flex-wrap:wrap;
-    }
-    .modal-price{
-      margin:0;
-      font-family:'Fraunces',Georgia,serif;
-      font-size:26px;
-      font-weight:700;
-      line-height:1.1;
-    }
-    .modal-stock{
-      margin:8px 0 0;
-      color:var(--accent);
-      font-size:12px;
-      font-weight:700;
+      color:#6b7280;
+      margin:0 0 10px;
       text-transform:uppercase;
-      letter-spacing:.04em;
     }
-    .modal-actions{
-      display:flex;
-      gap:10px;
-      flex-wrap:wrap;
-      justify-content:flex-end;
+    .grid-2{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+    .field{display:flex;flex-direction:column;gap:5px}
+    .field input{
+      width:100%;
+      min-height:38px;
+      border:1px solid #e3ece5;
+      border-radius:6px;
+      padding:0 12px;
+      background:#fff;
     }
-
-    /* Footer */
-    .footer{
-      border-top:1px solid var(--border-soft);
-      background:var(--surface);
-      padding:28px 0;text-align:center;
-      color:var(--text-muted);font-size:13px;
+    .field-full{grid-column:1/-1}
+    .payment-box{
+      display:flex;align-items:center;gap:8px;
+      min-height:40px;border:1px solid #c8dbce;border-radius:6px;padding:0 12px;margin-bottom:12px;
     }
-    .footer a{color:var(--text);text-decoration:none;font-weight:600}
-    .footer a:hover{color:var(--accent)}
-
-    @media (max-width:720px){
-      .container{padding:0 16px}
-      .topbar-caption{display:none}
-      .topbar-inner{min-height:48px}
-      .topbar-cart{padding:0 12px}
-      .header-card{padding:16px;border-radius:12px}
-      .header-row{flex-direction:column;gap:12px}
-      .avatar{width:52px;height:52px;border-radius:10px}
-      .store-name{font-size:24px}
-      .description{font-size:14px}
-      .btn{justify-content:center}
-      .section{padding:12px 0 56px}
-      .store-layout{grid-template-columns:1fr}
-      .sidebar-stack{gap:14px}
-      .cart-panel,.track-panel{position:static}
-      .section-title{font-size:18px}
-      .products{grid-template-columns:repeat(2,1fr);gap:12px}
-      .product-body{padding:10px 10px 12px}
-      .product-title{font-size:13px;min-height:34px}
-      .product-summary{min-height:0}
-      .product-price{font-size:15px}
-      .product-modal-card{margin:18px 14px}
-      .product-modal-media{height:220px}
-      .modal-title{font-size:24px}
-      .modal-footer{align-items:stretch}
-      .modal-actions{width:100%}
-      .tracker-result-grid{grid-template-columns:1fr}
+    .summary{
+      border:1px solid #e3ece5;border-radius:10px;background:#fff;padding:14px;position:sticky;top:44px;
+    }
+    .summary h3{margin:0 0 10px;font-size:12px;font-weight:800}
+    .summary-line,.summary-total{
+      display:flex;justify-content:space-between;gap:12px;font-size:11px;
+    }
+    .summary-line{margin:8px 0;color:#4b5563}
+    .summary-total{
+      margin-top:10px;padding-top:10px;border-top:1px solid #ecf1ed;
+      font-size:18px;font-weight:800;color:#111827;
+    }
+    .summary-item{
+      display:flex;justify-content:space-between;gap:10px;margin:8px 0;font-size:11px;
+    }
+    .summary-item-name{display:flex;gap:8px}
+    .mini-code{
+      width:18px;height:18px;border-radius:6px;background:#e4f2e8;color:#16513b;
+      display:inline-flex;align-items:center;justify-content:center;font-size:8px;font-weight:800;flex-shrink:0;
+    }
+    .summary-pay{
+      width:100%;min-height:38px;margin-top:14px;border:0;border-radius:8px;background:#134f3b;color:#fff;font-weight:700;
+    }
+    .foot-note{margin-top:8px;color:#6b7280;font-size:10px;text-align:center}
+    .flash{
+      margin-bottom:12px;padding:10px 12px;border-radius:8px;border:1px solid #f0d8b0;background:#fff9ef;color:#8a5a11;font-size:11px;
+    }
+    .confirm-shell{max-width:680px;margin:26px auto 0;padding:0 10px;text-align:center}
+    .confirm-badge{
+      display:inline-flex;align-items:center;justify-content:center;width:64px;height:64px;border-radius:999px;border:2px solid #9ad0ac;color:#134f3b;font-size:26px;font-weight:800;
+    }
+    .confirm-shell h1{margin:14px 0 6px;font-size:18px;font-weight:800}
+    .confirm-sub{margin:0;color:#6b7280;font-size:11px}
+    .order-chip{
+      display:inline-flex;align-items:center;justify-content:center;margin-top:10px;padding:4px 10px;border-radius:999px;background:#edf7ef;color:#2d6a4f;font-size:10px;font-weight:700;
+    }
+    .confirm-card{
+      margin:18px auto 0;max-width:400px;border-radius:16px;background:#134f3b;color:#fff;padding:14px 14px 0;text-align:left;
+    }
+    .confirm-card h2{margin:6px 0;font-size:18px}
+    .confirm-list{list-style:none;padding:0;margin:10px 0 0}
+    .confirm-list li{display:flex;gap:8px;align-items:flex-start;font-size:11px;margin-top:8px}
+    .confirm-list li::before{content:"✓";font-weight:700}
+    .white-btn{
+      width:100%;min-height:38px;margin-top:16px;border:0;border-radius:10px;background:#fff;color:#134f3b;font-weight:700;
+    }
+    .ghost-link{
+      display:inline-flex;align-items:center;justify-content:center;min-width:200px;min-height:34px;margin-top:14px;border:1px solid #e3ece5;border-radius:999px;background:#fff;color:#6b7280;font-size:11px;font-weight:600;
+    }
+    .track-shell{max-width:1200px;margin:0 auto;padding:20px 10px 30px}
+    .track-shell h1{margin:0;text-align:center;font-size:20px;font-weight:800}
+    .track-chip{display:block;width:max-content;margin:10px auto 18px;padding:4px 10px;border-radius:999px;background:#edf7ef;color:#2d6a4f;font-size:10px;font-weight:700}
+    .track-grid{
+      display:grid;
+      grid-template-columns:minmax(0,1fr) 240px;
+      gap:16px;
+      align-items:start;
+    }
+    .track-card,.side-card{
+      border:1px solid #e3ece5;border-radius:10px;background:#fff;padding:16px;
+    }
+    .track-card h2,.side-card h2{margin:0 0 10px;font-size:12px;font-weight:800}
+    .timeline{display:flex;flex-direction:column;gap:14px;margin-top:10px}
+    .step{display:grid;grid-template-columns:20px 1fr;gap:10px;align-items:start}
+    .step-dot{
+      width:20px;height:20px;border-radius:999px;border:2px solid #d9e5dd;background:#fff;
+      display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:800;color:#134f3b;
+    }
+    .step.complete .step-dot{background:#2d6a4f;border-color:#2d6a4f;color:#fff}
+    .step.active .step-dot{border-color:#2d6a4f}
+    .step h3{margin:0;font-size:12px;font-weight:700}
+    .step p{margin:2px 0 0;font-size:10px;color:#6b7280}
+    .bottom-banner{
+      margin-top:16px;padding:14px;border-radius:10px;background:#134f3b;color:#fff;display:flex;justify-content:space-between;align-items:center;gap:12px;
+    }
+    .bottom-banner p{margin:0;font-size:11px;color:rgba(255,255,255,.84)}
+    .bottom-banner .open-app{
+      min-width:110px;min-height:34px;border:0;border-radius:8px;background:#fff;color:#134f3b;font-weight:700;
+    }
+    .download-row{display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+    .download-btn{
+      display:inline-flex;flex-direction:column;justify-content:center;
+      min-width:116px;min-height:46px;padding:8px 14px;border-radius:8px;background:#2b7a4b;color:#fff;font-size:10px;font-weight:500;
+    }
+    .download-btn.is-light{background:#fff;color:#111827}
+    .download-btn strong{font-size:18px;line-height:1.05}
+    .hero{
+      background:#134f3b;color:#fff;
+    }
+    .hero-inner{
+      max-width:1200px;margin:0 auto;padding:48px 10px 30px;
+      display:grid;grid-template-columns:minmax(0,1fr) 280px;gap:26px;align-items:center;
+    }
+    .hero h1{margin:0 0 12px;font-size:34px;line-height:1.1;font-weight:800;max-width:520px}
+    .hero p{margin:0 0 20px;color:rgba(255,255,255,.84);max-width:560px}
+    .device{
+      height:232px;border-radius:14px;background:#2b7a4b;display:flex;align-items:center;justify-content:center;
+      box-shadow:inset 0 0 0 1px rgba(255,255,255,.1);
+      font-size:28px;
+    }
+    .why{
+      padding:18px 10px 0;max-width:1200px;margin:0 auto;text-align:center;
+    }
+    .why h2{margin:0 0 16px;font-size:20px;font-weight:800}
+    .why-grid{
+      display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:16px;
+    }
+    .why-card{
+      text-align:left;border:1px solid #dbe7dd;border-radius:12px;background:#eef8ee;padding:18px;
+    }
+    .why-card h3{margin:14px 0 8px;font-size:13px;font-weight:700}
+    .why-card p{margin:0;color:#6b7280;font-size:11px}
+    .find-strip{
+      margin-top:24px;padding:14px 0 20px;background:#eef8ee;border-top:1px solid #dde8df;
+    }
+    .find-strip-inner{
+      max-width:1200px;margin:0 auto;padding:0 10px;display:flex;justify-content:center;align-items:center;gap:18px;flex-wrap:wrap;
+    }
+    .find-link{
+      min-width:180px;min-height:38px;border-radius:8px;border:1px solid #134f3b;background:#fff;color:#134f3b;font-weight:700;display:inline-flex;align-items:center;justify-content:center;
+    }
+    .empty-state{
+      border:1px solid #dbe7dd;border-radius:12px;background:#fff;padding:30px;text-align:center;color:#6b7280;
+    }
+    @media (max-width: 980px){
+      .products,.why-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+      .split,.checkout-grid,.track-grid,.hero-inner{grid-template-columns:1fr}
+      .summary{position:static}
+      .device{height:180px}
+    }
+    @media (max-width: 640px){
+      .topbar-inner,.header-row,.sticky-cart-inner,.store-card,.bottom-banner,.find-strip-inner{flex-direction:column;align-items:stretch}
+      .mini-copy{text-align:left}
+      .products,.why-grid,.grid-2{grid-template-columns:1fr}
+      .hero h1{font-size:28px}
+      .store-meta h1,.panel-copy h1{font-size:24px}
+      .top-btn,.cart-btn,.find-link,.download-btn{width:100%}
     }
   </style>
 </head>
-<body>
-  <nav class="topbar">
-    <div class="container topbar-inner">
-      <a class="brand" href="${escape(store.shareUrl)}">eki.</a>
-      <span class="topbar-caption">Auto-synced from Eki app</span>
-      <div class="topbar-actions">
-        <button class="topbar-cart" id="topbar-cart" type="button">View Cart (0)</button>
-      </div>
-    </div>
-  </nav>
+<body>`;
+}
 
-  <header class="header container">
-    <div class="header-card">
-      <div class="header-row">
-        ${avatar}
-        <div class="meta">
-          <h1 class="store-name serif">
-            ${escape(store.storeName)}${verifiedBadge ? " " + verifiedBadge : ""}
-          </h1>
-          ${location ? `<p class="location">
-            <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true"><path fill="currentColor" d="M8 0a5 5 0 0 0-5 5c0 4.5 5 11 5 11s5-6.5 5-11a5 5 0 0 0-5-5zm0 7a2 2 0 1 1 0-4 2 2 0 0 1 0 4z"/></svg>
-            ${escape(location)}
-          </p>` : ""}
-          ${description}
-          ${deliveryCountries}
-          <div class="info-strip">
-            <span>Secure checkout</span>
-            <span>·</span>
-            <span>Instant confirmation</span>
-            <span>·</span>
-            <a href="#track-order">Track in Eki</a>
-          </div>
-          <div class="actions" style="margin-top:14px;display:flex;gap:10px;flex-wrap:wrap;">
-            <button class="btn btn-card" id="copy-link" type="button">
-              <svg viewBox="0 0 16 16" aria-hidden="true"><path fill="currentColor" d="M9.5 1a.5.5 0 0 0 0 1H13v3.5a.5.5 0 0 0 1 0V1.5a.5.5 0 0 0-.5-.5h-4zM2 2.5A1.5 1.5 0 0 1 3.5 1h3a.5.5 0 0 1 0 1h-3a.5.5 0 0 0-.5.5v10a.5.5 0 0 0 .5.5h6a.5.5 0 0 0 .5-.5v-3a.5.5 0 0 1 1 0v3A1.5 1.5 0 0 1 9.5 14h-6A1.5 1.5 0 0 1 2 12.5v-10z"/><path fill="currentColor" d="M14.354 2.354a.5.5 0 0 0-.708-.708L7.5 7.793 5.354 5.646a.5.5 0 1 0-.708.708l2.5 2.5a.5.5 0 0 0 .708 0l6.5-6.5z"/></svg>
-              Copy share link
-            </button>
-            <a class="btn btn-secondary" href="#products">View products</a>
+function renderTopbar(right: string): string {
+  return `
+  <div class="topbar">
+    <div class="topbar-inner">
+      <a class="brand" href="/">eki.</a>
+      <div class="mini-copy">+ Auto-synced from Eki app</div>
+      <div>${right}</div>
+    </div>
+  </div>`;
+}
+
+function renderStoreHeader(store: PublicStore): string {
+  const avatar = store.avatar
+    ? `<div class="avatar"><img src="${escape(store.avatar)}" alt="${escape(store.storeName)}" /></div>`
+    : `<div class="avatar">${escape(store.storeName.slice(0, 2).toUpperCase())}</div>`;
+
+  return `
+    <div class="store-band">
+      <div class="container">
+        <div class="store-card">
+          ${avatar}
+          <div class="store-meta">
+            <h1>${escape(store.storeName)} <span class="badge">Verified Vendor</span></h1>
+            <p class="sub">${escape([store.city, store.country].filter(Boolean).join(", ") || "Birmingham, UK")} · ${escape(`${store.rating ?? 4.9}`)} ★</p>
+            <p class="copy">${escape(store.description || "Authentic African foodstuff delivered to your door. Order securely without sending DMs.")}</p>
           </div>
         </div>
-      </div>
-    </div>
-  </header>
-
-  <main class="container section">
-    <div class="store-layout">
-      <section class="store-content" id="products">
-        <div class="section-header">
-          <h2 class="section-title">All Products</h2>
-          <span class="section-count">
-            ${productCount} ${productCount === 1 ? "item" : "items"}
-          </span>
+        <div class="trust-strip">
+          <span>Secure checkout</span>
+          <span>Instant confirmation</span>
+          <span>Track in Eki</span>
         </div>
-        ${productsHtml}
-      </section>
-
-      <div class="sidebar-stack">
-        <aside class="cart-panel" id="cart-panel">
-          <div class="cart-card">
-            <p class="cart-kicker">Your basket</p>
-            <h2 class="cart-title serif">Ready to check out</h2>
-            <p class="cart-copy">See exactly what is in your cart, then continue with this store's secure buyer checkout.</p>
-            <div class="cart-items" id="cart-items">
-              <div class="cart-empty">
-                <p class="cart-empty-title">Your cart is empty</p>
-                <p class="cart-empty-copy">Add a product to start your order.</p>
-              </div>
-            </div>
-            <div class="cart-summary">
-              <div class="cart-row"><span>Items</span><strong id="cart-count">0</strong></div>
-              <div class="cart-row"><span>Subtotal</span><strong id="cart-total">${escape(formatPrice(0, products[0]?.currency || "GBP"))}</strong></div>
-            </div>
-            <div class="cart-panel-actions">
-              <button class="btn btn-primary" type="button" id="checkout-btn" disabled>View Cart</button>
-              <button class="btn btn-secondary" type="button" id="copy-store-link">Copy store link</button>
-            </div>
-            <p class="cart-note">Tip: use the order tracker below with the same checkout email any time you want to reopen a paid order.</p>
-          </div>
-        </aside>
-
-        <aside class="track-panel" id="track-order">
-          <div class="track-card">
-            <p class="cart-kicker">Find your order</p>
-            <h2 class="cart-title serif">Track from your email</h2>
-            <p class="track-copy">Enter the email used when the order was placed. We will send a 6-digit code, then show the matching order cards right here.</p>
-            <div class="tracker-form">
-              <div>
-                <label class="tracker-label" for="track-email">Checkout email</label>
-                <input class="tracker-input" id="track-email" type="email" placeholder="you@example.com" />
-              </div>
-              <div class="tracker-actions">
-                <button class="btn btn-primary" type="button" id="track-request-btn">Email my tracking code</button>
-              </div>
-              <div id="track-code-wrap" hidden>
-                <label class="tracker-label" for="track-code">6-digit code</label>
-                <input class="tracker-input" id="track-code" type="text" inputmode="numeric" pattern="[0-9]*" placeholder="123456" maxlength="6" />
-              </div>
-              <div class="tracker-actions" id="track-verify-actions" hidden>
-                <button class="btn btn-primary" type="button" id="track-verify-btn">Verify and open orders</button>
-              </div>
-              <p class="tracker-status" id="track-status">Your secure order cards will appear here after verification.</p>
-              <div class="tracker-results" id="track-results"></div>
-            </div>
-          </div>
-        </aside>
       </div>
-    </div>
-  </main>
+    </div>`;
+}
 
-  <footer class="footer">
+function renderStorePage(store: PublicStore, products: PublicProduct[]): string {
+  const productsHtml = products.map((product) => {
+    const productHref = `/store/${encodeURIComponent(store.storeSlug)}/product/${encodeURIComponent(product.id)}`;
+    const stock = product.stock > 0 ? `${product.stock} in stock` : "No stock";
+    return `
+      <li class="product-card">
+        <a class="product-top" href="${productHref}">
+          <span class="stock-pill${product.stock > 0 ? "" : " is-sold"}">${escape(stock)}</span>
+          ${productImage(product)}
+        </a>
+        <div class="product-body">
+          <a href="${productHref}">
+            <h3 class="product-title">${escape(product.title)}</h3>
+            <p class="product-meta">${escape(formatWeight(product.weightGrams))} · 2-4 days</p>
+          </a>
+          <div class="product-row">
+            <p class="product-price">${escape(formatPrice(product.priceInCents, product.currency))}</p>
+            <button class="icon-add add-to-cart" type="button" data-product-id="${escape(product.id)}" aria-label="Add ${escape(product.title)}">+</button>
+          </div>
+        </div>
+      </li>`;
+  }).join("");
+
+  return `${baseStyles(`${store.storeName} | Eki`, store.description ?? store.storeName)}
+  <div class="shell">
+    ${renderTopbar(`<a class="top-btn" id="top-cart-button" href="/store/${encodeURIComponent(store.storeSlug)}/checkout">View Cart (0)</a>`)}
+    ${renderStoreHeader(store)}
     <div class="container">
-      Powered by <a href="https://culinarytales.app">Culinary Tales</a>
+      <div class="section-head">
+        <h2>All Products</h2>
+        <span class="muted">${products.length} items</span>
+      </div>
+      <ul class="products">${productsHtml}</ul>
     </div>
-  </footer>
-
-  <div class="toast" id="toast">Link copied to clipboard</div>
-  <div class="toast" id="cart-toast">Added to cart</div>
-  <div class="product-modal" id="product-modal" aria-hidden="true">
-    <div class="product-modal-backdrop" data-close-product-modal="true"></div>
-    <div class="product-modal-card" role="dialog" aria-modal="true" aria-labelledby="product-modal-title">
-      <button class="modal-close" type="button" id="close-product-modal" aria-label="Close product preview">&times;</button>
-      <div class="product-modal-media" id="product-modal-image-wrap"></div>
-      <div class="product-modal-body">
-        <p class="modal-eyebrow">Shared product</p>
-        <h3 class="modal-title serif" id="product-modal-title"></h3>
-        <p class="modal-meta" id="product-modal-meta"></p>
-        <p class="modal-description" id="product-modal-description"></p>
-        <div class="modal-footer">
-          <div>
-            <p class="modal-price" id="product-modal-price"></p>
-            <p class="modal-stock" id="product-modal-stock"></p>
-          </div>
-          <div class="modal-actions">
-            <button class="btn btn-secondary" type="button" id="modal-close-secondary">Keep browsing</button>
-            <button class="btn btn-primary" type="button" id="modal-add-button">Add to cart</button>
-          </div>
+    <div class="sticky-cart" id="sticky-cart">
+      <div class="sticky-cart-inner">
+        <div class="sticky-copy">
+          <small id="cart-copy">0 items in cart</small>
+          <strong id="cart-total">${escape(formatPrice(0, products[0]?.currency ?? "EUR"))}</strong>
         </div>
+        <a class="cart-btn" id="bottom-cart-button" href="/store/${encodeURIComponent(store.storeSlug)}/checkout">View Cart →</a>
       </div>
     </div>
   </div>
-
   <script>
     (function(){
-      var btn=document.getElementById('copy-link');
-      var toast=document.getElementById('toast');
-      var cartToast=document.getElementById('cart-toast');
-      var topbarCart=document.getElementById('topbar-cart');
-      var copyStoreLink=document.getElementById('copy-store-link');
-      var modal=document.getElementById('product-modal');
-      var closeModalBtn=document.getElementById('close-product-modal');
-      var closeModalSecondary=document.getElementById('modal-close-secondary');
-      var modalImageWrap=document.getElementById('product-modal-image-wrap');
-      var modalTitle=document.getElementById('product-modal-title');
-      var modalMeta=document.getElementById('product-modal-meta');
-      var modalDescription=document.getElementById('product-modal-description');
-      var modalPrice=document.getElementById('product-modal-price');
-      var modalStock=document.getElementById('product-modal-stock');
-      var modalAddButton=document.getElementById('modal-add-button');
-      var cartItemsEl=document.getElementById('cart-items');
-      var cartCountEl=document.getElementById('cart-count');
-      var cartTotalEl=document.getElementById('cart-total');
-      var checkoutBtn=document.getElementById('checkout-btn');
-      var trackEmail=document.getElementById('track-email');
-      var trackCodeWrap=document.getElementById('track-code-wrap');
-      var trackCode=document.getElementById('track-code');
-      var trackRequestBtn=document.getElementById('track-request-btn');
-      var trackVerifyActions=document.getElementById('track-verify-actions');
-      var trackVerifyBtn=document.getElementById('track-verify-btn');
-      var trackStatus=document.getElementById('track-status');
-      var trackResults=document.getElementById('track-results');
-      if(!btn) return;
-      var url=${JSON.stringify(store.shareUrl)};
-      var products=${serializedProducts};
-      var storeName=${JSON.stringify(store.storeName)};
-      var storeLocation=${JSON.stringify(locationLabel)};
-      var cart={};
-      var activeProductId=null;
-
-      function escapeHtml(value){
-        return String(value == null ? '' : value)
-          .replace(/&/g,'&amp;')
-          .replace(/</g,'&lt;')
-          .replace(/>/g,'&gt;')
-          .replace(/"/g,'&quot;')
-          .replace(/'/g,'&#39;');
-      }
-
-      function setTrackerStatus(message,state){
-        if(!trackStatus) return;
-        trackStatus.textContent=message || '';
-        trackStatus.className='tracker-status'+(state ? ' is-'+state : '');
-      }
-
-      function formatOrderStatus(status){
-        var value=String(status || '').replace(/_/g,' ').toLowerCase();
-        if(!value) return 'Processing';
-        return value.charAt(0).toUpperCase()+value.slice(1);
-      }
-
-      function renderTrackerResults(orders){
-        if(!trackResults) return;
-        if(!orders || !orders.length){
-          trackResults.innerHTML='';
-          return;
-        }
-
-        trackResults.innerHTML=orders.map(function(order){
-          var itemCount=Array.isArray(order.items) ? order.items.reduce(function(total,item){
-            return total + Number(item.quantity || 0);
-          },0) : 0;
-          return '<article class="tracker-result-card">'
-            + '<div class="tracker-result-top">'
-            + '<div>'
-            + '<p class="tracker-result-title">'+escapeHtml(order.orderNumber || 'Tracked order')+'</p>'
-            + '<p class="tracker-result-meta">'+escapeHtml(order.vendorName || storeName)+' - '+escapeHtml(order.createdAt ? new Date(order.createdAt).toLocaleDateString() : 'Recent order')+'</p>'
-            + '</div>'
-            + '<span class="tracker-badge">'+escapeHtml(formatOrderStatus(order.status))+'</span>'
-            + '</div>'
-            + '<div class="tracker-result-grid">'
-            + '<div class="tracker-result-cell"><span class="tracker-result-label">Total</span><span class="tracker-result-value">'+escapeHtml(money((Number(order.total || 0) * 100), order.currency || 'GBP'))+'</span></div>'
-            + '<div class="tracker-result-cell"><span class="tracker-result-label">Items</span><span class="tracker-result-value">'+escapeHtml(String(itemCount || 0))+'</span></div>'
-            + '<div class="tracker-result-cell"><span class="tracker-result-label">Delivery</span><span class="tracker-result-value">'+escapeHtml(order.estimatedDeliveryLabel || 'Tracking available in your buyer flow')+'</span></div>'
-            + '<div class="tracker-result-cell"><span class="tracker-result-label">Destination</span><span class="tracker-result-value">'+escapeHtml(order.contact && order.contact.city ? order.contact.city+', '+order.contact.country : 'Saved checkout address')+'</span></div>'
-            + '</div>'
-            + '</article>';
-        }).join('');
-      }
-
-      function postJson(path,payload){
-        return fetch(url + path,{
-          method:'POST',
-          headers:{'Content-Type':'application/json'},
-          body:JSON.stringify(payload || {})
-        }).then(function(response){
-          return response.json().catch(function(){ return {}; }).then(function(data){
-            if(!response.ok){
-              throw new Error(data && data.message ? data.message : 'Request failed');
-            }
-            return data;
-          });
-        });
-      }
-
-      function trackEvent(payload){
-        fetch(url + '/events',{
-          method:'POST',
-          headers:{'Content-Type':'application/json'},
-          body:JSON.stringify(payload || {})
-        }).catch(function(){});
-      }
-
-      function showToast(element){
-        if(!element) return;
-        element.classList.add('show');
-        setTimeout(function(){element.classList.remove('show');},1800);
-      }
-
-      btn.addEventListener('click',function(){
-        if(navigator.clipboard && navigator.clipboard.writeText){
-          navigator.clipboard.writeText(url).then(function(){showToast(toast);},function(){});
-        } else {
-          var ta=document.createElement('textarea');
-          ta.value=url;ta.style.position='fixed';ta.style.opacity='0';
-          document.body.appendChild(ta);ta.select();
-          try{document.execCommand('copy');showToast(toast);}catch(_){}
-          document.body.removeChild(ta);
-        }
-      });
-
-      if(copyStoreLink){
-        copyStoreLink.addEventListener('click',function(){ btn.click(); });
-      }
-
-      if(topbarCart){
-        topbarCart.addEventListener('click',function(){
-          var cartPanel=document.getElementById('cart-panel');
-          if(cartPanel) cartPanel.scrollIntoView({behavior:'smooth',block:'start'});
-        });
-      }
-
-      function money(priceInCents,currency){
-        try{
-          return new Intl.NumberFormat('en-US',{style:'currency',currency:(currency||'GBP').toUpperCase()}).format((priceInCents||0)/100);
-        }catch(_){
-          return ((priceInCents||0)/100).toFixed(2)+' '+String(currency||'GBP').toUpperCase();
+      var storeSlug = ${JSON.stringify(store.storeSlug)};
+      var cartKey = 'eki_public_store_cart_' + storeSlug;
+      var products = JSON.parse(${JSON.stringify(JSON.stringify(products.map((product) => ({
+        id: product.id,
+        title: product.title,
+        priceInCents: product.priceInCents,
+        currency: product.currency,
+      }))))});
+      function readCart(){
+        try {
+          var parsed = JSON.parse(localStorage.getItem(cartKey) || '[]');
+          return Array.isArray(parsed) ? parsed : [];
+        } catch (_error) {
+          return [];
         }
       }
-
-      function renderCart(){
-        var ids=Object.keys(cart);
-        if(!cartItemsEl || !cartCountEl || !cartTotalEl || !checkoutBtn) return;
-        if(ids.length===0){
-          cartItemsEl.innerHTML='<div class="cart-empty"><p class="cart-empty-title">Your cart is empty</p><p class="cart-empty-copy">Add a product to start your order.</p></div>';
-          cartCountEl.textContent='0';
-          cartTotalEl.textContent=money(0, products[0] && products[0].currency || 'GBP');
-          checkoutBtn.disabled=true;
-          if(topbarCart) topbarCart.textContent='View Cart (0)';
-          return;
-        }
-
-        var totalCount=0;
-        var totalCents=0;
-        var currency=products[0] && products[0].currency || 'GBP';
-
-        cartItemsEl.innerHTML=ids.map(function(id){
-          var product=products.find(function(item){ return item.id===id; });
-          if(!product) return '';
-          var qty=cart[id] || 0;
-          totalCount+=qty;
-          totalCents+=(product.priceInCents||0)*qty;
-          currency=product.currency || currency;
-          return '<div class="cart-item">'
-            + '<div><p class="cart-item-title">'+escapeHtml(product.title)+'</p><p class="cart-item-meta">Qty '+qty+' - '+escapeHtml(money(product.priceInCents,product.currency))+'</p></div>'
-            + '<div class="cart-item-actions">'
-            + '<button class="qty-btn" type="button" data-cart-dec="'+product.id+'">-</button>'
-            + '<span class="qty-value">'+qty+'</span>'
-            + '<button class="qty-btn" type="button" data-cart-inc="'+product.id+'">+</button>'
-            + '</div></div>';
-        }).join('');
-
-        cartCountEl.textContent=String(totalCount);
-        cartTotalEl.textContent=money(totalCents,currency);
-        checkoutBtn.disabled=false;
-        if(topbarCart) topbarCart.textContent='View Cart ('+String(totalCount)+')';
+      function writeCart(cart){
+        localStorage.setItem(cartKey, JSON.stringify(cart));
       }
-
-      function addToCart(productId){
-        var product=products.find(function(item){ return item.id===productId; });
-        if(!product) return;
-        cart[productId]=(cart[productId]||0)+1;
-        renderCart();
-        showToast(cartToast);
-        trackEvent({ event:'add_to_cart', productId:product.id, productName:product.title, quantity:cart[productId] });
+      function formatPrice(amount, currency){
+        try { return new Intl.NumberFormat('en-GB', { style:'currency', currency:String(currency || 'EUR').toUpperCase() }).format(amount / 100); }
+        catch (_error) { return (amount / 100).toFixed(2) + ' ' + String(currency || 'EUR').toUpperCase(); }
       }
-
-      function setModalProduct(productId){
-        var product=products.find(function(item){ return item.id===productId; });
-        if(!product || !modal) return;
-        activeProductId=productId;
-        if(modalTitle) modalTitle.textContent=product.title || '';
-        if(modalMeta) modalMeta.textContent=(product.category || 'Foodstuff')+' - Ships from '+storeLocation;
-        if(modalDescription) modalDescription.textContent=product.description || 'Freshly packed and ready for secure checkout.';
-        if(modalPrice) modalPrice.textContent=money(product.priceInCents,product.currency);
-        if(modalStock) modalStock.textContent=product.stock > 0 ? 'In stock' : 'Sold out';
-        if(modalAddButton){
-          modalAddButton.disabled=!(product.stock > 0);
-          modalAddButton.textContent=product.stock > 0 ? 'Add to cart' : 'Sold out';
-        }
-        if(modalImageWrap){
-          modalImageWrap.innerHTML=product.images && product.images[0]
-            ? '<img src="'+escapeHtml(product.images[0])+'" alt="'+escapeHtml(product.title)+'" />'
-            : '<div class="placeholder placeholder-modal">No image</div>';
-        }
-        modal.classList.add('show');
-        modal.setAttribute('aria-hidden','false');
-        document.body.style.overflow='hidden';
+      function updateCartUi(){
+        var cart = readCart();
+        var count = cart.reduce(function(sum, item){ return sum + Number(item.quantity || 0); }, 0);
+        var total = cart.reduce(function(sum, item){
+          var product = products.find(function(entry){ return entry.id === item.productId; });
+          return sum + (product ? product.priceInCents * Number(item.quantity || 0) : 0);
+        }, 0);
+        var currency = (products[0] && products[0].currency) || 'EUR';
+        var topBtn = document.getElementById('top-cart-button');
+        var bottomBtn = document.getElementById('bottom-cart-button');
+        var copy = document.getElementById('cart-copy');
+        var totalEl = document.getElementById('cart-total');
+        if(topBtn) topBtn.textContent = 'View Cart (' + count + ')';
+        if(bottomBtn) bottomBtn.textContent = 'View Cart →';
+        if(copy) copy.textContent = count + ' item' + (count === 1 ? '' : 's') + ' in cart';
+        if(totalEl) totalEl.textContent = formatPrice(total, currency);
       }
-
-      function closeModal(){
-        if(!modal) return;
-        modal.classList.remove('show');
-        modal.setAttribute('aria-hidden','true');
-        document.body.style.overflow='';
+      function addProduct(productId){
+        var cart = readCart();
+        var existing = cart.find(function(item){ return item.productId === productId; });
+        if(existing){ existing.quantity += 1; } else { cart.push({ productId: productId, quantity: 1 }); }
+        writeCart(cart);
+        updateCartUi();
       }
-
-      document.querySelectorAll('[data-product]').forEach(function(node){
-        node.addEventListener('click',function(){
-          var id=node.getAttribute('data-product');
-          if(id) setModalProduct(id);
-        });
-      });
-
-      document.querySelectorAll('.product-add').forEach(function(node){
-        node.addEventListener('click',function(event){
+      document.querySelectorAll('.add-to-cart').forEach(function(button){
+        button.addEventListener('click', function(event){
+          event.preventDefault();
           event.stopPropagation();
-          var id=node.getAttribute('data-product');
-          if(id) addToCart(id);
+          addProduct(String(button.getAttribute('data-product-id') || ''));
         });
       });
-
-      document.addEventListener('click',function(event){
-        var inc=event.target && event.target.getAttribute && event.target.getAttribute('data-cart-inc');
-        var dec=event.target && event.target.getAttribute && event.target.getAttribute('data-cart-dec');
-        if(inc){ addToCart(inc); return; }
-        if(dec){
-          if(cart[dec]) cart[dec]=Math.max(cart[dec]-1,0);
-          if(cart[dec]===0) delete cart[dec];
-          renderCart();
-        }
-      });
-
-      if(closeModalBtn) closeModalBtn.addEventListener('click',closeModal);
-      if(closeModalSecondary) closeModalSecondary.addEventListener('click',closeModal);
-      if(modal){
-        modal.addEventListener('click',function(event){
-          if(event.target && event.target.getAttribute && event.target.getAttribute('data-close-product-modal')==='true'){
-            closeModal();
-          }
-        });
-      }
-      if(modalAddButton){
-        modalAddButton.addEventListener('click',function(){
-          if(activeProductId) addToCart(activeProductId);
-          closeModal();
-          var cartPanel=document.getElementById('cart-panel');
-          if(cartPanel) cartPanel.scrollIntoView({behavior:'smooth',block:'start'});
-        });
-      }
-
-      if(checkoutBtn){
-        checkoutBtn.addEventListener('click',function(){
-          var cartPanel=document.getElementById('cart-panel');
-          if(cartPanel) cartPanel.scrollIntoView({behavior:'smooth',block:'start'});
-          cartToast.textContent='Your basket is ready below. Use the tracker card any time after payment.';
-          showToast(cartToast);
-          setTimeout(function(){ cartToast.textContent='Added to cart'; },2200);
-        });
-      }
-
-      if(trackRequestBtn){
-        trackRequestBtn.addEventListener('click',function(){
-          var email=trackEmail && trackEmail.value ? String(trackEmail.value).trim().toLowerCase() : '';
-          if(!email || email.indexOf('@')===-1){
-            setTrackerStatus('Enter the checkout email you used for the order.','error');
-            return;
-          }
-
-          setTrackerStatus('Sending your tracking code...','');
-          if(trackRequestBtn) trackRequestBtn.disabled=true;
-
-          postJson('/order-lookup/request',{ email:email })
-            .then(function(){
-              if(trackCodeWrap) trackCodeWrap.hidden=false;
-              if(trackVerifyActions) trackVerifyActions.hidden=false;
-              setTrackerStatus('We sent a 6-digit code if matching orders exist for this email.','success');
-              trackEvent({ event:'track_order', source:'direct' });
-              if(trackCode && trackCode.focus) trackCode.focus();
-            })
-            .catch(function(error){
-              setTrackerStatus(error && error.message ? error.message : 'Could not send the tracking code.','error');
-            })
-            .finally(function(){
-              if(trackRequestBtn) trackRequestBtn.disabled=false;
-            });
-        });
-      }
-
-      if(trackVerifyBtn){
-        trackVerifyBtn.addEventListener('click',function(){
-          var email=trackEmail && trackEmail.value ? String(trackEmail.value).trim().toLowerCase() : '';
-          var code=trackCode && trackCode.value ? String(trackCode.value).trim() : '';
-          if(!email || email.indexOf('@')===-1){
-            setTrackerStatus('Enter the checkout email you used for the order.','error');
-            return;
-          }
-          if(!/^\\d{6}$/.test(code)){
-            setTrackerStatus('Enter the 6-digit code from your email.','error');
-            return;
-          }
-
-          setTrackerStatus('Verifying your code...','');
-          if(trackVerifyBtn) trackVerifyBtn.disabled=true;
-
-          postJson('/order-lookup/verify',{ email:email, code:code })
-            .then(function(data){
-              var orders=data && Array.isArray(data.orders) ? data.orders : [];
-              if(!orders.length){
-                renderTrackerResults([]);
-                setTrackerStatus('No matching orders were found for that email and code.','error');
-                return;
-              }
-              renderTrackerResults(orders);
-              setTrackerStatus('Your tracked orders are ready below.','success');
-              if(trackResults) trackResults.scrollIntoView({behavior:'smooth',block:'start'});
-            })
-            .catch(function(error){
-              renderTrackerResults([]);
-              setTrackerStatus(error && error.message ? error.message : 'Could not verify that code.','error');
-            })
-            .finally(function(){
-              if(trackVerifyBtn) trackVerifyBtn.disabled=false;
-            });
-        });
-      }
-
-      trackEvent({ event:'open', source:'direct' });
-      renderCart();
+      updateCartUi();
     })();
   </script>
 </body>
 </html>`;
 }
 
+function renderStoreDirectoryPage(stores: PublicStore[]): string {
+  const cards = stores.length > 0
+    ? stores.map((store) => `
+      <a class="product-card" href="/store/${encodeURIComponent(store.storeSlug)}" style="padding:0">
+        <div class="product-top" style="min-height:140px">
+          ${store.coverImage ? `<img src="${escape(store.coverImage)}" alt="${escape(store.storeName)}" loading="lazy" />` : `<div class="placeholder-pill">${escape(productCode(store.storeName))}</div>`}
+        </div>
+        <div class="product-body" style="padding:14px">
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
+            <h3 class="product-title" style="font-size:14px">${escape(store.storeName)}</h3>
+            <span class="badge" style="margin-left:0">${escape(store.totalProducts)} items</span>
+          </div>
+          <p class="product-meta" style="margin-top:6px">${escape([store.city, store.country].filter(Boolean).join(", ") || "United Kingdom")}</p>
+          <p class="muted" style="margin:8px 0 0;font-size:11px">${escape(store.description || "Open this vendor storefront to browse products, add to cart and checkout securely.")}</p>
+        </div>
+      </a>
+    `).join("")
+    : `<div class="empty-state">No vendor stores are live yet.</div>`;
+
+  return `${baseStyles("Vendors | Eki", "Browse Eki vendor storefronts")}
+  <div class="shell">
+    ${renderTopbar(`<span class="top-btn">Vendors</span>`)}
+    <section class="hero">
+      <div class="hero-inner">
+        <div>
+          <h1>Browse verified vendor stores.</h1>
+          <p>Open any Eki vendor storefront, add foodstuff to your cart, pay securely, and track the order on the web or in the app.</p>
+        </div>
+        <div class="device">🏪</div>
+      </div>
+    </section>
+    <div class="container" style="padding-top:20px;padding-bottom:36px">
+      <div class="section-head">
+        <h2>All vendor stores</h2>
+        <span class="muted">${stores.length} stores</span>
+      </div>
+      <div class="products">${cards}</div>
+    </div>
+  </div>
+</body>
+</html>`;
+}
+
+function renderProductPage(store: PublicStore, product: PublicProduct): string {
+  const cartHref = `/store/${encodeURIComponent(store.storeSlug)}/checkout`;
+  return `${baseStyles(`${product.title} | ${store.storeName}`, product.description ?? product.title)}
+  <div class="shell">
+    ${renderTopbar(`<a class="top-btn" id="product-cart-button" href="${cartHref}">View Cart (0)</a>`)}
+    <div class="page-wrap">
+      <div class="split">
+        <div class="panel-media">
+          <a class="back-link" href="/store/${encodeURIComponent(store.storeSlug)}">←</a>
+          <div class="hero-image">${productImage(product)}</div>
+        </div>
+        <div class="panel-copy">
+          <div class="inline-badges">
+            <span class="crumb">← Back to all products</span>
+            <span class="pill">Sold by ${escape(store.storeName)}</span>
+          </div>
+          <h1>${escape(product.title)}</h1>
+          <div class="lead-row">
+            <span>${escape(formatWeight(product.weightGrams))}</span>
+            <span>Ships from ${escape(store.city || store.country || "Birmingham")}</span>
+            <span>Delivery 2-4 days</span>
+          </div>
+          <p class="product-price" style="font-size:34px;margin-top:12px">${escape(formatPrice(product.priceInCents, product.currency))}</p>
+          <div class="desc">${escape(product.description || `Freshly packed ${product.title}. Sourced directly from trusted African foodstuff vendors and prepared for fast secure checkout.`)}</div>
+          <div class="qty-row">
+            <label>Quantity</label>
+            <div class="qty-control">
+              <button type="button" id="qty-minus">−</button>
+              <span id="qty-value">1</span>
+              <button type="button" id="qty-plus">+</button>
+            </div>
+          </div>
+          <div class="secure-strip">
+            <span>Secure checkout</span>
+            <span>Order recorded on Eki</span>
+          </div>
+          <button class="primary-action" type="button" id="add-product-button">Add to Cart — ${escape(formatPrice(product.priceInCents, product.currency))}</button>
+        </div>
+      </div>
+    </div>
+  </div>
+  <script>
+    (function(){
+      var storeSlug = ${JSON.stringify(store.storeSlug)};
+      var productId = ${JSON.stringify(product.id)};
+      var cartKey = 'eki_public_store_cart_' + storeSlug;
+      var quantity = 1;
+      function readCart(){
+        try { var parsed = JSON.parse(localStorage.getItem(cartKey) || '[]'); return Array.isArray(parsed) ? parsed : []; }
+        catch (_error) { return []; }
+      }
+      function writeCart(cart){ localStorage.setItem(cartKey, JSON.stringify(cart)); }
+      function updateQuantity(){
+        var value = document.getElementById('qty-value');
+        if(value) value.textContent = String(quantity);
+      }
+      function updateCartButton(){
+        var count = readCart().reduce(function(sum, item){ return sum + Number(item.quantity || 0); }, 0);
+        var button = document.getElementById('product-cart-button');
+        if(button) button.textContent = 'View Cart (' + count + ')';
+      }
+      function addToCart(){
+        var cart = readCart();
+        var existing = cart.find(function(item){ return item.productId === productId; });
+        if(existing){ existing.quantity += quantity; } else { cart.push({ productId: productId, quantity: quantity }); }
+        writeCart(cart);
+        updateCartButton();
+        window.location.href = '/store/' + encodeURIComponent(storeSlug) + '/checkout';
+      }
+      document.getElementById('qty-minus')?.addEventListener('click', function(){ quantity = Math.max(1, quantity - 1); updateQuantity(); });
+      document.getElementById('qty-plus')?.addEventListener('click', function(){ quantity += 1; updateQuantity(); });
+      document.getElementById('add-product-button')?.addEventListener('click', addToCart);
+      updateQuantity();
+      updateCartButton();
+    })();
+  </script>
+</body>
+</html>`;
+}
+
+function renderCheckoutPage(store: PublicStore, products: PublicProduct[], cancelled: boolean): string {
+  const serializedProducts = JSON.stringify(products.map((product) => ({
+    id: product.id,
+    title: product.title,
+    priceInCents: product.priceInCents,
+    currency: product.currency,
+    image: product.images[0] ?? null,
+    weightLabel: formatWeight(product.weightGrams),
+  })));
+
+  return `${baseStyles(`Complete your order | ${store.storeName}`, store.description ?? store.storeName)}
+  <div class="shell">
+    ${renderTopbar(`<span class="top-btn" style="min-width:140px">🔒 Secure Checkout</span>`)}
+    <div class="page-card">
+      ${cancelled ? `<div class="flash">Your payment window was cancelled. Your cart is still here, so you can try again.</div>` : ""}
+      <div class="checkout-grid">
+        <div>
+          <h1 class="checkout-title">Complete your order</h1>
+          <p class="checkout-sub">No app required. Pay securely and receive confirmation instantly.</p>
+          <form id="checkout-form">
+            <div class="form-card">
+              <p class="section-label">Your details</p>
+              <div class="grid-2">
+                <label class="field"><span>First name</span><input name="firstName" value="Amara" required /></label>
+                <label class="field"><span>Last name</span><input name="lastName" value="Okafor" required /></label>
+                <label class="field field-full"><span>Phone number</span><input name="phone" value="+44 7700 900123" required /></label>
+                <label class="field field-full"><span>Email</span><input name="email" value="buyer@eki.app" type="email" required /></label>
+              </div>
+            </div>
+            <div class="form-card">
+              <p class="section-label">Delivery address</p>
+              <div class="grid-2">
+                <label class="field field-full"><span>Street address</span><input name="streetAddress" value="14 Broad Street" required /></label>
+                <label class="field"><span>City</span><input name="city" value="London" required /></label>
+                <label class="field"><span>Postcode</span><input name="postcode" value="E1 6RF" required /></label>
+                <label class="field field-full"><span>Country</span><input name="country" value="${escape(store.deliveryCountries[0] || store.country || "United Kingdom")}" required /></label>
+              </div>
+            </div>
+            <div class="form-card">
+              <p class="section-label">Payment</p>
+              <div class="payment-box">💳 Credit / Debit Card <span class="muted">Visa, Mastercard, Amex</span></div>
+              <button class="summary-pay" type="submit" id="checkout-submit">Pay Securely</button>
+              <p class="foot-note">Secure checkout powered by Eki</p>
+            </div>
+          </form>
+        </div>
+        <aside class="summary">
+          <h3>Order Summary</h3>
+          <div id="checkout-items"></div>
+          <div class="summary-line"><span>Subtotal</span><span id="summary-subtotal">—</span></div>
+          <div class="summary-line"><span>Delivery</span><span id="summary-delivery">—</span></div>
+          <div class="summary-total"><span>Total</span><span id="summary-total">—</span></div>
+        </aside>
+      </div>
+    </div>
+  </div>
+  <script>
+    (function(){
+      var storeSlug = ${JSON.stringify(store.storeSlug)};
+      var cartKey = 'eki_public_store_cart_' + storeSlug;
+      var products = JSON.parse(${JSON.stringify(serializedProducts)});
+      var form = document.getElementById('checkout-form');
+      var itemsWrap = document.getElementById('checkout-items');
+      function readCart(){
+        try { var parsed = JSON.parse(localStorage.getItem(cartKey) || '[]'); return Array.isArray(parsed) ? parsed : []; }
+        catch (_error) { return []; }
+      }
+      function formatPrice(amount, currency){
+        try { return new Intl.NumberFormat('en-GB', { style:'currency', currency:String(currency || 'EUR').toUpperCase() }).format(amount / 100); }
+        catch (_error) { return (amount / 100).toFixed(2) + ' ' + String(currency || 'EUR').toUpperCase(); }
+      }
+      function renderSummary(){
+        var cart = readCart();
+        var subtotal = 0;
+        var currency = (products[0] && products[0].currency) || 'EUR';
+        if(!cart.length){
+          if(itemsWrap) itemsWrap.innerHTML = '<div class="empty-state">Your cart is empty. Go back to the store to add products.</div>';
+          document.getElementById('summary-subtotal').textContent = formatPrice(0, currency);
+          document.getElementById('summary-delivery').textContent = formatPrice(0, currency);
+          document.getElementById('summary-total').textContent = formatPrice(0, currency);
+          return;
+        }
+        if(itemsWrap) itemsWrap.innerHTML = cart.map(function(item){
+          var product = products.find(function(entry){ return entry.id === item.productId; });
+          if(!product) return '';
+          subtotal += product.priceInCents * Number(item.quantity || 0);
+          return '<div class="summary-item"><div class="summary-item-name"><span class="mini-code">' + product.title.split(/\\s+/).map(function(part){return part[0] || '';}).join('').slice(0,2).toUpperCase() + '</span><div><strong>' + product.title + '</strong><br><span class="muted">' + product.weightLabel + '</span></div></div><strong>' + formatPrice(product.priceInCents * Number(item.quantity || 0), currency) + '</strong></div>';
+        }).join('');
+        document.getElementById('summary-subtotal').textContent = formatPrice(subtotal, currency);
+        document.getElementById('summary-delivery').textContent = 'Calculated at payment';
+        document.getElementById('summary-total').textContent = formatPrice(subtotal, currency);
+      }
+      form?.addEventListener('submit', function(event){
+        event.preventDefault();
+        var cart = readCart();
+        if(!cart.length){
+          alert('Your cart is empty.');
+          return;
+        }
+        var submit = document.getElementById('checkout-submit');
+        if(submit) submit.disabled = true;
+        var formData = new FormData(form);
+        var payload = {
+          firstName: String(formData.get('firstName') || '').trim(),
+          lastName: String(formData.get('lastName') || '').trim(),
+          phone: String(formData.get('phone') || '').trim(),
+          email: String(formData.get('email') || '').trim().toLowerCase(),
+          streetAddress: String(formData.get('streetAddress') || '').trim(),
+          city: String(formData.get('city') || '').trim(),
+          postcode: String(formData.get('postcode') || '').trim(),
+          country: String(formData.get('country') || '').trim(),
+          items: cart
+        };
+        fetch('/api/public/stores/' + encodeURIComponent(storeSlug) + '/checkout', {
+          method:'POST',
+          headers:{ 'Content-Type':'application/json' },
+          body: JSON.stringify(payload)
+        })
+          .then(async function(response){
+            if(!response.ok){
+              var errorBody = await response.json().catch(function(){ return {}; });
+              throw new Error(errorBody.message || 'Could not start payment.');
+            }
+            return response.json();
+          })
+          .then(function(data){
+            if(data && data.checkoutUrl){
+              window.location.href = data.checkoutUrl;
+            } else {
+              throw new Error('Checkout session did not return a payment link.');
+            }
+          })
+          .catch(function(error){
+            alert(error && error.message ? error.message : 'Could not start payment.');
+          })
+          .finally(function(){
+            if(submit) submit.disabled = false;
+          });
+      });
+      renderSummary();
+    })();
+  </script>
+</body>
+</html>`;
+}
+
+function renderConfirmationPage(store: PublicStore, order: PublicStoreTrackedOrder): string {
+  return `${baseStyles(`Order confirmed | ${store.storeName}`, `Order ${order.orderNumber} confirmed.`)}
+  <div class="shell">
+    ${renderTopbar(`<span class="top-btn" style="min-width:120px">Order confirmed</span>`)}
+    <div class="confirm-shell">
+      <div class="confirm-badge">✓</div>
+      <h1>Order confirmed</h1>
+      <p class="confirm-sub">${escape(store.storeName)} received your order.</p>
+      <span class="order-chip">${escape(order.orderNumber)}</span>
+      <div class="confirm-card">
+        <span class="pill" style="background:rgba(255,255,255,.12);color:#fff">Track this order</span>
+        <h2>Track this order in the Eki app.</h2>
+        <p class="confirm-sub" style="color:rgba(255,255,255,.82)">Get live updates, save this vendor and reorder in seconds.</p>
+        <ul class="confirm-list">
+          <li>Push notifications for every update</li>
+          <li>Save ${escape(store.storeName)} for fast reorder</li>
+          <li>Reorder your favourite items in 2 taps</li>
+          <li>App-only rewards: $5 off your next order</li>
+        </ul>
+        <button class="white-btn" type="button" onclick="window.open('https://play.google.com/store','_blank')">Download Eki App</button>
+      </div>
+      <a class="ghost-link" href="/store/${encodeURIComponent(store.storeSlug)}/track/${encodeURIComponent(order.orderNumber)}">Track on web instead →</a>
+    </div>
+  </div>
+</body>
+</html>`;
+}
+
+function renderTrackPage(store: PublicStore, order: PublicStoreTrackedOrder): string {
+  const steps = statusSteps(order.status).map((step) => `
+    <div class="step${step.complete ? " complete" : ""}${step.active ? " active" : ""}">
+      <div class="step-dot">${step.complete ? "✓" : ""}</div>
+      <div>
+        <h3>${escape(step.label)}</h3>
+        <p>${escape(step.active ? step.helper : (step.complete ? "Completed" : "Pending"))}</p>
+      </div>
+    </div>
+  `).join("");
+
+  const summaryItems = order.items.map((item) => `
+    <div class="summary-item">
+      <div>${escape(item.name)}</div>
+      <strong>${escape(formatMoney(item.price * item.quantity, order.currency))}</strong>
+    </div>
+  `).join("");
+
+  return `${baseStyles(`Track your order | ${store.storeName}`, `Track order ${order.orderNumber}`)}
+  <div class="shell">
+    ${renderTopbar(`<a class="top-btn" href="/">Sign in</a>`)}
+    <div class="track-shell">
+      <h1>Track your order</h1>
+      <span class="track-chip">Order ID: ${escape(order.orderNumber)}</span>
+      <div class="track-grid">
+        <div>
+          <div class="track-card">
+            <h2>Order Status</h2>
+            <p class="muted">Estimated delivery: ${escape(order.estimatedDeliveryLabel)}</p>
+            <div class="timeline">${steps}</div>
+          </div>
+          <div class="bottom-banner">
+            <div>
+              <strong>Get live updates in the Eki app</strong>
+              <p>Order updates, vendor saving and reorder in 2 taps</p>
+            </div>
+            <button class="open-app" type="button" onclick="window.open('https://play.google.com/store','_blank')">Open in App</button>
+          </div>
+        </div>
+        <div>
+          <div class="side-card">
+            <h2>Your Order</h2>
+            ${summaryItems}
+            <div class="summary-line"><span>Subtotal</span><span>${escape(formatMoney(order.subtotal, order.currency))}</span></div>
+            <div class="summary-line"><span>Delivery</span><span>${order.delivery === 0 ? "Free" : escape(formatMoney(order.delivery, order.currency))}</span></div>
+            <div class="summary-total"><span>Total</span><span>${escape(formatMoney(order.total, order.currency))}</span></div>
+          </div>
+          <div class="side-card" style="margin-top:12px">
+            <h2>Sold by</h2>
+            <strong>${escape(store.storeName)}</strong>
+            <p class="muted">${escape([store.city, store.country].filter(Boolean).join(", "))}</p>
+            <a class="muted" href="/store/${encodeURIComponent(store.storeSlug)}">Contact vendor</a>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>`;
+}
+
 function renderNotFound(slug: string): string {
-  return `<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Store not found - Culinary Tales</title>
-  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Inter:wght@400;500;600&display=swap" />
-  <style>
-    *,*::before,*::after{box-sizing:border-box}
-    body{
-      margin:0;font-family:'Inter',-apple-system,BlinkMacSystemFont,sans-serif;
-      background:#FAF7F2;color:#1F1B16;
-      display:flex;align-items:center;justify-content:center;
-      min-height:100vh;text-align:center;padding:24px;
-    }
-    .card{max-width:440px}
-    .number{
-      font-family:'Fraunces',Georgia,serif;
-      font-size:96px;line-height:1;font-weight:700;margin:0 0 8px;
-      color:#1F4D40;letter-spacing:-0.04em;
-    }
-    h1{
-      font-family:'Fraunces',Georgia,serif;
-      font-size:24px;font-weight:600;margin:8px 0 12px;color:#1F1B16;
-    }
-    p{color:#6B6256;margin:0 0 24px;line-height:1.55}
-    code{
-      background:#F4EFE6;padding:3px 8px;border-radius:6px;
-      font-family:'SF Mono',Menlo,Consolas,monospace;font-size:14px;
-    }
-    a{
-      display:inline-block;padding:11px 22px;border-radius:12px;
-      background:#1F4D40;color:#fff;text-decoration:none;font-weight:600;font-size:14px;
-    }
-    a:hover{background:#163A30}
-  </style>
-</head>
-<body>
-  <div class="card">
-    <p class="number">404</p>
-    <h1>Store not found</h1>
-    <p>The store <code>${escape(slug)}</code> could not be found, or it is currently unavailable.</p>
-    <a href="https://culinarytales.app">Back to Culinary Tales</a>
+  return `${baseStyles("Store not found | Eki", "Store not found")}
+  <div class="shell" style="display:flex;align-items:center;justify-content:center;min-height:100vh">
+    <div class="empty-state" style="max-width:460px">
+      <h1 style="margin:0 0 10px;font-size:32px">Store not found</h1>
+      <p style="margin:0 0 18px">The store <strong>${escape(slug)}</strong> could not be found or is currently unavailable.</p>
+      <a class="find-link" href="/">Back to Eki</a>
+    </div>
   </div>
 </body>
 </html>`;
 }
 
 function renderError(): string {
-  return `<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Error - Culinary Tales</title>
-  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,600&family=Inter:wght@400;500&display=swap" />
-  <style>
-    body{
-      margin:0;font-family:'Inter',-apple-system,BlinkMacSystemFont,sans-serif;
-      background:#FAF7F2;color:#1F1B16;text-align:center;
-      min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px;
-    }
-    h1{font-family:'Fraunces',Georgia,serif;font-size:28px;font-weight:600;margin:0 0 8px}
-    p{color:#6B6256;margin:0}
-  </style>
-</head>
-<body>
-  <div>
-    <h1>Something went wrong</h1>
-    <p>Please try again in a moment.</p>
+  return `${baseStyles("Error | Eki", "Something went wrong")}
+  <div class="shell" style="display:flex;align-items:center;justify-content:center;min-height:100vh">
+    <div class="empty-state" style="max-width:460px">
+      <h1 style="margin:0 0 10px;font-size:32px">Something went wrong</h1>
+      <p style="margin:0">Please try again in a moment.</p>
+    </div>
   </div>
 </body>
 </html>`;
 }
 
-/**
- * GET /store/:slug - server-rendered public storefront page.
- * Loads the public store and the first page of active products and returns
- * fully-rendered HTML so share links work without any client-side JS.
- */
-export async function getPublicStorePage(request: Request, response: Response): Promise<void> {
-  const slug = String(request.params.slug ?? "")
-    .trim()
-    .toLowerCase();
+function parseSlug(request: Request): string {
+  return String(request.params.slug ?? "").trim().toLowerCase();
+}
 
+function parseProductId(request: Request): string {
+  return String(request.params.productId ?? "").trim();
+}
+
+function parseOrderNumber(request: Request): string {
+  return String(request.params.orderNumber ?? "").trim();
+}
+
+export async function getPublicStorePage(request: Request, response: Response): Promise<void> {
+  const slug = parseSlug(request);
   response.setHeader("Content-Type", "text/html; charset=utf-8");
-  // Allow short caching at the edge (Vercel) but require revalidation.
   response.setHeader("Cache-Control", "public, max-age=60, s-maxage=300");
 
-  if (!slug || !/^[a-z0-9-]+$/.test(slug) || slug.length > 200) {
+  if (!slug || !/^[a-z0-9-]+$/.test(slug)) {
     response.status(404).send(renderNotFound(slug));
     return;
   }
@@ -1497,10 +1122,94 @@ export async function getPublicStorePage(request: Request, response: Response): 
     response.status(200).send(renderStorePage(store, productsResult.items));
   } catch (error) {
     const status = (error as { statusCode?: number }).statusCode ?? 500;
-    if (status === 404) {
-      response.status(404).send(renderNotFound(slug));
-      return;
-    }
+    response.status(status === 404 ? 404 : 500).send(status === 404 ? renderNotFound(slug) : renderError());
+  }
+}
+
+export async function getPublicStoreDirectoryPage(_request: Request, response: Response): Promise<void> {
+  response.setHeader("Content-Type", "text/html; charset=utf-8");
+  response.setHeader("Cache-Control", "public, max-age=60, s-maxage=300");
+
+  try {
+    const stores = await publicStoresService.listPublicStores();
+    response.status(200).send(renderStoreDirectoryPage(stores));
+  } catch {
     response.status(500).send(renderError());
+  }
+}
+
+export async function getPublicStoreProductPage(request: Request, response: Response): Promise<void> {
+  const slug = parseSlug(request);
+  const productId = parseProductId(request);
+  response.setHeader("Content-Type", "text/html; charset=utf-8");
+  response.setHeader("Cache-Control", "public, max-age=60, s-maxage=300");
+
+  try {
+    const [store, product] = await Promise.all([
+      publicStoresService.getStoreBySlug(slug),
+      publicStoresService.getStoreProductById(slug, productId),
+    ]);
+    response.status(200).send(renderProductPage(store, product));
+  } catch (error) {
+    const status = (error as { statusCode?: number }).statusCode ?? 500;
+    response.status(status === 404 ? 404 : 500).send(status === 404 ? renderNotFound(slug) : renderError());
+  }
+}
+
+export async function getPublicStoreCheckoutPage(request: Request, response: Response): Promise<void> {
+  const slug = parseSlug(request);
+  response.setHeader("Content-Type", "text/html; charset=utf-8");
+  response.setHeader("Cache-Control", "no-store");
+
+  try {
+    const [store, productsResult] = await Promise.all([
+      publicStoresService.getStoreBySlug(slug),
+      publicStoresService.listStoreProducts(slug, { limit: PAGE_PRODUCTS_LIMIT }),
+    ]);
+    response.status(200).send(renderCheckoutPage(store, productsResult.items, request.query.cancelled === "true"));
+  } catch (error) {
+    const status = (error as { statusCode?: number }).statusCode ?? 500;
+    response.status(status === 404 ? 404 : 500).send(status === 404 ? renderNotFound(slug) : renderError());
+  }
+}
+
+export async function getPublicStoreConfirmedPage(request: Request, response: Response): Promise<void> {
+  const slug = parseSlug(request);
+  const sessionId = String(request.query.session_id ?? "").trim();
+  response.setHeader("Content-Type", "text/html; charset=utf-8");
+  response.setHeader("Cache-Control", "no-store");
+
+  if (!sessionId) {
+    response.status(404).send(renderNotFound(slug));
+    return;
+  }
+
+  try {
+    const [store, order] = await Promise.all([
+      publicStoresService.getStoreBySlug(slug),
+      publicStoresService.getStoreOrderByCheckoutSession(slug, sessionId),
+    ]);
+    response.status(200).send(renderConfirmationPage(store, order));
+  } catch (error) {
+    const status = (error as { statusCode?: number }).statusCode ?? 500;
+    response.status(status === 404 ? 404 : 500).send(status === 404 ? renderNotFound(slug) : renderError());
+  }
+}
+
+export async function getPublicStoreTrackedOrderPage(request: Request, response: Response): Promise<void> {
+  const slug = parseSlug(request);
+  const orderNumber = parseOrderNumber(request);
+  response.setHeader("Content-Type", "text/html; charset=utf-8");
+  response.setHeader("Cache-Control", "no-store");
+
+  try {
+    const [store, order] = await Promise.all([
+      publicStoresService.getStoreBySlug(slug),
+      publicStoresService.getStoreOrderByNumber(slug, orderNumber),
+    ]);
+    response.status(200).send(renderTrackPage(store, order));
+  } catch (error) {
+    const status = (error as { statusCode?: number }).statusCode ?? 500;
+    response.status(status === 404 ? 404 : 500).send(status === 404 ? renderNotFound(slug) : renderError());
   }
 }

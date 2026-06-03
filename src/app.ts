@@ -22,7 +22,14 @@ import {
   requestPublicOrderLookup,
   verifyPublicOrderLookup,
 } from "./modules/public-site/public-site.page";
-import { getPublicStorePage } from "./modules/public-stores/public-stores.page";
+import {
+  getPublicStoreDirectoryPage,
+  getPublicStoreCheckoutPage,
+  getPublicStoreConfirmedPage,
+  getPublicStorePage,
+  getPublicStoreProductPage,
+  getPublicStoreTrackedOrderPage,
+} from "./modules/public-stores/public-stores.page";
 import { apiRouter } from "./routes";
 
 export const app = express();
@@ -135,8 +142,23 @@ app.get("/terms", (req, res, next) => {
 app.get("/account-deletion", (req, res, next) => {
   Promise.resolve(getPublicAccountDeletionPage(req, res)).catch(next);
 });
+app.get("/store", (req, res, next) => {
+  Promise.resolve(getPublicStoreDirectoryPage(req, res)).catch(next);
+});
 app.get("/store/:slug", (req, res, next) => {
   Promise.resolve(getPublicStorePage(req, res)).catch(next);
+});
+app.get("/store/:slug/product/:productId", (req, res, next) => {
+  Promise.resolve(getPublicStoreProductPage(req, res)).catch(next);
+});
+app.get("/store/:slug/checkout", (req, res, next) => {
+  Promise.resolve(getPublicStoreCheckoutPage(req, res)).catch(next);
+});
+app.get("/store/:slug/confirmed", (req, res, next) => {
+  Promise.resolve(getPublicStoreConfirmedPage(req, res)).catch(next);
+});
+app.get("/store/:slug/track/:orderNumber", (req, res, next) => {
+  Promise.resolve(getPublicStoreTrackedOrderPage(req, res)).catch(next);
 });
 
 // Error handling

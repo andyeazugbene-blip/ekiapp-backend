@@ -6,7 +6,9 @@ import { AppError } from "../../shared/errors/app-error";
 import { DEFAULT_PLAN_CONFIGS } from "./subscriptions.types";
 import type { ActivateSubscriptionInput, SubscriptionPlanConfigInput } from "./subscriptions.types";
 
-type PlanConfigRecord = SubscriptionPlanConfig;
+type PlanConfigRecord = SubscriptionPlanConfig & {
+  platformFeeBps?: number | null;
+};
 type PlanConfigModel = {
   count: () => Promise<number>;
   upsert: (args: any) => Promise<PlanConfigRecord>;
@@ -61,6 +63,7 @@ function formatPlanResponse(config: PlanConfigRecord) {
     name: config.name,
     description: config.description,
     monthlyPriceCents: config.monthlyPriceCents,
+    platformFeeBps: config.platformFeeBps ?? DEFAULT_PLAN_CONFIGS[config.plan].platformFeeBps,
     currency: config.currency,
     maxProducts: config.maxProducts,
     maxImagesPerProduct: config.maxImagesPerProduct,
@@ -164,6 +167,7 @@ export const subscriptionsService = {
           slug: input.slug,
           isActive: input.isActive,
           monthlyPriceCents: input.monthlyPriceCents,
+          platformFeeBps: input.platformFeeBps,
         },
       },
     });
