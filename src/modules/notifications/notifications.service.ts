@@ -125,6 +125,34 @@ export const notificationsService = {
     });
     return { count: result.count };
   },
+
+  async getPreferences(userId: string) {
+    return prisma.user.findUniqueOrThrow({
+      where: { id: userId },
+      select: {
+        smsMarketingConsentAt: true,
+        smsTransactionalEnabled: true,
+      },
+    });
+  },
+
+  async updatePreferences(userId: string, input: { smsMarketing?: boolean; smsTransactional?: boolean }) {
+    return prisma.user.update({
+      where: { id: userId },
+      data: {
+        ...(input.smsMarketing === undefined
+          ? {}
+          : { smsMarketingConsentAt: input.smsMarketing ? new Date() : null }),
+        ...(input.smsTransactional === undefined
+          ? {}
+          : { smsTransactionalEnabled: input.smsTransactional }),
+      },
+      select: {
+        smsMarketingConsentAt: true,
+        smsTransactionalEnabled: true,
+      },
+    });
+  },
 };
 
 export function parseListQuery(query: Record<string, unknown>): ListNotificationsQuery {

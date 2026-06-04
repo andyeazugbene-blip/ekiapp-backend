@@ -45,19 +45,40 @@ export const paystackService = {
       if (item.product.stock < item.quantity) throw new AppError(`Insufficient stock for "${item.product.title}"`, 400);
     }
 
-    // For domestic escrow, all items must be from same country vendor
-    const vendorCountries = new Set(cart.items.map(i => i.product.vendor.country?.toLowerCase()));
-    const supportedCountries = new Set(["nigeria", "ghana", "ng", "gh"]);
+    // Domestic escrow is one vendor per secured order. Multi-vendor African
+    // carts must be split before reaching this provider-specific checkout.
+    const vendorIds = new Set(cart.items.map(i => i.product.vendorId));
+    if (vendorIds.size !== 1) {
+      throw new AppError("Escrow checkout supports one vendor per secured order. Please check out each vendor separately.", 400);
+    }
+
+    // For domestic escrow, all items must be from same configured country vendor
+    const vendorCountries = new Set(cart.items.map(i => i.product.vendor.country?.toLowerCase()).filter(Boolean));
     const domesticVendorCountry = [...vendorCountries][0];
+    if (!domesticVendorCountry) {
+      throw new AppError("Escrow checkout is not available because the vendor country is not configured", 409);
+    }
     if (vendorCountries.size > 1) {
       throw new AppError("Domestic escrow checkout only supports items from a single vendor country", 400);
-    }
-    if (!domesticVendorCountry || !supportedCountries.has(domesticVendorCountry)) {
-      throw new AppError("Domestic escrow is only available for Nigeria and Ghana vendors", 400);
     }
 
     // Determine currency
     const currency = ["nigeria", "ng"].includes(domesticVendorCountry) ? "NGN" : "GHS";
+    const countryCode = ["nigeria", "ng"].includes(domesticVendorCountry) ? "NG" : ["ghana", "gh"].includes(domesticVendorCountry) ? "GH" : "";
+    const providerConfig = countryCode
+      ? await prisma.escrowProviderConfig.findFirst({
+          where: {
+            countryCode,
+            currency,
+            provider: "paystack",
+            enabled: true,
+            payoutSupported: true,
+          },
+        })
+      : null;
+    if (!providerConfig) {
+      throw new AppError("Escrow checkout is not available for this vendor country yet", 409, { country: domesticVendorCountry, currency });
+    }
 
     // Calculate totals (single vendor group for domestic)
     const vendorId = cart.items[0].product.vendorId;

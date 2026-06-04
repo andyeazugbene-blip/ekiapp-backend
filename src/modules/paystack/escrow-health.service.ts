@@ -1,6 +1,8 @@
 import { prisma } from "../../lib/prisma";
 import { logger } from "../../lib/logger";
 import { sendEmail } from "../../lib/email";
+import { isSmsConfigured } from "../../lib/sms";
+import { AppError } from "../../shared/errors/app-error";
 
 const OPS_ALERT_EMAIL = process.env.OPS_ALERT_EMAIL ?? "";
 
@@ -13,6 +15,17 @@ export const escrowHealthService = {
     outstandingAmount: number;
     currency: string;
     statusBreakdown: Record<string, { count: number; amount: number }>;
+    smsConfigured: boolean;
+    providers: Array<{
+      country: string;
+      countryCode: string;
+      currency: string;
+      provider: string;
+      enabled: boolean;
+      payoutSupported: boolean;
+      otpChannel: string;
+      protectionWindowHours: number;
+    }>;
   }> {
     // Sum all escrow orders that haven't been released/refunded yet
     const activeStatuses = ["PAYMENT_SECURED", "VENDOR_CONFIRMED", "DISPATCHED", "DISPUTED"];
@@ -37,11 +50,27 @@ export const escrowHealthService = {
       breakdown[order.status].amount += order.totalAmount;
     }
 
+    const providers = await prisma.escrowProviderConfig.findMany({
+      orderBy: [{ enabled: "desc" }, { country: "asc" }],
+      select: {
+        country: true,
+        countryCode: true,
+        currency: true,
+        provider: true,
+        enabled: true,
+        payoutSupported: true,
+        otpChannel: true,
+        protectionWindowHours: true,
+      },
+    });
+
     return {
       outstandingOrders: orders.length,
       outstandingAmount: totalAmount,
       currency: orders[0]?.currency ?? "NGN",
       statusBreakdown: breakdown,
+      smsConfigured: isSmsConfigured(),
+      providers,
     };
   },
 
@@ -86,5 +115,31 @@ export const escrowHealthService = {
         logger.info("Escrow alert email sent", { to: OPS_ALERT_EMAIL });
       }
     }
+  },
+
+  async updateProviderConfig(
+    providerId: string,
+    input: Partial<{
+      enabled: boolean;
+      payoutSupported: boolean;
+      otpChannel: "SMS" | "EMAIL" | "SMS_EMAIL";
+      protectionWindowHours: number;
+      notes: string | null;
+    }>,
+  ) {
+    const existing = await prisma.escrowProviderConfig.findUnique({ where: { id: providerId } });
+    if (!existing) {
+      throw new AppError("Escrow provider config not found", 404);
+    }
+    return prisma.escrowProviderConfig.update({
+      where: { id: providerId },
+      data: {
+        ...(typeof input.enabled === "boolean" ? { enabled: input.enabled } : {}),
+        ...(typeof input.payoutSupported === "boolean" ? { payoutSupported: input.payoutSupported } : {}),
+        ...(input.otpChannel ? { otpChannel: input.otpChannel } : {}),
+        ...(typeof input.protectionWindowHours === "number" ? { protectionWindowHours: input.protectionWindowHours } : {}),
+        ...(input.notes !== undefined ? { notes: input.notes } : {}),
+      },
+    });
   },
 };

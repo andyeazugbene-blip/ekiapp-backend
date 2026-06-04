@@ -75,22 +75,9 @@ export const ordersService = {
       throw new AppError("Vendor profile required", 403);
     }
 
-    // Find orders that contain items belonging to this vendor
-    const orderIds = await prisma.orderItem.findMany({
-      where: { vendorId: vendor.id },
-      select: { orderId: true },
-      distinct: ["orderId"],
-    });
-
-    const vendorOrderIds = orderIds.map((oi) => oi.orderId);
-
-    if (vendorOrderIds.length === 0) {
-      return { items: [], nextCursor: null };
-    }
-
     const items = await prisma.order.findMany({
       where: {
-        id: { in: vendorOrderIds },
+        vendorId: vendor.id,
         ...(query.status ? { status: query.status } : {}),
       },
       include: {
@@ -123,7 +110,7 @@ export const ordersService = {
     }
 
     const order = await prisma.order.findUnique({
-      where: { id: orderId },
+      where: { id: orderId, vendorId: vendor.id },
       include: {
         ...orderInclude,
         buyer: {
@@ -134,12 +121,6 @@ export const ordersService = {
 
     if (!order) {
       throw new AppError("Order not found", 404);
-    }
-
-    // Verify vendor owns items in this order
-    const hasItems = order.items.some((item) => item.vendorId === vendor.id);
-    if (!hasItems) {
-      throw new AppError("Forbidden", 403);
     }
 
     return order;
@@ -159,7 +140,7 @@ export const ordersService = {
     }
 
     const order = await prisma.order.findUnique({
-      where: { id: orderId },
+      where: { id: orderId, vendorId: vendor.id },
       include: { items: { select: { vendorId: true } } },
     });
 
@@ -167,9 +148,9 @@ export const ordersService = {
       throw new AppError("Order not found", 404);
     }
 
-    const hasItems = order.items.some((item) => item.vendorId === vendor.id);
-    if (!hasItems) {
-      throw new AppError("Forbidden", 403);
+    const hasOnlyVendorItems = order.items.every((item) => item.vendorId === vendor.id);
+    if (!hasOnlyVendorItems) {
+      throw new AppError("Order contains items outside this vendor and cannot be managed from the vendor app", 409);
     }
 
     const allowedTransitions = VENDOR_STATUS_TRANSITIONS[order.status] ?? [];

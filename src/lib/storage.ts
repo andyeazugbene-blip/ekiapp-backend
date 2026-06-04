@@ -1,4 +1,4 @@
-import { PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import { GetObjectCommand, HeadObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 
 import { logger } from "./logger";
@@ -85,7 +85,7 @@ if (!storageDisabled && BUCKET && ACCESS_KEY && SECRET_KEY) {
 
 export interface PresignedUpload {
   uploadUrl: string;
-  publicUrl: string;
+  publicUrl?: string;
   key: string;
 }
 
@@ -128,17 +128,14 @@ export async function generatePresignedUpload(
     };
   }
 
-  if (category === "verification") {
-    throw new Error("Verification uploads require private storage and cannot use the public upload bucket.");
-  }
-
   // Validate content type against allowlist
   if (!ALLOWED_CONTENT_TYPES.has(contentType)) {
     throw new Error(`Content type "${contentType}" is not allowed`);
   }
 
-  // PUBLIC_URL is required at this point (validated at startup for R2)
-  if (!PUBLIC_URL) {
+  // Public uploads need a public URL. Verification uploads are returned only
+  // through admin short-lived signed reads.
+  if (category !== "verification" && !PUBLIC_URL) {
     throw new Error("S3_PUBLIC_URL is not configured. Cannot generate public URL for uploads.");
   }
 
@@ -152,9 +149,26 @@ export async function generatePresignedUpload(
     expiresIn: PRESIGN_EXPIRY,
   });
 
-  const publicUrl = `${PUBLIC_URL}/${key}`;
+  const publicUrl = category === "verification" ? undefined : `${PUBLIC_URL}/${key}`;
 
   return { uploadUrl, publicUrl, key };
+}
+
+export async function objectExists(key: string): Promise<boolean> {
+  if (!s3 || !BUCKET) return process.env.NODE_ENV !== "production";
+  try {
+    await s3.send(new HeadObjectCommand({ Bucket: BUCKET, Key: key }));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export async function generatePresignedRead(key: string, expiresIn = 300): Promise<string> {
+  if (!s3 || !BUCKET) {
+    return `http://localhost:4001/api/uploads/mock-download?key=${encodeURIComponent(key)}`;
+  }
+  return getSignedUrl(s3, new GetObjectCommand({ Bucket: BUCKET, Key: key }), { expiresIn });
 }
 
 export function isStorageConfigured(): boolean {

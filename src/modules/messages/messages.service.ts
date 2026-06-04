@@ -1,4 +1,5 @@
 import { prisma } from "../../lib/prisma";
+import { pushNotifications } from "../../lib/push-notifications";
 import { CURSOR_ORDER_BY } from "../../shared/constants";
 import { AppError } from "../../shared/errors/app-error";
 import type {
@@ -8,8 +9,60 @@ import type {
   SendMessageInput,
 } from "./messages.types";
 
+type ParticipantRecord = {
+  id: string;
+  name: string;
+  role: "BUYER" | "VENDOR" | "ADMIN";
+  vendor: { id: string; storeName: string } | null;
+};
+
 function sortParticipants(a: string, b: string): [string, string] {
   return a < b ? [a, b] : [b, a];
+}
+
+async function assertConversationAllowed(
+  requester: ParticipantRecord,
+  other: ParticipantRecord,
+  orderId?: string,
+): Promise<"BUYER_VENDOR" | "ADMIN_VENDOR" | "DISPUTE"> {
+  const roles = new Set([requester.role, other.role]);
+
+  if (roles.has("ADMIN")) {
+    if (requester.role === "ADMIN" && other.role === "ADMIN") {
+      throw new AppError("Admin-to-admin conversations are not supported", 400);
+    }
+    return "ADMIN_VENDOR";
+  }
+
+  if (!orderId) {
+    throw new AppError("Buyer and vendor conversations must be linked to an order", 400);
+  }
+
+  if (!roles.has("BUYER") || !roles.has("VENDOR")) {
+    throw new AppError("Conversation participants are not compatible", 400);
+  }
+
+  const order = await prisma.order.findUnique({
+    where: { id: orderId },
+    select: {
+      id: true,
+      buyerId: true,
+      vendorId: true,
+    },
+  });
+
+  if (!order || !order.vendorId) {
+    throw new AppError("Order not found", 404);
+  }
+
+  const buyer = requester.role === "BUYER" ? requester : other;
+  const vendor = requester.role === "VENDOR" ? requester : other;
+
+  if (order.buyerId !== buyer.id || order.vendorId !== vendor.vendor?.id) {
+    throw new AppError("Conversation is not allowed for this order", 403);
+  }
+
+  return "BUYER_VENDOR";
 }
 
 async function serializeConversationForUser(userId: string, conversationId: string) {
@@ -130,14 +183,27 @@ export const messagesService = {
       throw new AppError("Cannot create conversation with yourself", 400);
     }
 
-    // Verify the other participant exists
+    const requester = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { id: true, name: true, role: true, vendor: { select: { id: true, storeName: true } } },
+    });
+    if (!requester) {
+      throw new AppError("Requester not found", 404);
+    }
+
     const otherUser = await prisma.user.findUnique({
       where: { id: input.participantId },
-      select: { id: true },
+      select: { id: true, name: true, role: true, vendor: { select: { id: true, storeName: true } } },
     });
     if (!otherUser) {
       throw new AppError("Participant not found", 404);
     }
+
+    const allowedType = await assertConversationAllowed(
+      requester as ParticipantRecord,
+      otherUser as ParticipantRecord,
+      input.orderId,
+    );
 
     const [participantA, participantB] = sortParticipants(userId, input.participantId);
 
@@ -164,7 +230,7 @@ export const messagesService = {
 
     const conversation = await prisma.conversation.create({
       data: {
-        type: input.type ?? "BUYER_VENDOR",
+        type: input.type ?? allowedType,
         participantA,
         participantB,
         orderId: input.orderId ?? "",
@@ -173,11 +239,21 @@ export const messagesService = {
     });
 
     if (input.initialMessage) {
-      await prisma.message.create({
+      const message = await prisma.message.create({
         data: {
           conversationId: conversation.id,
           senderId: userId,
           text: input.initialMessage,
+        },
+      });
+      pushNotifications.newMessage(input.participantId, requester.vendor?.storeName ?? requester.name);
+      await prisma.notification.create({
+        data: {
+          userId: input.participantId,
+          type: "ADMIN_BROADCAST",
+          title: "New message",
+          body: `${requester.vendor?.storeName ?? requester.name} sent you a message.`,
+          data: { conversationId: conversation.id, messageId: message.id },
         },
       });
     }
@@ -271,6 +347,16 @@ export const messagesService = {
       }),
     ]);
 
+    const recipientId = conversation.participantA === userId ? conversation.participantB : conversation.participantA;
+    const sender = await prisma.user.findUnique({
+      where: { id: userId },
+      include: { vendor: { select: { storeName: true } } },
+    });
+    const senderName = sender?.vendor?.storeName ?? sender?.name ?? "Eki";
+
+    await notificationsServiceSafe(recipientId, conversationId, message.id, senderName);
+    pushNotifications.newMessage(recipientId, senderName);
+
     return serializeMessage(message.id);
   },
 
@@ -296,3 +382,24 @@ export const messagesService = {
     });
   },
 };
+
+async function notificationsServiceSafe(
+  userId: string,
+  conversationId: string,
+  messageId: string,
+  senderName: string,
+): Promise<void> {
+  try {
+    await prisma.notification.create({
+      data: {
+        userId,
+        type: "ADMIN_BROADCAST",
+        title: "New message",
+        body: `${senderName} sent you a message.`,
+        data: { conversationId, messageId },
+      },
+    });
+  } catch {
+    // Messaging must not fail only because notification persistence failed.
+  }
+}

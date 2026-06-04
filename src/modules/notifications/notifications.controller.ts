@@ -42,3 +42,29 @@ export async function markAllNotificationsRead(
   const result = await notificationsService.markAllRead(requireUserId(request));
   response.status(200).json(result);
 }
+
+export async function getNotificationPreferences(request: Request, response: Response): Promise<void> {
+  const preferences = await notificationsService.getPreferences(requireUserId(request));
+  response.status(200).json({
+    smsMarketing: preferences.smsMarketingConsentAt != null,
+    smsTransactional: preferences.smsTransactionalEnabled,
+  });
+}
+
+export async function updateNotificationPreferences(request: Request, response: Response): Promise<void> {
+  const raw = (request.body ?? {}) as Record<string, unknown>;
+  if (raw.smsMarketing !== undefined && typeof raw.smsMarketing !== "boolean") {
+    throw new AppError("smsMarketing must be a boolean", 400);
+  }
+  if (raw.smsTransactional !== undefined && typeof raw.smsTransactional !== "boolean") {
+    throw new AppError("smsTransactional must be a boolean", 400);
+  }
+  const preferences = await notificationsService.updatePreferences(requireUserId(request), {
+    smsMarketing: raw.smsMarketing as boolean | undefined,
+    smsTransactional: raw.smsTransactional as boolean | undefined,
+  });
+  response.status(200).json({
+    smsMarketing: preferences.smsMarketingConsentAt != null,
+    smsTransactional: preferences.smsTransactionalEnabled,
+  });
+}

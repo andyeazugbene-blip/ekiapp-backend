@@ -1,4 +1,5 @@
 import { logger } from "./logger";
+import { prisma } from "./prisma";
 
 /**
  * SMS provider using Africa's Talking official SDK.
@@ -31,6 +32,23 @@ if (SMS_API_KEY) {
 export interface SendSmsInput {
   to: string; // Phone number in international format (e.g. +234...)
   message: string;
+  purpose?: string;
+}
+
+async function recordSms(input: SendSmsInput, status: string, providerResponse?: unknown, errorMessage?: string): Promise<void> {
+  try {
+    await prisma.smsDelivery.create({
+      data: {
+        to: input.to,
+        purpose: input.purpose ?? "transactional",
+        status,
+        providerResponse: providerResponse as object | undefined,
+        errorMessage,
+      },
+    });
+  } catch (error) {
+    logger.warn("Failed to record SMS delivery", { error: error instanceof Error ? error.message : String(error) });
+  }
 }
 
 /**
@@ -40,7 +58,8 @@ export interface SendSmsInput {
 export async function sendSms(input: SendSmsInput): Promise<boolean> {
   if (!smsClient) {
     logger.info("SMS (dev mode, not sent)", { to: input.to, message: input.message.slice(0, 50) });
-    return true;
+    await recordSms(input, process.env.NODE_ENV === "production" ? "NOT_CONFIGURED" : "DEV_LOGGED");
+    return process.env.NODE_ENV !== "production";
   }
 
   try {
@@ -53,16 +72,19 @@ export async function sendSms(input: SendSmsInput): Promise<boolean> {
     const recipient = result?.SMSMessageData?.Recipients?.[0];
     if (recipient && (recipient.statusCode === 100 || recipient.statusCode === 101 || recipient.status === "Success")) {
       logger.info("SMS sent", { to: input.to });
+      await recordSms(input, "SENT", result);
       return true;
     }
 
     logger.error("SMS delivery failed", { to: input.to, result: JSON.stringify(result).slice(0, 200) });
+    await recordSms(input, "FAILED", result);
     return false;
   } catch (error) {
     logger.error("SMS send exception", {
       to: input.to,
       error: error instanceof Error ? error.message : String(error),
     });
+    await recordSms(input, "ERROR", undefined, error instanceof Error ? error.message : String(error));
     return false;
   }
 }

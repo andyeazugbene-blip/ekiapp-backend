@@ -1,9 +1,45 @@
 import type { VerificationDocument, VendorVerificationStatus } from "@prisma/client";
 
 import { prisma } from "../../lib/prisma";
+import { generatePresignedRead } from "../../lib/storage";
 import { CURSOR_ORDER_BY } from "../../shared/constants";
 import { AppError } from "../../shared/errors/app-error";
 import type { ReviewVerificationInput, SubmitVerificationInput } from "./verification.types";
+
+async function assertCompletedVerificationAsset(userId: string, value: string | undefined): Promise<void> {
+  if (!value) return;
+  const asset = await prisma.uploadAsset.findFirst({
+    where: {
+      ownerId: userId,
+      category: "verification",
+      status: "COMPLETED",
+      OR: [{ key: value }, { publicUrl: value }],
+    },
+    select: { id: true },
+  });
+  if (!asset) {
+    throw new AppError("Verification document upload is not completed or does not belong to this account", 400);
+  }
+}
+
+async function withSignedDocumentUrls<T extends VerificationDocument>(doc: T): Promise<T & { frontReadUrl?: string; backReadUrl?: string }> {
+  const frontAsset = await prisma.uploadAsset.findFirst({
+    where: { category: "verification", OR: [{ key: doc.frontUrl }, { publicUrl: doc.frontUrl }] },
+    select: { key: true },
+  });
+  const backAsset = doc.backUrl
+    ? await prisma.uploadAsset.findFirst({
+        where: { category: "verification", OR: [{ key: doc.backUrl }, { publicUrl: doc.backUrl }] },
+        select: { key: true },
+      })
+    : null;
+
+  return {
+    ...doc,
+    frontReadUrl: frontAsset ? await generatePresignedRead(frontAsset.key) : doc.frontUrl,
+    backReadUrl: backAsset ? await generatePresignedRead(backAsset.key) : doc.backUrl ?? undefined,
+  };
+}
 
 export const verificationService = {
   async submitDocument(
@@ -33,6 +69,9 @@ export const verificationService = {
     if (existing) {
       throw new AppError("A pending document of this type already exists", 409);
     }
+
+    await assertCompletedVerificationAsset(userId, input.frontUrl);
+    await assertCompletedVerificationAsset(userId, input.backUrl);
 
     const doc = await prisma.verificationDocument.create({
       data: {
@@ -120,11 +159,12 @@ export const verificationService = {
     return updated;
   },
 
-  async adminListPendingDocuments(): Promise<VerificationDocument[]> {
-    return prisma.verificationDocument.findMany({
+  async adminListPendingDocuments(): Promise<Array<VerificationDocument & { frontReadUrl?: string; backReadUrl?: string }>> {
+    const docs = await prisma.verificationDocument.findMany({
       where: { status: "PENDING" },
       orderBy: { createdAt: "asc" },
     });
+    return Promise.all(docs.map(withSignedDocumentUrls));
   },
 
   async checkAndVerifyVendor(vendorId: string): Promise<void> {

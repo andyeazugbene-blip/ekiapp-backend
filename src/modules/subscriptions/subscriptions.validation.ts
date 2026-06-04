@@ -99,6 +99,8 @@ export function validateSubscriptionPlanConfigInput(input: unknown): Subscriptio
     discounts: requireBoolean(raw.discounts, "discounts"),
     marketingTools: requireBoolean(raw.marketingTools, "marketingTools"),
     canReceiveOrders: requireBoolean(raw.canReceiveOrders, "canReceiveOrders"),
+    appleProductId: typeof raw.appleProductId === "string" && raw.appleProductId.trim() ? raw.appleProductId.trim() : null,
+    googleProductId: typeof raw.googleProductId === "string" && raw.googleProductId.trim() ? raw.googleProductId.trim() : null,
     isActive: requireBoolean(raw.isActive, "isActive"),
     displayOrder: requireInteger(raw.displayOrder, "displayOrder", { min: 0 }),
   };

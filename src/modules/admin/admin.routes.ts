@@ -37,7 +37,7 @@ import {
   adminResolveDispute,
 } from "../paystack/dispute.controller";
 import { adminAdjustTrustScore } from "../paystack/trust-score.controller";
-import { getEscrowHealth } from "../paystack/escrow-health.controller";
+import { getEscrowHealth, updateEscrowProvider } from "../paystack/escrow-health.controller";
 import {
   adminListPendingDocuments,
   adminReviewDocument,
@@ -92,6 +92,10 @@ import {
   listAdminPlans,
   upsertAdminPlan,
 } from "../subscriptions/subscriptions.controller";
+import {
+  adminGetUploadReadUrl,
+  adminListUploads,
+} from "../uploads/uploads.controller";
 
 export const adminRouter = Router();
 
@@ -143,6 +147,8 @@ adminRouter.patch("/payout-requests/:id/reject", asyncHandler(requireAdminPermis
 // Verification document review
 adminRouter.get("/verification-documents", asyncHandler(requireAdminPermission("verification.read")), asyncHandler(adminListPendingDocuments));
 adminRouter.patch("/verification-documents/:id/review", asyncHandler(requireAdminPermission("verification.mutate")), asyncHandler(adminReviewDocument));
+adminRouter.get("/uploads", asyncHandler(requireAdminPermission("verification.read")), asyncHandler(adminListUploads));
+adminRouter.get("/uploads/:id/read-url", asyncHandler(requireAdminPermission("verification.read")), asyncHandler(adminGetUploadReadUrl));
 
 // Delivery zone management (global)
 adminRouter.get("/delivery-zones", asyncHandler(requireAdminPermission("delivery_zones.read")), asyncHandler(listAllDeliveryZones));
@@ -177,6 +183,7 @@ adminRouter.delete("/users/:id", asyncHandler(requireAdminPermission("users.muta
 
 // Escrow health monitoring
 adminRouter.get("/escrow/health", asyncHandler(requireAdminPermission("escrow.read")), asyncHandler(getEscrowHealth));
+adminRouter.patch("/escrow/providers/:id", asyncHandler(requireAdminPermission("settings.mutate")), asyncHandler(updateEscrowProvider));
 
 // ─── 2FA Management ─────────────────────────────────────────────────────────
 adminRouter.post("/2fa/setup", asyncHandler(requireAdminPermission("security.mutate")), asyncHandler(setup2fa));

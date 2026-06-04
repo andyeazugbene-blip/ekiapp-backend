@@ -37,6 +37,18 @@ enum EscrowType {
   DOMESTIC_AFRICA
 }
 
+enum EscrowOtpChannel {
+  SMS
+  EMAIL
+  SMS_EMAIL
+}
+
+enum UploadAssetStatus {
+  REQUESTED
+  COMPLETED
+  FAILED
+}
+
 enum PaystackTxStatus {
   PENDING
   SUCCESS
@@ -119,6 +131,8 @@ model User {
   suspendedReason     String?
   emailVerifiedAt     DateTime?
   trustScore          Int            @default(50)
+  smsMarketingConsentAt DateTime?
+  smsTransactionalEnabled Boolean    @default(true)
   role                UserRole       @default(BUYER)
   vendor              Vendor?
   orders              Order[]        @relation("BuyerOrders")
@@ -838,12 +852,64 @@ model SubscriptionPlanConfig {
   discounts          Boolean          @default(false)
   marketingTools     Boolean          @default(false)
   canReceiveOrders   Boolean          @default(true)
+  appleProductId     String?
+  googleProductId    String?
   isActive           Boolean          @default(true)
   displayOrder       Int              @default(0)
   createdAt          DateTime         @default(now())
   updatedAt          DateTime         @updatedAt
 
   @@index([isActive, displayOrder])
+}
+
+model UploadAsset {
+  id           String            @id @default(cuid())
+  ownerId      String
+  category     String
+  key          String            @unique
+  publicUrl    String?
+  contentType  String
+  sizeBytes    Int?
+  status       UploadAssetStatus @default(REQUESTED)
+  completedAt  DateTime?
+  createdAt    DateTime          @default(now())
+  updatedAt    DateTime          @updatedAt
+
+  @@index([ownerId, category, status])
+  @@index([status, createdAt])
+}
+
+model EscrowProviderConfig {
+  id                    String           @id @default(cuid())
+  country               String
+  countryCode           String
+  currency              String
+  provider              String
+  enabled               Boolean          @default(false)
+  payoutSupported       Boolean          @default(false)
+  otpChannel            EscrowOtpChannel @default(SMS)
+  protectionWindowHours Int              @default(24)
+  notes                 String?
+  createdAt             DateTime         @default(now())
+  updatedAt             DateTime         @updatedAt
+
+  @@unique([countryCode, currency, provider])
+  @@index([enabled, countryCode])
+}
+
+model SmsDelivery {
+  id               String   @id @default(cuid())
+  to               String
+  purpose          String   @default("transactional")
+  provider         String   @default("africastalking")
+  status           String
+  providerResponse Json?
+  errorMessage     String?
+  createdAt        DateTime @default(now())
+
+  @@index([to, createdAt])
+  @@index([status, createdAt])
+  @@index([purpose, createdAt])
 }
 
 // ─── Push Notifications (Expo) ──────────────────────────────────────────────

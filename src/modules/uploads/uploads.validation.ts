@@ -1,7 +1,7 @@
 import { AppError } from "../../shared/errors/app-error";
-import type { RequestUploadInput, UploadCategory } from "./uploads.types";
+import type { CompleteUploadInput, RequestUploadInput, UploadCategory } from "./uploads.types";
 
-const ALLOWED_CATEGORIES: Set<string> = new Set(["product", "avatar", "cover", "verification"]);
+const ALLOWED_CATEGORIES: Set<string> = new Set(["product", "avatar", "cover", "verification", "message"]);
 
 const ALLOWED_IMAGE_TYPES = new Set([
   "image/jpeg",
@@ -32,7 +32,7 @@ export function validateRequestUploadInput(input: unknown): RequestUploadInput {
   }
 
   if (typeof raw.category !== "string" || !ALLOWED_CATEGORIES.has(raw.category)) {
-    throw new AppError("Invalid category (product, avatar, cover, verification)", 400);
+    throw new AppError("Invalid category (product, avatar, cover, verification, message)", 400);
   }
 
   const category = raw.category as UploadCategory;
@@ -54,4 +54,22 @@ export function validateRequestUploadInput(input: unknown): RequestUploadInput {
     contentType,
     category,
   };
+}
+
+export function validateCompleteUploadInput(input: unknown): CompleteUploadInput {
+  if (!input || typeof input !== "object") {
+    throw new AppError("Invalid request body", 400);
+  }
+  const raw = input as Record<string, unknown>;
+  if (typeof raw.assetId !== "string" || raw.assetId.trim().length === 0) {
+    throw new AppError("Invalid assetId", 400);
+  }
+  if (typeof raw.key !== "string" || raw.key.trim().length === 0) {
+    throw new AppError("Invalid key", 400);
+  }
+  const sizeBytes = raw.sizeBytes === undefined ? undefined : Number(raw.sizeBytes);
+  if (sizeBytes !== undefined && (!Number.isInteger(sizeBytes) || sizeBytes <= 0)) {
+    throw new AppError("Invalid sizeBytes", 400);
+  }
+  return { assetId: raw.assetId.trim(), key: raw.key.trim(), sizeBytes };
 }

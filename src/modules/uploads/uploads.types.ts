@@ -1,4 +1,4 @@
-export type UploadCategory = "product" | "avatar" | "cover" | "verification";
+export type UploadCategory = "product" | "avatar" | "cover" | "verification" | "message";
 
 export interface RequestUploadInput {
   filename: string;
@@ -7,7 +7,14 @@ export interface RequestUploadInput {
 }
 
 export interface UploadUrlResponse {
+  assetId: string;
   uploadUrl: string;
-  publicUrl: string;
+  publicUrl?: string;
   key: string;
+}
+
+export interface CompleteUploadInput {
+  assetId: string;
+  key: string;
+  sizeBytes?: number;
 }

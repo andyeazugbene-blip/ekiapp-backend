@@ -2,10 +2,11 @@ import { NotificationType, UserRole } from "@prisma/client";
 
 import { sendPushToUser } from "../../lib/expo-push";
 import { prisma } from "../../lib/prisma";
+import { sendSms } from "../../lib/sms";
 import { AppError } from "../../shared/errors/app-error";
 
 type BroadcastAudience = "all" | "vendors" | "buyers" | "active_vendors" | "new_vendors" | "individual_vendor" | "individual_buyer";
-type BroadcastChannel = "in_app" | "push" | "in_app_push";
+type BroadcastChannel = "in_app" | "push" | "sms" | "in_app_push" | "in_app_sms" | "in_app_push_sms";
 
 export interface AdminBroadcastInput {
   audience: BroadcastAudience;
@@ -17,7 +18,7 @@ export interface AdminBroadcastInput {
 }
 
 const VALID_AUDIENCES = new Set<BroadcastAudience>(["all", "vendors", "buyers", "active_vendors", "new_vendors", "individual_vendor", "individual_buyer"]);
-const VALID_CHANNELS = new Set<BroadcastChannel>(["in_app", "push", "in_app_push"]);
+const VALID_CHANNELS = new Set<BroadcastChannel>(["in_app", "push", "sms", "in_app_push", "in_app_sms", "in_app_push_sms"]);
 
 function normalizeInput(raw: unknown): AdminBroadcastInput {
   const input = (raw ?? {}) as Partial<AdminBroadcastInput>;
@@ -59,23 +60,24 @@ export const adminCommunicationsService = {
     const recipients = input.audience === "individual_vendor"
       ? await prisma.user.findMany({
           where: { vendor: { id: input.vendorId }, role: UserRole.VENDOR, isSuspended: false },
-          select: { id: true, role: true },
+          select: { id: true, role: true, phone: true, smsMarketingConsentAt: true },
           take: 1,
         })
       : input.audience === "individual_buyer"
         ? await prisma.user.findMany({
             where: { id: input.userId, role: UserRole.BUYER, isSuspended: false },
-            select: { id: true, role: true },
+            select: { id: true, role: true, phone: true, smsMarketingConsentAt: true },
             take: 1,
           })
         : await prisma.user.findMany({
             where: whereForAudience(input.audience),
-            select: { id: true, role: true },
+            select: { id: true, role: true, phone: true, smsMarketingConsentAt: true },
             take: 1000,
           });
 
-    const shouldCreateMessages = input.channel === "in_app" || input.channel === "in_app_push";
-    const shouldPush = input.channel === "push" || input.channel === "in_app_push";
+    const shouldCreateMessages = ["in_app", "in_app_push", "in_app_sms", "in_app_push_sms"].includes(input.channel);
+    const shouldPush = ["push", "in_app_push", "in_app_push_sms"].includes(input.channel);
+    const shouldSms = ["sms", "in_app_sms", "in_app_push_sms"].includes(input.channel);
 
     let notificationsCreated = 0;
     if (recipients.length > 0) {
@@ -142,11 +144,31 @@ export const adminCommunicationsService = {
       }
     }
 
+    let smsQueued = 0;
+    let smsSkipped = 0;
+    if (shouldSms) {
+      for (const recipient of recipients) {
+        if (recipient.id === actorId) continue;
+        if (!recipient.phone || !recipient.smsMarketingConsentAt) {
+          smsSkipped += 1;
+          continue;
+        }
+        smsQueued += 1;
+        void sendSms({
+          to: recipient.phone,
+          message: `${input.subject}: ${input.body}`,
+          purpose: "admin_marketing",
+        });
+      }
+    }
+
     return {
       sent: recipients.filter((recipient) => recipient.id !== actorId).length,
       queued: shouldPush ? recipients.length : 0,
       notificationsCreated,
       messagesCreated: messageCount,
+      smsQueued,
+      smsSkipped,
       message: "Admin broadcast queued successfully.",
     };
   },

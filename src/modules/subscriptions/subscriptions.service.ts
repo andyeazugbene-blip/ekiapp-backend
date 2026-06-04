@@ -75,6 +75,8 @@ function formatPlanResponse(config: PlanConfigRecord) {
     discounts: config.discounts,
     marketingTools: config.marketingTools,
     canReceiveOrders: config.canReceiveOrders,
+    appleProductId: config.appleProductId ?? null,
+    googleProductId: config.googleProductId ?? null,
     isActive: config.isActive,
     displayOrder: config.displayOrder,
   };
