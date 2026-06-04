@@ -852,8 +852,6 @@ model SubscriptionPlanConfig {
   discounts          Boolean          @default(false)
   marketingTools     Boolean          @default(false)
   canReceiveOrders   Boolean          @default(true)
-  appleProductId     String?
-  googleProductId    String?
   isActive           Boolean          @default(true)
   displayOrder       Int              @default(0)
   createdAt          DateTime         @default(now())

@@ -4,6 +4,7 @@ import { AppError } from "../../shared/errors/app-error";
 import type {
   ActivateSubscriptionInput,
   CreateSubscriptionInput,
+  CreateWebSubscriptionCheckoutInput,
   SubscriptionPlanConfigInput,
 } from "./subscriptions.types";
 
@@ -21,6 +22,25 @@ export function validateCreateSubscriptionInput(input: unknown): CreateSubscript
   }
 
   return { plan: raw.plan as SubscriptionPlan };
+}
+
+export function validateCreateWebSubscriptionCheckoutInput(input: unknown): CreateWebSubscriptionCheckoutInput {
+  if (!input || typeof input !== "object") {
+    throw new AppError("Invalid request body", 400);
+  }
+  const raw = input as Record<string, unknown>;
+
+  const plan = typeof raw.plan === "string" ? raw.plan.toUpperCase() : "";
+  if (!["GROWTH", "PRO"].includes(plan)) {
+    throw new AppError("plan must be growth or pro", 400);
+  }
+
+  const email = typeof raw.email === "string" ? raw.email.trim().toLowerCase() : "";
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+    throw new AppError("A valid vendor email is required", 400);
+  }
+
+  return { plan: plan as SubscriptionPlan, email };
 }
 
 export function validateActivateSubscriptionInput(input: unknown): ActivateSubscriptionInput {
@@ -99,8 +119,6 @@ export function validateSubscriptionPlanConfigInput(input: unknown): Subscriptio
     discounts: requireBoolean(raw.discounts, "discounts"),
     marketingTools: requireBoolean(raw.marketingTools, "marketingTools"),
     canReceiveOrders: requireBoolean(raw.canReceiveOrders, "canReceiveOrders"),
-    appleProductId: typeof raw.appleProductId === "string" && raw.appleProductId.trim() ? raw.appleProductId.trim() : null,
-    googleProductId: typeof raw.googleProductId === "string" && raw.googleProductId.trim() ? raw.googleProductId.trim() : null,
     isActive: requireBoolean(raw.isActive, "isActive"),
     displayOrder: requireInteger(raw.displayOrder, "displayOrder", { min: 0 }),
   };

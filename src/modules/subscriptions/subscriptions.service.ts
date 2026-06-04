@@ -75,8 +75,6 @@ function formatPlanResponse(config: PlanConfigRecord) {
     discounts: config.discounts,
     marketingTools: config.marketingTools,
     canReceiveOrders: config.canReceiveOrders,
-    appleProductId: config.appleProductId ?? null,
-    googleProductId: config.googleProductId ?? null,
     isActive: config.isActive,
     displayOrder: config.displayOrder,
   };
@@ -273,23 +271,67 @@ export const subscriptionsService = {
       throw new AppError("Vendor profile required", 403);
     }
 
-    const planConfig = await getPlanConfig(plan);
+    return this.createVendorSubscriptionCheckout({
+      vendorId: vendor.id,
+      userId,
+      email: vendor.user.email,
+      plan,
+    });
+  },
+
+  async createWebCheckoutSession(email: string, plan: SubscriptionPlan): Promise<{ checkoutUrl: string }> {
+    if (plan === "FREE") {
+      throw new AppError("Cannot create checkout for free plan", 400);
+    }
+
+    const user = await prisma.user.findUnique({
+      where: { email },
+      select: {
+        id: true,
+        email: true,
+        role: true,
+        vendor: { select: { id: true } },
+      },
+    });
+
+    if (!user || user.role !== "VENDOR" || !user.vendor) {
+      throw new AppError("No vendor account exists for this email", 404);
+    }
+
+    return this.createVendorSubscriptionCheckout({
+      vendorId: user.vendor.id,
+      userId: user.id,
+      email: user.email,
+      plan,
+    });
+  },
+
+  async createVendorSubscriptionCheckout(input: {
+    vendorId: string;
+    userId: string;
+    email: string;
+    plan: SubscriptionPlan;
+  }): Promise<{ checkoutUrl: string }> {
+    const planConfig = await getPlanConfig(input.plan);
     if (!planConfig.isActive) {
       throw new AppError("This plan is currently unavailable", 409);
     }
+    if (planConfig.monthlyPriceCents <= 0) {
+      throw new AppError("Paid plan price is not configured", 409);
+    }
 
-    const frontendUrl = process.env.FRONTEND_URL ?? "http://localhost:3000";
+    const frontendUrl = process.env.FRONTEND_URL ?? "https://culinarytales.app";
 
     let subscription = await prisma.vendorSubscription.findUnique({
-      where: { vendorId: vendor.id },
+      where: { vendorId: input.vendorId },
     });
 
     let customerId = subscription?.stripeCustomerId;
 
     if (!customerId) {
       const customer = await stripe.customers.create({
-        email: vendor.user.email,
-        metadata: { vendorId: vendor.id, userId },
+        email: input.email,
+        metadata: { vendorId: input.vendorId, userId: input.userId },
       });
       customerId = customer.id;
 
@@ -301,7 +343,7 @@ export const subscriptionsService = {
       } else {
         subscription = await prisma.vendorSubscription.create({
           data: {
-            vendorId: vendor.id,
+            vendorId: input.vendorId,
             plan: "FREE",
             status: "ACTIVE",
             stripeCustomerId: customerId,
@@ -309,6 +351,14 @@ export const subscriptionsService = {
         });
       }
     }
+
+    const metadata = {
+      kind: "vendor_subscription",
+      vendorId: input.vendorId,
+      userId: input.userId,
+      plan: input.plan,
+      email: input.email,
+    };
 
     const session = await stripe.checkout.sessions.create({
       customer: customerId,
@@ -327,12 +377,10 @@ export const subscriptionsService = {
           quantity: 1,
         },
       ],
-      success_url: `${frontendUrl}/vendor/subscription?success=true`,
-      cancel_url: `${frontendUrl}/vendor/subscription?cancelled=true`,
-      metadata: {
-        vendorId: vendor.id,
-        plan,
-      },
+      success_url: `${frontendUrl}/vendor/subscription?success=true&email=${encodeURIComponent(input.email)}`,
+      cancel_url: `${frontendUrl}/vendor/subscription?cancelled=true&email=${encodeURIComponent(input.email)}`,
+      metadata,
+      subscription_data: { metadata },
     });
 
     if (!session.url) {

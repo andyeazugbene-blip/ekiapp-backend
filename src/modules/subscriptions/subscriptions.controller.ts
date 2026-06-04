@@ -5,6 +5,7 @@ import { subscriptionsService } from "./subscriptions.service";
 import {
   validateActivateSubscriptionInput,
   validateCreateSubscriptionInput,
+  validateCreateWebSubscriptionCheckoutInput,
   validateSubscriptionPlanConfigInput,
 } from "./subscriptions.validation";
 
@@ -49,6 +50,12 @@ export async function activateSubscription(request: Request, response: Response)
 export async function createCheckoutSession(request: Request, response: Response): Promise<void> {
   const input = validateCreateSubscriptionInput(request.body);
   const result = await subscriptionsService.createCheckoutSession(requireUserId(request), input.plan);
+  response.status(200).json(result);
+}
+
+export async function createWebCheckoutSession(request: Request, response: Response): Promise<void> {
+  const input = validateCreateWebSubscriptionCheckoutInput(request.body);
+  const result = await subscriptionsService.createWebCheckoutSession(input.email, input.plan);
   response.status(200).json(result);
 }
 

@@ -4,6 +4,11 @@ export interface CreateSubscriptionInput {
   plan: SubscriptionPlan;
 }
 
+export interface CreateWebSubscriptionCheckoutInput {
+  plan: SubscriptionPlan;
+  email: string;
+}
+
 export interface ActivateSubscriptionInput {
   plan: SubscriptionPlan;
 }
@@ -36,8 +41,6 @@ export interface SubscriptionPlanConfigInput {
   discounts: boolean;
   marketingTools: boolean;
   canReceiveOrders: boolean;
-  appleProductId?: string | null;
-  googleProductId?: string | null;
   isActive: boolean;
   displayOrder: number;
 }
@@ -66,8 +69,6 @@ export const DEFAULT_PLAN_CONFIGS: Record<SubscriptionPlan, SubscriptionPlanConf
     discounts: false,
     marketingTools: false,
     canReceiveOrders: true,
-    appleProductId: null,
-    googleProductId: null,
     isActive: true,
     displayOrder: 0,
   },
@@ -89,8 +90,6 @@ export const DEFAULT_PLAN_CONFIGS: Record<SubscriptionPlan, SubscriptionPlanConf
     discounts: true,
     marketingTools: true,
     canReceiveOrders: true,
-    appleProductId: null,
-    googleProductId: null,
     isActive: false,
     displayOrder: 10,
   },
@@ -112,8 +111,6 @@ export const DEFAULT_PLAN_CONFIGS: Record<SubscriptionPlan, SubscriptionPlanConf
     discounts: true,
     marketingTools: true,
     canReceiveOrders: true,
-    appleProductId: "eki_vendor_growth_monthly",
-    googleProductId: "eki_vendor_growth_monthly",
     isActive: true,
     displayOrder: 20,
   },
@@ -135,8 +132,6 @@ export const DEFAULT_PLAN_CONFIGS: Record<SubscriptionPlan, SubscriptionPlanConf
     discounts: true,
     marketingTools: true,
     canReceiveOrders: true,
-    appleProductId: null,
-    googleProductId: null,
     isActive: false,
     displayOrder: 30,
   },
@@ -158,8 +153,6 @@ export const DEFAULT_PLAN_CONFIGS: Record<SubscriptionPlan, SubscriptionPlanConf
     discounts: true,
     marketingTools: true,
     canReceiveOrders: true,
-    appleProductId: "eki_vendor_pro_monthly",
-    googleProductId: "eki_vendor_pro_monthly",
     isActive: true,
     displayOrder: 30,
   },

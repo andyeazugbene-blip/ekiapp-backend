@@ -47,6 +47,10 @@ class StripeWebhookService {
       return this.handleChargeRefunded(event);
     }
 
+    if (event.type === "checkout.session.completed") {
+      return this.handleCheckoutSessionCompleted(event);
+    }
+
     if (event.type !== "payment_intent.succeeded") {
       return { received: true, ignored: true, eventId: event.id, type: event.type };
     }
@@ -272,6 +276,74 @@ class StripeWebhookService {
   }
 
   // ─── Payment Failed / Canceled ──────────────────────────────────────────
+
+  private async handleCheckoutSessionCompleted(event: Stripe.Event): Promise<StripeWebhookResult> {
+    const session = event.data.object as Stripe.Checkout.Session;
+    if (session.mode !== "subscription" || session.metadata?.kind !== "vendor_subscription") {
+      return { received: true, ignored: true, eventId: event.id, type: event.type };
+    }
+
+    const vendorId = session.metadata.vendorId;
+    const plan = session.metadata.plan as "GROWTH" | "PRO" | undefined;
+    const stripeSubscriptionId = typeof session.subscription === "string" ? session.subscription : session.subscription?.id;
+
+    if (!vendorId || !plan || !["GROWTH", "PRO"].includes(plan) || !stripeSubscriptionId) {
+      logger.warn("Subscription checkout webhook missing metadata", { eventId: event.id, vendorId, plan });
+      return { received: true, ignored: true, eventId: event.id, type: event.type };
+    }
+
+    try {
+      return await prisma.$transaction(async (tx) => {
+        if (await this.isDuplicate(tx, event.id, event.type, { orderId: vendorId })) {
+          return { received: true, duplicate: true, eventId: event.id, type: event.type };
+        }
+
+        const now = new Date();
+        const periodEnd = new Date(now);
+        periodEnd.setMonth(periodEnd.getMonth() + 1);
+
+        await tx.vendorSubscription.upsert({
+          where: { vendorId },
+          update: {
+            plan,
+            status: "ACTIVE",
+            stripeSubscriptionId,
+            currentPeriodStart: now,
+            currentPeriodEnd: periodEnd,
+            cancelledAt: null,
+          },
+          create: {
+            vendorId,
+            plan,
+            status: "ACTIVE",
+            stripeSubscriptionId,
+            currentPeriodStart: now,
+            currentPeriodEnd: periodEnd,
+          },
+        });
+
+        await tx.webhookEvent.update({
+          where: { stripeEventId: event.id },
+          data: { status: "PROCESSED", processedAt: now },
+        });
+
+        logger.info("Webhook processed: vendor subscription checkout completed", {
+          eventId: event.id,
+          vendorId,
+          plan,
+          stripeSubscriptionId,
+        });
+
+        return { received: true, eventId: event.id, type: event.type };
+      }, { isolationLevel: "Serializable" });
+    } catch (error) {
+      if (this.isUniqueConstraintError(error)) {
+        return { received: true, duplicate: true, eventId: event.id, type: event.type };
+      }
+      logger.error("Webhook failed: checkout.session.completed", { eventId: event.id, ...serializeError(error) });
+      throw error;
+    }
+  }
 
   private async handlePaymentFailedOrCanceled(event: Stripe.Event): Promise<StripeWebhookResult> {
     const paymentIntent = event.data.object as Stripe.PaymentIntent;

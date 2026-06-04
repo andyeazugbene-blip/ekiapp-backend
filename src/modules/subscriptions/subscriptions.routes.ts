@@ -6,6 +6,7 @@ import {
   activateSubscription,
   cancelSubscription,
   createCheckoutSession,
+  createWebCheckoutSession,
   getPlanLimits,
   getPlans,
   getSubscription,
@@ -15,6 +16,7 @@ export const subscriptionsRouter = Router();
 
 // Public: list available plans
 subscriptionsRouter.get("/plans", asyncHandler(getPlans));
+subscriptionsRouter.post("/web-checkout", asyncHandler(createWebCheckoutSession));
 
 // Authenticated (vendor)
 subscriptionsRouter.use(authenticate);
