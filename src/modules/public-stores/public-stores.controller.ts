@@ -74,13 +74,27 @@ function parseLookupEmail(body: unknown): string {
   return raw.email.trim().toLowerCase();
 }
 
+function parseGlobalLookupEmail(body: unknown): string {
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    throw new AppError("Invalid request body", 400);
+  }
+
+  const raw = body as Record<string, unknown>;
+  const value = typeof raw.email === "string" ? raw.email : typeof raw.contact === "string" ? raw.contact : "";
+  if (!value.trim() || !value.includes("@")) {
+    throw new AppError("Valid email address required", 400);
+  }
+  return value.trim().toLowerCase();
+}
+
 function parseLookupVerification(body: unknown): { email: string; code: string } {
   if (!body || typeof body !== "object" || Array.isArray(body)) {
     throw new AppError("Invalid request body", 400);
   }
 
   const raw = body as Record<string, unknown>;
-  if (typeof raw.email !== "string" || !raw.email.trim() || !raw.email.includes("@")) {
+  const email = typeof raw.email === "string" ? raw.email : typeof raw.contact === "string" ? raw.contact : "";
+  if (!email.trim() || !email.includes("@")) {
     throw new AppError("Valid email address required", 400);
   }
   if (typeof raw.code !== "string" || !/^\d{6}$/.test(raw.code.trim())) {
@@ -88,7 +102,7 @@ function parseLookupVerification(body: unknown): { email: string; code: string }
   }
 
   return {
-    email: raw.email.trim().toLowerCase(),
+    email: email.trim().toLowerCase(),
     code: raw.code.trim(),
   };
 }
@@ -135,8 +149,33 @@ function parseCheckoutBody(body: unknown) {
     city: requireText("city"),
     postcode: requireText("postcode"),
     country: requireText("country"),
+    promoCode: typeof raw.promoCode === "string" && raw.promoCode.trim() ? raw.promoCode.trim().toUpperCase() : undefined,
     items,
   };
+}
+
+export async function getPublicStorePromo(request: Request, response: Response): Promise<void> {
+  const slug = parseSlug(request);
+  const code = String(request.params.code ?? "").trim().toUpperCase();
+  if (!code) throw new AppError("Promo code is required", 400);
+  const promo = await publicStoresService.getPublicPromo(slug, code);
+  response.status(200).json({ promo });
+}
+
+export async function requestGlobalPublicStoreOrderLookup(request: Request, response: Response): Promise<void> {
+  const email = parseGlobalLookupEmail(request.body);
+  const found = await publicStoresService.requestGuestOrderLookupCodeByEmail(email);
+  response.status(200).json({
+    found,
+    emailHint: email,
+    message: found ? "A verification code has been sent to your email." : "No order found for this email address.",
+  });
+}
+
+export async function verifyGlobalPublicStoreOrderLookup(request: Request, response: Response): Promise<void> {
+  const { email, code } = parseLookupVerification(request.body);
+  const orders = await publicStoresService.verifyGuestOrderLookupByEmail(email, code);
+  response.status(200).json({ orders });
 }
 
 export async function getPublicStore(request: Request, response: Response): Promise<void> {

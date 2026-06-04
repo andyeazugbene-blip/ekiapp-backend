@@ -146,6 +146,17 @@ export const emailTemplates = {
     };
   },
 
+  welcomeVendor(params: { name: string }): { subject: string; html: string } {
+    return {
+      subject: "Welcome to Eki Seller",
+      html: baseLayout(`
+        <h2 style="color: #111827; margin: 0 0 16px;">Welcome, ${params.name}!</h2>
+        <p style="color: #374151;">Thanks for joining Eki as a vendor. Your seller account is ready for store setup, product listings, delivery zones, verification, and public store sharing.</p>
+        <p style="color: #374151;">Open the app to complete your store profile and start selling securely.</p>
+      `),
+    };
+  },
+
   vendorVerified(params: { storeName: string }): { subject: string; html: string } {
     return {
       subject: "Your store has been verified!",

@@ -34,10 +34,11 @@ export async function listVendorBuyers(request: Request, response: Response): Pr
       status: { notIn: ["PENDING", "FAILED", "CANCELLED"] },
     },
     select: {
+      id: true,
       buyerId: true,
       totalAmount: true,
       createdAt: true,
-      buyer: { select: { id: true, name: true, country: true } },
+      buyer: { select: { id: true, name: true, avatar: true, country: true } },
     },
     orderBy: { createdAt: "desc" },
   });
@@ -50,6 +51,8 @@ export async function listVendorBuyers(request: Request, response: Response): Pr
     totalOrders: number;
     totalSpent: number;
     lastOrderAt: Date;
+    lastOrderId: string;
+    avatar: string | null;
   }>();
 
   for (const order of orders) {
@@ -59,6 +62,7 @@ export async function listVendorBuyers(request: Request, response: Response): Pr
       existing.totalSpent += order.totalAmount;
       if (order.createdAt > existing.lastOrderAt) {
         existing.lastOrderAt = order.createdAt;
+        existing.lastOrderId = order.id;
       }
     } else {
       buyerMap.set(order.buyerId, {
@@ -68,6 +72,8 @@ export async function listVendorBuyers(request: Request, response: Response): Pr
         totalOrders: 1,
         totalSpent: order.totalAmount,
         lastOrderAt: order.createdAt,
+        lastOrderId: order.id,
+        avatar: order.buyer.avatar,
       });
     }
   }

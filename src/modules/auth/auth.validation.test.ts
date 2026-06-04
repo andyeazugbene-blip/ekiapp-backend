@@ -14,6 +14,7 @@ describe("validateRegisterInput", () => {
       email: "alice@example.com",
       password: "Supersecret1",
       name: "Alice",
+      role: "BUYER",
     });
   });
 
@@ -40,14 +41,22 @@ describe("validateRegisterInput", () => {
     ).toThrow(/name/i);
   });
 
-  it("does not accept a client-provided role", () => {
+  it("accepts buyer or vendor role only", () => {
     const out = validateRegisterInput({
       email: "a@b.co",
       password: "Supersecret1",
       name: "Alice",
+      role: "vendor",
+    });
+    expect(out.role).toBe("VENDOR");
+
+    const adminAttempt = validateRegisterInput({
+      email: "b@b.co",
+      password: "Supersecret1",
+      name: "Bob",
       role: "ADMIN",
     });
-    expect((out as unknown as Record<string, unknown>).role).toBeUndefined();
+    expect(adminAttempt.role).toBe("BUYER");
   });
 });
 

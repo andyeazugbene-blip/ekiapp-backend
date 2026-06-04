@@ -6,6 +6,7 @@ export interface RegisterInput {
   name: string;
   phone?: string;
   country?: string;
+  role?: Exclude<UserRole, "ADMIN">;
 }
 
 export interface LoginInput {
@@ -27,6 +28,7 @@ export interface AuthUser {
   phone: string | null;
   avatar: string | null;
   country: string | null;
+  referralCode: string | null;
   role: UserRole;
   trustScore: number;
   createdAt: Date;

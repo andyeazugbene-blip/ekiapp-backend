@@ -13,14 +13,23 @@ import { requestIdMiddleware } from "./middlewares/request-id";
 import { requestLogger } from "./middlewares/request-logger";
 import { validateInputLength } from "./middlewares/validate-input-length";
 import {
+  getPublicAccountDeletionPage,
   getPublicFindOrderPage,
   getPublicHelpPage,
   getPublicHomePage,
+  getPublicInvitePage,
   getPublicPrivacyPage,
   getPublicTermsPage,
   getPublicVendorSubscriptionPage,
 } from "./modules/public-site/public-site.page";
-import { getPublicStorePage } from "./modules/public-stores/public-stores.page";
+import {
+  getPublicStoreCheckoutPage,
+  getPublicStoreConfirmedPage,
+  getPublicStoreDirectoryPage,
+  getPublicStorePage,
+  getPublicStoreProductPage,
+  getPublicStoreTrackedOrderPage,
+} from "./modules/public-stores/public-stores.page";
 import { apiRouter } from "./routes";
 
 export const app = express();
@@ -36,9 +45,9 @@ app.disable("x-powered-by");
 
 // Security headers. CSP must be relaxed on /api/docs and server-rendered
 // public HTML pages that use inline scripts.
-const publicHtmlPaths = new Set(["/", "/find-order", "/help", "/privacy", "/terms", "/vendor/subscription"]);
+const publicHtmlPaths = new Set(["/", "/find-order", "/help", "/support", "/privacy", "/terms", "/account-deletion", "/vendor/subscription"]);
 const swaggerAndPublicPagePaths = (req: { path: string }) =>
-  req.path === "/api/docs" || req.path.startsWith("/store/") || publicHtmlPaths.has(req.path);
+  req.path === "/api/docs" || req.path.startsWith("/store") || req.path.startsWith("/invite/") || publicHtmlPaths.has(req.path);
 
 app.use((req, res, next) => {
   if (swaggerAndPublicPagePaths(req)) {
@@ -115,14 +124,38 @@ app.get("/find-order", (req, res, next) => {
 app.get("/help", (req, res, next) => {
   Promise.resolve(getPublicHelpPage(req, res)).catch(next);
 });
+app.get("/support", (req, res, next) => {
+  Promise.resolve(getPublicHelpPage(req, res)).catch(next);
+});
 app.get("/privacy", (req, res, next) => {
   Promise.resolve(getPublicPrivacyPage(req, res)).catch(next);
 });
 app.get("/terms", (req, res, next) => {
   Promise.resolve(getPublicTermsPage(req, res)).catch(next);
 });
+app.get("/account-deletion", (req, res, next) => {
+  Promise.resolve(getPublicAccountDeletionPage(req, res)).catch(next);
+});
+app.get("/invite/:code", (req, res, next) => {
+  Promise.resolve(getPublicInvitePage(req, res)).catch(next);
+});
 app.get("/vendor/subscription", (req, res, next) => {
   Promise.resolve(getPublicVendorSubscriptionPage(req, res)).catch(next);
+});
+app.get("/store", (req, res, next) => {
+  Promise.resolve(getPublicStoreDirectoryPage(req, res)).catch(next);
+});
+app.get("/store/:slug/product/:productId", (req, res, next) => {
+  Promise.resolve(getPublicStoreProductPage(req, res)).catch(next);
+});
+app.get("/store/:slug/checkout", (req, res, next) => {
+  Promise.resolve(getPublicStoreCheckoutPage(req, res)).catch(next);
+});
+app.get("/store/:slug/confirmed", (req, res, next) => {
+  Promise.resolve(getPublicStoreConfirmedPage(req, res)).catch(next);
+});
+app.get("/store/:slug/order/:orderNumber", (req, res, next) => {
+  Promise.resolve(getPublicStoreTrackedOrderPage(req, res)).catch(next);
 });
 app.get("/store/:slug", (req, res, next) => {
   Promise.resolve(getPublicStorePage(req, res)).catch(next);

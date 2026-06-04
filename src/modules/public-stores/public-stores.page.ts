@@ -608,17 +608,17 @@ function renderStorePage(store: PublicStore, products: PublicProduct[]): string 
     const stock = product.stock > 0 ? `${product.stock} in stock` : "No stock";
     return `
       <li class="product-card">
-        <a class="product-top" href="${productHref}">
+        <a class="product-top product-link" href="${productHref}">
           <span class="stock-pill${product.stock > 0 ? "" : " is-sold"}">${escape(stock)}</span>
           ${productImage(product)}
         </a>
         <div class="product-body">
-          <a href="${productHref}">
+          <a class="product-link" href="${productHref}">
             <h3 class="product-title">${escape(product.title)}</h3>
             <p class="product-meta">${escape(formatWeight(product.weightGrams))} · 2-4 days</p>
           </a>
           <div class="product-row">
-            <p class="product-price">${escape(formatPrice(product.priceInCents, product.currency))}</p>
+            <p class="product-price" data-product-price="${escape(product.id)}" data-base-price="${product.priceInCents}">${escape(formatPrice(product.priceInCents, product.currency))}</p>
             <button class="icon-add add-to-cart" type="button" data-product-id="${escape(product.id)}" aria-label="Add ${escape(product.title)}">+</button>
           </div>
         </div>
@@ -650,6 +650,9 @@ function renderStorePage(store: PublicStore, products: PublicProduct[]): string 
     (function(){
       var storeSlug = ${JSON.stringify(store.storeSlug)};
       var cartKey = 'eki_public_store_cart_' + storeSlug;
+      var params = new URLSearchParams(window.location.search);
+      var promoCode = String(params.get('promo') || '').trim().toUpperCase();
+      var source = String(params.get('source') || 'direct');
       var products = JSON.parse(${JSON.stringify(JSON.stringify(products.map((product) => ({
         id: product.id,
         title: product.title,
@@ -694,6 +697,7 @@ function renderStorePage(store: PublicStore, products: PublicProduct[]): string 
         if(existing){ existing.quantity += 1; } else { cart.push({ productId: productId, quantity: 1 }); }
         writeCart(cart);
         updateCartUi();
+        fetch('/api/public/stores/' + encodeURIComponent(storeSlug) + '/events', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ event:'add_to_cart', source:source, productId:productId, quantity:1 }) }).catch(function(){});
       }
       document.querySelectorAll('.add-to-cart').forEach(function(button){
         button.addEventListener('click', function(event){
@@ -702,6 +706,37 @@ function renderStorePage(store: PublicStore, products: PublicProduct[]): string 
           addProduct(String(button.getAttribute('data-product-id') || ''));
         });
       });
+      document.querySelectorAll('.product-link').forEach(function(link){
+        if(!promoCode) return;
+        var href = new URL(link.getAttribute('href'), window.location.origin);
+        href.searchParams.set('promo', promoCode);
+        link.setAttribute('href', href.pathname + href.search);
+      });
+      document.querySelectorAll('#top-cart-button,#bottom-cart-button').forEach(function(link){
+        if(!promoCode) return;
+        var href = new URL(link.getAttribute('href'), window.location.origin);
+        href.searchParams.set('promo', promoCode);
+        link.setAttribute('href', href.pathname + href.search);
+      });
+      fetch('/api/public/stores/' + encodeURIComponent(storeSlug) + '/events', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ event:'open', source:source }) }).catch(function(){});
+      if(promoCode){
+        fetch('/api/public/stores/' + encodeURIComponent(storeSlug) + '/promo/' + encodeURIComponent(promoCode))
+          .then(function(response){ return response.ok ? response.json() : Promise.reject(new Error('invalid')); })
+          .then(function(data){
+            var promo = data && data.promo;
+            if(!promo) return;
+            var allowed = new Set(Array.isArray(promo.productIds) ? promo.productIds : []);
+            products.forEach(function(product){
+              if(!promo.appliesToAllProducts && !allowed.has(product.id)) return;
+              var next = promo.type === 'PERCENTAGE'
+                ? Math.max(0, product.priceInCents - Math.round(product.priceInCents * Number(promo.value || 0) / 100))
+                : Math.max(0, product.priceInCents - Number(promo.value || 0));
+              var node = document.querySelector('[data-product-price="' + product.id + '"]');
+              if(node) node.innerHTML = '<span style="text-decoration:line-through;color:#8A8F94;font-weight:500;margin-right:6px">' + formatPrice(product.priceInCents, product.currency) + '</span>' + formatPrice(next, product.currency) + '<small style="display:block;color:#16704f;margin-top:3px">Coupon ' + promoCode + '</small>';
+            });
+          })
+          .catch(function(){});
+      }
       updateCartUi();
     })();
   </script>
@@ -774,7 +809,7 @@ function renderProductPage(store: PublicStore, product: PublicProduct): string {
             <span>Ships from ${escape(store.city || store.country || "Birmingham")}</span>
             <span>Delivery 2-4 days</span>
           </div>
-          <p class="product-price" style="font-size:34px;margin-top:12px">${escape(formatPrice(product.priceInCents, product.currency))}</p>
+          <p class="product-price" id="detail-price" style="font-size:34px;margin-top:12px">${escape(formatPrice(product.priceInCents, product.currency))}</p>
           <div class="desc">${escape(product.description || `Freshly packed ${product.title}. Sourced directly from trusted African foodstuff vendors and prepared for fast secure checkout.`)}</div>
           <div class="qty-row">
             <label>Quantity</label>
@@ -788,7 +823,7 @@ function renderProductPage(store: PublicStore, product: PublicProduct): string {
             <span>Secure checkout</span>
             <span>Order recorded on Eki</span>
           </div>
-          <button class="primary-action" type="button" id="add-product-button">Add to Cart — ${escape(formatPrice(product.priceInCents, product.currency))}</button>
+          <button class="primary-action" type="button" id="add-product-button">Add to Cart — <span id="detail-button-price">${escape(formatPrice(product.priceInCents, product.currency))}</span></button>
         </div>
       </div>
     </div>
@@ -797,8 +832,16 @@ function renderProductPage(store: PublicStore, product: PublicProduct): string {
     (function(){
       var storeSlug = ${JSON.stringify(store.storeSlug)};
       var productId = ${JSON.stringify(product.id)};
+      var basePrice = ${JSON.stringify(product.priceInCents)};
+      var currency = ${JSON.stringify(product.currency)};
       var cartKey = 'eki_public_store_cart_' + storeSlug;
       var quantity = 1;
+      var params = new URLSearchParams(window.location.search);
+      var promoCode = String(params.get('promo') || '').trim().toUpperCase();
+      function formatPrice(amount, currency){
+        try { return new Intl.NumberFormat('en-GB', { style:'currency', currency:String(currency || 'EUR').toUpperCase() }).format(amount / 100); }
+        catch (_error) { return (amount / 100).toFixed(2) + ' ' + String(currency || 'EUR').toUpperCase(); }
+      }
       function readCart(){
         try { var parsed = JSON.parse(localStorage.getItem(cartKey) || '[]'); return Array.isArray(parsed) ? parsed : []; }
         catch (_error) { return []; }
@@ -819,7 +862,31 @@ function renderProductPage(store: PublicStore, product: PublicProduct): string {
         if(existing){ existing.quantity += quantity; } else { cart.push({ productId: productId, quantity: quantity }); }
         writeCart(cart);
         updateCartButton();
-        window.location.href = '/store/' + encodeURIComponent(storeSlug) + '/checkout';
+        var next = '/store/' + encodeURIComponent(storeSlug) + '/checkout';
+        if(promoCode) next += '?promo=' + encodeURIComponent(promoCode);
+        window.location.href = next;
+      }
+      var back = document.querySelector('.back-link');
+      if(back && promoCode) back.setAttribute('href', '/store/' + encodeURIComponent(storeSlug) + '?promo=' + encodeURIComponent(promoCode));
+      var cartButton = document.getElementById('product-cart-button');
+      if(cartButton && promoCode) cartButton.setAttribute('href', '/store/' + encodeURIComponent(storeSlug) + '/checkout?promo=' + encodeURIComponent(promoCode));
+      if(promoCode){
+        fetch('/api/public/stores/' + encodeURIComponent(storeSlug) + '/promo/' + encodeURIComponent(promoCode))
+          .then(function(response){ return response.ok ? response.json() : Promise.reject(new Error('invalid')); })
+          .then(function(data){
+            var promo = data && data.promo;
+            if(!promo) return;
+            var allowed = new Set(Array.isArray(promo.productIds) ? promo.productIds : []);
+            if(!promo.appliesToAllProducts && !allowed.has(productId)) return;
+            var nextPrice = promo.type === 'PERCENTAGE'
+              ? Math.max(0, basePrice - Math.round(basePrice * Number(promo.value || 0) / 100))
+              : Math.max(0, basePrice - Number(promo.value || 0));
+            var priceNode = document.getElementById('detail-price');
+            var buttonPrice = document.getElementById('detail-button-price');
+            if(priceNode) priceNode.innerHTML = '<span style="text-decoration:line-through;color:#8A8F94;font-size:20px;margin-right:8px">' + formatPrice(basePrice, currency) + '</span>' + formatPrice(nextPrice, currency) + '<small style="display:block;color:#16704f;font-size:12px;margin-top:4px">Coupon ' + promoCode + ' applied</small>';
+            if(buttonPrice) buttonPrice.textContent = formatPrice(nextPrice, currency);
+          })
+          .catch(function(){});
       }
       document.getElementById('qty-minus')?.addEventListener('click', function(){ quantity = Math.max(1, quantity - 1); updateQuantity(); });
       document.getElementById('qty-plus')?.addEventListener('click', function(){ quantity += 1; updateQuantity(); });
@@ -881,6 +948,7 @@ function renderCheckoutPage(store: PublicStore, products: PublicProduct[], cance
         <aside class="summary">
           <h3>Order Summary</h3>
           <div id="checkout-items"></div>
+          <div class="summary-line" id="summary-discount-row" style="display:none"><span id="summary-discount-label">Coupon</span><span id="summary-discount">-</span></div>
           <div class="summary-line"><span>Subtotal</span><span id="summary-subtotal">—</span></div>
           <div class="summary-line"><span>Delivery</span><span id="summary-delivery">—</span></div>
           <div class="summary-total"><span>Total</span><span id="summary-total">—</span></div>
@@ -893,6 +961,9 @@ function renderCheckoutPage(store: PublicStore, products: PublicProduct[], cance
       var storeSlug = ${JSON.stringify(store.storeSlug)};
       var cartKey = 'eki_public_store_cart_' + storeSlug;
       var products = JSON.parse(${JSON.stringify(serializedProducts)});
+      var params = new URLSearchParams(window.location.search);
+      var promoCode = String(params.get('promo') || '').trim().toUpperCase();
+      var promo = null;
       var form = document.getElementById('checkout-form');
       var itemsWrap = document.getElementById('checkout-items');
       function readCart(){
@@ -906,6 +977,7 @@ function renderCheckoutPage(store: PublicStore, products: PublicProduct[], cance
       function renderSummary(){
         var cart = readCart();
         var subtotal = 0;
+        var discount = 0;
         var currency = (products[0] && products[0].currency) || 'EUR';
         if(!cart.length){
           if(itemsWrap) itemsWrap.innerHTML = '<div class="empty-state">Your cart is empty. Go back to the store to add products.</div>';
@@ -920,10 +992,34 @@ function renderCheckoutPage(store: PublicStore, products: PublicProduct[], cance
           subtotal += product.priceInCents * Number(item.quantity || 0);
           return '<div class="summary-item"><div class="summary-item-name"><span class="mini-code">' + product.title.split(/\\s+/).map(function(part){return part[0] || '';}).join('').slice(0,2).toUpperCase() + '</span><div><strong>' + product.title + '</strong><br><span class="muted">' + product.weightLabel + '</span></div></div><strong>' + formatPrice(product.priceInCents * Number(item.quantity || 0), currency) + '</strong></div>';
         }).join('');
+        if(promo){
+          var allowed = new Set(Array.isArray(promo.productIds) ? promo.productIds : []);
+          var eligible = cart.reduce(function(sum, item){
+            var product = products.find(function(entry){ return entry.id === item.productId; });
+            if(!product || (!promo.appliesToAllProducts && !allowed.has(product.id))) return sum;
+            return sum + product.priceInCents * Number(item.quantity || 0);
+          }, 0);
+          discount = promo.type === 'PERCENTAGE'
+            ? Math.round(eligible * Number(promo.value || 0) / 100)
+            : Math.min(Number(promo.value || 0), eligible);
+        }
+        var discountRow = document.getElementById('summary-discount-row');
+        if(discountRow) discountRow.style.display = discount > 0 ? 'flex' : 'none';
+        var discountLabel = document.getElementById('summary-discount-label');
+        var discountValue = document.getElementById('summary-discount');
+        if(discountLabel) discountLabel.textContent = 'Coupon ' + promoCode;
+        if(discountValue) discountValue.textContent = '-' + formatPrice(discount, currency);
         document.getElementById('summary-subtotal').textContent = formatPrice(subtotal, currency);
         document.getElementById('summary-delivery').textContent = 'Calculated at payment';
-        document.getElementById('summary-total').textContent = formatPrice(subtotal, currency);
+        document.getElementById('summary-total').textContent = formatPrice(Math.max(0, subtotal - discount), currency);
       }
+      if(promoCode){
+        fetch('/api/public/stores/' + encodeURIComponent(storeSlug) + '/promo/' + encodeURIComponent(promoCode))
+          .then(function(response){ return response.ok ? response.json() : Promise.reject(new Error('invalid')); })
+          .then(function(data){ promo = data && data.promo ? data.promo : null; renderSummary(); })
+          .catch(function(){ promo = null; renderSummary(); });
+      }
+      fetch('/api/public/stores/' + encodeURIComponent(storeSlug) + '/events', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ event:'start_checkout', source:'direct' }) }).catch(function(){});
       form?.addEventListener('submit', function(event){
         event.preventDefault();
         var cart = readCart();
@@ -943,6 +1039,7 @@ function renderCheckoutPage(store: PublicStore, products: PublicProduct[], cance
           city: String(formData.get('city') || '').trim(),
           postcode: String(formData.get('postcode') || '').trim(),
           country: String(formData.get('country') || '').trim(),
+          promoCode: promoCode || undefined,
           items: cart
         };
         fetch('/api/public/stores/' + encodeURIComponent(storeSlug) + '/checkout', {

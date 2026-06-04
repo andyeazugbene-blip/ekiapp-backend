@@ -34,6 +34,7 @@ type AuthUserRecord = {
   phone: string | null;
   avatar: string | null;
   country: string | null;
+  referralCode: string | null;
   isSuspended: boolean;
   suspendedReason: string | null;
   role: UserRole;
@@ -106,6 +107,7 @@ function toAuthUser(user: AuthUserRecord): AuthUser {
     phone: user.phone,
     avatar: user.avatar,
     country: user.country,
+    referralCode: user.referralCode,
     role: user.role,
     trustScore: user.trustScore,
     createdAt: user.createdAt,
@@ -144,7 +146,7 @@ export const authService = {
           password: passwordHash,
           phone: input.phone,
           country: input.country,
-          role: UserRole.BUYER,
+          role: input.role ?? UserRole.BUYER,
         },
       });
     } catch (error) {
@@ -158,7 +160,9 @@ export const authService = {
     }
 
     // Send welcome email (non-blocking)
-    const welcome = emailTemplates.welcomeBuyer({ name: user.name });
+    const welcome = user.role === UserRole.VENDOR
+      ? emailTemplates.welcomeVendor({ name: user.name })
+      : emailTemplates.welcomeBuyer({ name: user.name });
     enqueueEmail({ to: user.email, subject: welcome.subject, html: welcome.html });
 
     // Send email verification token (non-blocking)

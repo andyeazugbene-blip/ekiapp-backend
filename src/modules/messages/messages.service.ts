@@ -34,12 +34,12 @@ async function assertConversationAllowed(
     return "ADMIN_VENDOR";
   }
 
-  if (!orderId) {
-    throw new AppError("Buyer and vendor conversations must be linked to an order", 400);
-  }
-
   if (!roles.has("BUYER") || !roles.has("VENDOR")) {
     throw new AppError("Conversation participants are not compatible", 400);
+  }
+
+  if (!orderId) {
+    return "BUYER_VENDOR";
   }
 
   const order = await prisma.order.findUnique({

@@ -1,3 +1,5 @@
+import { UserRole } from "@prisma/client";
+
 import { AppError } from "../../shared/errors/app-error";
 import { normalizePhoneNumber } from "../../shared/utils/phone";
 import type {
@@ -34,7 +36,7 @@ export function validateRegisterInput(input: unknown): RegisterInput {
     throw new AppError("Invalid request body", 400);
   }
 
-  const { email, password, name, phone, country } = input as Record<string, unknown>;
+  const { email, password, name, phone, country, role } = input as Record<string, unknown>;
 
   if (!email || typeof email !== "string" || !EMAIL_REGEX.test(email)) {
     throw new AppError("Invalid email", 400);
@@ -55,6 +57,10 @@ export function validateRegisterInput(input: unknown): RegisterInput {
     name: (name as string).trim(),
     phone: typeof phone === "string" && phone.trim().length > 0 ? normalizePhoneNumber(phone, "phone") : undefined,
     country: typeof country === "string" && country.trim().length > 0 ? country.trim() : undefined,
+    role:
+      role === "VENDOR" || role === "vendor"
+        ? UserRole.VENDOR
+        : UserRole.BUYER,
   };
 }
 

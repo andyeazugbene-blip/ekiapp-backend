@@ -38,6 +38,14 @@ export interface PublicProduct {
   createdAt: Date;
 }
 
+export interface PublicStorePromo {
+  code: string;
+  type: "PERCENTAGE" | "FIXED_AMOUNT";
+  value: number;
+  productIds: string[];
+  appliesToAllProducts: boolean;
+}
+
 export interface ListPublicProductsQuery {
   limit: number;
   cursor?: string;

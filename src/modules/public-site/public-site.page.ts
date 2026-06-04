@@ -924,6 +924,83 @@ const termsPage: PageDefinition = {
   ],
 };
 
+const accountDeletionPage: PageDefinition = {
+  title: "Account deletion | Eki",
+  description: "How to delete an Eki account and what data may be retained.",
+  eyebrow: "Data deletion",
+  heading: "Delete your Eki account.",
+  intro:
+    "Signed-in users can request account deletion inside the Eki app. If you cannot access the app, contact support from the email address on your account.",
+  actions: [
+    { href: "mailto:adminandy@eki.app", label: "Email support" },
+    { href: "/privacy", label: "Privacy policy", variant: "secondary" },
+  ],
+  sections: [
+    {
+      title: "In-app deletion",
+      bullets: [
+        "Open Eki and sign in to the buyer or vendor account you want to delete.",
+        "Go to Profile or Settings, then open Delete Account.",
+        "Review the deletion information and confirm the request.",
+      ],
+    },
+    {
+      title: "What is deleted",
+      bullets: [
+        "Account access is removed after the backend accepts the deletion request.",
+        "Profile data that can legally be erased is deleted or anonymized.",
+        "Uploaded images owned by the account may be removed where they are no longer required for an active order or compliance record.",
+      ],
+    },
+    {
+      title: "What may be retained",
+      bullets: [
+        "Order, payment, payout, tax, fraud-prevention, and dispute records may be retained where required by law or platform safety obligations.",
+        "Active orders, unresolved disputes, or payout obligations can block deletion until they are resolved.",
+      ],
+    },
+    {
+      title: "Manual request",
+      body: [
+        "If you cannot access your account, email adminandy@eki.app from the registered email address and include the account role, buyer or vendor.",
+      ],
+    },
+  ],
+};
+
+function renderReferralInviteLayout(code: string): string {
+  const safeCode = escape(code.trim().toUpperCase());
+  return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Join Eki | Referral invite</title>
+  <meta name="description" content="Join Eki using a referral invite." />
+  <style>
+    *{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;background:#f6f8f7;color:#111827;font-family:Inter,Arial,sans-serif}
+    .card{width:min(92vw,460px);background:#fff;border:1px solid #dde7e2;border-radius:24px;padding:30px;box-shadow:0 20px 50px rgba(10,43,33,.08);text-align:center}
+    .logo{display:inline-grid;place-items:center;width:52px;height:52px;border-radius:14px;background:#076b51;color:#fff;font-weight:800;margin-bottom:18px}
+    h1{margin:0;font-size:30px;letter-spacing:-.04em}.code{margin:20px 0;padding:14px;border-radius:14px;background:#eff8f3;color:#076b51;font-weight:800;letter-spacing:.08em}
+    p{color:#5f6b66;line-height:1.55}.actions{display:grid;gap:10px;margin-top:22px}a{display:grid;place-items:center;height:50px;border-radius:14px;text-decoration:none;font-weight:800}
+    .primary{background:#076b51;color:#fff}.secondary{border:1px solid #cfe1da;color:#076b51;background:#fff}
+  </style>
+</head>
+<body>
+  <main class="card">
+    <div class="logo">eki</div>
+    <h1>You were invited to Eki.</h1>
+    <p>Use this referral code when creating your buyer account. Rewards are credited after the invited buyer completes a first paid order.</p>
+    <div class="code">${safeCode || "REFERRAL"}</div>
+    <div class="actions">
+      <a class="primary" href="/">Open Eki website</a>
+      <a class="secondary" href="/help">Need help?</a>
+    </div>
+  </main>
+</body>
+</html>`;
+}
+
 function renderVendorSubscriptionLayout(): string {
   return `<!doctype html>
 <html lang="en">
@@ -1031,6 +1108,16 @@ export async function getPublicPrivacyPage(_request: Request, response: Response
 
 export async function getPublicTermsPage(_request: Request, response: Response): Promise<void> {
   sendPage(response, termsPage);
+}
+
+export async function getPublicAccountDeletionPage(_request: Request, response: Response): Promise<void> {
+  sendPage(response, accountDeletionPage);
+}
+
+export async function getPublicInvitePage(request: Request, response: Response): Promise<void> {
+  response.setHeader("Content-Type", "text/html; charset=utf-8");
+  response.setHeader("Cache-Control", "public, max-age=300, s-maxage=900");
+  response.status(200).send(renderReferralInviteLayout(String(request.params.code ?? "")));
 }
 
 export async function getPublicVendorSubscriptionPage(_request: Request, response: Response): Promise<void> {

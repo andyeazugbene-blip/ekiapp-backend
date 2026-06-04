@@ -19,6 +19,7 @@ import type {
   PublicStoreAnalyticsSummary,
   PublicStoreEventItemInput,
   PublicStoreEventType,
+  PublicStorePromo,
   PublicStoreSourceKey,
   PublicStoreTrackedOrder,
   PublicStoreTrackedOrderStatus,
@@ -65,6 +66,7 @@ interface PublicStoreCheckoutInput {
   city: string;
   postcode: string;
   country: string;
+  promoCode?: string;
   items: PublicStoreCheckoutItemInput[];
 }
 
@@ -480,6 +482,87 @@ async function listPublicStoreOrdersForContact(vendor: VendorStoreRecord, email:
   return orders.map((order) => mapTrackedOrder(order, vendor));
 }
 
+async function listPublicStoreOrdersForEmail(email: string): Promise<PublicStoreTrackedOrder[]> {
+  const normalizedEmail = normalizeEmail(email);
+  const orders = await prisma.order.findMany({
+    where: {
+      vendorId: { not: null },
+      status: { in: [...TRACKABLE_ORDER_STATUSES] },
+      buyer: { email: normalizedEmail },
+    },
+    include: {
+      buyer: { select: { name: true, email: true, phone: true, id: true } },
+      items: {
+        select: {
+          productId: true,
+          productTitle: true,
+          quantity: true,
+          unitAmount: true,
+          totalAmount: true,
+        },
+      },
+    },
+    orderBy: CURSOR_ORDER_BY,
+  });
+
+  const vendors = await prisma.vendor.findMany({
+    where: {
+      id: { in: orders.map((order) => order.vendorId).filter((value): value is string => Boolean(value)) },
+      isSuspended: false,
+    },
+    select: { id: true, storeName: true, storeSlug: true, city: true, country: true, isSuspended: true },
+  });
+  const vendorMap = new Map(vendors.map((vendor) => [vendor.id, vendor]));
+
+  return orders.flatMap((order) => {
+    const vendor = order.vendorId ? vendorMap.get(order.vendorId) : undefined;
+    return vendor ? [mapTrackedOrder(order, vendor)] : [];
+  });
+}
+
+async function getPublicPromoForVendor(vendorId: string, code: string): Promise<PublicStorePromo & { id: string; minOrderAmount: number | null; maxUses: number | null; usedCount: number; validFrom: Date; validUntil: Date | null }> {
+  const promo = await prisma.promoCode.findFirst({
+    where: { vendorId, code: code.trim().toUpperCase(), isActive: true },
+  });
+  if (!promo) throw new AppError("Invalid promo code for this store", 400);
+
+  const now = new Date();
+  if (promo.validFrom > now) throw new AppError("Promo code is not yet active", 400);
+  if (promo.validUntil && promo.validUntil < now) throw new AppError("Promo code has expired", 400);
+  if (promo.maxUses && promo.usedCount >= promo.maxUses) throw new AppError("Promo code usage limit reached", 400);
+
+  const log = await prisma.auditLog.findFirst({
+    where: {
+      actorId: vendorId,
+      action: "vendor.promo.created",
+      entityType: "PROMO_CODE",
+      entityId: promo.id,
+    },
+    orderBy: CURSOR_ORDER_BY,
+    select: { metadata: true },
+  });
+  const metadata = log?.metadata && typeof log.metadata === "object" && !Array.isArray(log.metadata)
+    ? log.metadata as Record<string, unknown>
+    : {};
+  const productIds = Array.isArray(metadata.productIds)
+    ? metadata.productIds.filter((value): value is string => typeof value === "string" && value.trim().length > 0)
+    : [];
+
+  return {
+    id: promo.id,
+    code: promo.code,
+    type: promo.type,
+    value: promo.value,
+    productIds,
+    appliesToAllProducts: productIds.length === 0,
+    minOrderAmount: promo.minOrderAmount,
+    maxUses: promo.maxUses,
+    usedCount: promo.usedCount,
+    validFrom: promo.validFrom,
+    validUntil: promo.validUntil,
+  };
+}
+
 async function findPublicProductForVendor(vendorId: string, productId: string): Promise<PublicProduct> {
   const product = await prisma.product.findFirst({
     where: {
@@ -765,6 +848,18 @@ export const publicStoresService = {
     return findPublicProductForVendor(vendor.id, productId);
   },
 
+  async getPublicPromo(slug: string, code: string): Promise<PublicStorePromo> {
+    const vendor = await findVendorBySlug(slug);
+    const promo = await getPublicPromoForVendor(vendor.id, code);
+    return {
+      code: promo.code,
+      type: promo.type,
+      value: promo.value,
+      productIds: promo.productIds,
+      appliesToAllProducts: promo.appliesToAllProducts,
+    };
+  },
+
   async createGuestCheckoutSession(
     slug: string,
     input: PublicStoreCheckoutInput,
@@ -850,7 +945,7 @@ export const publicStoresService = {
       };
     });
 
-    const subtotalAmount = pricedItems.reduce((sum, item) => sum + item.totalAmount, 0);
+    const originalSubtotalAmount = pricedItems.reduce((sum, item) => sum + item.totalAmount, 0);
     const totalWeight = pricedItems.reduce((sum, item) => sum + item.weightGrams, 0);
     if (totalWeight > MAX_VENDOR_WEIGHT_GRAMS) {
       throw new AppError(
@@ -860,14 +955,63 @@ export const publicStoresService = {
     }
 
     const deliveryFeeAmount = baseZone.baseFeeAmount + Math.ceil(totalWeight / 1000) * baseZone.feePerKgAmount;
+    const buyer = await ensureGuestBuyer(input);
+    const promo = input.promoCode ? await getPublicPromoForVendor(vendor.id, input.promoCode) : null;
+    const eligibleProductIds = new Set(promo?.productIds ?? []);
+    const eligibleSubtotalAmount = promo
+      ? pricedItems
+          .filter((item) => promo.appliesToAllProducts || eligibleProductIds.has(item.productId))
+          .reduce((sum, item) => sum + item.totalAmount, 0)
+      : 0;
+
+    if (promo && eligibleSubtotalAmount <= 0) {
+      throw new AppError("This coupon does not apply to the products in your cart", 400);
+    }
+    if (promo?.minOrderAmount && eligibleSubtotalAmount < promo.minOrderAmount) {
+      throw new AppError(`Minimum eligible order amount is ${promo.minOrderAmount} cents`, 400);
+    }
+    if (promo) {
+      const previousRedemption = await prisma.promoRedemption.findUnique({
+        where: { promoCodeId_buyerId: { promoCodeId: promo.id, buyerId: buyer.id } },
+        select: { id: true },
+      });
+      if (previousRedemption) {
+        throw new AppError("You have already used this promo code", 400);
+      }
+    }
+
+    const discountAmount = promo
+      ? promo.type === "PERCENTAGE"
+        ? Math.round((eligibleSubtotalAmount * promo.value) / 100)
+        : Math.min(promo.value, eligibleSubtotalAmount)
+      : 0;
+    const subtotalAmount = Math.max(0, originalSubtotalAmount - discountAmount);
     const platformFeeBps = await resolveVendorPlatformFeeBps(vendor.id);
     const platformFeeAmount = calcPlatformFee(subtotalAmount, platformFeeBps);
     const vendorEarningsAmount = subtotalAmount - platformFeeAmount;
     const totalAmount = subtotalAmount + deliveryFeeAmount;
-    const buyer = await ensureGuestBuyer(input);
+    if (totalAmount <= 0) {
+      throw new AppError("The checkout total must be greater than zero", 400);
+    }
     const deliveryAddress = [normalizeText(input.streetAddress), normalizeText(input.city), normalizeText(input.postcode), normalizedCountry]
       .filter(Boolean)
       .join(", ");
+
+    let remainingDiscount = discountAmount;
+    const discountedLineItems = pricedItems.map((item, index) => {
+      const eligible = Boolean(promo && (promo.appliesToAllProducts || eligibleProductIds.has(item.productId)));
+      const laterEligible = pricedItems.slice(index + 1).some((entry) => promo && (promo.appliesToAllProducts || eligibleProductIds.has(entry.productId)));
+      const itemDiscount = eligible
+        ? Math.min(
+            item.totalAmount,
+            laterEligible
+              ? Math.round((discountAmount * item.totalAmount) / Math.max(1, eligibleSubtotalAmount))
+              : remainingDiscount,
+          )
+        : 0;
+      remainingDiscount = Math.max(0, remainingDiscount - itemDiscount);
+      return { ...item, checkoutAmount: Math.max(0, item.totalAmount - itemDiscount), itemDiscount };
+    });
 
     const { checkoutId, orderId, orderNumber } = await prisma.$transaction(async (tx) => {
       for (const item of pricedItems) {
@@ -893,6 +1037,9 @@ export const publicStoresService = {
             buyerPhone: normalizeText(input.phone),
             deliveryAddress,
             deliveryCountry: normalizedCountry,
+            originalSubtotalAmount,
+            discountAmount,
+            promoCode: promo?.code ?? null,
           } as Prisma.InputJsonValue,
         },
         select: { id: true },
@@ -943,6 +1090,29 @@ export const publicStoresService = {
         },
       });
 
+      if (promo && discountAmount > 0) {
+        const updated = await tx.promoCode.updateMany({
+          where: {
+            id: promo.id,
+            vendorId: vendor.id,
+            isActive: true,
+            ...(promo.maxUses ? { usedCount: { lt: promo.maxUses } } : {}),
+          },
+          data: { usedCount: { increment: 1 } },
+        });
+        if (updated.count !== 1) {
+          throw new AppError("Promo no longer available", 409);
+        }
+        await tx.promoRedemption.create({
+          data: {
+            promoCodeId: promo.id,
+            buyerId: buyer.id,
+            orderId: order.id,
+            discountAmount,
+          },
+        });
+      }
+
       return { checkoutId: checkout.id, orderId: order.id, orderNumber: order.orderNumber };
     }, { isolationLevel: "Serializable" });
 
@@ -962,6 +1132,8 @@ export const publicStoresService = {
         orderNumber,
         storeSlug: vendor.storeSlug,
         walletDeduction: "0",
+        promoCode: promo?.code ?? "",
+        discountAmount: String(discountAmount),
       },
       payment_intent_data: {
         metadata: {
@@ -973,17 +1145,19 @@ export const publicStoresService = {
           orderNumber,
           storeSlug: vendor.storeSlug,
           walletDeduction: "0",
+          promoCode: promo?.code ?? "",
+          discountAmount: String(discountAmount),
         },
       },
       line_items: [
-        ...pricedItems.map((item) => ({
-          quantity: item.quantity,
+        ...discountedLineItems.filter((item) => item.checkoutAmount > 0).map((item) => ({
+          quantity: 1,
           price_data: {
             currency,
-            unit_amount: item.unitAmount,
+            unit_amount: item.checkoutAmount,
             product_data: {
-              name: item.productTitle,
-              metadata: { productId: item.productId },
+              name: `${item.productTitle} x ${item.quantity}`,
+              metadata: { productId: item.productId, promoDiscount: String(item.itemDiscount) },
             },
           },
         })),
@@ -1214,11 +1388,32 @@ export const publicStoresService = {
     await otpService.sendOtp(normalizedEmail, "guest_order_lookup");
   },
 
+  async requestGuestOrderLookupCodeByEmail(email: string): Promise<boolean> {
+    const normalizedEmail = normalizeEmail(email);
+    const existingOrder = await prisma.order.findFirst({
+      where: {
+        vendorId: { not: null },
+        status: { in: [...TRACKABLE_ORDER_STATUSES] },
+        buyer: { email: normalizedEmail },
+      },
+      select: { id: true },
+    });
+    if (!existingOrder) return false;
+    await otpService.sendOtp(normalizedEmail, "guest_order_lookup");
+    return true;
+  },
+
   async verifyGuestOrderLookup(slug: string, email: string, code: string): Promise<PublicStoreTrackedOrder[]> {
     const vendor = await findVendorBySlug(slug);
     const normalizedEmail = email.trim().toLowerCase();
 
     await otpService.verifyOtp(normalizedEmail, code, "guest_order_lookup");
     return listPublicStoreOrdersForContact(vendor, normalizedEmail);
+  },
+
+  async verifyGuestOrderLookupByEmail(email: string, code: string): Promise<PublicStoreTrackedOrder[]> {
+    const normalizedEmail = normalizeEmail(email);
+    await otpService.verifyOtp(normalizedEmail, code, "guest_order_lookup");
+    return listPublicStoreOrdersForEmail(normalizedEmail);
   },
 };
