@@ -54,6 +54,25 @@ export async function unsuspendUser(request: Request, response: Response): Promi
   response.status(200).json({ user });
 }
 
+export async function deleteUser(request: Request, response: Response): Promise<void> {
+  const userId = requireIdParam(request);
+  const reason =
+    typeof request.query.reason === "string" && request.query.reason.trim().length > 0
+      ? request.query.reason.trim()
+      : typeof request.body?.reason === "string" && request.body.reason.trim().length > 0
+        ? request.body.reason.trim()
+        : undefined;
+  const result = await adminListingsService.deleteUser(userId, reason);
+  await recordAudit({
+    actorId: requireUserId(request),
+    action: "user.delete",
+    entityType: "User",
+    entityId: userId,
+    metadata: { reason: reason ?? null, role: result.role },
+  });
+  response.status(200).json({ message: "User account data has been anonymized.", user: result });
+}
+
 export async function listVendors(request: Request, response: Response): Promise<void> {
   response.status(200).json(await adminListingsService.listVendors(q(request)));
 }

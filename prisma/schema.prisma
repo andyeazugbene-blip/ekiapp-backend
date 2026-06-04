@@ -92,6 +92,7 @@ enum NotificationType {
   PAYOUT_APPROVED
   PAYOUT_REJECTED
   PAYOUT_PAID
+  ADMIN_BROADCAST
 }
 
 enum ReviewStatus {
@@ -124,6 +125,7 @@ model User {
   cart                Cart?
   notifications       Notification[]
   adminTwoFactor      AdminTwoFactor?
+  adminRoleAssignments AdminRoleAssignment[]
   createdAt           DateTime       @default(now())
   updatedAt           DateTime       @updatedAt
 
@@ -787,6 +789,34 @@ model VendorSubscription {
 
   @@index([status])
   @@index([plan])
+}
+
+// ─── Admin RBAC ──────────────────────────────────────────────────────────────
+
+model AdminRole {
+  id          String                @id @default(cuid())
+  name        String                @unique
+  description String?
+  permissions String[]              @default([])
+  isSystem    Boolean               @default(false)
+  assignments AdminRoleAssignment[]
+  createdAt   DateTime              @default(now())
+  updatedAt   DateTime              @updatedAt
+
+  @@index([isSystem, name])
+}
+
+model AdminRoleAssignment {
+  id        String    @id @default(cuid())
+  roleId    String
+  userId    String
+  role      AdminRole @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt DateTime  @default(now())
+
+  @@unique([roleId, userId])
+  @@index([userId])
+  @@index([roleId])
 }
 
 model SubscriptionPlanConfig {

@@ -14,6 +14,7 @@
 import { Router } from "express";
 
 import { authenticate, requireRole } from "../../middlewares/authenticate";
+import { requireAdminPermission } from "../../middlewares/require-admin-permission";
 import { require2fa } from "../../middlewares/require-2fa";
 import {
   adminApprovePayoutRequest,
@@ -57,6 +58,7 @@ import {
 import {
   approveProduct,
   approveVendor,
+  deleteUser,
   disableProduct,
   listOrders,
   listPayments,
@@ -68,6 +70,15 @@ import {
   listWalletTransactions,
   rejectVendor,
 } from "./admin-listings.controller";
+import { sendAdminBroadcast } from "./admin-communications.controller";
+import {
+  assignAdminRole,
+  createAdminRole,
+  deleteAdminRole,
+  listAdminRoles,
+  removeAdminRoleAssignment,
+  updateAdminRole,
+} from "./admin-roles.controller";
 import { completeOrder } from "./admin-orders.controller";
 import { adminRefundOrder } from "./admin-refunds.controller";
 import { suspendVendor, unsuspendVendor } from "./admin-vendors.controller";
@@ -87,82 +98,94 @@ export const adminRouter = Router();
 adminRouter.use(authenticate, requireRole("ADMIN"));
 
 // Dashboard & Analytics
-adminRouter.get("/dashboard", asyncHandler(getAdminDashboard));
-adminRouter.get("/analytics", asyncHandler(getAdminAnalytics));
+adminRouter.get("/dashboard", asyncHandler(requireAdminPermission("dashboard.read")), asyncHandler(getAdminDashboard));
+adminRouter.get("/analytics", asyncHandler(requireAdminPermission("analytics.read")), asyncHandler(getAdminAnalytics));
 // Canonical revenue chart endpoint. /revenue is kept as an alias.
-adminRouter.get("/analytics/revenue", asyncHandler(getAdminRevenue));
-adminRouter.get("/revenue", asyncHandler(getAdminRevenue));
-adminRouter.get("/audit-logs", asyncHandler(listAuditLogs));
+adminRouter.get("/analytics/revenue", asyncHandler(requireAdminPermission("analytics.read")), asyncHandler(getAdminRevenue));
+adminRouter.get("/revenue", asyncHandler(requireAdminPermission("analytics.read")), asyncHandler(getAdminRevenue));
+adminRouter.get("/audit-logs", asyncHandler(requireAdminPermission("audit.read")), asyncHandler(listAuditLogs));
 
 // Listings
-adminRouter.get("/users", asyncHandler(listUsers));
-adminRouter.get("/vendors", asyncHandler(listVendors));
-adminRouter.get("/products", asyncHandler(listProducts));
-adminRouter.get("/orders", asyncHandler(listOrders));
-adminRouter.get("/payments", asyncHandler(listPayments));
-adminRouter.get("/wallet-transactions", asyncHandler(listWalletTransactions));
+adminRouter.get("/users", asyncHandler(requireAdminPermission("users.read")), asyncHandler(listUsers));
+adminRouter.get("/vendors", asyncHandler(requireAdminPermission("vendors.read")), asyncHandler(listVendors));
+adminRouter.get("/products", asyncHandler(requireAdminPermission("products.read")), asyncHandler(listProducts));
+adminRouter.get("/orders", asyncHandler(requireAdminPermission("orders.read")), asyncHandler(listOrders));
+adminRouter.get("/payments", asyncHandler(requireAdminPermission("orders.read")), asyncHandler(listPayments));
+adminRouter.get("/wallet-transactions", asyncHandler(requireAdminPermission("orders.read")), asyncHandler(listWalletTransactions));
+
+// Communications
+adminRouter.post("/broadcasts", asyncHandler(requireAdminPermission("communications.send")), asyncHandler(sendAdminBroadcast));
+
+// Admin role management
+adminRouter.get("/roles", asyncHandler(requireAdminPermission("roles.read")), asyncHandler(listAdminRoles));
+adminRouter.post("/roles", asyncHandler(requireAdminPermission("roles.mutate")), asyncHandler(createAdminRole));
+adminRouter.patch("/roles/:id", asyncHandler(requireAdminPermission("roles.mutate")), asyncHandler(updateAdminRole));
+adminRouter.delete("/roles/:id", asyncHandler(requireAdminPermission("roles.mutate")), asyncHandler(deleteAdminRole));
+adminRouter.post("/roles/:id/assignments", asyncHandler(requireAdminPermission("roles.mutate")), asyncHandler(assignAdminRole));
+adminRouter.delete("/role-assignments/:id", asyncHandler(requireAdminPermission("roles.mutate")), asyncHandler(removeAdminRoleAssignment));
 
 // Vendor moderation
-adminRouter.patch("/vendors/:id/approve", asyncHandler(approveVendor));
-adminRouter.patch("/vendors/:id/reject", asyncHandler(rejectVendor));
+adminRouter.patch("/vendors/:id/approve", asyncHandler(requireAdminPermission("vendors.mutate")), asyncHandler(approveVendor));
+adminRouter.patch("/vendors/:id/reject", asyncHandler(requireAdminPermission("vendors.mutate")), asyncHandler(rejectVendor));
 
 // Product moderation
-adminRouter.patch("/products/:id/approve", asyncHandler(approveProduct));
-adminRouter.patch("/products/:id/disable", asyncHandler(disableProduct));
+adminRouter.patch("/products/:id/approve", asyncHandler(requireAdminPermission("products.mutate")), asyncHandler(approveProduct));
+adminRouter.patch("/products/:id/disable", asyncHandler(requireAdminPermission("products.mutate")), asyncHandler(disableProduct));
 
 // Order management
-adminRouter.patch("/orders/:id/complete", asyncHandler(completeOrder));
+adminRouter.patch("/orders/:id/complete", asyncHandler(requireAdminPermission("orders.mutate")), asyncHandler(completeOrder));
 
 // Payout management
-adminRouter.get("/payout-requests", asyncHandler(adminListPayoutRequests));
-adminRouter.patch("/payout-requests/:id/approve", asyncHandler(adminApprovePayoutRequest));
-adminRouter.patch("/payout-requests/:id/reject", asyncHandler(adminRejectPayoutRequest));
+adminRouter.get("/payout-requests", asyncHandler(requireAdminPermission("payouts.read")), asyncHandler(adminListPayoutRequests));
+adminRouter.patch("/payout-requests/:id/approve", asyncHandler(requireAdminPermission("payouts.mutate")), asyncHandler(adminApprovePayoutRequest));
+adminRouter.patch("/payout-requests/:id/reject", asyncHandler(requireAdminPermission("payouts.mutate")), asyncHandler(adminRejectPayoutRequest));
 
 // Verification document review
-adminRouter.get("/verification-documents", asyncHandler(adminListPendingDocuments));
-adminRouter.patch("/verification-documents/:id/review", asyncHandler(adminReviewDocument));
+adminRouter.get("/verification-documents", asyncHandler(requireAdminPermission("verification.read")), asyncHandler(adminListPendingDocuments));
+adminRouter.patch("/verification-documents/:id/review", asyncHandler(requireAdminPermission("verification.mutate")), asyncHandler(adminReviewDocument));
 
 // Delivery zone management (global)
-adminRouter.get("/delivery-zones", asyncHandler(listAllDeliveryZones));
-adminRouter.post("/delivery-zones", asyncHandler(createDeliveryZone));
-adminRouter.patch("/delivery-zones/:id", asyncHandler(updateDeliveryZone));
-adminRouter.delete("/delivery-zones/:id", asyncHandler(deleteDeliveryZone));
+adminRouter.get("/delivery-zones", asyncHandler(requireAdminPermission("delivery_zones.read")), asyncHandler(listAllDeliveryZones));
+adminRouter.post("/delivery-zones", asyncHandler(requireAdminPermission("delivery_zones.mutate")), asyncHandler(createDeliveryZone));
+adminRouter.patch("/delivery-zones/:id", asyncHandler(requireAdminPermission("delivery_zones.mutate")), asyncHandler(updateDeliveryZone));
+adminRouter.delete("/delivery-zones/:id", asyncHandler(requireAdminPermission("delivery_zones.mutate")), asyncHandler(deleteDeliveryZone));
 
 // Promo code management
-adminRouter.get("/promo-codes", asyncHandler(adminListPromoCodes));
-adminRouter.post("/promo-codes", asyncHandler(adminCreatePromoCode));
-adminRouter.patch("/promo-codes/:id", asyncHandler(adminUpdatePromoCode));
+adminRouter.get("/promo-codes", asyncHandler(requireAdminPermission("promos.read")), asyncHandler(adminListPromoCodes));
+adminRouter.post("/promo-codes", asyncHandler(requireAdminPermission("promos.mutate")), asyncHandler(adminCreatePromoCode));
+adminRouter.patch("/promo-codes/:id", asyncHandler(requireAdminPermission("promos.mutate")), asyncHandler(adminUpdatePromoCode));
 
 // Subscription plan management
-adminRouter.get("/subscription-plans", asyncHandler(listAdminPlans));
-adminRouter.post("/subscription-plans", asyncHandler(upsertAdminPlan));
-adminRouter.patch("/subscription-plans/:plan", asyncHandler(upsertAdminPlan));
+adminRouter.get("/subscription-plans", asyncHandler(requireAdminPermission("subscriptions.read")), asyncHandler(listAdminPlans));
+adminRouter.post("/subscription-plans", asyncHandler(requireAdminPermission("subscriptions.mutate")), asyncHandler(upsertAdminPlan));
+adminRouter.patch("/subscription-plans/:plan", asyncHandler(requireAdminPermission("subscriptions.mutate")), asyncHandler(upsertAdminPlan));
 
 // Review moderation
-adminRouter.get("/reviews", asyncHandler(adminListReviews));
-adminRouter.patch("/reviews/:id/moderate", asyncHandler(adminModerateReview));
+adminRouter.get("/reviews", asyncHandler(requireAdminPermission("reviews.read")), asyncHandler(adminListReviews));
+adminRouter.patch("/reviews/:id/moderate", asyncHandler(requireAdminPermission("reviews.mutate")), asyncHandler(adminModerateReview));
 
 // Escrow disputes
-adminRouter.get("/disputes", asyncHandler(adminListDisputes));
-adminRouter.get("/disputes/:id", asyncHandler(adminGetDispute));
-adminRouter.patch("/disputes/:id/resolve", asyncHandler(adminResolveDispute));
+adminRouter.get("/disputes", asyncHandler(requireAdminPermission("disputes.read")), asyncHandler(adminListDisputes));
+adminRouter.get("/disputes/:id", asyncHandler(requireAdminPermission("disputes.read")), asyncHandler(adminGetDispute));
+adminRouter.patch("/disputes/:id/resolve", asyncHandler(requireAdminPermission("disputes.mutate")), asyncHandler(adminResolveDispute));
 
 // Trust score management
-adminRouter.patch("/users/:id/trust-score", asyncHandler(adminAdjustTrustScore));
-adminRouter.patch("/users/:id/suspend", asyncHandler(require2fa), asyncHandler(suspendUser));
-adminRouter.patch("/users/:id/unsuspend", asyncHandler(require2fa), asyncHandler(unsuspendUser));
+adminRouter.patch("/users/:id/trust-score", asyncHandler(requireAdminPermission("users.mutate")), asyncHandler(adminAdjustTrustScore));
+adminRouter.patch("/users/:id/suspend", asyncHandler(requireAdminPermission("users.mutate")), asyncHandler(require2fa), asyncHandler(suspendUser));
+adminRouter.patch("/users/:id/unsuspend", asyncHandler(requireAdminPermission("users.mutate")), asyncHandler(require2fa), asyncHandler(unsuspendUser));
+adminRouter.delete("/users/:id", asyncHandler(requireAdminPermission("users.mutate")), asyncHandler(require2fa), asyncHandler(deleteUser));
 
 // Escrow health monitoring
-adminRouter.get("/escrow/health", asyncHandler(getEscrowHealth));
+adminRouter.get("/escrow/health", asyncHandler(requireAdminPermission("escrow.read")), asyncHandler(getEscrowHealth));
 
 // ─── 2FA Management ─────────────────────────────────────────────────────────
-adminRouter.post("/2fa/setup", asyncHandler(setup2fa));
-adminRouter.post("/2fa/verify", asyncHandler(verify2fa));
-adminRouter.post("/2fa/disable", asyncHandler(disable2fa));
-adminRouter.post("/2fa/backup-codes/regenerate", asyncHandler(regenerateBackupCodes));
+adminRouter.post("/2fa/setup", asyncHandler(requireAdminPermission("security.mutate")), asyncHandler(setup2fa));
+adminRouter.post("/2fa/verify", asyncHandler(requireAdminPermission("security.mutate")), asyncHandler(verify2fa));
+adminRouter.post("/2fa/disable", asyncHandler(requireAdminPermission("security.mutate")), asyncHandler(disable2fa));
+adminRouter.post("/2fa/backup-codes/regenerate", asyncHandler(requireAdminPermission("security.mutate")), asyncHandler(regenerateBackupCodes));
 
 // ─── Sensitive operations requiring 2FA (if enabled) ────────────────────────
-adminRouter.post("/orders/:id/refund", asyncHandler(require2fa), asyncHandler(adminRefundOrder));
-adminRouter.patch("/vendors/:id/suspend", asyncHandler(require2fa), asyncHandler(suspendVendor));
-adminRouter.patch("/vendors/:id/unsuspend", asyncHandler(require2fa), asyncHandler(unsuspendVendor));
-adminRouter.patch("/payout-requests/:id/mark-paid", asyncHandler(require2fa), asyncHandler(adminMarkPayoutRequestPaid));
+adminRouter.post("/orders/:id/refund", asyncHandler(requireAdminPermission("payments.mutate")), asyncHandler(require2fa), asyncHandler(adminRefundOrder));
+adminRouter.patch("/vendors/:id/suspend", asyncHandler(requireAdminPermission("vendors.mutate")), asyncHandler(require2fa), asyncHandler(suspendVendor));
+adminRouter.patch("/vendors/:id/unsuspend", asyncHandler(requireAdminPermission("vendors.mutate")), asyncHandler(require2fa), asyncHandler(unsuspendVendor));
+adminRouter.patch("/payout-requests/:id/mark-paid", asyncHandler(requireAdminPermission("payouts.mutate")), asyncHandler(require2fa), asyncHandler(adminMarkPayoutRequestPaid));

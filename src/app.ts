@@ -1,7 +1,7 @@
 import cors from "cors";
 import express from "express";
-import path from "path";
 import helmet from "helmet";
+import path from "path";
 
 // Imported for its init side-effect; Sentry stays disabled if SENTRY_DSN is unset.
 import "./lib/sentry";
@@ -13,24 +13,13 @@ import { requestIdMiddleware } from "./middlewares/request-id";
 import { requestLogger } from "./middlewares/request-logger";
 import { validateInputLength } from "./middlewares/validate-input-length";
 import {
-  getPublicAccountDeletionPage,
   getPublicFindOrderPage,
   getPublicHelpPage,
   getPublicHomePage,
   getPublicPrivacyPage,
-  getPublicSupportPage,
   getPublicTermsPage,
-  requestPublicOrderLookup,
-  verifyPublicOrderLookup,
 } from "./modules/public-site/public-site.page";
-import {
-  getPublicStoreDirectoryPage,
-  getPublicStoreCheckoutPage,
-  getPublicStoreConfirmedPage,
-  getPublicStorePage,
-  getPublicStoreProductPage,
-  getPublicStoreTrackedOrderPage,
-} from "./modules/public-stores/public-stores.page";
+import { getPublicStorePage } from "./modules/public-stores/public-stores.page";
 import { apiRouter } from "./routes";
 
 export const app = express();
@@ -46,7 +35,7 @@ app.disable("x-powered-by");
 
 // Security headers. CSP must be relaxed on /api/docs and server-rendered
 // public HTML pages that use inline scripts.
-const publicHtmlPaths = new Set(["/", "/find-order", "/help", "/support", "/privacy", "/terms", "/account-deletion"]);
+const publicHtmlPaths = new Set(["/", "/find-order", "/help", "/privacy", "/terms"]);
 const swaggerAndPublicPagePaths = (req: { path: string }) =>
   req.path === "/api/docs" || req.path.startsWith("/store/") || publicHtmlPaths.has(req.path);
 
@@ -72,25 +61,18 @@ const defaultOrigins = [
   "https://www.culinarytales.app",
   "https://ekiapp-backend.vercel.app",
 ];
-const localAdminOrigins = [
-  "http://localhost:3000",
-  "http://127.0.0.1:3000",
-  "http://localhost:3001",
-  "http://127.0.0.1:3001",
-];
-const configuredOrigins = process.env.CORS_ORIGINS
-  ? process.env.CORS_ORIGINS.split(",").map((origin) => origin.trim()).filter(Boolean)
-  : [];
-const allowedOrigins = isProduction
-  ? Array.from(new Set([...defaultOrigins, ...configuredOrigins, ...localAdminOrigins]))
-  : undefined;
+const allowedOrigins = process.env.CORS_ORIGINS
+  ? process.env.CORS_ORIGINS.split(",").map((origin) => origin.trim())
+  : isProduction
+    ? defaultOrigins
+    : undefined;
 
 app.use(
   cors({
     origin: allowedOrigins ?? true,
     credentials: true,
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization", "X-Request-ID", "x-2fa-code", "X-Client-App", "X-Client-Platform"],
+    allowedHeaders: ["Content-Type", "Authorization", "X-Request-ID"],
   }),
 );
 
@@ -109,22 +91,20 @@ app.use(validateInputLength);
 
 // Routes
 app.use("/api", apiRouter);
-app.post("/api/public/order-lookup/request", (req, res, next) => {
-  Promise.resolve(requestPublicOrderLookup(req, res)).catch(next);
-});
-app.post("/api/public/order-lookup/verify", (req, res, next) => {
-  Promise.resolve(verifyPublicOrderLookup(req, res)).catch(next);
-});
 
 // Root-level OpenAPI spec aliases (for Postman, Insomnia, openapi-generator)
 app.get("/openapi.json", (_req, res) => res.json(swaggerSpec));
 app.get("/api-json", (_req, res) => res.json(swaggerSpec));
 app.get("/swagger.json", (_req, res) => res.json(swaggerSpec));
 
-// Public web routes (server-rendered pages outside /api).
-app.get("/assets/public-site/home-phone-mockup.png", (_req, res) => {
-  res.type("png").sendFile(path.join(__dirname, "modules", "public-site", "home-phone-mockup.png"));
+app.get("/assets/public-site/hero-phone-mockup.jpg", (_req, res) => {
+  res.type("jpeg").sendFile(path.join(__dirname, "modules/public-site/hero-phone-mockup.jpg"));
 });
+app.get("/assets/public-site/hero-phone-mockup.png", (_req, res) => {
+  res.type("png").sendFile(path.join(__dirname, "modules/public-site/hero-phone-mockup.png"));
+});
+
+// Public web routes (server-rendered pages outside /api).
 app.get("/", (req, res, next) => {
   Promise.resolve(getPublicHomePage(req, res)).catch(next);
 });
@@ -134,35 +114,14 @@ app.get("/find-order", (req, res, next) => {
 app.get("/help", (req, res, next) => {
   Promise.resolve(getPublicHelpPage(req, res)).catch(next);
 });
-app.get("/support", (req, res, next) => {
-  Promise.resolve(getPublicSupportPage(req, res)).catch(next);
-});
 app.get("/privacy", (req, res, next) => {
   Promise.resolve(getPublicPrivacyPage(req, res)).catch(next);
 });
 app.get("/terms", (req, res, next) => {
   Promise.resolve(getPublicTermsPage(req, res)).catch(next);
 });
-app.get("/account-deletion", (req, res, next) => {
-  Promise.resolve(getPublicAccountDeletionPage(req, res)).catch(next);
-});
-app.get("/store", (req, res, next) => {
-  Promise.resolve(getPublicStoreDirectoryPage(req, res)).catch(next);
-});
 app.get("/store/:slug", (req, res, next) => {
   Promise.resolve(getPublicStorePage(req, res)).catch(next);
-});
-app.get("/store/:slug/product/:productId", (req, res, next) => {
-  Promise.resolve(getPublicStoreProductPage(req, res)).catch(next);
-});
-app.get("/store/:slug/checkout", (req, res, next) => {
-  Promise.resolve(getPublicStoreCheckoutPage(req, res)).catch(next);
-});
-app.get("/store/:slug/confirmed", (req, res, next) => {
-  Promise.resolve(getPublicStoreConfirmedPage(req, res)).catch(next);
-});
-app.get("/store/:slug/track/:orderNumber", (req, res, next) => {
-  Promise.resolve(getPublicStoreTrackedOrderPage(req, res)).catch(next);
 });
 
 // Error handling

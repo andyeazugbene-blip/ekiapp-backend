@@ -301,4 +301,60 @@ export const adminListingsService = {
       return updatedUser;
     });
   },
+
+  async deleteUser(userId: string, reason?: string) {
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      include: { vendor: { select: { id: true } } },
+    });
+    if (!user) throw new AppError("User not found", 404);
+    if (user.role === UserRole.ADMIN) throw new AppError("Admin accounts cannot be deleted here", 409);
+
+    return prisma.$transaction(async (tx) => {
+      await tx.pushToken.deleteMany({ where: { userId } });
+      await tx.notification.deleteMany({ where: { userId } });
+
+      if (user.vendor?.id) {
+        await tx.product.updateMany({
+          where: { vendorId: user.vendor.id },
+          data: { isActive: false },
+        });
+        await tx.vendor.update({
+          where: { id: user.vendor.id },
+          data: {
+            isSuspended: true,
+            suspendedReason: reason ?? "Deleted by admin",
+            contactEmail: null,
+            contactPhone: null,
+            description: null,
+          },
+        });
+      }
+
+      return tx.user.update({
+        where: { id: userId },
+        data: {
+          email: `deleted_${userId}@anonymized.local`,
+          name: "Deleted user",
+          phone: null,
+          avatar: null,
+          country: null,
+          password: `deleted:${userId}`,
+          isSuspended: true,
+          suspendedReason: reason ?? "Deleted by admin",
+          tokenVersion: { increment: 1 },
+        },
+        select: {
+          id: true,
+          email: true,
+          name: true,
+          role: true,
+          isSuspended: true,
+          suspendedReason: true,
+          createdAt: true,
+          updatedAt: true,
+        },
+      });
+    });
+  },
 };
