@@ -18,6 +18,7 @@ import {
   getPublicHomePage,
   getPublicPrivacyPage,
   getPublicTermsPage,
+  getPublicVendorSubscriptionPage,
 } from "./modules/public-site/public-site.page";
 import { getPublicStorePage } from "./modules/public-stores/public-stores.page";
 import { apiRouter } from "./routes";
@@ -35,7 +36,7 @@ app.disable("x-powered-by");
 
 // Security headers. CSP must be relaxed on /api/docs and server-rendered
 // public HTML pages that use inline scripts.
-const publicHtmlPaths = new Set(["/", "/find-order", "/help", "/privacy", "/terms"]);
+const publicHtmlPaths = new Set(["/", "/find-order", "/help", "/privacy", "/terms", "/vendor/subscription"]);
 const swaggerAndPublicPagePaths = (req: { path: string }) =>
   req.path === "/api/docs" || req.path.startsWith("/store/") || publicHtmlPaths.has(req.path);
 
@@ -119,6 +120,9 @@ app.get("/privacy", (req, res, next) => {
 });
 app.get("/terms", (req, res, next) => {
   Promise.resolve(getPublicTermsPage(req, res)).catch(next);
+});
+app.get("/vendor/subscription", (req, res, next) => {
+  Promise.resolve(getPublicVendorSubscriptionPage(req, res)).catch(next);
 });
 app.get("/store/:slug", (req, res, next) => {
   Promise.resolve(getPublicStorePage(req, res)).catch(next);
