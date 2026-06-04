@@ -353,7 +353,7 @@ function renderHomeLayout(page: PageDefinition): string {
     }
     .nav a:hover{color:#FFFFFF}
     .hero{
-      min-height:360px;
+      min-height:390px;
       display:grid;
       grid-template-columns:minmax(0,1fr) minmax(280px,430px);
       align-items:center;
@@ -411,12 +411,14 @@ function renderHomeLayout(page: PageDefinition): string {
       display:flex;
       align-items:center;
       justify-content:center;
+      overflow:hidden;
+      border-radius:18px;
     }
     .phone{
       position:relative;
       z-index:2;
-      width:min(84vw,360px);
-      max-height:380px;
+      width:min(84vw,380px);
+      max-height:390px;
       object-fit:contain;
       object-position:center;
       filter:drop-shadow(0 28px 36px rgba(0,0,0,.34));
@@ -488,7 +490,7 @@ function renderHomeLayout(page: PageDefinition): string {
     }
     @media (max-width:860px){
       .shell{width:min(100% - 28px,1120px)}
-      .hero{grid-template-columns:1fr;gap:28px;padding-top:30px}
+      .hero{grid-template-columns:1fr;gap:0;min-height:0;padding:26px 0 28px}
       h1{font-size:36px}
       .phone-stage{min-height:300px}
       .phone{max-height:340px}
@@ -498,11 +500,24 @@ function renderHomeLayout(page: PageDefinition): string {
     @media (max-width:520px){
       .topbar{height:50px}
       .nav{gap:18px}
-      h1{font-size:32px}
-      .intro{font-size:14px}
-      .store-buttons{gap:10px}
+      .hero-wrap{min-height:0}
+      .hero{display:block;padding:18px 0 20px}
+      h1{font-size:24px;line-height:1.02;max-width:210px}
+      .intro{font-size:12px;line-height:1.35;max-width:260px;margin-top:8px}
+      .phone-stage{display:none}
+      .store-buttons{gap:10px;margin-top:22px}
       .store-button{flex:1;min-width:135px}
-      .feature-grid{grid-template-columns:1fr}
+      .features-band{padding:0 0 0;background:#F6F8F7}
+      .features-title{display:none}
+      .feature-grid{grid-template-columns:1fr;gap:0}
+      .feature-card{display:grid;grid-template-columns:34px 1fr;column-gap:14px;min-height:auto;border-radius:0;background:#F6F8F7;padding:18px 2px;border-bottom:1px solid #E5E7EB}
+      .feature-icon{margin:0;width:28px;height:28px;font-size:11px}
+      .feature-card h2{font-size:13px;margin:0 0 3px}
+      .feature-card p{font-size:11px}
+      .order-band{background:#F6F8F7;padding:10px 0 18px}
+      .order-row{gap:0}
+      .order-row span{display:none}
+      .find-link{width:100%;height:36px;background:#FFFFFF;border-color:#DCE3E0;color:#164F3F}
     }
   </style>
 </head>
@@ -541,22 +556,22 @@ function renderHomeLayout(page: PageDefinition): string {
       <h2 class="features-title">Why thousands love Eki</h2>
       <div class="feature-grid">
         <article class="feature-card">
-          <div class="feature-icon">OK</div>
+          <div class="feature-icon">1</div>
           <h2>Shop from verified vendors</h2>
           <p>Every vendor is reviewed and verified before listing on Eki.</p>
         </article>
         <article class="feature-card">
-          <div class="feature-icon">TRK</div>
+          <div class="feature-icon">2</div>
           <h2>Live order tracking</h2>
           <p>Track your foodstuff order from vendor confirmation to dispatch and delivery.</p>
         </article>
         <article class="feature-card">
-          <div class="feature-icon">SEC</div>
+          <div class="feature-icon">3</div>
           <h2>Secure Eki checkout</h2>
           <p>Your order and payment record are handled securely through Eki.</p>
         </article>
         <article class="feature-card">
-          <div class="feature-icon">RE</div>
+          <div class="feature-icon">4</div>
           <h2>One-tap reorder</h2>
           <p>Saved your favorite vendors? Reorder last basket in a single tap.</p>
         </article>

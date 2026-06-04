@@ -195,6 +195,22 @@ function baseStyles(title: string, description: string, extraHead = ""): string 
       display:flex;justify-content:space-between;align-items:center;
       margin:10px 0 8px;
     }
+    .store-search{
+      width:100%;
+      min-height:40px;
+      border:1px solid #dbe7dd;
+      border-radius:8px;
+      padding:0 14px;
+      background:#fff;
+      color:#111827;
+      font-size:13px;
+      outline:none;
+      margin:4px 0 10px;
+    }
+    .store-search:focus{
+      border-color:#134f3b;
+      box-shadow:0 0 0 3px rgba(19,79,59,.08);
+    }
     .section-head h2{margin:0;font-size:13px;font-weight:800}
     .muted{color:#6b7280;font-size:10px}
     .products{
@@ -556,7 +572,20 @@ function baseStyles(title: string, description: string, extraHead = ""): string 
     @media (max-width: 640px){
       .topbar-inner,.header-row,.sticky-cart-inner,.store-card,.bottom-banner,.find-strip-inner{flex-direction:column;align-items:stretch}
       .mini-copy{text-align:left}
-      .products,.why-grid,.grid-2{grid-template-columns:1fr}
+      .products{grid-template-columns:repeat(2,minmax(0,1fr));gap:6px}
+      .why-grid,.grid-2{grid-template-columns:1fr}
+      .container{padding:0 6px}
+      .store-card{border-radius:0;border-left:0;border-right:0}
+      .store-band{padding-top:0}
+      .product-top{min-height:118px;padding:8px}
+      .product-body{padding:7px}
+      .product-title{font-size:11px}
+      .product-row{display:block}
+      .icon-add{width:100%;height:32px;margin-top:8px;border-radius:5px}
+      .sticky-cart{background:#134f3b;color:#fff}
+      .sticky-copy{display:none}
+      .sticky-cart-inner{padding:8px}
+      .cart-btn{width:100%;border-radius:6px;background:#134f3b;color:#fff;min-height:42px}
       .hero h1{font-size:28px}
       .store-meta h1,.panel-copy h1{font-size:24px}
       .top-btn,.cart-btn,.find-link,.download-btn{width:100%}
@@ -607,7 +636,7 @@ function renderStorePage(store: PublicStore, products: PublicProduct[]): string 
     const productHref = `/store/${encodeURIComponent(store.storeSlug)}/product/${encodeURIComponent(product.id)}`;
     const stock = product.stock > 0 ? `${product.stock} in stock` : "No stock";
     return `
-      <li class="product-card">
+      <li class="product-card" data-product-card data-product-title="${escape(product.title.toLowerCase())}">
         <a class="product-top product-link" href="${productHref}">
           <span class="stock-pill${product.stock > 0 ? "" : " is-sold"}">${escape(stock)}</span>
           ${productImage(product)}
@@ -630,6 +659,7 @@ function renderStorePage(store: PublicStore, products: PublicProduct[]): string 
     ${renderTopbar(`<a class="top-btn" id="top-cart-button" href="/store/${encodeURIComponent(store.storeSlug)}/checkout">View Cart (0)</a>`)}
     ${renderStoreHeader(store)}
     <div class="container">
+      <input class="store-search" id="store-product-search" type="search" placeholder="Search products..." autocomplete="off" />
       <div class="section-head">
         <h2>All Products</h2>
         <span class="muted">${products.length} items</span>
@@ -706,6 +736,16 @@ function renderStorePage(store: PublicStore, products: PublicProduct[]): string 
           addProduct(String(button.getAttribute('data-product-id') || ''));
         });
       });
+      var searchInput = document.getElementById('store-product-search');
+      if(searchInput){
+        searchInput.addEventListener('input', function(){
+          var query = String(searchInput.value || '').trim().toLowerCase();
+          document.querySelectorAll('[data-product-card]').forEach(function(card){
+            var title = String(card.getAttribute('data-product-title') || '');
+            card.style.display = !query || title.indexOf(query) !== -1 ? '' : 'none';
+          });
+        });
+      }
       document.querySelectorAll('.product-link').forEach(function(link){
         if(!promoCode) return;
         var href = new URL(link.getAttribute('href'), window.location.origin);
