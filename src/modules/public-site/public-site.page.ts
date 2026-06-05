@@ -309,224 +309,50 @@ function renderHomeLayout(page: PageDefinition): string {
   <style>
     *,*::before,*::after{box-sizing:border-box}
     html,body{margin:0;padding:0}
-    body{
-      background:#F6F8F7;
-      color:#111827;
-      font-family:'Inter',-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
-      -webkit-font-smoothing:antialiased;
-      -moz-osx-font-smoothing:grayscale;
-    }
+    body{background:#F5F6F5;color:#111827;font-family:'Inter',-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale}
     a{color:inherit}
-    .hero-wrap{
-      background:#164F3F;
-      color:#FFFFFF;
-      overflow:hidden;
-    }
-    .shell{width:min(1120px,calc(100% - 40px));margin:0 auto}
-    .topbar{
-      height:54px;
-      display:flex;
-      align-items:center;
-      justify-content:space-between;
-      gap:24px;
-    }
-    .brand{
-      display:inline-flex;
-      align-items:center;
-      justify-content:center;
-      min-width:58px;
-      height:28px;
-      border-radius:6px;
-      background:#2E8658;
-      color:#FFFFFF;
-      text-decoration:none;
-      font-weight:800;
-      letter-spacing:-0.03em;
-      line-height:1;
-    }
-    .nav{display:flex;align-items:center;gap:28px}
-    .nav a{
-      color:rgba(255,255,255,0.86);
-      font-size:13px;
-      font-weight:600;
-      text-decoration:none;
-    }
-    .nav a:hover{color:#FFFFFF}
-    .hero{
-      min-height:390px;
-      display:grid;
-      grid-template-columns:minmax(0,1fr) minmax(280px,430px);
-      align-items:center;
-      gap:48px;
-      padding:42px 0 52px;
-    }
-    .copy{max-width:560px}
-    h1{
-      margin:0;
-      font-size:43px;
-      line-height:1.06;
-      letter-spacing:-0.045em;
-      font-weight:800;
-    }
-    .intro{
-      margin:16px 0 0;
-      max-width:520px;
-      color:rgba(255,255,255,0.82);
-      font-size:16px;
-      line-height:1.45;
-    }
-    .store-buttons{
-      display:flex;
-      flex-wrap:wrap;
-      gap:14px;
-      margin-top:34px;
-    }
-    .store-button{
-      min-width:150px;
-      height:46px;
-      border-radius:8px;
-      background:#FFFFFF;
-      color:#164F3F;
-      text-decoration:none;
-      display:flex;
-      flex-direction:column;
-      justify-content:center;
-      padding:0 16px;
-      box-shadow:0 14px 30px rgba(0,0,0,0.08);
-    }
-    .store-button.google{
-      background:#2E8658;
-      color:#FFFFFF;
-    }
+    .hero-wrap{background:#164F3F;color:#FFFFFF;overflow:hidden}
+    .shell{width:min(1120px,calc(100% - 32px));margin:0 auto}
+    .topbar{height:44px;display:flex;align-items:center;justify-content:space-between;gap:18px}
+    .brand{display:inline-flex;align-items:center;justify-content:center;min-width:40px;height:24px;padding:0 10px;border-radius:5px;background:#2B8256;color:#FFFFFF;text-decoration:none;font-weight:800;font-size:13px;letter-spacing:-0.03em;line-height:1}
+    .toplinks{display:flex;align-items:center;gap:16px;color:rgba(255,255,255,.76);font-size:12px;font-weight:600}
+    .toplinks a{text-decoration:none}
+    .hero{display:grid;grid-template-columns:minmax(0,1fr) minmax(280px,380px);align-items:center;gap:52px;padding:14px 0 34px;min-height:360px}
+    .copy{max-width:520px;padding:8px 0 0}
+    h1{margin:0;max-width:10ch;font-size:56px;line-height:0.98;letter-spacing:-0.045em;font-weight:800}
+    .intro{margin:16px 0 0;max-width:430px;color:rgba(255,255,255,0.82);font-size:15px;line-height:1.4}
+    .store-buttons{display:flex;gap:12px;margin-top:28px;flex-wrap:wrap}
+    .store-button{min-width:132px;height:44px;border-radius:9px;background:#FFFFFF;color:#164F3F;text-decoration:none;display:flex;flex-direction:column;justify-content:center;padding:0 14px;box-shadow:0 14px 30px rgba(0,0,0,0.08)}
+    .store-button.google{background:#2F885A;color:#FFFFFF}
     .store-small{font-size:9px;font-weight:600;opacity:.74}
     .store-main{font-size:14px;font-weight:800;margin-top:1px}
-    .helper{
-      color:rgba(255,255,255,0.72);
-      font-size:12px;
-      margin:15px 0 0;
-    }
-    .phone-stage{
-      position:relative;
-      min-height:320px;
-      display:flex;
-      align-items:center;
-      justify-content:center;
-      overflow:hidden;
-      border-radius:18px;
-    }
-    .phone{
-      position:relative;
-      z-index:2;
-      width:min(84vw,380px);
-      max-height:390px;
-      object-fit:contain;
-      object-position:center;
-      filter:drop-shadow(0 28px 36px rgba(0,0,0,.34));
-    }
-    .features-band{background:#FFFFFF;padding:36px 0 48px}
-    .features-title{
-      margin:0 0 24px;
-      text-align:center;
-      font-size:22px;
-      line-height:1.2;
-      letter-spacing:-0.03em;
-      font-weight:800;
-    }
-    .feature-grid{
-      display:grid;
-      grid-template-columns:repeat(4,minmax(0,1fr));
-      gap:28px;
-    }
-    .feature-card{
-      min-height:124px;
-      border-radius:10px;
-      background:#ECF7F0;
-      padding:24px 22px;
-    }
-    .feature-icon{
-      width:34px;
-      height:34px;
-      border-radius:999px;
-      background:#D7F0DF;
-      display:grid;
-      place-items:center;
-      margin-bottom:18px;
-      color:#164F3F;
-      font-size:17px;
-    }
-    .feature-card h2{
-      margin:0 0 6px;
-      font-size:14px;
-      font-weight:800;
-      letter-spacing:-0.02em;
-    }
-    .feature-card p{
-      margin:0;
-      color:#637069;
-      font-size:12px;
-      line-height:1.35;
-    }
-    .order-band{background:#ECF7F0;padding:18px 0}
-    .order-row{
-      display:flex;
-      justify-content:center;
-      align-items:center;
-      gap:28px;
-      color:#6B7280;
-      font-size:13px;
-    }
-    .find-link{
-      min-width:180px;
-      height:34px;
-      border-radius:6px;
-      border:1px solid #164F3F;
-      color:#164F3F;
-      display:inline-flex;
-      align-items:center;
-      justify-content:center;
-      text-decoration:none;
-      font-weight:700;
-      background:#F8FFFB;
-    }
-    @media (max-width:860px){
-      .shell{width:min(100% - 28px,1120px)}
-      .hero{grid-template-columns:1fr;gap:0;min-height:0;padding:26px 0 28px}
-      h1{font-size:36px}
-      .phone-stage{min-height:300px}
-      .phone{max-height:340px}
-      .feature-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
-      .order-row{flex-direction:column;gap:12px}
-    }
-    @media (max-width:520px){
-      .topbar{height:50px}
-      .nav{gap:18px}
-      .hero-wrap{min-height:0}
-      .hero{display:block;padding:18px 0 20px}
-      h1{font-size:24px;line-height:1.02;max-width:210px}
-      .intro{font-size:12px;line-height:1.35;max-width:260px;margin-top:8px}
-      .phone-stage{display:none}
-      .store-buttons{gap:10px;margin-top:22px}
-      .store-button{flex:1;min-width:135px}
-      .features-band{padding:0 0 0;background:#F6F8F7}
-      .features-title{display:none}
-      .feature-grid{grid-template-columns:1fr;gap:0}
-      .feature-card{display:grid;grid-template-columns:34px 1fr;column-gap:14px;min-height:auto;border-radius:0;background:#F6F8F7;padding:18px 2px;border-bottom:1px solid #E5E7EB}
-      .feature-icon{margin:0;width:28px;height:28px;font-size:11px}
-      .feature-card h2{font-size:13px;margin:0 0 3px}
-      .feature-card p{font-size:11px}
-      .order-band{background:#F6F8F7;padding:10px 0 18px}
-      .order-row{gap:0}
-      .order-row span{display:none}
-      .find-link{width:100%;height:36px;background:#FFFFFF;border-color:#DCE3E0;color:#164F3F}
-    }
+    .scan-copy{margin-top:14px;color:rgba(255,255,255,.72);font-size:12px;line-height:1.4}
+    .phone-stage{position:relative;min-height:310px;display:flex;align-items:center;justify-content:center}
+    .phone{width:min(82vw,390px);max-height:400px;object-fit:contain;object-position:center;filter:drop-shadow(0 28px 40px rgba(0,0,0,.32))}
+    .steps-band{background:#FFFFFF;padding:0 0 92px}
+    .steps-head{padding:26px 0 10px;display:flex;align-items:center;justify-content:space-between;gap:16px}
+    .steps-kicker{color:#164F3F;font-size:12px;font-weight:800;letter-spacing:.01em;text-transform:uppercase}
+    .steps-tag{display:inline-flex;align-items:center;min-height:30px;border-radius:999px;background:#EAF6EE;color:#2A8256;padding:0 12px;font-size:12px;font-weight:700;text-decoration:none}
+    .steps-list{border-top:1px solid #E8ECE9;background:#FFFFFF}
+    .step{display:flex;gap:14px;padding:18px 0;border-bottom:1px solid #EEF1EF;align-items:flex-start}
+    .step-index{width:30px;height:30px;border-radius:999px;background:#EAF6EE;color:#7AA07E;display:grid;place-items:center;font-size:13px;font-weight:800;flex:0 0 auto}
+    .step-title{margin:0;color:#1F2937;font-size:15px;line-height:1.3;font-weight:800;letter-spacing:-0.02em}
+    .step-body{margin:4px 0 0;color:#97A1A8;font-size:12px;line-height:1.35}
+    .sticky-order{position:sticky;bottom:0;background:#FFFFFF;border-top:1px solid #E8ECE9;padding:14px 0 calc(14px + env(safe-area-inset-bottom, 0px));margin-top:-1px}
+    .sticky-order a{width:100%;min-height:42px;border-radius:10px;border:1px solid #D6E2DB;background:#F8FCFA;color:#53616A;display:flex;align-items:center;justify-content:center;gap:6px;text-decoration:none;font-size:13px;font-weight:700}
+    .sticky-order strong{color:#164F3F}
+    .sticky-order span{display:inline-flex;align-items:center;gap:6px}
+    @media (max-width:900px){.hero{grid-template-columns:1fr;gap:8px;padding:12px 0 0}.phone-stage{display:none}h1{font-size:31px;max-width:220px}.intro{max-width:310px;font-size:13px;line-height:1.28}.store-buttons{margin-top:22px}.store-button{flex:1;min-width:0}.steps-band{padding-bottom:86px}.toplinks{display:none}.steps-head{padding:18px 0 8px}}
+    @media (max-width:520px){.shell{width:min(100% - 18px,1120px)}.topbar{height:44px}.hero{padding-top:8px}h1{font-size:30px}.steps-kicker{display:none}.steps-head{padding-top:14px}}
   </style>
 </head>
 <body>
   <div class="hero-wrap">
     <header class="shell topbar">
       <a class="brand" href="/">eki</a>
-      <nav class="nav" aria-label="Main navigation">
+      <nav class="toplinks" aria-label="Main">
         <a href="/store">Vendors</a>
+        <a href="/find-order">Find order</a>
       </nav>
     </header>
     <main class="shell hero">
@@ -543,7 +369,7 @@ function renderHomeLayout(page: PageDefinition): string {
             <span class="store-main">Google Play</span>
           </a>
         </div>
-        <p class="helper">Or scan the QR code in the app to get started instantly</p>
+        <p class="scan-copy">Scan the QR code in the app to get started instantly.</p>
       </section>
       <section class="phone-stage" aria-label="Eki app preview">
         <img class="phone" src="/assets/public-site/hero-phone-mockup.png" alt="Eki vendor dashboard phone mockup" />
@@ -551,44 +377,53 @@ function renderHomeLayout(page: PageDefinition): string {
     </main>
   </div>
 
-  <section class="features-band">
+  <section class="steps-band">
     <div class="shell">
-      <h2 class="features-title">Why thousands love Eki</h2>
-      <div class="feature-grid">
-        <article class="feature-card">
-          <div class="feature-icon">1</div>
-          <h2>Shop from verified vendors</h2>
-          <p>Every vendor is reviewed and verified before listing on Eki.</p>
+      <div class="steps-head">
+        <span class="steps-kicker">Why buyers stay on Eki</span>
+        <a class="steps-tag" href="/store">Open vendors</a>
+      </div>
+      <div class="steps-list">
+        <article class="step">
+          <div class="step-index">1</div>
+          <div>
+            <h2 class="step-title">Shop from verified vendors</h2>
+            <p class="step-body">Every vendor reviewed before listing.</p>
+          </div>
         </article>
-        <article class="feature-card">
-          <div class="feature-icon">2</div>
-          <h2>Live order tracking</h2>
-          <p>Track your foodstuff order from vendor confirmation to dispatch and delivery.</p>
+        <article class="step">
+          <div class="step-index">2</div>
+          <div>
+            <h2 class="step-title">Live order tracking</h2>
+            <p class="step-body">From vendor confirmation to delivery.</p>
+          </div>
         </article>
-        <article class="feature-card">
-          <div class="feature-icon">3</div>
-          <h2>Secure Eki checkout</h2>
-          <p>Your order and payment record are handled securely through Eki.</p>
+        <article class="step">
+          <div class="step-index">3</div>
+          <div>
+            <h2 class="step-title">Secure Eki checkout</h2>
+            <p class="step-body">Order and payment record protected by Eki.</p>
+          </div>
         </article>
-        <article class="feature-card">
-          <div class="feature-icon">4</div>
-          <h2>One-tap reorder</h2>
-          <p>Saved your favorite vendors? Reorder last basket in a single tap.</p>
+        <article class="step">
+          <div class="step-index">4</div>
+          <div>
+            <h2 class="step-title">One-tap reorder</h2>
+            <p class="step-body">Saved vendors reorder in a single tap.</p>
+          </div>
         </article>
       </div>
     </div>
   </section>
 
-  <section class="order-band">
-    <div class="shell order-row">
-      <span>Already have an order?</span>
-      <a class="find-link" href="/find-order">Find your order -></a>
+  <div class="sticky-order">
+    <div class="shell">
+      <a href="/find-order"><span>Already have an order? <strong>Find it here</strong></span></a>
     </div>
-  </section>
+  </div>
 </body>
 </html>`;
 }
-
 function renderFindOrderLayout(): string {
   return `<!DOCTYPE html>
 <html lang="en">
