@@ -298,6 +298,12 @@ function baseStyles(title: string, description: string, extraHead = ""): string 
       width:20px;height:20px;border-radius:4px;border:0;
       background:#134f3b;color:#fff;font-weight:800;font-size:14px;
       display:inline-flex;align-items:center;justify-content:center;
+      transition:transform .18s ease, background .18s ease, box-shadow .18s ease;
+    }
+    .icon-add.is-added{
+      transform:scale(1.18);
+      background:#0b7a56;
+      box-shadow:0 0 0 6px rgba(11,122,86,.14);
     }
     .sticky-cart{
       position:sticky;
@@ -321,7 +327,18 @@ function baseStyles(title: string, description: string, extraHead = ""): string 
       display:inline-flex;align-items:center;justify-content:center;
       min-width:108px;min-height:32px;padding:0 16px;border:0;border-radius:999px;
       background:#134f3b;color:#fff;font-size:11px;font-weight:700;
+      transition:transform .18s ease, box-shadow .18s ease;
     }
+    .cart-btn.is-pulsing{
+      transform:translateY(-1px) scale(1.02);
+      box-shadow:0 10px 22px rgba(19,79,59,.22);
+    }
+    @keyframes cartBump{
+      0%{transform:translateY(0) scale(1)}
+      45%{transform:translateY(-2px) scale(1.03)}
+      100%{transform:translateY(0) scale(1)}
+    }
+    .sticky-cart.is-pulsing{animation:cartBump .36s ease}
     .page-wrap{max-width:1200px;margin:0 auto;padding:0 10px}
     .split{
       display:grid;
@@ -570,25 +587,125 @@ function baseStyles(title: string, description: string, extraHead = ""): string 
       .device{height:180px}
     }
     @media (max-width: 640px){
-      .topbar-inner,.header-row,.sticky-cart-inner,.store-card,.bottom-banner,.find-strip-inner{flex-direction:column;align-items:stretch}
+      body{background:#f5f6f5}
+      .shell{background:#f5f6f5}
+      .topbar{min-height:28px;background:#fff;color:#0b1720;border-bottom:1px solid #e8ece9}
+      .topbar-inner{
+        flex-direction:row;
+        align-items:center;
+        padding:3px 6px;
+        gap:8px;
+      }
+      .brand{
+        min-width:36px;
+        height:22px;
+        border-radius:5px;
+        background:#134f3b;
+        color:#fff;
+        justify-content:center;
+        padding:0 8px;
+        font-size:10px;
+      }
+      .mini-copy{
+        display:block;
+        flex:1;
+        text-align:left;
+        color:#111827;
+        font-size:10px;
+        font-weight:800;
+        overflow:hidden;
+        white-space:nowrap;
+        text-overflow:ellipsis;
+      }
+      .top-btn{
+        width:auto;
+        min-width:30px;
+        min-height:24px;
+        border:0;
+        border-radius:999px;
+        background:#e7f5ea;
+        color:#134f3b;
+        padding:0 9px;
+        font-size:10px;
+      }
+      .header-row,.bottom-banner,.find-strip-inner{flex-direction:column;align-items:stretch}
       .mini-copy{text-align:left}
       .products{grid-template-columns:repeat(2,minmax(0,1fr));gap:6px}
       .why-grid,.grid-2{grid-template-columns:1fr}
-      .container{padding:0 6px}
-      .store-card{border-radius:0;border-left:0;border-right:0}
-      .store-band{padding-top:0}
+      .container{padding:0 8px}
+      .store-band{padding:0;background:#134f3b;color:#fff}
+      .store-card{
+        flex-direction:row;
+        align-items:center;
+        gap:10px;
+        border-radius:0;
+        border:0;
+        background:#134f3b;
+        color:#fff;
+        padding:14px 6px 16px;
+      }
+      .avatar{width:48px;height:48px;border-radius:999px;background:#2b7a4b;color:#fff}
+      .store-meta h1{font-size:14px;color:#fff}
+      .badge{
+        display:block;
+        width:max-content;
+        margin:6px 0 0;
+        background:#2b7a4b;
+        color:#fff;
+        border-radius:5px;
+        font-size:8px;
+      }
+      .store-meta .sub,.store-meta .copy{color:rgba(255,255,255,.82);font-size:10px}
+      .store-meta .copy{display:none}
+      .trust-strip{
+        margin:0 -8px;
+        border-radius:0;
+        border-left:0;
+        border-right:0;
+        background:#f2fbf4;
+        font-size:9px;
+        gap:10px;
+      }
+      .store-search{min-height:38px;border-radius:5px;margin:10px 0 8px;font-size:12px}
+      .section-head{margin:8px 0}
+      .section-head h2{font-size:11px}
       .product-top{min-height:118px;padding:8px}
       .product-body{padding:7px}
       .product-title{font-size:11px}
       .product-row{display:block}
-      .icon-add{width:100%;height:32px;margin-top:8px;border-radius:5px}
+      .icon-add{
+        width:100%;
+        height:31px;
+        margin-top:8px;
+        border-radius:5px;
+        font-size:0;
+      }
+      .icon-add::after{content:"Add to cart";font-size:10px;font-weight:700}
+      .icon-add.is-added::after{content:"Added"}
       .sticky-cart{background:#134f3b;color:#fff}
       .sticky-copy{display:none}
-      .sticky-cart-inner{padding:8px}
+      .sticky-cart-inner{padding:8px;display:block}
       .cart-btn{width:100%;border-radius:6px;background:#134f3b;color:#fff;min-height:42px}
       .hero h1{font-size:28px}
       .store-meta h1,.panel-copy h1{font-size:24px}
-      .top-btn,.cart-btn,.find-link,.download-btn{width:100%}
+      .cart-btn,.find-link,.download-btn{width:100%}
+      .split{display:block;min-height:0;background:#fff}
+      .page-wrap{padding:0;max-width:none}
+      .panel-media{padding:0;border:0;background:#e5f6e8}
+      .panel-media .back-link{position:absolute;top:8px;left:8px;z-index:2}
+      .hero-image{height:292px;min-height:292px;padding:0}
+      .hero-image img{width:100%;height:100%;max-height:none;border-radius:0;object-fit:cover}
+      .hero-image .placeholder-pill{margin:auto}
+      .panel-copy{padding:10px 8px 14px;background:#fff}
+      .inline-badges{display:block}
+      .crumb{display:none}
+      .pill{font-size:9px;background:#e8f5eb}
+      .panel-copy h1{font-size:16px;margin:6px 0 2px}
+      .lead-row{gap:8px;font-size:10px}
+      .desc{margin:10px 0 0;padding:0;background:#fff;border-top:1px solid #edf0ee;border-radius:0;font-size:11px}
+      .qty-row{margin-top:12px}
+      .secure-strip{margin:10px -8px 0;border-left:0;border-right:0;border-radius:0;font-size:9px}
+      .primary-action{min-height:42px;border-radius:5px}
     }
   </style>
 </head>
@@ -727,6 +844,18 @@ function renderStorePage(store: PublicStore, products: PublicProduct[]): string 
         if(existing){ existing.quantity += 1; } else { cart.push({ productId: productId, quantity: 1 }); }
         writeCart(cart);
         updateCartUi();
+        var sticky = document.getElementById('sticky-cart');
+        var bottomBtn = document.getElementById('bottom-cart-button');
+        if(sticky){
+          sticky.classList.remove('is-pulsing');
+          void sticky.offsetWidth;
+          sticky.classList.add('is-pulsing');
+          window.setTimeout(function(){ sticky.classList.remove('is-pulsing'); }, 420);
+        }
+        if(bottomBtn){
+          bottomBtn.classList.add('is-pulsing');
+          window.setTimeout(function(){ bottomBtn.classList.remove('is-pulsing'); }, 420);
+        }
         fetch('/api/public/stores/' + encodeURIComponent(storeSlug) + '/events', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ event:'add_to_cart', source:source, productId:productId, quantity:1 }) }).catch(function(){});
       }
       document.querySelectorAll('.add-to-cart').forEach(function(button){
@@ -734,6 +863,9 @@ function renderStorePage(store: PublicStore, products: PublicProduct[]): string 
           event.preventDefault();
           event.stopPropagation();
           addProduct(String(button.getAttribute('data-product-id') || ''));
+          button.classList.add('is-added');
+          button.setAttribute('aria-live', 'polite');
+          window.setTimeout(function(){ button.classList.remove('is-added'); }, 520);
         });
       });
       var searchInput = document.getElementById('store-product-search');
@@ -902,9 +1034,15 @@ function renderProductPage(store: PublicStore, product: PublicProduct): string {
         if(existing){ existing.quantity += quantity; } else { cart.push({ productId: productId, quantity: quantity }); }
         writeCart(cart);
         updateCartButton();
+        var action = document.getElementById('add-product-button');
+        if(action){
+          action.disabled = true;
+          action.textContent = 'Added to cart';
+          action.style.transform = 'scale(0.99)';
+        }
         var next = '/store/' + encodeURIComponent(storeSlug) + '/checkout';
         if(promoCode) next += '?promo=' + encodeURIComponent(promoCode);
-        window.location.href = next;
+        window.setTimeout(function(){ window.location.href = next; }, 260);
       }
       var back = document.querySelector('.back-link');
       if(back && promoCode) back.setAttribute('href', '/store/' + encodeURIComponent(storeSlug) + '?promo=' + encodeURIComponent(promoCode));
