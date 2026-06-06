@@ -48,8 +48,8 @@ describe("Orders Validation", () => {
       expect(VENDOR_STATUS_TRANSITIONS.CONFIRMED).toContain("PROCESSING");
     });
 
-    it("does not allow PENDING → anything", () => {
-      expect(VENDOR_STATUS_TRANSITIONS.PENDING).toHaveLength(0);
+    it("allows PENDING → CONFIRMED", () => {
+      expect(VENDOR_STATUS_TRANSITIONS.PENDING).toContain("CONFIRMED");
     });
 
     it("does not allow COMPLETED → anything", () => {
