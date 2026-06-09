@@ -8,11 +8,21 @@ import { PrismaClient } from "@prisma/client";
 // client on globalThis ensures a single client per worker. Use a Neon
 // pooled connection string in DATABASE_URL for production (see README).
 const globalForPrisma = globalThis as unknown as {
-  prisma: PrismaClient | undefined;
+  prisma?: unknown;
 };
 
-export const prisma = globalForPrisma.prisma ?? new PrismaClient();
-
-if (process.env.NODE_ENV !== "production") {
-  globalForPrisma.prisma = prisma;
+function isPrismaClient(obj: unknown): obj is PrismaClient {
+  return !!obj && typeof (obj as any).$connect === "function" && typeof (obj as any).$disconnect === "function";
 }
+
+let prisma: PrismaClient;
+if (isPrismaClient(globalForPrisma.prisma)) {
+  prisma = globalForPrisma.prisma as PrismaClient;
+} else {
+  prisma = new PrismaClient();
+  if (process.env.NODE_ENV !== "production") {
+    globalForPrisma.prisma = prisma;
+  }
+}
+
+export { prisma };

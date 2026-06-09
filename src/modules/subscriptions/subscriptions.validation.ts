@@ -17,12 +17,14 @@ export function validateCreateSubscriptionInput(input: unknown): CreateSubscript
     throw new AppError("Invalid request body", 400);
   }
   const raw = input as Record<string, unknown>;
-
   if (typeof raw.plan !== "string" || raw.plan.trim().length === 0) {
     throw new AppError("plan is required", 400);
   }
-
-  return { plan: raw.plan.trim() };
+  const plan = raw.plan.trim().toUpperCase();
+  if (!PLANS.has(plan)) {
+    throw new AppError("plan must be one of FREE, BASIC, GROWTH, PREMIUM, PRO", 400);
+  }
+  return { plan: plan as SubscriptionPlan };
 }
 
 export function validateCreateWebSubscriptionCheckoutInput(input: unknown): CreateWebSubscriptionCheckoutInput {
@@ -49,13 +51,17 @@ export function validateActivateSubscriptionInput(input: unknown): ActivateSubsc
     throw new AppError("Invalid request body", 400);
   }
   const raw = input as Record<string, unknown>;
-
-  const plan = typeof raw.plan === "string" ? raw.plan.trim() : "";
-  if (!plan) {
+  const planRaw = typeof raw.plan === "string" ? raw.plan.trim() : "";
+  if (!planRaw) {
     throw new AppError("plan is required", 400);
   }
-
-  return { plan };
+  const plan = planRaw.toUpperCase();
+  // Only allow plans that can be activated from the app (soft-launch policy)
+  const ALLOWED = new Set<string>(["FREE", "GROWTH", "PRO"]);
+  if (!ALLOWED.has(plan)) {
+    throw new AppError("plan must be one of FREE, GROWTH, PRO", 400);
+  }
+  return { plan: plan as SubscriptionPlan };
 }
 
 function requireBoolean(value: unknown, field: string): boolean {
@@ -175,9 +181,13 @@ export function validateAssignVendorPlanInput(input: unknown): AssignVendorPlanI
     throw new AppError("Invalid request body", 400);
   }
   const raw = input as Record<string, unknown>;
-  const plan = typeof raw.plan === "string" ? raw.plan.trim() : "";
-  if (!plan) {
+  const planRaw = typeof raw.plan === "string" ? raw.plan.trim() : "";
+  if (!planRaw) {
     throw new AppError("plan is required", 400);
   }
-  return { plan };
+  const plan = planRaw.toUpperCase();
+  if (!PLANS.has(plan)) {
+    throw new AppError("plan must be one of FREE, BASIC, GROWTH, PREMIUM, PRO", 400);
+  }
+  return { plan: plan as SubscriptionPlan };
 }
