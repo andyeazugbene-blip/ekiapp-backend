@@ -8,7 +8,9 @@ import {
 
 import { prisma } from "../../lib/prisma";
 import { CURSOR_ORDER_BY } from "../../shared/constants";
+import { calculateWithdrawalFee } from "../../shared/pricing";
 import { notificationsService } from "../notifications/notifications.service";
+import { resolveVendorWithdrawalFeeBps } from "../subscriptions/subscription-plan-utils";
 import { AppError } from "../../shared/errors/app-error";
 import type {
   CreatePayoutRequestInput,
@@ -47,12 +49,18 @@ export const payoutsService = {
       if (input.amount > wallet.availableBalance) {
         throw new AppError("Insufficient available balance", 400);
       }
+      const withdrawalFeeBps = await resolveVendorWithdrawalFeeBps(vendor.id, tx);
+      const withdrawalFeeAmount = calculateWithdrawalFee(input.amount, withdrawalFeeBps);
+      const netAmount = Math.max(0, input.amount - withdrawalFeeAmount);
 
       return tx.payoutRequest.create({
         data: {
           vendorId: vendor.id,
           payoutMethodId: payoutMethod.id,
           amount: input.amount,
+          withdrawalFeeAmount,
+          withdrawalFeeBps,
+          netAmount,
           currency: wallet.currency,
           status: PayoutRequestStatus.PENDING,
           notes: input.notes,
@@ -64,8 +72,8 @@ export const payoutsService = {
       userId,
       type: NotificationType.PAYOUT_REQUESTED,
       title: "Payout requested",
-      body: `Your payout of ${created.amount} ${created.currency} is pending review.`,
-      data: { payoutRequestId: created.id, amount: created.amount, currency: created.currency },
+      body: `Your payout of ${created.netAmount ?? created.amount} ${created.currency} is pending review after withdrawal fees.`,
+      data: { payoutRequestId: created.id, amount: created.amount, netAmount: created.netAmount, currency: created.currency },
     });
 
     return created;
@@ -110,7 +118,7 @@ export const payoutsService = {
         userId: vendorUserId,
         type: NotificationType.PAYOUT_APPROVED,
         title: "Payout approved",
-        body: `Your payout of ${payout.amount} ${payout.currency} has been approved.`,
+        body: `Your payout of ${payout.netAmount ?? payout.amount} ${payout.currency} has been approved.`,
         data: { payoutRequestId: payout.id },
       });
     }
@@ -207,7 +215,7 @@ export const payoutsService = {
           userId: vendorUserId,
           type: NotificationType.PAYOUT_PAID,
           title: "Payout paid",
-          body: `Your payout of ${payout.amount} ${payout.currency} has been paid.`,
+          body: `Your payout of ${payout.netAmount ?? payout.amount} ${payout.currency} has been paid.`,
           data: { payoutRequestId: payout.id },
         });
       }

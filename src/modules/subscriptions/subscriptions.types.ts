@@ -1,16 +1,16 @@
 import type { SubscriptionPlan } from "@prisma/client";
 
 export interface CreateSubscriptionInput {
-  plan: SubscriptionPlan;
+  plan: string;
 }
 
 export interface CreateWebSubscriptionCheckoutInput {
-  plan: SubscriptionPlan;
+  plan: string;
   email: string;
 }
 
 export interface ActivateSubscriptionInput {
-  plan: SubscriptionPlan;
+  plan: string;
 }
 
 export interface SubscriptionInfo {
@@ -24,13 +24,18 @@ export interface SubscriptionInfo {
 }
 
 export interface SubscriptionPlanConfigInput {
-  plan: SubscriptionPlan;
+  id?: string;
+  plan?: SubscriptionPlan | null;
   slug: string;
   name: string;
   description?: string | null;
   monthlyPriceCents: number;
-  platformFeeBps: number;
+  platformFeeBps?: number;
+  defaultPlatformFeeBps: number;
+  withdrawalFeeBps: number;
   currency: string;
+  stripePriceId?: string | null;
+  stripeProductId?: string | null;
   maxProducts: number;
   maxImagesPerProduct: number;
   maxOrders?: number | null;
@@ -43,6 +48,21 @@ export interface SubscriptionPlanConfigInput {
   canReceiveOrders: boolean;
   isActive: boolean;
   displayOrder: number;
+  commissionTiers: CommissionTierInput[];
+}
+
+export interface CommissionTierInput {
+  id?: string;
+  label?: string | null;
+  minSubtotalCents: number;
+  maxSubtotalCents?: number | null;
+  platformFeeBps: number;
+  isActive: boolean;
+  displayOrder: number;
+}
+
+export interface AssignVendorPlanInput {
+  plan: string;
 }
 
 /**
@@ -57,7 +77,9 @@ export const DEFAULT_PLAN_CONFIGS: Record<SubscriptionPlan, SubscriptionPlanConf
     name: "Free",
     description: "Starter access for new vendors.",
     monthlyPriceCents: 0,
-    platformFeeBps: 1200,
+    platformFeeBps: 1500,
+    defaultPlatformFeeBps: 1500,
+    withdrawalFeeBps: 250,
     currency: "GBP",
     maxProducts: 10,
     maxImagesPerProduct: 3,
@@ -71,6 +93,16 @@ export const DEFAULT_PLAN_CONFIGS: Record<SubscriptionPlan, SubscriptionPlanConf
     canReceiveOrders: true,
     isActive: true,
     displayOrder: 0,
+    commissionTiers: [
+      {
+        label: "Starter default",
+        minSubtotalCents: 0,
+        maxSubtotalCents: null,
+        platformFeeBps: 1500,
+        isActive: true,
+        displayOrder: 0,
+      },
+    ],
   },
   BASIC: {
     plan: "BASIC",
@@ -78,7 +110,9 @@ export const DEFAULT_PLAN_CONFIGS: Record<SubscriptionPlan, SubscriptionPlanConf
     name: "Basic",
     description: "Legacy plan kept for compatibility.",
     monthlyPriceCents: 1999,
-    platformFeeBps: 1100,
+    platformFeeBps: 1500,
+    defaultPlatformFeeBps: 1500,
+    withdrawalFeeBps: 250,
     currency: "GBP",
     maxProducts: 50,
     maxImagesPerProduct: 8,
@@ -92,6 +126,16 @@ export const DEFAULT_PLAN_CONFIGS: Record<SubscriptionPlan, SubscriptionPlanConf
     canReceiveOrders: true,
     isActive: false,
     displayOrder: 10,
+    commissionTiers: [
+      {
+        label: "Starter default",
+        minSubtotalCents: 0,
+        maxSubtotalCents: null,
+        platformFeeBps: 1500,
+        isActive: true,
+        displayOrder: 0,
+      },
+    ],
   },
   GROWTH: {
     plan: "GROWTH",
@@ -99,7 +143,9 @@ export const DEFAULT_PLAN_CONFIGS: Record<SubscriptionPlan, SubscriptionPlanConf
     name: "Growth",
     description: "Growth plan with analytics and marketing tools.",
     monthlyPriceCents: 2999,
-    platformFeeBps: 900,
+    platformFeeBps: 1000,
+    defaultPlatformFeeBps: 1000,
+    withdrawalFeeBps: 200,
     currency: "GBP",
     maxProducts: 100,
     maxImagesPerProduct: 10,
@@ -113,6 +159,16 @@ export const DEFAULT_PLAN_CONFIGS: Record<SubscriptionPlan, SubscriptionPlanConf
     canReceiveOrders: true,
     isActive: true,
     displayOrder: 20,
+    commissionTiers: [
+      {
+        label: "Growth default",
+        minSubtotalCents: 0,
+        maxSubtotalCents: null,
+        platformFeeBps: 1000,
+        isActive: true,
+        displayOrder: 0,
+      },
+    ],
   },
   PREMIUM: {
     plan: "PREMIUM",
@@ -121,6 +177,8 @@ export const DEFAULT_PLAN_CONFIGS: Record<SubscriptionPlan, SubscriptionPlanConf
     description: "Legacy premium plan kept for compatibility.",
     monthlyPriceCents: 4999,
     platformFeeBps: 800,
+    defaultPlatformFeeBps: 800,
+    withdrawalFeeBps: 150,
     currency: "GBP",
     maxProducts: -1,
     maxImagesPerProduct: 20,
@@ -134,6 +192,16 @@ export const DEFAULT_PLAN_CONFIGS: Record<SubscriptionPlan, SubscriptionPlanConf
     canReceiveOrders: true,
     isActive: false,
     displayOrder: 30,
+    commissionTiers: [
+      {
+        label: "Pro default",
+        minSubtotalCents: 0,
+        maxSubtotalCents: null,
+        platformFeeBps: 800,
+        isActive: true,
+        displayOrder: 0,
+      },
+    ],
   },
   PRO: {
     plan: "PRO",
@@ -141,7 +209,9 @@ export const DEFAULT_PLAN_CONFIGS: Record<SubscriptionPlan, SubscriptionPlanConf
     name: "Pro",
     description: "Full access for advanced vendors.",
     monthlyPriceCents: 7999,
-    platformFeeBps: 650,
+    platformFeeBps: 800,
+    defaultPlatformFeeBps: 800,
+    withdrawalFeeBps: 150,
     currency: "GBP",
     maxProducts: -1,
     maxImagesPerProduct: 30,
@@ -155,9 +225,121 @@ export const DEFAULT_PLAN_CONFIGS: Record<SubscriptionPlan, SubscriptionPlanConf
     canReceiveOrders: true,
     isActive: true,
     displayOrder: 30,
+    commissionTiers: [
+      {
+        label: "Pro default",
+        minSubtotalCents: 0,
+        maxSubtotalCents: null,
+        platformFeeBps: 800,
+        isActive: true,
+        displayOrder: 0,
+      },
+    ],
   },
 };
 
 export type PlanLimits = (typeof DEFAULT_PLAN_CONFIGS)[keyof typeof DEFAULT_PLAN_CONFIGS];
 
 export const PLAN_LIMITS = DEFAULT_PLAN_CONFIGS;
+
+export const DEFAULT_SELLER_PLAN_CONFIGS: SubscriptionPlanConfigInput[] = [
+  {
+    plan: "FREE",
+    slug: "starter",
+    name: "Starter",
+    description: "Default diaspora seller plan for all newly verified vendors.",
+    monthlyPriceCents: 0,
+    platformFeeBps: 1500,
+    defaultPlatformFeeBps: 1500,
+    withdrawalFeeBps: 250,
+    currency: "GBP",
+    maxProducts: 25,
+    maxImagesPerProduct: 5,
+    maxOrders: null,
+    analytics: false,
+    prioritySupport: false,
+    flashSales: false,
+    bundles: false,
+    discounts: false,
+    marketingTools: false,
+    canReceiveOrders: true,
+    isActive: true,
+    displayOrder: 0,
+    commissionTiers: [
+      {
+        label: "Starter default",
+        minSubtotalCents: 0,
+        maxSubtotalCents: null,
+        platformFeeBps: 1500,
+        isActive: true,
+        displayOrder: 0,
+      },
+    ],
+  },
+  {
+    plan: "GROWTH",
+    slug: "growth",
+    name: "Growth",
+    description: "Lower commission and marketing tools for approved or high-performing vendors.",
+    monthlyPriceCents: 2999,
+    platformFeeBps: 1000,
+    defaultPlatformFeeBps: 1000,
+    withdrawalFeeBps: 200,
+    currency: "GBP",
+    maxProducts: 100,
+    maxImagesPerProduct: 10,
+    maxOrders: null,
+    analytics: true,
+    prioritySupport: false,
+    flashSales: true,
+    bundles: true,
+    discounts: true,
+    marketingTools: true,
+    canReceiveOrders: true,
+    isActive: true,
+    displayOrder: 10,
+    commissionTiers: [
+      {
+        label: "Growth default",
+        minSubtotalCents: 0,
+        maxSubtotalCents: null,
+        platformFeeBps: 1000,
+        isActive: true,
+        displayOrder: 0,
+      },
+    ],
+  },
+  {
+    plan: "PRO",
+    slug: "pro",
+    name: "Pro",
+    description: "Advanced seller plan with admin-configurable custom fees and priority support.",
+    monthlyPriceCents: 7999,
+    platformFeeBps: 800,
+    defaultPlatformFeeBps: 800,
+    withdrawalFeeBps: 150,
+    currency: "GBP",
+    maxProducts: -1,
+    maxImagesPerProduct: 30,
+    maxOrders: null,
+    analytics: true,
+    prioritySupport: true,
+    flashSales: true,
+    bundles: true,
+    discounts: true,
+    marketingTools: true,
+    canReceiveOrders: true,
+    isActive: true,
+    displayOrder: 20,
+    commissionTiers: [
+      {
+        label: "Pro default",
+        minSubtotalCents: 0,
+        maxSubtotalCents: null,
+        platformFeeBps: 800,
+        isActive: true,
+        displayOrder: 0,
+      },
+    ],
+  },
+];

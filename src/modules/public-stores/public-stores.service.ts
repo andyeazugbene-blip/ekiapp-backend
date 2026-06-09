@@ -9,7 +9,7 @@ import { CURSOR_ORDER_BY, MAX_VENDOR_WEIGHT_GRAMS } from "../../shared/constants
 import { AppError } from "../../shared/errors/app-error";
 import { calculatePlatformFee as calcPlatformFee } from "../../shared/pricing";
 import { otpService } from "../auth/otp.service";
-import { resolveVendorPlatformFeeBps } from "../subscriptions/subscription-plan-utils";
+import { resolveVendorCommission } from "../subscriptions/subscription-plan-utils";
 import { buildVendorShareUrl } from "../vendors/vendors.service";
 import type {
   ListPublicProductsQuery,
@@ -990,8 +990,8 @@ export const publicStoresService = {
         : Math.min(promo.value, eligibleSubtotalAmount)
       : 0;
     const subtotalAmount = Math.max(0, originalSubtotalAmount - discountAmount);
-    const platformFeeBps = await resolveVendorPlatformFeeBps(vendor.id);
-    const platformFeeAmount = calcPlatformFee(subtotalAmount, platformFeeBps);
+    const commission = await resolveVendorCommission(vendor.id, subtotalAmount);
+    const platformFeeAmount = calcPlatformFee(subtotalAmount, commission.platformFeeBps);
     const vendorEarningsAmount = subtotalAmount - platformFeeAmount;
     const totalAmount = subtotalAmount + deliveryFeeAmount;
     if (totalAmount <= 0) {
@@ -1044,6 +1044,11 @@ export const publicStoresService = {
             originalSubtotalAmount,
             discountAmount,
             promoCode: promo?.code ?? null,
+            sellerPlanId: commission.sellerPlanId,
+            sellerPlanSlug: commission.sellerPlanSlug,
+            commissionTierId: commission.commissionTierId,
+            commissionBps: commission.platformFeeBps,
+            withdrawalFeeBps: commission.withdrawalFeeBps,
           } as Prisma.InputJsonValue,
         },
         select: { id: true },
@@ -1061,6 +1066,11 @@ export const publicStoresService = {
           deliveryFeeAmount,
           platformFeeAmount,
           vendorEarnings: vendorEarningsAmount,
+          sellerPlanId: commission.sellerPlanId,
+          sellerPlanSlug: commission.sellerPlanSlug,
+          commissionTierId: commission.commissionTierId,
+          commissionBps: commission.platformFeeBps,
+          withdrawalFeeBps: commission.withdrawalFeeBps,
           totalAmount,
           currency,
           deliveryZoneId: baseZone.id,
@@ -1090,6 +1100,11 @@ export const publicStoresService = {
           amount: totalAmount,
           platformFeeAmount,
           vendorEarningsAmount,
+          sellerPlanId: commission.sellerPlanId,
+          sellerPlanSlug: commission.sellerPlanSlug,
+          commissionTierId: commission.commissionTierId,
+          commissionBps: commission.platformFeeBps,
+          withdrawalFeeBps: commission.withdrawalFeeBps,
           currency,
           status: "PENDING",
           provider: "stripe",

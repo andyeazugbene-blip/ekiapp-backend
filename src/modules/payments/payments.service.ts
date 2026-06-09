@@ -8,7 +8,7 @@ import { stripe } from "../../lib/stripe";
 import { AppError } from "../../shared/errors/app-error";
 import { calculatePlatformFee as calcPlatformFee } from "../../shared/pricing";
 import { referralsService } from "../referrals/referrals.service";
-import { resolveVendorPlatformFeeBps } from "../subscriptions/subscription-plan-utils";
+import { resolveVendorCommission } from "../subscriptions/subscription-plan-utils";
 import { validateCreatePaymentIntentFromCartInput } from "./payments.validation";
 import type { CreatePaymentIntentResponse, PricedOrderItem } from "./payments.types";
 
@@ -22,6 +22,11 @@ interface VendorGroup {
   totalAmount: number;
   platformFeeAmount: number;
   vendorEarningsAmount: number;
+  sellerPlanId: string | null;
+  sellerPlanSlug: string;
+  commissionTierId: string | null;
+  commissionBps: number;
+  withdrawalFeeBps: number;
   deliveryZoneId: string;
 }
 
@@ -136,8 +141,8 @@ class PaymentsService {
       const effectiveZone = vendorZone ?? zone;
 
       const deliveryFee = effectiveZone.baseFeeAmount + Math.ceil(totalWeight / 1000) * effectiveZone.feePerKgAmount;
-      const platformFeeBps = await resolveVendorPlatformFeeBps(vendorId);
-      const platformFee = calcPlatformFee(subtotal, platformFeeBps);
+      const commission = await resolveVendorCommission(vendorId, subtotal);
+      const platformFee = calcPlatformFee(subtotal, commission.platformFeeBps);
       const vendorEarnings = subtotal - platformFee;
 
       vendorGroups.push({
@@ -148,6 +153,11 @@ class PaymentsService {
         totalAmount: subtotal + deliveryFee,
         platformFeeAmount: platformFee,
         vendorEarningsAmount: vendorEarnings,
+        sellerPlanId: commission.sellerPlanId,
+        sellerPlanSlug: commission.sellerPlanSlug,
+        commissionTierId: commission.commissionTierId,
+        commissionBps: commission.platformFeeBps,
+        withdrawalFeeBps: commission.withdrawalFeeBps,
         deliveryZoneId: effectiveZone.id,
       });
     }
@@ -227,6 +237,11 @@ class PaymentsService {
               delivery: g.deliveryFeeAmount,
               platformFee: g.platformFeeAmount,
               vendorEarnings: g.vendorEarningsAmount,
+              sellerPlanId: g.sellerPlanId,
+              sellerPlanSlug: g.sellerPlanSlug,
+              commissionTierId: g.commissionTierId,
+              commissionBps: g.commissionBps,
+              withdrawalFeeBps: g.withdrawalFeeBps,
             })),
             walletDeduction,
             deliveryAddress: payload.deliveryAddress ?? null,
@@ -252,6 +267,11 @@ class PaymentsService {
             deliveryFeeAmount: group.deliveryFeeAmount,
             platformFeeAmount: group.platformFeeAmount,
             vendorEarnings: group.vendorEarningsAmount,
+            sellerPlanId: group.sellerPlanId,
+            sellerPlanSlug: group.sellerPlanSlug,
+            commissionTierId: group.commissionTierId,
+            commissionBps: group.commissionBps,
+            withdrawalFeeBps: group.withdrawalFeeBps,
             totalAmount: group.totalAmount,
             currency,
             deliveryZoneId: group.deliveryZoneId,
@@ -281,6 +301,11 @@ class PaymentsService {
             amount: group.totalAmount,
             platformFeeAmount: group.platformFeeAmount,
             vendorEarningsAmount: group.vendorEarningsAmount,
+            sellerPlanId: group.sellerPlanId,
+            sellerPlanSlug: group.sellerPlanSlug,
+            commissionTierId: group.commissionTierId,
+            commissionBps: group.commissionBps,
+            withdrawalFeeBps: group.withdrawalFeeBps,
             currency,
             status: stripeAmount === 0 ? "SUCCEEDED" : "PENDING",
             provider: walletDeduction > 0 && stripeAmount === 0 ? "wallet" : "stripe",

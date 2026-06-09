@@ -8,7 +8,7 @@ import { logger } from "../../lib/logger";
 import { AppError } from "../../shared/errors/app-error";
 import { notificationsService } from "../notifications/notifications.service";
 import { calculatePlatformFee } from "../../shared/pricing";
-import { resolveVendorPlatformFeeBps } from "../subscriptions/subscription-plan-utils";
+import { resolveVendorCommission } from "../subscriptions/subscription-plan-utils";
 
 export interface InitializeEscrowInput {
   cartId: string;
@@ -104,8 +104,8 @@ export const paystackService = {
       where: { country: { equals: input.deliveryCountry, mode: "insensitive" }, isActive: true },
     });
     const deliveryFee = zone?.baseFeeAmount ?? 0;
-    const platformFeeBps = await resolveVendorPlatformFeeBps(vendorId);
-    const platformFee = calculatePlatformFee(subtotal, platformFeeBps);
+    const commission = await resolveVendorCommission(vendorId, subtotal);
+    const platformFee = calculatePlatformFee(subtotal, commission.platformFeeBps);
     const vendorEarnings = subtotal - platformFee;
     const grandTotal = subtotal + deliveryFee;
 
@@ -142,6 +142,11 @@ export const paystackService = {
           deliveryFeeAmount: deliveryFee,
           platformFeeAmount: platformFee,
           vendorEarnings,
+          sellerPlanId: commission.sellerPlanId,
+          sellerPlanSlug: commission.sellerPlanSlug,
+          commissionTierId: commission.commissionTierId,
+          commissionBps: commission.platformFeeBps,
+          withdrawalFeeBps: commission.withdrawalFeeBps,
           totalAmount: grandTotal,
           currency,
           deliveryAddress: input.deliveryAddress,

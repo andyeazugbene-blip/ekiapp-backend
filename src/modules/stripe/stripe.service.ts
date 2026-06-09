@@ -1,4 +1,4 @@
-import { NotificationType, PaymentStatus, Prisma } from "@prisma/client";
+import { NotificationType, PaymentStatus, Prisma, SubscriptionPlan } from "@prisma/client";
 import type Stripe from "stripe";
 
 import { env } from "../../config/env";
@@ -284,11 +284,12 @@ class StripeWebhookService {
     }
 
     const vendorId = session.metadata.vendorId;
-    const plan = session.metadata.plan as "GROWTH" | "PRO" | undefined;
+    const sellerPlanId = session.metadata.sellerPlanId;
+    const sellerPlanSlug = session.metadata.sellerPlanSlug ?? session.metadata.plan;
     const stripeSubscriptionId = typeof session.subscription === "string" ? session.subscription : session.subscription?.id;
 
-    if (!vendorId || !plan || !["GROWTH", "PRO"].includes(plan) || !stripeSubscriptionId) {
-      logger.warn("Subscription checkout webhook missing metadata", { eventId: event.id, vendorId, plan });
+    if (!vendorId || !sellerPlanSlug || !stripeSubscriptionId) {
+      logger.warn("Subscription checkout webhook missing metadata", { eventId: event.id, vendorId, sellerPlanSlug });
       return { received: true, ignored: true, eventId: event.id, type: event.type };
     }
 
@@ -301,11 +302,35 @@ class StripeWebhookService {
         const now = new Date();
         const periodEnd = new Date(now);
         periodEnd.setMonth(periodEnd.getMonth() + 1);
+        const legacyPlan = sellerPlanSlug.toUpperCase();
+        const sellerPlan = await tx.sellerPlan.findFirst({
+          where: {
+            deletedAt: null,
+            OR: [
+              ...(sellerPlanId ? [{ id: sellerPlanId }] : []),
+              { slug: sellerPlanSlug.toLowerCase() },
+              ...(Object.values(SubscriptionPlan).includes(legacyPlan as SubscriptionPlan)
+                ? [{ legacyPlan: legacyPlan as SubscriptionPlan }]
+                : []),
+            ],
+          },
+        });
+        if (!sellerPlan) {
+          logger.warn("Subscription checkout webhook plan not found", {
+            eventId: event.id,
+            vendorId,
+            sellerPlanId,
+            sellerPlanSlug,
+          });
+          await this.markEventIgnored(tx, event.id);
+          return { received: true, ignored: true, eventId: event.id, type: event.type };
+        }
 
         await tx.vendorSubscription.upsert({
           where: { vendorId },
           update: {
-            plan,
+            plan: sellerPlan.legacyPlan ?? "GROWTH",
+            sellerPlanId: sellerPlan.id,
             status: "ACTIVE",
             stripeSubscriptionId,
             currentPeriodStart: now,
@@ -314,7 +339,8 @@ class StripeWebhookService {
           },
           create: {
             vendorId,
-            plan,
+            plan: sellerPlan.legacyPlan ?? "GROWTH",
+            sellerPlanId: sellerPlan.id,
             status: "ACTIVE",
             stripeSubscriptionId,
             currentPeriodStart: now,
@@ -330,7 +356,8 @@ class StripeWebhookService {
         logger.info("Webhook processed: vendor subscription checkout completed", {
           eventId: event.id,
           vendorId,
-          plan,
+          sellerPlanId: sellerPlan.id,
+          sellerPlanSlug: sellerPlan.slug,
           stripeSubscriptionId,
         });
 

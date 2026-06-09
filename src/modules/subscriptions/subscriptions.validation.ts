@@ -2,14 +2,15 @@ import { SubscriptionPlan } from "@prisma/client";
 
 import { AppError } from "../../shared/errors/app-error";
 import type {
+  AssignVendorPlanInput,
   ActivateSubscriptionInput,
   CreateSubscriptionInput,
   CreateWebSubscriptionCheckoutInput,
+  CommissionTierInput,
   SubscriptionPlanConfigInput,
 } from "./subscriptions.types";
 
 const PLANS = new Set<string>(Object.values(SubscriptionPlan));
-const ACTIVATE_PLANS = new Set(["FREE", "GROWTH", "PRO"]);
 
 export function validateCreateSubscriptionInput(input: unknown): CreateSubscriptionInput {
   if (!input || typeof input !== "object") {
@@ -17,11 +18,11 @@ export function validateCreateSubscriptionInput(input: unknown): CreateSubscript
   }
   const raw = input as Record<string, unknown>;
 
-  if (typeof raw.plan !== "string" || !PLANS.has(raw.plan)) {
-    throw new AppError("plan must be FREE, BASIC, GROWTH, PREMIUM, or PRO", 400);
+  if (typeof raw.plan !== "string" || raw.plan.trim().length === 0) {
+    throw new AppError("plan is required", 400);
   }
 
-  return { plan: raw.plan as SubscriptionPlan };
+  return { plan: raw.plan.trim() };
 }
 
 export function validateCreateWebSubscriptionCheckoutInput(input: unknown): CreateWebSubscriptionCheckoutInput {
@@ -30,9 +31,9 @@ export function validateCreateWebSubscriptionCheckoutInput(input: unknown): Crea
   }
   const raw = input as Record<string, unknown>;
 
-  const plan = typeof raw.plan === "string" ? raw.plan.toUpperCase() : "";
-  if (!["GROWTH", "PRO"].includes(plan)) {
-    throw new AppError("plan must be growth or pro", 400);
+  const plan = typeof raw.plan === "string" ? raw.plan.trim() : "";
+  if (!plan) {
+    throw new AppError("plan is required", 400);
   }
 
   const email = typeof raw.email === "string" ? raw.email.trim().toLowerCase() : "";
@@ -40,7 +41,7 @@ export function validateCreateWebSubscriptionCheckoutInput(input: unknown): Crea
     throw new AppError("A valid vendor email is required", 400);
   }
 
-  return { plan: plan as SubscriptionPlan, email };
+  return { plan, email };
 }
 
 export function validateActivateSubscriptionInput(input: unknown): ActivateSubscriptionInput {
@@ -49,12 +50,12 @@ export function validateActivateSubscriptionInput(input: unknown): ActivateSubsc
   }
   const raw = input as Record<string, unknown>;
 
-  const plan = typeof raw.plan === "string" ? raw.plan.toUpperCase() : "";
-  if (!ACTIVATE_PLANS.has(plan)) {
-    throw new AppError("plan must be free, growth, or pro", 400);
+  const plan = typeof raw.plan === "string" ? raw.plan.trim() : "";
+  if (!plan) {
+    throw new AppError("plan is required", 400);
   }
 
-  return { plan: plan as ActivateSubscriptionInput["plan"] };
+  return { plan };
 }
 
 function requireBoolean(value: unknown, field: string): boolean {
@@ -85,30 +86,74 @@ function requireInteger(value: unknown, field: string, options?: { min?: number;
   return number;
 }
 
+function optionalString(value: unknown): string | null {
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
+}
+
+function parseLegacyPlan(value: unknown): SubscriptionPlan | null {
+  if (value == null || value === "") return null;
+  const plan = typeof value === "string" ? value.toUpperCase() : "";
+  if (!PLANS.has(plan)) {
+    throw new AppError("legacy plan must be FREE, BASIC, GROWTH, PREMIUM, or PRO", 400);
+  }
+  return plan as SubscriptionPlan;
+}
+
+function validateCommissionTier(raw: unknown, index: number): CommissionTierInput {
+  if (!raw || typeof raw !== "object") {
+    throw new AppError(`commissionTiers[${index}] must be an object`, 400);
+  }
+  const tier = raw as Record<string, unknown>;
+  const minSubtotalCents = requireInteger(tier.minSubtotalCents, `commissionTiers[${index}].minSubtotalCents`, { min: 0 });
+  const maxSubtotalCents =
+    tier.maxSubtotalCents == null
+      ? null
+      : requireInteger(tier.maxSubtotalCents, `commissionTiers[${index}].maxSubtotalCents`, { min: minSubtotalCents + 1 });
+
+  return {
+    id: typeof tier.id === "string" && tier.id.trim().length > 0 ? tier.id.trim() : undefined,
+    label: optionalString(tier.label),
+    minSubtotalCents,
+    maxSubtotalCents,
+    platformFeeBps: requireInteger(tier.platformFeeBps, `commissionTiers[${index}].platformFeeBps`, { min: 0, max: 10000 }),
+    isActive: typeof tier.isActive === "boolean" ? tier.isActive : true,
+    displayOrder: tier.displayOrder == null ? index : requireInteger(tier.displayOrder, `commissionTiers[${index}].displayOrder`, { min: 0 }),
+  };
+}
+
 export function validateSubscriptionPlanConfigInput(input: unknown): SubscriptionPlanConfigInput {
   if (!input || typeof input !== "object") {
     throw new AppError("Invalid request body", 400);
   }
 
   const raw = input as Record<string, unknown>;
-  const plan = typeof raw.plan === "string" ? raw.plan.toUpperCase() : "";
-  if (!PLANS.has(plan)) {
-    throw new AppError("plan must be FREE, BASIC, GROWTH, PREMIUM, or PRO", 400);
-  }
-
   const slug = requireString(raw.slug, "slug").toLowerCase();
   if (!/^[a-z0-9-]+$/.test(slug)) {
     throw new AppError("slug must use lowercase letters, numbers, and dashes only", 400);
   }
+  const commissionTiersRaw = Array.isArray(raw.commissionTiers) ? raw.commissionTiers : [];
+  const commissionTiers = commissionTiersRaw.map(validateCommissionTier);
+  if (!commissionTiers.some((tier) => tier.isActive && tier.minSubtotalCents === 0)) {
+    throw new AppError("At least one active commission tier must start at 0", 400);
+  }
+  const defaultPlatformFeeBps =
+    raw.defaultPlatformFeeBps == null && raw.platformFeeBps != null
+      ? requireInteger(raw.platformFeeBps, "platformFeeBps", { min: 0, max: 10000 })
+      : requireInteger(raw.defaultPlatformFeeBps, "defaultPlatformFeeBps", { min: 0, max: 10000 });
 
   return {
-    plan: plan as SubscriptionPlan,
+    id: typeof raw.id === "string" && raw.id.trim().length > 0 ? raw.id.trim() : undefined,
+    plan: parseLegacyPlan(raw.plan ?? raw.legacyPlan),
     slug,
     name: requireString(raw.name, "name"),
     description: typeof raw.description === "string" ? raw.description.trim() : null,
     monthlyPriceCents: requireInteger(raw.monthlyPriceCents, "monthlyPriceCents", { min: 0 }),
-    platformFeeBps: requireInteger(raw.platformFeeBps, "platformFeeBps", { min: 0, max: 10000 }),
+    platformFeeBps: defaultPlatformFeeBps,
+    defaultPlatformFeeBps,
+    withdrawalFeeBps: requireInteger(raw.withdrawalFeeBps, "withdrawalFeeBps", { min: 0, max: 10000 }),
     currency: requireString(raw.currency, "currency").toUpperCase(),
+    stripePriceId: optionalString(raw.stripePriceId),
+    stripeProductId: optionalString(raw.stripeProductId),
     maxProducts: requireInteger(raw.maxProducts, "maxProducts"),
     maxImagesPerProduct: requireInteger(raw.maxImagesPerProduct, "maxImagesPerProduct", { min: 1 }),
     maxOrders: raw.maxOrders == null ? null : requireInteger(raw.maxOrders, "maxOrders"),
@@ -121,5 +166,18 @@ export function validateSubscriptionPlanConfigInput(input: unknown): Subscriptio
     canReceiveOrders: requireBoolean(raw.canReceiveOrders, "canReceiveOrders"),
     isActive: requireBoolean(raw.isActive, "isActive"),
     displayOrder: requireInteger(raw.displayOrder, "displayOrder", { min: 0 }),
+    commissionTiers,
   };
+}
+
+export function validateAssignVendorPlanInput(input: unknown): AssignVendorPlanInput {
+  if (!input || typeof input !== "object") {
+    throw new AppError("Invalid request body", 400);
+  }
+  const raw = input as Record<string, unknown>;
+  const plan = typeof raw.plan === "string" ? raw.plan.trim() : "";
+  if (!plan) {
+    throw new AppError("plan is required", 400);
+  }
+  return { plan };
 }

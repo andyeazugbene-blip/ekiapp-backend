@@ -10,13 +10,14 @@ import {
   PromoType,
   ReviewStatus,
   ShipmentStatus,
+  SubscriptionPlan,
   SubscriptionStatus,
   UserRole,
   VendorVerificationStatus,
   WalletTransactionType,
 } from "@prisma/client";
 import bcrypt from "bcryptjs";
-import { DEFAULT_PLAN_CONFIGS } from "../src/modules/subscriptions/subscriptions.types";
+import { DEFAULT_PLAN_CONFIGS, DEFAULT_SELLER_PLAN_CONFIGS } from "../src/modules/subscriptions/subscriptions.types";
 
 const prisma = new PrismaClient();
 
@@ -32,12 +33,101 @@ function usd(amount: number) {
   return Math.round(amount * 100);
 }
 
+function legacyPlanConfigData(plan: (typeof DEFAULT_PLAN_CONFIGS)[SubscriptionPlan]) {
+  return {
+    plan: plan.plan as SubscriptionPlan,
+    slug: plan.slug,
+    name: plan.name,
+    description: plan.description ?? null,
+    monthlyPriceCents: plan.monthlyPriceCents,
+    platformFeeBps: plan.platformFeeBps ?? plan.defaultPlatformFeeBps,
+    currency: plan.currency,
+    maxProducts: plan.maxProducts,
+    maxImagesPerProduct: plan.maxImagesPerProduct,
+    maxOrders: plan.maxOrders ?? null,
+    analytics: plan.analytics,
+    prioritySupport: plan.prioritySupport,
+    flashSales: plan.flashSales,
+    bundles: plan.bundles,
+    discounts: plan.discounts,
+    marketingTools: plan.marketingTools,
+    canReceiveOrders: plan.canReceiveOrders,
+    isActive: plan.isActive,
+    displayOrder: plan.displayOrder,
+  };
+}
+
+function sellerPlanConfigData(plan: (typeof DEFAULT_SELLER_PLAN_CONFIGS)[number]) {
+  return {
+    slug: plan.slug,
+    name: plan.name,
+    description: plan.description ?? null,
+    legacyPlan: plan.plan ?? null,
+    monthlyPriceCents: plan.monthlyPriceCents,
+    currency: plan.currency,
+    stripePriceId: plan.stripePriceId ?? null,
+    stripeProductId: plan.stripeProductId ?? null,
+    defaultPlatformFeeBps: plan.defaultPlatformFeeBps,
+    withdrawalFeeBps: plan.withdrawalFeeBps,
+    maxProducts: plan.maxProducts,
+    maxImagesPerProduct: plan.maxImagesPerProduct,
+    maxOrders: plan.maxOrders ?? null,
+    analytics: plan.analytics,
+    prioritySupport: plan.prioritySupport,
+    flashSales: plan.flashSales,
+    bundles: plan.bundles,
+    discounts: plan.discounts,
+    marketingTools: plan.marketingTools,
+    canReceiveOrders: plan.canReceiveOrders,
+    isActive: plan.isActive,
+    displayOrder: plan.displayOrder,
+    deletedAt: null,
+  };
+}
+
 async function main() {
   const passwordHash = await bcrypt.hash(APP_PASSWORD, 10);
   const adminPassword = await bcrypt.hash(process.env.ADMIN_PASSWORD ?? "AndersonP@55w0rd", 10);
 
+  const legacyPlans = await Promise.all(
+    Object.values(DEFAULT_PLAN_CONFIGS).map((plan) => {
+      const data = legacyPlanConfigData(plan);
+      return prisma.subscriptionPlanConfig.upsert({
+        where: { plan: data.plan },
+        update: data,
+        create: data,
+      });
+    }),
+  );
+
   await Promise.all(
-    Object.values(DEFAULT_PLAN_CONFIGS).map((plan) =>
+    DEFAULT_SELLER_PLAN_CONFIGS.map(async (plan) => {
+      const data = sellerPlanConfigData(plan);
+      const sellerPlan = await prisma.sellerPlan.upsert({
+        where: { slug: data.slug },
+        update: data,
+        create: data,
+      });
+
+      await prisma.commissionTier.deleteMany({ where: { sellerPlanId: sellerPlan.id } });
+      await prisma.commissionTier.createMany({
+        data: plan.commissionTiers.map((tier) => ({
+          sellerPlanId: sellerPlan.id,
+          label: tier.label ?? null,
+          minSubtotalCents: tier.minSubtotalCents,
+          maxSubtotalCents: tier.maxSubtotalCents ?? null,
+          platformFeeBps: tier.platformFeeBps,
+          isActive: tier.isActive,
+          displayOrder: tier.displayOrder,
+        })),
+      });
+
+      return sellerPlan;
+    }),
+  );
+
+  await Promise.all(
+    legacyPlans.map((plan) =>
       prisma.subscriptionPlanConfig.upsert({
         where: { plan: plan.plan },
         update: plan,

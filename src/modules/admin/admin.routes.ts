@@ -89,6 +89,8 @@ import {
   verify2fa,
 } from "./admin-2fa.controller";
 import {
+  assignVendorPlan,
+  deleteAdminPlan,
   listAdminPlans,
   upsertAdminPlan,
 } from "../subscriptions/subscriptions.controller";
@@ -165,6 +167,8 @@ adminRouter.patch("/promo-codes/:id", asyncHandler(requireAdminPermission("promo
 adminRouter.get("/subscription-plans", asyncHandler(requireAdminPermission("subscriptions.read")), asyncHandler(listAdminPlans));
 adminRouter.post("/subscription-plans", asyncHandler(requireAdminPermission("subscriptions.mutate")), asyncHandler(upsertAdminPlan));
 adminRouter.patch("/subscription-plans/:plan", asyncHandler(requireAdminPermission("subscriptions.mutate")), asyncHandler(upsertAdminPlan));
+adminRouter.delete("/subscription-plans/:id", asyncHandler(requireAdminPermission("subscriptions.mutate")), asyncHandler(deleteAdminPlan));
+adminRouter.patch("/vendors/:id/seller-plan", asyncHandler(requireAdminPermission("subscriptions.mutate")), asyncHandler(assignVendorPlan));
 
 // Review moderation
 adminRouter.get("/reviews", asyncHandler(requireAdminPermission("reviews.read")), asyncHandler(adminListReviews));

@@ -208,6 +208,9 @@ model PayoutRequest {
   vendorId           String
   payoutMethodId     String
   amount             Int
+  withdrawalFeeAmount Int                @default(0)
+  withdrawalFeeBps    Int                @default(0)
+  netAmount           Int?
   currency           String              @default("EUR")
   status             PayoutRequestStatus @default(PENDING)
   notes              String?
@@ -291,6 +294,11 @@ model Order {
   deliveryFeeAmount  Int                 @default(0)
   platformFeeAmount  Int                 @default(0)
   vendorEarnings     Int                 @default(0)
+  sellerPlanId       String?
+  sellerPlanSlug     String?
+  commissionTierId   String?
+  commissionBps      Int?
+  withdrawalFeeBps   Int?
   totalAmount        Int
   currency           String              @default("EUR")
   deliveryZoneId     String?
@@ -300,6 +308,8 @@ model Order {
   checkout           Checkout?           @relation(fields: [checkoutId], references: [id], onDelete: SetNull)
   buyer              User                @relation("BuyerOrders", fields: [buyerId], references: [id], onDelete: Restrict)
   deliveryZone       DeliveryZone?       @relation(fields: [deliveryZoneId], references: [id], onDelete: SetNull)
+  sellerPlan         SellerPlan?         @relation(fields: [sellerPlanId], references: [id], onDelete: SetNull)
+  commissionTier     CommissionTier?     @relation(fields: [commissionTierId], references: [id], onDelete: SetNull)
   items              OrderItem[]
   payment            Payment?
   paystackTransaction PaystackTransaction?
@@ -314,6 +324,8 @@ model Order {
   @@index([vendorId, status])
   @@index([status, createdAt])
   @@index([escrowType, status])
+  @@index([sellerPlanId])
+  @@index([commissionTierId])
   @@index([createdAt])
 }
 
@@ -363,17 +375,26 @@ model Payment {
   amount                Int
   platformFeeAmount     Int
   vendorEarningsAmount  Int
+  sellerPlanId          String?
+  sellerPlanSlug        String?
+  commissionTierId      String?
+  commissionBps         Int?
+  withdrawalFeeBps      Int?
   currency              String              @default("EUR")
   status                PaymentStatus       @default(PENDING)
   provider              String              @default("stripe")
   metadata              Json?
   processedAt           DateTime?
   order                 Order               @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  sellerPlan            SellerPlan?         @relation(fields: [sellerPlanId], references: [id], onDelete: SetNull)
+  commissionTier        CommissionTier?     @relation(fields: [commissionTierId], references: [id], onDelete: SetNull)
   walletTransactions    WalletTransaction[]
   createdAt             DateTime            @default(now())
   updatedAt             DateTime            @updatedAt
 
   @@index([status])
+  @@index([sellerPlanId])
+  @@index([commissionTierId])
   @@index([status, createdAt])
   @@index([createdAt])
 }
@@ -796,17 +817,20 @@ model VendorSubscription {
   id                   String             @id @default(cuid())
   vendorId             String             @unique
   plan                 SubscriptionPlan   @default(FREE)
+  sellerPlanId         String?
   status               SubscriptionStatus @default(ACTIVE)
   stripeSubscriptionId String?            @unique
   stripeCustomerId     String?
   currentPeriodStart   DateTime?
   currentPeriodEnd     DateTime?
   cancelledAt          DateTime?
+  sellerPlan           SellerPlan?        @relation(fields: [sellerPlanId], references: [id], onDelete: SetNull)
   createdAt            DateTime           @default(now())
   updatedAt            DateTime           @updatedAt
 
   @@index([status])
   @@index([plan])
+  @@index([sellerPlanId])
 }
 
 // ─── Admin RBAC ──────────────────────────────────────────────────────────────
@@ -862,6 +886,60 @@ model SubscriptionPlanConfig {
   updatedAt          DateTime         @updatedAt
 
   @@index([isActive, displayOrder])
+}
+
+model SellerPlan {
+  id                   String               @id @default(cuid())
+  slug                 String               @unique
+  name                 String
+  description          String?
+  legacyPlan           SubscriptionPlan?    @unique
+  monthlyPriceCents    Int                  @default(0)
+  currency             String               @default("GBP")
+  stripePriceId        String?
+  stripeProductId      String?
+  defaultPlatformFeeBps Int                 @default(1500)
+  withdrawalFeeBps     Int                  @default(250)
+  maxProducts          Int                  @default(10)
+  maxImagesPerProduct  Int                  @default(3)
+  maxOrders            Int?
+  analytics            Boolean              @default(false)
+  prioritySupport      Boolean              @default(false)
+  flashSales           Boolean              @default(false)
+  bundles              Boolean              @default(false)
+  discounts            Boolean              @default(false)
+  marketingTools       Boolean              @default(false)
+  canReceiveOrders     Boolean              @default(true)
+  isActive             Boolean              @default(true)
+  displayOrder         Int                  @default(0)
+  deletedAt            DateTime?
+  subscriptions        VendorSubscription[]
+  commissionTiers      CommissionTier[]
+  orders               Order[]
+  payments             Payment[]
+  createdAt            DateTime             @default(now())
+  updatedAt            DateTime             @updatedAt
+
+  @@index([isActive, deletedAt, displayOrder])
+  @@index([legacyPlan])
+}
+
+model CommissionTier {
+  id                String      @id @default(cuid())
+  sellerPlanId      String
+  label             String?
+  minSubtotalCents  Int         @default(0)
+  maxSubtotalCents  Int?
+  platformFeeBps    Int
+  isActive          Boolean     @default(true)
+  displayOrder      Int         @default(0)
+  sellerPlan        SellerPlan  @relation(fields: [sellerPlanId], references: [id], onDelete: Cascade)
+  orders            Order[]
+  payments          Payment[]
+  createdAt         DateTime    @default(now())
+  updatedAt         DateTime    @updatedAt
+
+  @@index([sellerPlanId, isActive, minSubtotalCents])
 }
 
 model UploadAsset {

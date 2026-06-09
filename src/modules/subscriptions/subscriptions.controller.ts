@@ -4,6 +4,7 @@ import { AppError } from "../../shared/errors/app-error";
 import { subscriptionsService } from "./subscriptions.service";
 import {
   validateActivateSubscriptionInput,
+  validateAssignVendorPlanInput,
   validateCreateSubscriptionInput,
   validateCreateWebSubscriptionCheckoutInput,
   validateSubscriptionPlanConfigInput,
@@ -39,6 +40,35 @@ export async function upsertAdminPlan(request: Request, response: Response): Pro
   const input = validateSubscriptionPlanConfigInput(request.body);
   const plan = await subscriptionsService.upsertPlanConfig(request.user.id, input);
   response.status(200).json({ plan });
+}
+
+export async function deleteAdminPlan(request: Request, response: Response): Promise<void> {
+  if (!request.user) {
+    throw new AppError("Unauthorized", 401);
+  }
+
+  const planId = request.params.id ?? request.params.plan;
+  if (!planId || typeof planId !== "string") {
+    throw new AppError("Plan id is required and must be a string", 400);
+  }
+
+  const plan = await subscriptionsService.deletePlanConfig(request.user.id, planId);
+  response.status(200).json({ plan });
+}
+
+export async function assignVendorPlan(request: Request, response: Response): Promise<void> {
+  if (!request.user) {
+    throw new AppError("Unauthorized", 401);
+  }
+
+  const vendorId = request.params.id;
+  if (!vendorId || typeof vendorId !== "string") {
+    throw new AppError("Vendor id is required and must be a string", 400);
+  }
+
+  const input = validateAssignVendorPlanInput(request.body);
+  const subscription = await subscriptionsService.assignVendorPlan(request.user.id, vendorId, input);
+  response.status(200).json({ subscription });
 }
 
 export async function activateSubscription(request: Request, response: Response): Promise<void> {

@@ -1,87 +1,276 @@
-import type { SubscriptionPlan, SubscriptionPlanConfig, VendorSubscription } from "@prisma/client";
+import type {
+  CommissionTier,
+  SellerPlan,
+  SubscriptionPlan,
+  VendorSubscription,
+} from "@prisma/client";
 
 import { prisma } from "../../lib/prisma";
 import { stripe } from "../../lib/stripe";
 import { AppError } from "../../shared/errors/app-error";
-import { DEFAULT_PLAN_CONFIGS } from "./subscriptions.types";
-import type { ActivateSubscriptionInput, SubscriptionPlanConfigInput } from "./subscriptions.types";
+import {
+  DEFAULT_PLAN_CONFIGS,
+  DEFAULT_SELLER_PLAN_CONFIGS,
+} from "./subscriptions.types";
+import type {
+  ActivateSubscriptionInput,
+  AssignVendorPlanInput,
+  CommissionTierInput,
+  SubscriptionPlanConfigInput,
+} from "./subscriptions.types";
 
-type PlanConfigRecord = SubscriptionPlanConfig & {
-  platformFeeBps?: number | null;
+type SellerPlanWithTiers = SellerPlan & { commissionTiers: CommissionTier[] };
+type VendorSubscriptionWithPlan = VendorSubscription & {
+  sellerPlan: SellerPlanWithTiers | null;
 };
-type PlanConfigModel = {
-  count: () => Promise<number>;
-  upsert: (args: any) => Promise<PlanConfigRecord>;
-  findUnique: (args: any) => Promise<PlanConfigRecord | null>;
-  findMany: (args?: any) => Promise<PlanConfigRecord[]>;
-  findFirst: (args: any) => Promise<PlanConfigRecord | null>;
-  create: (args: any) => Promise<PlanConfigRecord>;
-};
 
-function getPlanModel(): PlanConfigModel | null {
-  return ((prisma as unknown as { subscriptionPlanConfig?: PlanConfigModel }).subscriptionPlanConfig ?? null);
+function percentFromBps(bps: number): string {
+  return `${(bps / 100).toFixed(2).replace(/\.00$/, "").replace(/(\.\d)0$/, "$1")}%`;
 }
 
-async function ensureDefaultPlanConfigs(): Promise<void> {
-  const planModel = getPlanModel();
-  if (!planModel) return;
-
-  const existing = await planModel.count();
-  if (existing > 0) return;
-
-  await Promise.all(
-    Object.values(DEFAULT_PLAN_CONFIGS).map((plan) =>
-      planModel.upsert({
-        where: { plan: plan.plan },
-        update: {},
-        create: plan,
-      }),
-    ),
-  );
+function legacyPlanForSlug(slug: string): SubscriptionPlan {
+  if (slug === "growth") return "GROWTH";
+  if (slug === "pro") return "PRO";
+  return "FREE";
 }
 
-async function getPlanConfig(plan: SubscriptionPlan): Promise<PlanConfigRecord> {
-  await ensureDefaultPlanConfigs();
-
-  const planModel = getPlanModel();
-  if (!planModel) {
-    return DEFAULT_PLAN_CONFIGS[plan] as unknown as PlanConfigRecord;
-  }
-
-  const config = await planModel.findUnique({ where: { plan } });
-  if (config) return config;
-
-  const fallback = DEFAULT_PLAN_CONFIGS[plan];
-  return planModel.create({ data: fallback });
-}
-
-function formatPlanResponse(config: PlanConfigRecord) {
+function stripLegacyConfig(plan: (typeof DEFAULT_PLAN_CONFIGS)[SubscriptionPlan]) {
   return {
-    id: config.id,
-    plan: config.plan,
-    slug: config.slug,
-    name: config.name,
-    description: config.description,
-    monthlyPriceCents: config.monthlyPriceCents,
-    platformFeeBps: config.platformFeeBps ?? DEFAULT_PLAN_CONFIGS[config.plan].platformFeeBps,
-    currency: config.currency,
-    maxProducts: config.maxProducts,
-    maxImagesPerProduct: config.maxImagesPerProduct,
-    maxOrders: config.maxOrders,
-    analytics: config.analytics,
-    prioritySupport: config.prioritySupport,
-    flashSales: config.flashSales,
-    bundles: config.bundles,
-    discounts: config.discounts,
-    marketingTools: config.marketingTools,
-    canReceiveOrders: config.canReceiveOrders,
-    isActive: config.isActive,
-    displayOrder: config.displayOrder,
+    plan: plan.plan ?? legacyPlanForSlug(plan.slug),
+    slug: plan.slug,
+    name: plan.name,
+    description: plan.description,
+    monthlyPriceCents: plan.monthlyPriceCents,
+    platformFeeBps: plan.defaultPlatformFeeBps,
+    currency: plan.currency,
+    maxProducts: plan.maxProducts,
+    maxImagesPerProduct: plan.maxImagesPerProduct,
+    maxOrders: plan.maxOrders,
+    analytics: plan.analytics,
+    prioritySupport: plan.prioritySupport,
+    flashSales: plan.flashSales,
+    bundles: plan.bundles,
+    discounts: plan.discounts,
+    marketingTools: plan.marketingTools,
+    canReceiveOrders: plan.canReceiveOrders,
+    isActive: plan.isActive,
+    displayOrder: plan.displayOrder,
   };
 }
 
+function sellerPlanData(input: SubscriptionPlanConfigInput) {
+  return {
+    slug: input.slug,
+    name: input.name,
+    description: input.description ?? null,
+    legacyPlan: input.plan ?? null,
+    monthlyPriceCents: input.monthlyPriceCents,
+    currency: input.currency,
+    stripePriceId: input.stripePriceId ?? null,
+    stripeProductId: input.stripeProductId ?? null,
+    defaultPlatformFeeBps: input.defaultPlatformFeeBps,
+    withdrawalFeeBps: input.withdrawalFeeBps,
+    maxProducts: input.maxProducts,
+    maxImagesPerProduct: input.maxImagesPerProduct,
+    maxOrders: input.maxOrders ?? null,
+    analytics: input.analytics,
+    prioritySupport: input.prioritySupport,
+    flashSales: input.flashSales,
+    bundles: input.bundles,
+    discounts: input.discounts,
+    marketingTools: input.marketingTools,
+    canReceiveOrders: input.canReceiveOrders,
+    isActive: input.isActive,
+    displayOrder: input.displayOrder,
+    deletedAt: input.isActive ? null : undefined,
+  };
+}
+
+function sortTiers(tiers: CommissionTier[]): CommissionTier[] {
+  return [...tiers].sort((a, b) => a.displayOrder - b.displayOrder || a.minSubtotalCents - b.minSubtotalCents);
+}
+
+function formatTier(tier: CommissionTier) {
+  return {
+    id: tier.id,
+    label: tier.label,
+    minSubtotalCents: tier.minSubtotalCents,
+    maxSubtotalCents: tier.maxSubtotalCents,
+    platformFeeBps: tier.platformFeeBps,
+    platformFeePercent: percentFromBps(tier.platformFeeBps),
+    isActive: tier.isActive,
+    displayOrder: tier.displayOrder,
+  };
+}
+
+function formatPlanResponse(plan: SellerPlanWithTiers) {
+  const activeTiers = sortTiers(plan.commissionTiers).filter((tier) => tier.isActive);
+  const firstTier = activeTiers[0];
+  const platformFeeBps = firstTier?.platformFeeBps ?? plan.defaultPlatformFeeBps;
+
+  return {
+    id: plan.id,
+    plan: plan.legacyPlan ?? legacyPlanForSlug(plan.slug),
+    legacyPlan: plan.legacyPlan,
+    slug: plan.slug,
+    name: plan.name,
+    description: plan.description,
+    monthlyPriceCents: plan.monthlyPriceCents,
+    price: plan.monthlyPriceCents / 100,
+    platformFeeBps,
+    defaultPlatformFeeBps: plan.defaultPlatformFeeBps,
+    platformFeePercent: percentFromBps(platformFeeBps),
+    withdrawalFeeBps: plan.withdrawalFeeBps,
+    withdrawalFeePercent: percentFromBps(plan.withdrawalFeeBps),
+    currency: plan.currency,
+    stripePriceId: plan.stripePriceId,
+    stripeProductId: plan.stripeProductId,
+    maxProducts: plan.maxProducts,
+    maxImagesPerProduct: plan.maxImagesPerProduct,
+    maxOrders: plan.maxOrders,
+    analytics: plan.analytics,
+    prioritySupport: plan.prioritySupport,
+    flashSales: plan.flashSales,
+    bundles: plan.bundles,
+    discounts: plan.discounts,
+    marketingTools: plan.marketingTools,
+    canReceiveOrders: plan.canReceiveOrders,
+    isActive: plan.isActive,
+    deletedAt: plan.deletedAt,
+    displayOrder: plan.displayOrder,
+    commissionTiers: sortTiers(plan.commissionTiers).map(formatTier),
+  };
+}
+
+function formatSubscriptionResponse(subscription: VendorSubscriptionWithPlan) {
+  const plan = subscription.sellerPlan;
+  return {
+    id: subscription.id,
+    vendorId: subscription.vendorId,
+    plan: subscription.plan,
+    sellerPlanId: subscription.sellerPlanId,
+    planId: plan?.id ?? subscription.plan,
+    planName: plan?.name ?? subscription.plan,
+    slug: plan?.slug ?? subscription.plan.toLowerCase(),
+    status: subscription.status,
+    currentPeriodStart: subscription.currentPeriodStart,
+    currentPeriodEnd: subscription.currentPeriodEnd,
+    cancelledAt: subscription.cancelledAt,
+    stripeSubscriptionId: subscription.stripeSubscriptionId,
+    stripeCustomerId: subscription.stripeCustomerId,
+    platformFeeBps: plan?.defaultPlatformFeeBps,
+    platformFeePercent: plan ? percentFromBps(plan.defaultPlatformFeeBps) : undefined,
+    withdrawalFeeBps: plan?.withdrawalFeeBps,
+    withdrawalFeePercent: plan ? percentFromBps(plan.withdrawalFeeBps) : undefined,
+    commissionTiers: plan ? sortTiers(plan.commissionTiers).map(formatTier) : [],
+  };
+}
+
+async function syncCommissionTiers(sellerPlanId: string, tiers: CommissionTierInput[]) {
+  const keepIds: string[] = [];
+  for (const tier of tiers) {
+    const data = {
+      sellerPlanId,
+      label: tier.label ?? null,
+      minSubtotalCents: tier.minSubtotalCents,
+      maxSubtotalCents: tier.maxSubtotalCents ?? null,
+      platformFeeBps: tier.platformFeeBps,
+      isActive: tier.isActive,
+      displayOrder: tier.displayOrder,
+    };
+    if (tier.id) {
+      const updated = await prisma.commissionTier.update({
+        where: { id: tier.id },
+        data,
+      });
+      keepIds.push(updated.id);
+    } else {
+      const created = await prisma.commissionTier.create({ data });
+      keepIds.push(created.id);
+    }
+  }
+
+  await prisma.commissionTier.deleteMany({
+    where: {
+      sellerPlanId,
+      ...(keepIds.length > 0 ? { id: { notIn: keepIds } } : {}),
+    },
+  });
+}
+
+async function ensureDefaultPlanConfigs(): Promise<void> {
+  const existingLegacyPlans = await prisma.subscriptionPlanConfig.count();
+  if (existingLegacyPlans === 0) {
+    await Promise.all(
+      Object.values(DEFAULT_PLAN_CONFIGS).map((plan) =>
+        prisma.subscriptionPlanConfig.upsert({
+          where: { plan: plan.plan ?? legacyPlanForSlug(plan.slug) },
+          update: {},
+          create: stripLegacyConfig(plan),
+        }),
+      ),
+    );
+  }
+
+  const existingSellerPlans = await prisma.sellerPlan.count();
+  if (existingSellerPlans > 0) return;
+
+  for (const plan of DEFAULT_SELLER_PLAN_CONFIGS) {
+    const created = await prisma.sellerPlan.create({ data: sellerPlanData(plan) });
+    await syncCommissionTiers(created.id, plan.commissionTiers);
+  }
+}
+
+async function getStarterPlan(): Promise<SellerPlanWithTiers> {
+  await ensureDefaultPlanConfigs();
+  const starter = await prisma.sellerPlan.findFirst({
+    where: { slug: "starter", deletedAt: null },
+    include: { commissionTiers: true },
+  });
+  if (!starter) {
+    throw new AppError("Starter seller plan is not configured", 503);
+  }
+  return starter;
+}
+
+async function findSellerPlan(identifier: string, includeInactive = false): Promise<SellerPlanWithTiers | null> {
+  await ensureDefaultPlanConfigs();
+  const normalized = identifier.trim();
+  const legacy = normalized.toUpperCase();
+
+  return prisma.sellerPlan.findFirst({
+    where: {
+      deletedAt: null,
+      ...(includeInactive ? {} : { isActive: true }),
+      OR: [
+        { id: normalized },
+        { slug: normalized.toLowerCase() },
+        ...(legacy in DEFAULT_PLAN_CONFIGS ? [{ legacyPlan: legacy as SubscriptionPlan }] : []),
+      ],
+    },
+    include: { commissionTiers: true },
+  });
+}
+
+async function getPlanForSubscription(subscription: VendorSubscription | null): Promise<SellerPlanWithTiers> {
+  if (subscription?.sellerPlanId) {
+    const sellerPlan = await prisma.sellerPlan.findUnique({
+      where: { id: subscription.sellerPlanId },
+      include: { commissionTiers: true },
+    });
+    if (sellerPlan && !sellerPlan.deletedAt) return sellerPlan;
+  }
+
+  if (subscription?.plan) {
+    const legacy = await findSellerPlan(subscription.plan, true);
+    if (legacy) return legacy;
+  }
+
+  return getStarterPlan();
+}
+
 export const subscriptionsService = {
-  async getSubscription(userId: string): Promise<VendorSubscription> {
+  async getSubscription(userId: string) {
     const vendor = await prisma.vendor.findUnique({
       where: { userId },
       select: { id: true },
@@ -90,31 +279,37 @@ export const subscriptionsService = {
       throw new AppError("Vendor profile required", 403);
     }
 
-    let subscription = await prisma.vendorSubscription.findUnique({
+    const starter = await getStarterPlan();
+    const subscription = await prisma.vendorSubscription.upsert({
       where: { vendorId: vendor.id },
+      update: {},
+      create: {
+        vendorId: vendor.id,
+        plan: starter.legacyPlan ?? "FREE",
+        sellerPlanId: starter.id,
+        status: "ACTIVE",
+      },
+      include: { sellerPlan: { include: { commissionTiers: true } } },
     });
 
-    if (!subscription) {
-      subscription = await prisma.vendorSubscription.create({
-        data: {
-          vendorId: vendor.id,
-          plan: "FREE",
-          status: "ACTIVE",
-        },
+    if (!subscription.sellerPlanId) {
+      const plan = await getPlanForSubscription(subscription);
+      const updated = await prisma.vendorSubscription.update({
+        where: { id: subscription.id },
+        data: { sellerPlanId: plan.id, plan: plan.legacyPlan ?? subscription.plan },
+        include: { sellerPlan: { include: { commissionTiers: true } } },
       });
+      return formatSubscriptionResponse(updated);
     }
 
-    return subscription;
+    return formatSubscriptionResponse(subscription);
   },
 
   async listPublicPlans() {
     await ensureDefaultPlanConfigs();
-    const planModel = getPlanModel();
-    if (!planModel) {
-      return Object.values(DEFAULT_PLAN_CONFIGS).filter((plan) => plan.isActive).map((plan) => formatPlanResponse(plan as unknown as PlanConfigRecord));
-    }
-    const plans = await planModel.findMany({
-      where: { isActive: true },
+    const plans = await prisma.sellerPlan.findMany({
+      where: { isActive: true, deletedAt: null },
+      include: { commissionTiers: true },
       orderBy: [{ displayOrder: "asc" }, { createdAt: "asc" }],
     });
     return plans.map(formatPlanResponse);
@@ -122,11 +317,9 @@ export const subscriptionsService = {
 
   async listAdminPlans() {
     await ensureDefaultPlanConfigs();
-    const planModel = getPlanModel();
-    if (!planModel) {
-      return Object.values(DEFAULT_PLAN_CONFIGS).map((plan) => formatPlanResponse(plan as unknown as PlanConfigRecord));
-    }
-    const plans = await planModel.findMany({
+    const plans = await prisma.sellerPlan.findMany({
+      where: { deletedAt: null },
+      include: { commissionTiers: true },
       orderBy: [{ displayOrder: "asc" }, { createdAt: "asc" }],
     });
     return plans.map(formatPlanResponse);
@@ -134,51 +327,139 @@ export const subscriptionsService = {
 
   async upsertPlanConfig(adminId: string, input: SubscriptionPlanConfigInput) {
     await ensureDefaultPlanConfigs();
-    const planModel = getPlanModel();
-    if (!planModel) {
-      throw new AppError("Subscription plan storage is unavailable", 503);
-    }
 
-    const existingSlug = await planModel.findFirst({
+    const existing = input.id
+      ? await prisma.sellerPlan.findUnique({ where: { id: input.id } })
+      : await prisma.sellerPlan.findUnique({ where: { slug: input.slug } });
+
+    const slugConflict = await prisma.sellerPlan.findFirst({
       where: {
         slug: input.slug,
-        NOT: { plan: input.plan },
+        deletedAt: null,
+        ...(existing ? { NOT: { id: existing.id } } : {}),
       },
       select: { id: true },
     });
-    if (existingSlug) {
-      throw new AppError("Another plan already uses this slug", 409);
+    if (slugConflict) {
+      throw new AppError("Another seller plan already uses this slug", 409);
     }
 
-    const plan = await planModel.upsert({
-      where: { plan: input.plan },
-      update: input,
-      create: input,
+    if (input.plan) {
+      const legacyConflict = await prisma.sellerPlan.findFirst({
+        where: {
+          legacyPlan: input.plan,
+          deletedAt: null,
+          ...(existing ? { NOT: { id: existing.id } } : {}),
+        },
+        select: { id: true },
+      });
+      if (legacyConflict) {
+        throw new AppError("Another seller plan already uses this legacy plan", 409);
+      }
+    }
+
+    const plan = existing
+      ? await prisma.sellerPlan.update({
+          where: { id: existing.id },
+          data: sellerPlanData(input),
+        })
+      : await prisma.sellerPlan.create({ data: sellerPlanData(input) });
+
+    await syncCommissionTiers(plan.id, input.commissionTiers);
+
+    const withTiers = await prisma.sellerPlan.findUniqueOrThrow({
+      where: { id: plan.id },
+      include: { commissionTiers: true },
     });
 
     await prisma.auditLog.create({
       data: {
         actorId: adminId,
-        action: "SUBSCRIPTION_PLAN_UPSERTED",
-        entityType: "SubscriptionPlanConfig",
+        action: "SELLER_PLAN_UPSERTED",
+        entityType: "SellerPlan",
         entityId: plan.id,
         metadata: {
-          plan: input.plan,
-          slug: input.slug,
-          isActive: input.isActive,
-          monthlyPriceCents: input.monthlyPriceCents,
-          platformFeeBps: input.platformFeeBps,
+          slug: plan.slug,
+          isActive: plan.isActive,
+          monthlyPriceCents: plan.monthlyPriceCents,
+          defaultPlatformFeeBps: plan.defaultPlatformFeeBps,
+          withdrawalFeeBps: plan.withdrawalFeeBps,
         },
       },
     });
 
-    return formatPlanResponse(plan);
+    return formatPlanResponse(withTiers);
   },
 
-  async activatePlan(
-    userId: string,
-    input: ActivateSubscriptionInput,
-  ): Promise<{ subscription: VendorSubscription; limits: ReturnType<typeof formatPlanResponse> }> {
+  async deletePlanConfig(adminId: string, planId: string) {
+    const plan = await prisma.sellerPlan.findUnique({ where: { id: planId } });
+    if (!plan || plan.deletedAt) {
+      throw new AppError("Seller plan not found", 404);
+    }
+
+    const activePlans = await prisma.sellerPlan.count({ where: { isActive: true, deletedAt: null } });
+    if (plan.isActive && activePlans <= 1) {
+      throw new AppError("At least one active seller plan is required", 409);
+    }
+
+    const updated = await prisma.sellerPlan.update({
+      where: { id: planId },
+      data: { isActive: false, deletedAt: new Date() },
+      include: { commissionTiers: true },
+    });
+
+    await prisma.auditLog.create({
+      data: {
+        actorId: adminId,
+        action: "SELLER_PLAN_DELETED",
+        entityType: "SellerPlan",
+        entityId: planId,
+        metadata: { slug: plan.slug },
+      },
+    });
+
+    return formatPlanResponse(updated);
+  },
+
+  async assignVendorPlan(adminId: string, vendorId: string, input: AssignVendorPlanInput) {
+    const [vendor, sellerPlan] = await Promise.all([
+      prisma.vendor.findUnique({ where: { id: vendorId }, select: { id: true } }),
+      findSellerPlan(input.plan, true),
+    ]);
+    if (!vendor) throw new AppError("Vendor not found", 404);
+    if (!sellerPlan || sellerPlan.deletedAt) throw new AppError("Seller plan not found", 404);
+
+    const subscription = await prisma.vendorSubscription.upsert({
+      where: { vendorId },
+      update: {
+        sellerPlanId: sellerPlan.id,
+        plan: sellerPlan.legacyPlan ?? legacyPlanForSlug(sellerPlan.slug),
+        status: "ACTIVE",
+        cancelledAt: null,
+      },
+      create: {
+        vendorId,
+        sellerPlanId: sellerPlan.id,
+        plan: sellerPlan.legacyPlan ?? legacyPlanForSlug(sellerPlan.slug),
+        status: "ACTIVE",
+      },
+      include: { sellerPlan: { include: { commissionTiers: true } } },
+    });
+
+    await prisma.auditLog.create({
+      data: {
+        actorId: adminId,
+        action: "VENDOR_SELLER_PLAN_ASSIGNED",
+        entityType: "Vendor",
+        entityId: vendorId,
+        metadata: { sellerPlanId: sellerPlan.id, slug: sellerPlan.slug },
+      },
+    });
+
+    return formatSubscriptionResponse(subscription);
+  },
+
+  async activatePlan(userId: string, input: ActivateSubscriptionInput) {
     const vendor = await prisma.vendor.findUnique({
       where: { userId },
       select: { id: true },
@@ -187,47 +468,39 @@ export const subscriptionsService = {
       throw new AppError("Vendor profile required", 403);
     }
 
-    const planConfig = await getPlanConfig(input.plan);
-    if (input.plan !== "FREE") {
+    const sellerPlan = await findSellerPlan(input.plan, true);
+    if (!sellerPlan || sellerPlan.slug !== "starter") {
       throw new AppError(
-        "Paid subscriptions require website checkout. Complete the purchase on the website and the app will unlock features after the backend activates the plan.",
+        "Paid seller plans require website checkout. Complete the purchase on the website and the app will unlock features after Stripe confirms payment.",
         409,
         null,
-        "SUBSCRIPTIONS_NOT_AVAILABLE",
+        "SELLER_PLANS_WEB_ONLY",
       );
     }
-
-    const now = new Date();
-    const periodEnd = new Date(now);
-    periodEnd.setMonth(periodEnd.getMonth() + 1);
 
     const subscription = await prisma.vendorSubscription.upsert({
       where: { vendorId: vendor.id },
       update: {
-        plan: input.plan,
+        sellerPlanId: sellerPlan.id,
+        plan: sellerPlan.legacyPlan ?? "FREE",
         status: "ACTIVE",
-        currentPeriodStart: now,
-        currentPeriodEnd: periodEnd,
         cancelledAt: null,
       },
       create: {
         vendorId: vendor.id,
-        plan: input.plan,
+        sellerPlanId: sellerPlan.id,
+        plan: sellerPlan.legacyPlan ?? "FREE",
         status: "ACTIVE",
-        currentPeriodStart: now,
-        currentPeriodEnd: periodEnd,
       },
+      include: { sellerPlan: { include: { commissionTiers: true } } },
     });
 
-    return { subscription, limits: formatPlanResponse(planConfig) };
+    return { subscription: formatSubscriptionResponse(subscription), limits: formatPlanResponse(sellerPlan) };
   },
 
   async enforceProductLimit(vendorId: string): Promise<void> {
-    const subscription = await prisma.vendorSubscription.findUnique({
-      where: { vendorId },
-    });
-    const plan: SubscriptionPlan = subscription?.plan ?? "FREE";
-    const limits = await getPlanConfig(plan);
+    const subscription = await prisma.vendorSubscription.findUnique({ where: { vendorId } });
+    const limits = await getPlanForSubscription(subscription);
 
     if (limits.maxProducts === -1) return;
 
@@ -237,7 +510,7 @@ export const subscriptionsService = {
 
     if (currentCount >= limits.maxProducts) {
       throw new AppError(
-        `Your ${limits.name} plan allows a maximum of ${limits.maxProducts} active products.`,
+        `Your ${limits.name} seller plan allows a maximum of ${limits.maxProducts} active products.`,
         403,
       );
     }
@@ -247,22 +520,12 @@ export const subscriptionsService = {
     vendorId: string,
     feature: "analytics" | "flashSales" | "bundles" | "discounts",
   ): Promise<boolean> {
-    const subscription = await prisma.vendorSubscription.findUnique({
-      where: { vendorId },
-    });
-    const plan: SubscriptionPlan = subscription?.plan ?? "FREE";
-    const limits = await getPlanConfig(plan);
+    const subscription = await prisma.vendorSubscription.findUnique({ where: { vendorId } });
+    const limits = await getPlanForSubscription(subscription);
     return Boolean(limits[feature]);
   },
 
-  async createCheckoutSession(
-    userId: string,
-    plan: SubscriptionPlan,
-  ): Promise<{ checkoutUrl: string }> {
-    if (plan === "FREE") {
-      throw new AppError("Cannot create checkout for free plan", 400);
-    }
-
+  async createCheckoutSession(userId: string, plan: string): Promise<{ checkoutUrl: string }> {
     const vendor = await prisma.vendor.findUnique({
       where: { userId },
       include: { user: { select: { email: true } } },
@@ -279,11 +542,7 @@ export const subscriptionsService = {
     });
   },
 
-  async createWebCheckoutSession(email: string, plan: SubscriptionPlan): Promise<{ checkoutUrl: string }> {
-    if (plan === "FREE") {
-      throw new AppError("Cannot create checkout for free plan", 400);
-    }
-
+  async createWebCheckoutSession(email: string, plan: string): Promise<{ checkoutUrl: string }> {
     const user = await prisma.user.findUnique({
       where: { email },
       select: {
@@ -310,14 +569,14 @@ export const subscriptionsService = {
     vendorId: string;
     userId: string;
     email: string;
-    plan: SubscriptionPlan;
+    plan: string;
   }): Promise<{ checkoutUrl: string }> {
-    const planConfig = await getPlanConfig(input.plan);
-    if (!planConfig.isActive) {
-      throw new AppError("This plan is currently unavailable", 409);
+    const planConfig = await findSellerPlan(input.plan);
+    if (!planConfig) {
+      throw new AppError("This seller plan is currently unavailable", 409);
     }
     if (planConfig.monthlyPriceCents <= 0) {
-      throw new AppError("Paid plan price is not configured", 409);
+      throw new AppError("This seller plan does not require paid checkout", 409);
     }
 
     const frontendUrl = process.env.FRONTEND_URL ?? "https://culinarytales.app";
@@ -341,10 +600,12 @@ export const subscriptionsService = {
           data: { stripeCustomerId: customerId },
         });
       } else {
+        const starter = await getStarterPlan();
         subscription = await prisma.vendorSubscription.create({
           data: {
             vendorId: input.vendorId,
-            plan: "FREE",
+            plan: starter.legacyPlan ?? "FREE",
+            sellerPlanId: starter.id,
             status: "ACTIVE",
             stripeCustomerId: customerId,
           },
@@ -356,27 +617,31 @@ export const subscriptionsService = {
       kind: "vendor_subscription",
       vendorId: input.vendorId,
       userId: input.userId,
-      plan: input.plan,
+      sellerPlanId: planConfig.id,
+      sellerPlanSlug: planConfig.slug,
+      plan: planConfig.legacyPlan ?? legacyPlanForSlug(planConfig.slug),
       email: input.email,
     };
+
+    const lineItem = planConfig.stripePriceId
+      ? { price: planConfig.stripePriceId, quantity: 1 }
+      : {
+          price_data: {
+            currency: planConfig.currency.toLowerCase(),
+            product_data: {
+              name: `${planConfig.name} Seller Plan`,
+              description: planConfig.description ?? `${planConfig.name} seller plan`,
+            },
+            unit_amount: planConfig.monthlyPriceCents,
+            recurring: { interval: "month" as const },
+          },
+          quantity: 1,
+        };
 
     const session = await stripe.checkout.sessions.create({
       customer: customerId,
       mode: "subscription",
-      line_items: [
-        {
-          price_data: {
-            currency: planConfig.currency.toLowerCase(),
-            product_data: {
-              name: `${planConfig.name} Plan`,
-              description: planConfig.description ?? `${planConfig.name} vendor subscription`,
-            },
-            unit_amount: planConfig.monthlyPriceCents,
-            recurring: { interval: "month" },
-          },
-          quantity: 1,
-        },
-      ],
+      line_items: [lineItem],
       success_url: `${frontendUrl}/vendor/subscription?success=true&email=${encodeURIComponent(input.email)}`,
       cancel_url: `${frontendUrl}/vendor/subscription?cancelled=true&email=${encodeURIComponent(input.email)}`,
       metadata,
@@ -390,7 +655,7 @@ export const subscriptionsService = {
     return { checkoutUrl: session.url };
   },
 
-  async cancelSubscription(userId: string): Promise<VendorSubscription> {
+  async cancelSubscription(userId: string) {
     const vendor = await prisma.vendor.findUnique({
       where: { userId },
       select: { id: true },
@@ -403,13 +668,10 @@ export const subscriptionsService = {
       where: { vendorId: vendor.id },
     });
     if (!subscription) {
-      throw new AppError("No subscription found", 404);
-    }
-    if (subscription.plan === "FREE") {
-      throw new AppError("Cannot cancel free plan", 400);
+      throw new AppError("No seller plan found", 404);
     }
     if (subscription.status === "CANCELLED") {
-      throw new AppError("Subscription already cancelled", 409);
+      throw new AppError("Seller plan already cancelled", 409);
     }
 
     if (subscription.stripeSubscriptionId) {
@@ -418,26 +680,34 @@ export const subscriptionsService = {
       });
     }
 
-    return prisma.vendorSubscription.update({
+    const updated = await prisma.vendorSubscription.update({
       where: { id: subscription.id },
       data: {
         status: "CANCELLED",
         cancelledAt: new Date(),
       },
+      include: { sellerPlan: { include: { commissionTiers: true } } },
     });
+    return formatSubscriptionResponse(updated);
   },
 
   async handleSubscriptionWebhook(
     vendorId: string,
-    plan: SubscriptionPlan,
+    sellerPlanId: string,
     stripeSubscriptionId: string,
     periodStart: Date,
     periodEnd: Date,
   ): Promise<void> {
+    const sellerPlan = await prisma.sellerPlan.findUnique({ where: { id: sellerPlanId } });
+    if (!sellerPlan || sellerPlan.deletedAt) {
+      throw new AppError("Seller plan not found for subscription webhook", 404);
+    }
+
     await prisma.vendorSubscription.upsert({
       where: { vendorId },
       update: {
-        plan,
+        sellerPlanId,
+        plan: sellerPlan.legacyPlan ?? legacyPlanForSlug(sellerPlan.slug),
         status: "ACTIVE",
         stripeSubscriptionId,
         currentPeriodStart: periodStart,
@@ -446,7 +716,8 @@ export const subscriptionsService = {
       },
       create: {
         vendorId,
-        plan,
+        sellerPlanId,
+        plan: sellerPlan.legacyPlan ?? legacyPlanForSlug(sellerPlan.slug),
         status: "ACTIVE",
         stripeSubscriptionId,
         currentPeriodStart: periodStart,
@@ -455,18 +726,7 @@ export const subscriptionsService = {
     });
   },
 
-  async getPlanLimits(userId: string): Promise<{
-    plan: SubscriptionPlan;
-    limits: ReturnType<typeof formatPlanResponse> & {
-      currentProducts: number;
-      currentOrders: number;
-      ordersRemaining: number | null;
-      canSendOffers: boolean;
-      canAccessAnalytics: boolean;
-    };
-  }> {
-    const sub = await this.getSubscription(userId);
-    const limits = await getPlanConfig(sub.plan);
+  async getPlanLimits(userId: string) {
     const vendor = await prisma.vendor.findUnique({
       where: { userId },
       select: { id: true },
@@ -474,6 +734,9 @@ export const subscriptionsService = {
     if (!vendor) {
       throw new AppError("Vendor profile required", 403);
     }
+
+    const sub = await prisma.vendorSubscription.findUnique({ where: { vendorId: vendor.id } });
+    const limits = await getPlanForSubscription(sub);
 
     const [currentProducts, currentOrders] = await Promise.all([
       prisma.product.count({ where: { vendorId: vendor.id, isActive: true } }),
@@ -484,7 +747,8 @@ export const subscriptionsService = {
       limits.maxOrders == null || limits.maxOrders === -1 ? null : Math.max(limits.maxOrders - currentOrders, 0);
 
     return {
-      plan: sub.plan,
+      plan: limits.legacyPlan ?? legacyPlanForSlug(limits.slug),
+      sellerPlanId: limits.id,
       limits: {
         ...formatPlanResponse(limits),
         currentProducts,

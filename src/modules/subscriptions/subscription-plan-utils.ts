@@ -1,44 +1,122 @@
-import type { SubscriptionPlan } from "@prisma/client";
+import type { CommissionTier, SellerPlan, SubscriptionPlan } from "@prisma/client";
 
 import { env } from "../../config/env";
 import { prisma } from "../../lib/prisma";
-import { DEFAULT_PLAN_CONFIGS } from "./subscriptions.types";
+import { DEFAULT_SELLER_PLAN_CONFIGS } from "./subscriptions.types";
 
-type SubscriptionLookupClient = {
-  vendorSubscription: {
-    findUnique: (args: any) => Promise<{ plan: SubscriptionPlan } | null>;
+type SellerPlanWithTiers = SellerPlan & { commissionTiers: CommissionTier[] };
+
+type SellerPlanLookupClient = {
+  vendorSubscription?: {
+    findUnique: (args: any) => any;
   };
-  subscriptionPlanConfig?: {
-    findUnique: (args: any) => Promise<{ platformFeeBps?: number | null } | null>;
+  sellerPlan?: {
+    findFirst: (args: any) => any;
   };
 };
 
-function fallbackPlatformFeeBps(plan: SubscriptionPlan): number {
-  return DEFAULT_PLAN_CONFIGS[plan]?.platformFeeBps ?? env.platformFeeBps;
+export interface VendorCommissionResolution {
+  sellerPlanId: string | null;
+  sellerPlanSlug: string;
+  sellerPlanName: string;
+  commissionTierId: string | null;
+  commissionTierLabel: string | null;
+  platformFeeBps: number;
+  withdrawalFeeBps: number;
 }
 
-export async function resolveVendorPlatformFeeBps(
+const STARTER_FALLBACK = DEFAULT_SELLER_PLAN_CONFIGS.find((plan) => plan.slug === "starter") ?? DEFAULT_SELLER_PLAN_CONFIGS[0];
+
+function legacySlug(plan: SubscriptionPlan | null | undefined): string {
+  if (plan === "GROWTH") return "growth";
+  if (plan === "PRO" || plan === "PREMIUM") return "pro";
+  return "starter";
+}
+
+function fallbackCommission(plan?: SubscriptionPlan | null): VendorCommissionResolution {
+  const fallback = DEFAULT_SELLER_PLAN_CONFIGS.find((item) => item.slug === legacySlug(plan)) ?? STARTER_FALLBACK;
+  const tier = fallback.commissionTiers
+    .filter((item) => item.isActive)
+    .sort((left, right) => right.minSubtotalCents - left.minSubtotalCents)[0];
+
+  return {
+    sellerPlanId: null,
+    sellerPlanSlug: fallback.slug,
+    sellerPlanName: fallback.name,
+    commissionTierId: null,
+    commissionTierLabel: tier?.label ?? null,
+    platformFeeBps: tier?.platformFeeBps ?? fallback.defaultPlatformFeeBps ?? env.platformFeeBps,
+    withdrawalFeeBps: fallback.withdrawalFeeBps,
+  };
+}
+
+function selectTier(plan: SellerPlanWithTiers, subtotalAmount: number): CommissionTier | null {
+  return plan.commissionTiers
+    .filter((tier) => {
+      if (!tier.isActive) return false;
+      if (tier.minSubtotalCents > subtotalAmount) return false;
+      return tier.maxSubtotalCents == null || subtotalAmount < tier.maxSubtotalCents;
+    })
+    .sort((left, right) => {
+      return right.minSubtotalCents - left.minSubtotalCents || left.displayOrder - right.displayOrder;
+    })[0] ?? null;
+}
+
+async function findStarterPlan(client: SellerPlanLookupClient): Promise<SellerPlanWithTiers | null> {
+  if (!client.sellerPlan?.findFirst) return null;
+  return client.sellerPlan.findFirst({
+    where: { slug: "starter", deletedAt: null },
+    include: { commissionTiers: true },
+  });
+}
+
+export async function resolveVendorCommission(
   vendorId: string,
-  client: SubscriptionLookupClient = prisma as unknown as SubscriptionLookupClient,
-): Promise<number> {
-  if (!client?.vendorSubscription?.findUnique) {
-    return env.platformFeeBps;
+  subtotalAmount = 0,
+  client: SellerPlanLookupClient = prisma as unknown as SellerPlanLookupClient,
+): Promise<VendorCommissionResolution> {
+  if (!client.vendorSubscription?.findUnique) {
+    return fallbackCommission();
   }
 
   const subscription = await client.vendorSubscription.findUnique({
     where: { vendorId },
-    select: { plan: true },
+    select: {
+      plan: true,
+      sellerPlanId: true,
+      sellerPlan: {
+        include: { commissionTiers: true },
+      },
+    },
   });
-  const plan = subscription?.plan ?? "FREE";
 
-  if (!client.subscriptionPlanConfig) {
-    return fallbackPlatformFeeBps(plan);
+  const plan = subscription?.sellerPlan ?? await findStarterPlan(client);
+  if (!plan || plan.deletedAt) {
+    return fallbackCommission(subscription?.plan);
   }
 
-  const planConfig = await client.subscriptionPlanConfig.findUnique({
-    where: { plan },
-    select: { platformFeeBps: true },
-  });
+  const tier = selectTier(plan, subtotalAmount);
+  return {
+    sellerPlanId: plan.id,
+    sellerPlanSlug: plan.slug,
+    sellerPlanName: plan.name,
+    commissionTierId: tier?.id ?? null,
+    commissionTierLabel: tier?.label ?? null,
+    platformFeeBps: tier?.platformFeeBps ?? plan.defaultPlatformFeeBps,
+    withdrawalFeeBps: plan.withdrawalFeeBps,
+  };
+}
 
-  return typeof planConfig?.platformFeeBps === "number" ? planConfig.platformFeeBps : fallbackPlatformFeeBps(plan);
+export async function resolveVendorPlatformFeeBps(
+  vendorId: string,
+  client: SellerPlanLookupClient = prisma as unknown as SellerPlanLookupClient,
+): Promise<number> {
+  return (await resolveVendorCommission(vendorId, 0, client)).platformFeeBps;
+}
+
+export async function resolveVendorWithdrawalFeeBps(
+  vendorId: string,
+  client: SellerPlanLookupClient = prisma as unknown as SellerPlanLookupClient,
+): Promise<number> {
+  return (await resolveVendorCommission(vendorId, 0, client)).withdrawalFeeBps;
 }
