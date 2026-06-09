@@ -5,7 +5,9 @@ import { asyncHandler } from "../../shared/utils/async-handler";
 import {
   createProduct,
   disableProduct,
+  getMyProduct,
   getProduct,
+  listMyProducts,
   listProducts,
   updateProduct,
 } from "./products.controller";
@@ -13,6 +15,8 @@ import {
 export const productsRouter = Router();
 
 productsRouter.get("/", asyncHandler(listProducts));
+productsRouter.get("/me", authenticate, requireRole("VENDOR"), asyncHandler(listMyProducts));
+productsRouter.get("/me/:id", authenticate, requireRole("VENDOR"), asyncHandler(getMyProduct));
 productsRouter.get("/:id", asyncHandler(getProduct));
 
 productsRouter.post("/", authenticate, requireRole("VENDOR"), asyncHandler(createProduct));

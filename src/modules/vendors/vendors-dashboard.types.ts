@@ -14,6 +14,7 @@ export interface VendorDashboardData {
     salesThisWeek: number;
     salesThisMonth: number;
     pendingPayout: number;
+    availableBalance: number;
     currency: string;
   };
   insights: {

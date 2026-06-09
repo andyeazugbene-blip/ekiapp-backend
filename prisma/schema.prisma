@@ -232,6 +232,8 @@ model Product {
   title        String
   description  String?
   priceInCents Int
+  costAmount   Int?
+  costCurrency String?
   currency     String      @default("EUR")
   images       String[]    @default([])
   category     String?
@@ -340,6 +342,8 @@ model OrderItem {
   quantity     Int
   unitAmount   Int
   totalAmount  Int
+  costAmount   Int?
+  costCurrency String?
   currency     String   @default("EUR")
   productTitle String
   order        Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)

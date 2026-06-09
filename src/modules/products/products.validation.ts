@@ -50,6 +50,12 @@ function positiveInt(value: unknown, field: string): number {
   return num;
 }
 
+function nullableNonNegativeInt(value: unknown, field: string): number | null | undefined {
+  if (value === undefined) return undefined;
+  if (value === null || value === "") return null;
+  return nonNegativeInt(value, field);
+}
+
 function imagesArray(value: unknown): string[] {
   if (!Array.isArray(value)) {
     throw new AppError("Invalid images", 400);
@@ -72,6 +78,9 @@ export function validateCreateProductInput(input: unknown): CreateProductInput {
     title: requiredString(raw.title, "title"),
     description: optionalString(raw.description, "description"),
     priceAmount: positiveInt(raw.priceAmount, "priceAmount"),
+    costAmount:
+      raw.costAmount === undefined ? undefined : nonNegativeInt(raw.costAmount, "costAmount"),
+    costCurrency: optionalString(raw.costCurrency, "costCurrency")?.toUpperCase(),
     currency: optionalString(raw.currency, "currency")?.toLowerCase(),
     images: raw.images === undefined ? undefined : imagesArray(raw.images),
     category: optionalString(raw.category, "category"),
@@ -94,6 +103,13 @@ export function validateUpdateProductInput(input: unknown): UpdateProductInput {
   }
   if (raw.priceAmount !== undefined) {
     update.priceAmount = positiveInt(raw.priceAmount, "priceAmount");
+  }
+  if (raw.costAmount !== undefined) {
+    update.costAmount = nullableNonNegativeInt(raw.costAmount, "costAmount");
+  }
+  if (raw.costCurrency !== undefined) {
+    update.costCurrency =
+      raw.costCurrency === null ? null : optionalString(raw.costCurrency, "costCurrency")?.toUpperCase() ?? null;
   }
   if (raw.currency !== undefined) {
     const currency = optionalString(raw.currency, "currency");

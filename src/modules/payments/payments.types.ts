@@ -24,6 +24,8 @@ export type PricedOrderItem = {
   quantity: number;
   unitAmount: number;
   totalAmount: number;
+  costAmount?: number | null;
+  costCurrency?: string | null;
   currency: string;
   productTitle: string;
   weightGrams: number;

@@ -92,6 +92,8 @@ export const paystackService = {
         quantity: item.quantity,
         unitAmount: item.product.priceInCents,
         totalAmount: total,
+        costAmount: item.product.costAmount,
+        costCurrency: item.product.costCurrency ?? item.product.currency,
         currency,
         productTitle: item.product.title,
       };
@@ -156,6 +158,8 @@ export const paystackService = {
           quantity: item.quantity,
           unitAmount: item.unitAmount,
           totalAmount: item.totalAmount,
+          costAmount: item.costAmount,
+          costCurrency: item.costCurrency,
           currency: item.currency,
           productTitle: item.productTitle,
         })),

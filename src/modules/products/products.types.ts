@@ -2,6 +2,8 @@ export interface CreateProductInput {
   title: string;
   description?: string;
   priceAmount: number;
+  costAmount?: number;
+  costCurrency?: string;
   currency?: string;
   images?: string[];
   category?: string;
@@ -13,6 +15,8 @@ export interface UpdateProductInput {
   title?: string;
   description?: string | null;
   priceAmount?: number;
+  costAmount?: number | null;
+  costCurrency?: string | null;
   currency?: string;
   images?: string[];
   category?: string | null;

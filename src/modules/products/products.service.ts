@@ -52,6 +52,8 @@ export const productsService = {
         title: input.title,
         description: input.description,
         priceInCents: input.priceAmount,
+        costAmount: input.costAmount,
+        costCurrency: input.costAmount === undefined ? undefined : input.costCurrency ?? vendor.currency,
         currency: vendor.currency,
         images: input.images ?? [],
         category: input.category,
@@ -75,15 +77,40 @@ export const productsService = {
       throw new AppError("Forbidden", 403);
     }
 
-    const { priceAmount, ...rest } = input;
+    const { priceAmount, costAmount, costCurrency, ...rest } = input;
 
     return prisma.product.update({
       where: { id: productId },
       data: {
         ...rest,
         ...(priceAmount !== undefined ? { priceInCents: priceAmount } : {}),
+        ...(costAmount !== undefined
+          ? {
+              costAmount,
+              costCurrency: costAmount === null ? null : costCurrency ?? product.currency,
+            }
+          : costCurrency !== undefined
+            ? { costCurrency }
+            : {}),
       },
     });
+  },
+
+  async listMyProducts(userId: string): Promise<Product[]> {
+    const vendorId = await getVendorIdForUser(userId);
+    return prisma.product.findMany({
+      where: { vendorId },
+      orderBy: CURSOR_ORDER_BY,
+    });
+  },
+
+  async getMyProductById(userId: string, productId: string): Promise<Product> {
+    const vendorId = await getVendorIdForUser(userId);
+    const product = await prisma.product.findUnique({ where: { id: productId } });
+    if (!product || product.vendorId !== vendorId) {
+      throw new AppError("Product not found", 404);
+    }
+    return product;
   },
 
   async disableProduct(userId: string, productId: string): Promise<Product> {

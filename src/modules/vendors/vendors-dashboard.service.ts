@@ -112,6 +112,7 @@ export const vendorDashboardService = {
         salesThisWeek,
         salesThisMonth,
         pendingPayout: wallet?.pendingBalance ?? 0,
+        availableBalance: wallet?.availableBalance ?? 0,
         currency: wallet?.currency ?? "usd",
       },
       insights: {
