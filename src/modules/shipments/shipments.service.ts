@@ -43,16 +43,25 @@ export const shipmentsService = {
       throw new AppError("Order is not in a shippable state", 400);
     }
 
-    const shipment = await prisma.shipment.create({
-      data: {
-        orderId,
-        vendorId: vendor.id,
-        trackingNumber: input.trackingNumber,
-        carrier: input.carrier,
-        status: "PROCESSING",
-        estimatedDeliveryAt: input.estimatedDeliveryAt ? new Date(input.estimatedDeliveryAt) : null,
-        dispatchedAt: new Date(),
-      },
+    const shipment = await prisma.$transaction(async (tx) => {
+      const created = await tx.shipment.create({
+        data: {
+          orderId,
+          vendorId: vendor.id,
+          trackingNumber: input.trackingNumber,
+          carrier: input.carrier,
+          status: "PROCESSING",
+          estimatedDeliveryAt: input.estimatedDeliveryAt ? new Date(input.estimatedDeliveryAt) : null,
+          dispatchedAt: new Date(),
+        },
+      });
+
+      await tx.order.updateMany({
+        where: { id: orderId, status: { in: ["PAID", "CONFIRMED", "PROCESSING"] } },
+        data: { status: "DISPATCHED" },
+      });
+
+      return created;
     });
 
     return shipment;

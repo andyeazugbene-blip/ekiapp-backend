@@ -32,6 +32,10 @@ function generateReferralCode(): string {
   return "REF-" + crypto.randomBytes(4).toString("hex").toUpperCase();
 }
 
+function normalizeReferralCode(code: string): string {
+  return code.trim().toUpperCase();
+}
+
 export const referralsService = {
   async getOrCreateReferralCode(userId: string): Promise<string> {
     const user = await prisma.user.findUnique({
@@ -64,20 +68,33 @@ export const referralsService = {
     return code;
   },
 
-  async applyReferral(referredUserId: string, referralCode: string): Promise<void> {
-    // Find the referrer
-    const referrer = await prisma.user.findUnique({
-      where: { referralCode },
+  async validateReferralCode(referralCode: string): Promise<{ referrerId: string }> {
+    const normalized = normalizeReferralCode(referralCode);
+    const referrer = await prisma.user.findFirst({
+      where: { referralCode: { equals: normalized, mode: "insensitive" } },
       select: { id: true },
     });
     if (!referrer) {
-      // Silently ignore invalid referral codes during registration
-      logger.warn("Invalid referral code used", { referralCode, referredUserId });
-      return;
+      throw new AppError("Referral code not found", 404);
+    }
+    return { referrerId: referrer.id };
+  },
+
+  async applyReferral(referredUserId: string, referralCode: string): Promise<void> {
+    const normalized = normalizeReferralCode(referralCode);
+
+    // Find the referrer
+    const referrer = await prisma.user.findFirst({
+      where: { referralCode: { equals: normalized, mode: "insensitive" } },
+      select: { id: true },
+    });
+    if (!referrer) {
+      logger.warn("Invalid referral code used", { referralCode: normalized, referredUserId });
+      throw new AppError("Referral code not found", 404);
     }
 
     if (referrer.id === referredUserId) {
-      return; // Can't refer yourself
+      throw new AppError("You cannot use your own referral code", 400);
     }
 
     // Check if already referred

@@ -19,8 +19,8 @@ export interface UpdateOrderStatusInput {
 // Allowed vendor transitions: PAID → CONFIRMED → PROCESSING → DISPATCHED
 // + Escrow: PAYMENT_SECURED → VENDOR_CONFIRMED → DISPATCHED
 export const VENDOR_STATUS_TRANSITIONS: Record<OrderStatus, OrderStatus[]> = {
-  PENDING: ["CONFIRMED"],
-  PAID: ["CONFIRMED"],
+  PENDING: ["CONFIRMED", "PROCESSING"],
+  PAID: ["CONFIRMED", "PROCESSING"],
   CONFIRMED: ["PROCESSING"],
   PROCESSING: ["DISPATCHED"],
   DISPATCHED: ["IN_TRANSIT"],

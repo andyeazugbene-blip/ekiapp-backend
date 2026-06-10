@@ -10,6 +10,7 @@ import { emailTemplates } from "../../lib/email-templates";
 import { logger } from "../../lib/logger";
 import { prisma } from "../../lib/prisma";
 import { AppError } from "../../shared/errors/app-error";
+import { referralsService } from "../referrals/referrals.service";
 import type {
   AuthUser,
   ForgotPasswordInput,
@@ -135,6 +136,9 @@ export const authService = {
     }
 
     await ensurePhoneIsAvailable(input.phone);
+    if (input.referralCode) {
+      await referralsService.validateReferralCode(input.referralCode);
+    }
 
     const passwordHash = await bcrypt.hash(input.password, BCRYPT_ROUNDS);
     let user;
@@ -159,6 +163,17 @@ export const authService = {
       throw error;
     }
 
+    if (input.referralCode) {
+      await referralsService.applyReferral(user.id, input.referralCode);
+    }
+    await referralsService.getOrCreateReferralCode(user.id).catch((err: unknown) => {
+      logger.warn("Could not create referral code during registration", { userId: user.id, error: String(err) });
+    });
+    const registeredUser = await prisma.user.findUnique({
+      where: { id: user.id },
+      include: { vendor: true },
+    });
+
     // Send welcome email (non-blocking)
     const welcome = user.role === UserRole.VENDOR
       ? emailTemplates.welcomeVendor({ name: user.name })
@@ -178,7 +193,7 @@ export const authService = {
       logger.error("Failed to create email verification token", { userId: user.id, error: String(err) });
     });
 
-    return { user: toAuthUser(user), token: signToken(user) };
+    return { user: toAuthUser(registeredUser ?? user), token: signToken(user) };
   },
 
   async login(input: LoginInput, meta?: AuthRequestMeta): Promise<{ user: AuthUser; token: string }> {

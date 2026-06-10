@@ -175,6 +175,9 @@ class PaymentsService {
       if (!buyerWallet) {
         throw new AppError("Buyer wallet not found", 400);
       }
+      if (buyerWallet.currency.toLowerCase() !== currency) {
+        throw new AppError("Wallet currency must match checkout currency", 400);
+      }
       if (payload.walletAmount > buyerWallet.balance) {
         throw new AppError("Insufficient wallet balance", 400);
       }

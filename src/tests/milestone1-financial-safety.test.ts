@@ -110,7 +110,7 @@ describe("Milestone 1: Payment Flow Safety", () => {
 
   describe("Order status transitions", () => {
     it("vendor can only transition through allowed states", () => {
-      expect(VENDOR_STATUS_TRANSITIONS.PAID).toEqual(["CONFIRMED"]);
+      expect(VENDOR_STATUS_TRANSITIONS.PAID).toEqual(["CONFIRMED", "PROCESSING"]);
       expect(VENDOR_STATUS_TRANSITIONS.CONFIRMED).toEqual(["PROCESSING"]);
       expect(VENDOR_STATUS_TRANSITIONS.PROCESSING).toEqual(["DISPATCHED"]);
       expect(VENDOR_STATUS_TRANSITIONS.COMPLETED).toEqual([]);

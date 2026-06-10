@@ -122,9 +122,15 @@ class StripeWebhookService {
           return { received: true, ignored: true, eventId: event.id, type: event.type };
         }
 
-        // Validate amount
-        if (checkout.totalAmount !== paymentIntent.amount) {
-          logger.error("Webhook: amount mismatch", { checkoutId, expected: checkout.totalAmount, got: paymentIntent.amount, eventId: event.id });
+        // Validate the amount charged by Stripe. Mixed wallet/card checkouts charge
+        // only the remainder after the wallet deduction, while checkout.totalAmount
+        // remains the full basket total for the order ledger.
+        const checkoutMeta = checkout.metadata as { walletDeduction?: unknown } | null;
+        const rawWalletDeduction = Number(checkoutMeta?.walletDeduction ?? paymentIntent.metadata?.walletDeduction ?? 0);
+        const walletDeduction = Number.isFinite(rawWalletDeduction) ? rawWalletDeduction : 0;
+        const expectedStripeAmount = Math.max(checkout.totalAmount - walletDeduction, 0);
+        if (expectedStripeAmount !== paymentIntent.amount) {
+          logger.error("Webhook: amount mismatch", { checkoutId, expected: expectedStripeAmount, checkoutTotal: checkout.totalAmount, walletDeduction, got: paymentIntent.amount, eventId: event.id });
           await this.markEventIgnored(tx, event.id);
           return { received: true, ignored: true, eventId: event.id, type: event.type };
         }

@@ -15,7 +15,19 @@ const orderInclude = {
     },
   },
   payment: {
-    select: { id: true, status: true, stripePaymentIntentId: true },
+    select: {
+      id: true,
+      status: true,
+      stripePaymentIntentId: true,
+      provider: true,
+      platformFeeAmount: true,
+      vendorEarningsAmount: true,
+      sellerPlanId: true,
+      sellerPlanSlug: true,
+      commissionTierId: true,
+      commissionBps: true,
+      withdrawalFeeBps: true,
+    },
   },
   deliveryZone: {
     select: { id: true, name: true, country: true },

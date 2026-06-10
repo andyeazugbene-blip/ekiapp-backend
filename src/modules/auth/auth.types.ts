@@ -6,6 +6,7 @@ export interface RegisterInput {
   name: string;
   phone?: string;
   country?: string;
+  referralCode?: string;
   role?: Exclude<UserRole, "ADMIN">;
 }
 
