@@ -115,9 +115,11 @@ class StripeWebhookService {
           return { received: true, ignored: true, eventId: event.id, type: event.type };
         }
 
-        // Validate currency
-        if (checkout.currency.toLowerCase() !== paymentIntent.currency.toLowerCase()) {
-          logger.error("Webhook: currency mismatch", { checkoutId, expected: checkout.currency, got: paymentIntent.currency, eventId: event.id });
+        // Validate currency against the Stripe currency stored in metadata
+        const checkoutMeta = checkout.metadata as { stripeCurrency?: string; walletDeduction?: unknown } | null;
+        const expectedStripeCurrency = (checkoutMeta?.stripeCurrency ?? checkout.currency).toLowerCase();
+        if (expectedStripeCurrency !== paymentIntent.currency.toLowerCase()) {
+          logger.error("Webhook: currency mismatch", { checkoutId, expected: expectedStripeCurrency, got: paymentIntent.currency, eventId: event.id });
           await this.markEventIgnored(tx, event.id);
           return { received: true, ignored: true, eventId: event.id, type: event.type };
         }
@@ -125,7 +127,6 @@ class StripeWebhookService {
         // Validate the amount charged by Stripe. Mixed wallet/card checkouts charge
         // only the remainder after the wallet deduction, while checkout.totalAmount
         // remains the full basket total for the order ledger.
-        const checkoutMeta = checkout.metadata as { walletDeduction?: unknown } | null;
         const rawWalletDeduction = Number(checkoutMeta?.walletDeduction ?? paymentIntent.metadata?.walletDeduction ?? 0);
         const walletDeduction = Number.isFinite(rawWalletDeduction) ? rawWalletDeduction : 0;
         const expectedStripeAmount = Math.max(checkout.totalAmount - walletDeduction, 0);
@@ -747,7 +748,7 @@ class StripeWebhookService {
   }
 
   private isUniqueConstraintError(error: unknown): boolean {
-    return error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002";
+    return (error as any)?.code === "P2002";
   }
 }
 

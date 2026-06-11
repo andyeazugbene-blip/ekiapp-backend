@@ -64,10 +64,10 @@ function signToken(user: { id: string; role: UserRole; email: string; tokenVersi
 }
 
 function isUniqueViolation(error: unknown, field: string): boolean {
-  return error instanceof Prisma.PrismaClientKnownRequestError
-    && error.code === "P2002"
-    && Array.isArray(error.meta?.target)
-    && error.meta.target.includes(field);
+  const e = error as any;
+  return e?.code === "P2002"
+    && Array.isArray(e?.meta?.target)
+    && e.meta.target.includes(field);
 }
 
 async function ensurePhoneIsAvailable(phone: string | null | undefined, excludeUserId?: string): Promise<void> {
@@ -354,8 +354,9 @@ export const authService = {
     });
 
     // Send password reset email
-    const resetBaseUrl = process.env.FRONTEND_URL ?? "http://localhost:3000";
-    const resetUrl = `${resetBaseUrl}/reset-password?token=${token}`;
+    const resetBaseUrl = env.frontendUrl;
+    const roleQuery = input.role ? `&role=${input.role}` : "";
+    const resetUrl = `${resetBaseUrl}/reset-password?token=${token}${roleQuery}`;
     const template = emailTemplates.passwordReset({ name: user.name, resetUrl });
     await enqueueEmail({ to: user.email, subject: template.subject, html: template.html });
 

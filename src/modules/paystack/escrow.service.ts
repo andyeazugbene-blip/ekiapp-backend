@@ -5,6 +5,7 @@ import { paystack } from "../../lib/paystack";
 import { logger } from "../../lib/logger";
 import { sendSms } from "../../lib/sms";
 import { AppError } from "../../shared/errors/app-error";
+import { releaseVendorEarnings } from "../../shared/utils/wallet-release";
 import { notificationsService } from "../notifications/notifications.service";
 
 const VENDOR_TIMEOUT_HOURS = Number(process.env.ESCROW_VENDOR_TIMEOUT_HOURS ?? "48");
@@ -348,6 +349,11 @@ export const escrowService = {
       logger.error("Post-OTP payout initiation failed", { orderId, error: String(err) });
     });
 
+    // Release wallet earnings so vendor can request payout
+    releaseVendorEarnings(orderId).catch((err) => {
+      logger.error("Post-OTP wallet release failed", { orderId, error: String(err) });
+    });
+
     return { confirmed: true };
   },
 
@@ -407,6 +413,10 @@ export const escrowService = {
 
         this.initiateVendorPayout(order.id).catch((err) => {
           logger.error("Auto-release payout initiation failed", { orderId: order.id, error: String(err) });
+        });
+
+        releaseVendorEarnings(order.id).catch((err) => {
+          logger.error("Auto-release wallet release failed", { orderId: order.id, error: String(err) });
         });
       } catch (error) {
         logger.error("Escrow auto-release: failed", {

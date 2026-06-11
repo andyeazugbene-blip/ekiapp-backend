@@ -58,3 +58,8 @@ export async function updateVendorOrderStatus(request: Request, response: Respon
   );
   response.status(200).json({ order });
 }
+
+export async function completeBuyerOrder(request: Request, response: Response): Promise<void> {
+  const order = await ordersService.completeBuyerOrder(requireUserId(request), requireIdParam(request));
+  response.status(200).json({ order });
+}

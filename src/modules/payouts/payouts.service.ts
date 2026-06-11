@@ -222,7 +222,7 @@ export const payoutsService = {
 
       return payout;
     } catch (error) {
-      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+      if ((error as any)?.code === "P2002") {
         throw new AppError("Payout already processed", 409);
       }
       throw error;

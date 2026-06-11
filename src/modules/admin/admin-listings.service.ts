@@ -88,6 +88,24 @@ export const adminListingsService = {
     );
   },
 
+  async getUser(userId: string) {
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      select: {
+        id: true,
+        email: true,
+        name: true,
+        role: true,
+        isSuspended: true,
+        suspendedReason: true,
+        createdAt: true,
+        updatedAt: true,
+      },
+    });
+    if (!user) throw new AppError("User not found", 404);
+    return user;
+  },
+
   async listVendors(query: Record<string, unknown>) {
     const verificationStatus = optionalEnum(
       query.status,

@@ -14,6 +14,8 @@ export type CreatePaymentIntentFromCartInput = {
   deliveryAddress?: string;
   deliveryCountry?: string;
   walletAmount?: number;
+  promoCode?: string;
+  promoVendorId?: string;
 };
 
 export type NormalizedPaymentItem = CreatePaymentIntentItemInput;
@@ -40,4 +42,6 @@ export type CreatePaymentIntentResponse = {
   orderIds: string[];
   amount: number;
   currency: string;
+  discountAmount?: number;
+  promoCode?: string;
 };

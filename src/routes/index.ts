@@ -91,6 +91,7 @@ apiRouter.use("/uploads", uploadsRouter);
 apiRouter.use("/shipments", shipmentsRouter);
 apiRouter.use("/wallet", buyerWalletRouter);
 apiRouter.use("/promo-codes", promosRouter);
+apiRouter.use("/promos", promosRouter);
 apiRouter.use("/referrals", referralsRouter);
 apiRouter.use("/subscriptions", subscriptionsRouter);
 apiRouter.use("/push-tokens", pushTokensRouter);

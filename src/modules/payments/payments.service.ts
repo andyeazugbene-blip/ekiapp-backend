@@ -9,10 +9,12 @@ import { AppError } from "../../shared/errors/app-error";
 import { calculatePlatformFee as calcPlatformFee } from "../../shared/pricing";
 import { referralsService } from "../referrals/referrals.service";
 import { resolveVendorCommission } from "../subscriptions/subscription-plan-utils";
+import { promosService } from "../promos/promos.service";
 import { validateCreatePaymentIntentFromCartInput } from "./payments.validation";
 import type { CreatePaymentIntentResponse, PricedOrderItem } from "./payments.types";
 
 import { MAX_VENDOR_WEIGHT_GRAMS } from "../../shared/constants";
+import { resolveStripeCurrency } from "../../shared/currency";
 
 interface VendorGroup {
   vendorId: string;
@@ -28,6 +30,7 @@ interface VendorGroup {
   commissionBps: number;
   withdrawalFeeBps: number;
   deliveryZoneId: string;
+  discountAmount: number;
 }
 
 /**
@@ -159,11 +162,41 @@ class PaymentsService {
         commissionBps: commission.platformFeeBps,
         withdrawalFeeBps: commission.withdrawalFeeBps,
         deliveryZoneId: effectiveZone.id,
+        discountAmount: 0,
       });
     }
 
-    const grandTotal = vendorGroups.reduce((sum, g) => sum + g.totalAmount, 0);
+    let grandTotal = vendorGroups.reduce((sum, g) => sum + g.totalAmount, 0);
     const buyerId = cart.buyerId;
+
+    // ─── Step 2e: Promo code validation ────────────────────────────────────
+
+    let promoDiscount = 0;
+    let promoCodeApplied: string | undefined;
+    if (payload.promoCode && payload.promoVendorId) {
+      const targetGroup = vendorGroups.find((g) => g.vendorId === payload.promoVendorId);
+      if (!targetGroup) {
+        throw new AppError("Promo code vendor is not in this cart", 400);
+      }
+      const orderAmountCents = targetGroup.subtotalAmount;
+      const validation = await promosService.validatePromo(buyerId, {
+        code: payload.promoCode,
+        orderAmount: orderAmountCents,
+        vendorId: payload.promoVendorId,
+      });
+      promoDiscount = validation.discountAmount;
+      promoCodeApplied = payload.promoCode;
+
+      // Apply discount to the target vendor group
+      targetGroup.discountAmount = promoDiscount;
+      targetGroup.subtotalAmount = Math.max(0, targetGroup.subtotalAmount - promoDiscount);
+      // Recalculate platform fee and earnings on discounted subtotal
+      const commission = await resolveVendorCommission(targetGroup.vendorId, targetGroup.subtotalAmount);
+      targetGroup.platformFeeAmount = calcPlatformFee(targetGroup.subtotalAmount, commission.platformFeeBps);
+      targetGroup.vendorEarningsAmount = targetGroup.subtotalAmount - targetGroup.platformFeeAmount;
+      targetGroup.totalAmount = targetGroup.subtotalAmount + targetGroup.deliveryFeeAmount;
+      grandTotal = vendorGroups.reduce((sum, group) => sum + group.totalAmount, 0);
+    }
 
     // ─── Step 2d: Wallet deduction validation ──────────────────────────────
 
@@ -226,6 +259,9 @@ class PaymentsService {
         }
       }
 
+      // Resolve Stripe-compatible currency (Italy account may not support some local currencies)
+      const stripeCurrency = resolveStripeCurrency(currency);
+
       // Create Checkout record
       const checkout = await tx.checkout.create({
         data: {
@@ -245,10 +281,14 @@ class PaymentsService {
               commissionTierId: g.commissionTierId,
               commissionBps: g.commissionBps,
               withdrawalFeeBps: g.withdrawalFeeBps,
+              discountAmount: g.discountAmount,
             })),
             walletDeduction,
             deliveryAddress: payload.deliveryAddress ?? null,
             deliveryCountry: payload.deliveryCountry ?? zone.country,
+            stripeCurrency,
+            promoCode: promoCodeApplied ?? null,
+            promoDiscount: promoDiscount,
           } as unknown as Prisma.InputJsonValue,
         },
         select: { id: true },
@@ -344,6 +384,36 @@ class PaymentsService {
           });
         }
 
+        // Redeem promo code if applicable for this vendor
+        if (promoCodeApplied && group.discountAmount > 0 && group.vendorId === payload.promoVendorId) {
+          const promo = await tx.promoCode.findFirst({
+            where: { vendorId: group.vendorId, code: promoCodeApplied },
+          });
+          if (promo) {
+            const existingRedemption = await tx.promoRedemption.findFirst({
+              where: { orderId: order.id, buyerId },
+            });
+            if (!existingRedemption) {
+              await tx.promoCode.updateMany({
+                where: {
+                  id: promo.id,
+                  isActive: true,
+                  usedCount: { lt: promo.maxUses ?? 999999 },
+                },
+                data: { usedCount: { increment: 1 }, updatedAt: new Date() },
+              });
+              await tx.promoRedemption.create({
+                data: {
+                  promoCodeId: promo.id,
+                  buyerId,
+                  orderId: order.id,
+                  discountAmount: group.discountAmount,
+                },
+              });
+            }
+          }
+        }
+
         orderIds.push(order.id);
       }
 
@@ -381,15 +451,19 @@ class PaymentsService {
         orderIds,
         amount: grandTotal,
         currency,
+        discountAmount: promoDiscount,
+        promoCode: promoCodeApplied,
       };
     }
+
+    const stripeCurrency = resolveStripeCurrency(currency);
 
     let paymentIntent;
     try {
       paymentIntent = await stripe.paymentIntents.create(
         {
           amount: stripeAmount,
-          currency,
+          currency: stripeCurrency,
           automatic_payment_methods: { enabled: true },
           metadata: {
             checkoutId,
@@ -397,6 +471,7 @@ class PaymentsService {
             orderIds: orderIds.join(","),
             vendorIds: vendorGroups.map((g) => g.vendorId).join(","),
             walletDeduction: String(walletDeduction),
+            stripeCurrency,
           },
         },
         { idempotencyKey: `pi:checkout:${checkoutId}` },
@@ -440,6 +515,8 @@ class PaymentsService {
       orderIds,
       amount: grandTotal,
       currency,
+      discountAmount: promoDiscount,
+      promoCode: promoCodeApplied,
     };
   }
 }

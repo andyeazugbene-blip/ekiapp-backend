@@ -3,6 +3,7 @@ import { Router } from "express";
 import { authenticate } from "../../middlewares/authenticate";
 import { asyncHandler } from "../../shared/utils/async-handler";
 import {
+  completeBuyerOrder,
   getBuyerOrder,
   getVendorOrder,
   listBuyerOrders,
@@ -19,6 +20,9 @@ ordersRouter.use(authenticate);
 // Buyer: list own orders, get order detail
 ordersRouter.get("/me", asyncHandler(listBuyerOrders));
 ordersRouter.get("/:id", asyncHandler(getBuyerOrder));
+
+// Buyer: mark delivered order as completed (received)
+ordersRouter.post("/:id/complete", asyncHandler(completeBuyerOrder));
 
 // Buyer: confirm delivery with OTP (escrow orders)
 ordersRouter.post("/:id/confirm-delivery", asyncHandler(buyerConfirmDelivery));

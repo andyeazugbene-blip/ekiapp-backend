@@ -133,13 +133,16 @@ export function validateForgotPasswordInput(input: unknown): ForgotPasswordInput
   if (!input || typeof input !== "object") {
     throw new AppError("Invalid request body", 400);
   }
-  const { email } = input as Record<string, unknown>;
+  const { email, role } = input as Record<string, unknown>;
 
   if (!email || typeof email !== "string" || !EMAIL_REGEX.test(email)) {
     throw new AppError("Invalid email", 400);
   }
 
-  return { email: email.toLowerCase().trim() };
+  return {
+    email: email.toLowerCase().trim(),
+    role: typeof role === "string" && role.trim().length > 0 ? role.trim().toLowerCase() : undefined,
+  };
 }
 
 export function validateResetPasswordInput(input: unknown): ResetPasswordInput {

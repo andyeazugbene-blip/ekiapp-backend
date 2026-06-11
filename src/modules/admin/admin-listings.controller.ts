@@ -27,6 +27,12 @@ export async function listUsers(request: Request, response: Response): Promise<v
   response.status(200).json(await adminListingsService.listUsers(q(request)));
 }
 
+export async function getUser(request: Request, response: Response): Promise<void> {
+  const userId = requireIdParam(request);
+  const user = await adminListingsService.getUser(userId);
+  response.status(200).json({ user });
+}
+
 export async function suspendUser(request: Request, response: Response): Promise<void> {
   const userId = requireIdParam(request);
   const reason = typeof request.body?.reason === "string" ? request.body.reason.trim() : undefined;

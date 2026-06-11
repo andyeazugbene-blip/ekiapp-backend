@@ -42,5 +42,13 @@ export function validateCreatePaymentIntentFromCartInput(
     result.walletAmount = walletAmount;
   }
 
+  // promoCode (optional)
+  if (typeof raw.promoCode === "string" && raw.promoCode.trim().length > 0) {
+    result.promoCode = raw.promoCode.trim().toUpperCase();
+  }
+  if (typeof raw.promoVendorId === "string" && raw.promoVendorId.trim().length > 0) {
+    result.promoVendorId = raw.promoVendorId.trim();
+  }
+
   return result;
 }

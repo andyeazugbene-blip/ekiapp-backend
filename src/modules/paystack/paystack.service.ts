@@ -53,8 +53,8 @@ export const paystackService = {
     }
 
     // For domestic escrow, all items must be from same configured country vendor
-    const vendorCountries = new Set(cart.items.map(i => i.product.vendor.country?.toLowerCase()).filter(Boolean));
-    const domesticVendorCountry = [...vendorCountries][0];
+    const vendorCountries = new Set(cart.items.map(i => i.product.vendor.country?.toLowerCase()).filter(Boolean) as string[]);
+    const domesticVendorCountry = [...vendorCountries][0] as string;
     if (!domesticVendorCountry) {
       throw new AppError("Escrow checkout is not available because the vendor country is not configured", 409);
     }
@@ -231,7 +231,7 @@ export const paystackService = {
       });
     } catch (error: unknown) {
       // Unique constraint violation = duplicate webhook
-      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+      if ((error as any)?.code === "P2002") {
         logger.info("Paystack webhook: duplicate (unique constraint)", { reference });
         return;
       }
@@ -275,7 +275,7 @@ export const paystackService = {
 
         // SMS fallback
         if (vendor.contactPhone) {
-          const { sendSms } = await import("../../lib/sms");
+          const { sendSms } = await import("../../lib/sms.js");
           sendSms({
             to: vendor.contactPhone,
             message: `Eki: Payment of ${order.totalAmount / 100} ${order.currency} secured for order ${order.orderNumber}. Open the app to confirm and prepare.`,

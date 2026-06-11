@@ -2,6 +2,7 @@ import { prisma } from "../../lib/prisma";
 import { paystack } from "../../lib/paystack";
 import { logger } from "../../lib/logger";
 import { AppError } from "../../shared/errors/app-error";
+import { releaseVendorEarnings } from "../../shared/utils/wallet-release";
 import { notificationsService } from "../notifications/notifications.service";
 
 export interface ResolveDisputeInput {
@@ -28,16 +29,22 @@ export const disputeService = {
 
     if (!order) throw new AppError("Order not found", 404);
     if (order.buyerId !== buyerId) throw new AppError("Forbidden", 403);
-    if (order.escrowType !== "DOMESTIC_AFRICA") throw new AppError("Not an escrow order", 400);
 
-    if (order.status !== "DISPATCHED") {
-      throw new AppError("Can only dispute orders that have been dispatched", 400);
+    const isEscrow = order.escrowType === "DOMESTIC_AFRICA";
+
+    // For escrow: only allow DISPATCHED orders that haven't had OTP confirmed
+    // For non-escrow: allow DISPATCHED, IN_TRANSIT, DELIVERED orders
+    const allowedStatuses = isEscrow ? ["DISPATCHED"] : ["DISPATCHED", "IN_TRANSIT", "DELIVERED"];
+    if (!allowedStatuses.includes(order.status)) {
+      throw new AppError(isEscrow ? "Can only dispute orders that have been dispatched" : "Can only report issues for active orders", 400);
     }
 
-    // Check if OTP was already confirmed — if so, transaction is final
-    const otp = await prisma.deliveryOtp.findUnique({ where: { orderId } });
-    if (otp?.confirmedAt) {
-      throw new AppError("Cannot dispute — delivery was already confirmed with the OTP code. Transaction is final.", 400);
+    // Escrow-only: Check if OTP was already confirmed
+    if (isEscrow) {
+      const otp = await prisma.deliveryOtp.findUnique({ where: { orderId } });
+      if (otp?.confirmedAt) {
+        throw new AppError("Cannot dispute — delivery was already confirmed with the OTP code. Transaction is final.", 400);
+      }
     }
 
     // Check for existing dispute
@@ -56,7 +63,7 @@ export const disputeService = {
         },
       });
 
-      // Mark order as DISPUTED (freezes auto-release)
+      // Mark order as DISPUTED
       await tx.order.update({
         where: { id: orderId },
         data: { status: "DISPUTED", disputedAt: new Date() },
@@ -72,14 +79,16 @@ export const disputeService = {
         await notificationsService.enqueue({
           userId: vendor.userId,
           type: "ORDER_PAID",
-          title: "Dispute Opened ⚠️",
-          body: `A buyer has raised a dispute for order ${order.orderNumber}. The escrow is frozen until resolved.`,
+          title: isEscrow ? "Dispute Opened ⚠️" : "Issue Reported ⚠️",
+          body: isEscrow
+            ? `A buyer has raised a dispute for order ${order.orderNumber}. The escrow is frozen until resolved.`
+            : `A buyer has reported an issue for order ${order.orderNumber}. Please review and respond.`,
           data: { orderId, disputeId: dispute.id },
         });
       }
     }
 
-    logger.info("Escrow dispute opened", { orderId, disputeId: dispute.id, buyerId });
+    logger.info(isEscrow ? "Escrow dispute opened" : "Support issue opened", { orderId, disputeId: dispute.id, buyerId });
     return { disputeId: dispute.id };
   },
 
@@ -227,9 +236,12 @@ export const disputeService = {
       }
     }
 
-    // If resolved in vendor's favour, initiate payout
+    // If resolved in vendor's favour, release wallet earnings and initiate payout
     if (input.resolution === "vendor") {
-      const { escrowService } = await import("./escrow.service");
+      releaseVendorEarnings(dispute.orderId).catch((err) => {
+        logger.error("Dispute wallet release failed", { disputeId, error: String(err) });
+      });
+      const { escrowService } = await import("./escrow.service.js");
       escrowService.initiateVendorPayout(dispute.orderId).catch((err) => {
         logger.error("Dispute vendor payout failed", { disputeId, error: String(err) });
       });

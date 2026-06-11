@@ -56,10 +56,10 @@ async function ensureStoreNameAvailable(storeName: string, excludeVendorId?: str
 }
 
 function isUniqueViolation(error: unknown, field: string): boolean {
-  return error instanceof Prisma.PrismaClientKnownRequestError
-    && error.code === "P2002"
-    && Array.isArray(error.meta?.target)
-    && error.meta.target.includes(field);
+  const e = error as any;
+  return e?.code === "P2002"
+    && Array.isArray(e?.meta?.target)
+    && e.meta.target.includes(field);
 }
 
 export const vendorsService = {

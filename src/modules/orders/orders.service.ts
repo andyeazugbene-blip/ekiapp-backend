@@ -3,8 +3,9 @@ import type { Order, OrderStatus } from "@prisma/client";
 import { prisma } from "../../lib/prisma";
 import { CURSOR_ORDER_BY } from "../../shared/constants";
 import { AppError } from "../../shared/errors/app-error";
+import { releaseVendorEarnings } from "../../shared/utils/wallet-release";
 import type { ListBuyerOrdersQuery, ListVendorOrdersQuery } from "./orders.types";
-import { VENDOR_STATUS_TRANSITIONS } from "./orders.types";
+import { VENDOR_STATUS_TRANSITIONS, BUYER_STATUS_TRANSITIONS } from "./orders.types";
 
 const orderInclude = {
   items: {
@@ -181,6 +182,44 @@ export const ordersService = {
       },
       include: orderInclude,
     });
+
+    // When vendor marks order DELIVERED, release pending earnings to available balance
+    if (newStatus === "DELIVERED") {
+      releaseVendorEarnings(orderId).catch(() => {});
+    }
+
+    return updated;
+  },
+
+  async completeBuyerOrder(buyerId: string, orderId: string): Promise<Order> {
+    const order = await prisma.order.findUnique({
+      where: { id: orderId },
+      include: orderInclude,
+    });
+
+    if (!order) {
+      throw new AppError("Order not found", 404);
+    }
+    if (order.buyerId !== buyerId) {
+      throw new AppError("Forbidden", 403);
+    }
+
+    const allowedTransitions = BUYER_STATUS_TRANSITIONS[order.status] ?? [];
+    if (!allowedTransitions.includes("COMPLETED")) {
+      throw new AppError(
+        `Cannot mark order as completed from ${order.status}`,
+        400,
+      );
+    }
+
+    const updated = await prisma.order.update({
+      where: { id: orderId },
+      data: { status: "COMPLETED", deliveredAt: new Date() },
+      include: orderInclude,
+    });
+
+    // Release pending earnings to available balance
+    releaseVendorEarnings(orderId).catch(() => {});
 
     return updated;
   },

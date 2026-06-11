@@ -120,10 +120,11 @@ export async function generatePresignedUpload(
 ): Promise<PresignedUpload | null> {
   if (!s3 || !BUCKET) {
     // If not configured, return a mock upload URL for local dev/testing
-    const mockBase = `http://localhost:4001/api/uploads/mock-upload`;
+    const mockBaseUrl = process.env.PUBLIC_URL_BASE?.trim().replace(/\/+$/, "")
+      ?? `http://localhost:${process.env.PORT ?? 4000}`;
     return {
-      uploadUrl: `${mockBase}?key=${encodeURIComponent(key)}`,
-      publicUrl: `http://localhost:4001/api/uploads/mock-download?key=${encodeURIComponent(key)}`,
+      uploadUrl: `${mockBaseUrl}/api/uploads/mock-upload?key=${encodeURIComponent(key)}`,
+      publicUrl: `${mockBaseUrl}/api/uploads/mock-download?key=${encodeURIComponent(key)}`,
       key,
     };
   }
@@ -166,7 +167,9 @@ export async function objectExists(key: string): Promise<boolean> {
 
 export async function generatePresignedRead(key: string, expiresIn = 300): Promise<string> {
   if (!s3 || !BUCKET) {
-    return `http://localhost:4001/api/uploads/mock-download?key=${encodeURIComponent(key)}`;
+    const mockBaseUrl = process.env.PUBLIC_URL_BASE?.trim().replace(/\/+$/, "")
+      ?? `http://localhost:${process.env.PORT ?? 4000}`;
+    return `${mockBaseUrl}/api/uploads/mock-download?key=${encodeURIComponent(key)}`;
   }
   return getSignedUrl(s3, new GetObjectCommand({ Bucket: BUCKET, Key: key }), { expiresIn });
 }

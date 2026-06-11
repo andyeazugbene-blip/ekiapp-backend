@@ -60,6 +60,7 @@ import {
   approveVendor,
   deleteUser,
   disableProduct,
+  getUser,
   listOrders,
   listPayments,
   listProducts,
@@ -113,6 +114,7 @@ adminRouter.get("/audit-logs", asyncHandler(requireAdminPermission("audit.read")
 
 // Listings
 adminRouter.get("/users", asyncHandler(requireAdminPermission("users.read")), asyncHandler(listUsers));
+adminRouter.get("/users/:id", asyncHandler(requireAdminPermission("users.read")), asyncHandler(getUser));
 adminRouter.get("/vendors", asyncHandler(requireAdminPermission("vendors.read")), asyncHandler(listVendors));
 adminRouter.get("/products", asyncHandler(requireAdminPermission("products.read")), asyncHandler(listProducts));
 adminRouter.get("/orders", asyncHandler(requireAdminPermission("orders.read")), asyncHandler(listOrders));

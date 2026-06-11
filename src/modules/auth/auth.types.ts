@@ -51,6 +51,7 @@ export interface UpdateProfileInput {
 
 export interface ForgotPasswordInput {
   email: string;
+  role?: string;
 }
 
 export interface ResetPasswordInput {
