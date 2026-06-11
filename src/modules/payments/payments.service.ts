@@ -17,6 +17,8 @@ import { MAX_VENDOR_WEIGHT_GRAMS } from "../../shared/constants";
 import { resolveStripeCurrency } from "../../shared/currency";
 import { enqueueEmail } from "../../lib/email-queue";
 import { emailTemplates } from "../../lib/email-templates";
+import { notificationsService } from "../notifications/notifications.service";
+import { pushNotifications } from "../../lib/push-notifications";
 
 interface VendorGroup {
   vendorId: string;
@@ -454,6 +456,14 @@ class PaymentsService {
         });
       });
 
+      // ─── Notify vendors about wallet-paid orders ────────────────────
+      this.notifyVendorsWalletPaid(orderIds, vendorGroups).catch((error) => {
+        logger.error("Failed to send vendor notifications for wallet-paid checkout", {
+          buyerId,
+          errorMessage: error instanceof Error ? error.message : String(error),
+        });
+      });
+
       return {
         paymentIntentId: "",
         clientSecret: "wallet_paid",
@@ -584,6 +594,43 @@ class PaymentsService {
         buyerId,
         errorMessage: error instanceof Error ? error.message : String(error),
       });
+    }
+  }
+
+  /**
+   * Notify vendors about wallet-paid orders (in-app + push).
+   */
+  private async notifyVendorsWalletPaid(
+    orderIds: string[],
+    vendorGroups: VendorGroup[],
+  ): Promise<void> {
+    for (let i = 0; i < orderIds.length; i++) {
+      const group = vendorGroups[i];
+      const orderId = orderIds[i];
+      if (!group || !orderId) continue;
+
+      try {
+        const vendor = await prisma.vendor.findUnique({
+          where: { id: group.vendorId },
+          select: { userId: true, storeName: true },
+        });
+        if (!vendor?.userId) continue;
+
+        await notificationsService.enqueue({
+          userId: vendor.userId,
+          type: "ORDER_PAID" as any,
+          title: "New order received",
+          body: `Order ${orderId} has been paid (wallet).`,
+          data: { orderId },
+        });
+        pushNotifications.vendorNewOrder(vendor.userId, orderId);
+      } catch (error) {
+        logger.error("notifyVendorsWalletPaid failed", {
+          orderId,
+          vendorId: group.vendorId,
+          errorMessage: error instanceof Error ? error.message : String(error),
+        });
+      }
     }
   }
 }
