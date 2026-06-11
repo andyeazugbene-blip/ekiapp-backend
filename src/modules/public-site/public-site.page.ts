@@ -192,15 +192,26 @@ function renderLayout(page: PageDefinition): string {
     .button-primary{
       background:var(--accent);
       color:#FFFFFF;
+      transition:transform 0.2s cubic-bezier(0.34,1.56,0.64,1),box-shadow 0.2s ease,background 0.2s ease;
     }
     .button-primary:hover{
       background:var(--accent-hover);
+      transform:translateY(-2px) scale(1.02);
+      box-shadow:0 12px 28px rgba(31,77,64,0.2);
     }
+    .button-primary:active{transform:translateY(0) scale(0.98)}
     .button-secondary{
       background:#FFFFFF;
       color:var(--text);
       border-color:var(--border);
+      transition:transform 0.2s cubic-bezier(0.34,1.56,0.64,1),border-color 0.2s ease,box-shadow 0.2s ease;
     }
+    .button-secondary:hover{
+      border-color:var(--accent);
+      transform:translateY(-1px);
+      box-shadow:0 8px 20px rgba(31,27,22,0.08);
+    }
+    .button-secondary:active{transform:translateY(0)}
     .grid{
       display:grid;
       grid-template-columns:repeat(12,minmax(0,1fr));
@@ -322,24 +333,34 @@ function renderHomeLayout(page: PageDefinition): string {
     h1{margin:0;max-width:10ch;font-size:56px;line-height:0.98;letter-spacing:-0.045em;font-weight:800}
     .intro{margin:16px 0 0;max-width:430px;color:rgba(255,255,255,0.82);font-size:15px;line-height:1.4}
     .store-buttons{display:flex;gap:12px;margin-top:28px;flex-wrap:wrap}
-    .store-button{min-width:132px;height:44px;border-radius:9px;background:#FFFFFF;color:#164F3F;text-decoration:none;display:flex;flex-direction:column;justify-content:center;padding:0 14px;box-shadow:0 14px 30px rgba(0,0,0,0.08)}
-    .store-button.google{background:#2F885A;color:#FFFFFF}
+    .store-button{min-width:132px;height:44px;border-radius:9px;background:#FFFFFF;color:#164F3F;text-decoration:none;display:flex;flex-direction:column;justify-content:center;padding:0 14px;box-shadow:0 14px 30px rgba(0,0,0,0.08);transition:transform 0.2s cubic-bezier(0.34,1.56,0.64,1),box-shadow 0.2s ease}
+    .store-button:hover{transform:translateY(-2px) scale(1.02);box-shadow:0 18px 36px rgba(0,0,0,0.15)}
+    .store-button:active{transform:translateY(0) scale(0.98);box-shadow:0 6px 16px rgba(0,0,0,0.1)}
+    .store-button.google{background:#2F885A;color:#FFFFFF;transition:transform 0.2s cubic-bezier(0.34,1.56,0.64,1),box-shadow 0.2s ease,background 0.2s ease}
+    .store-button.google:hover{background:#3A9A68;transform:translateY(-2px) scale(1.02);box-shadow:0 18px 36px rgba(0,0,0,0.15)}
+    .store-button.google:active{transform:translateY(0) scale(0.98)}
     .store-small{font-size:9px;font-weight:600;opacity:.74}
     .store-main{font-size:14px;font-weight:800;margin-top:1px}
     .scan-copy{margin-top:14px;color:rgba(255,255,255,.72);font-size:12px;line-height:1.4}
     .phone-stage{position:relative;min-height:310px;display:flex;align-items:center;justify-content:center}
-    .phone{width:min(82vw,390px);max-height:400px;object-fit:contain;object-position:center;filter:drop-shadow(0 28px 40px rgba(0,0,0,.32))}
+    .phone{width:min(82vw,390px);max-height:400px;object-fit:contain;object-position:center;filter:drop-shadow(0 28px 40px rgba(0,0,0,.32));transition:transform 0.3s ease}
+    .phone:hover{transform:scale(1.02)}
     .steps-band{background:#FFFFFF;padding:0 0 92px}
     .steps-head{padding:26px 0 10px;display:flex;align-items:center;justify-content:space-between;gap:16px}
     .steps-kicker{color:#164F3F;font-size:12px;font-weight:800;letter-spacing:.01em;text-transform:uppercase}
-    .steps-tag{display:inline-flex;align-items:center;min-height:30px;border-radius:999px;background:#EAF6EE;color:#2A8256;padding:0 12px;font-size:12px;font-weight:700;text-decoration:none}
+    .steps-tag{display:inline-flex;align-items:center;min-height:30px;border-radius:999px;background:#EAF6EE;color:#2A8256;padding:0 12px;font-size:12px;font-weight:700;text-decoration:none;transition:background 0.2s ease,transform 0.2s cubic-bezier(0.34,1.56,0.64,1)}
+    .steps-tag:hover{background:#CDECD7;transform:scale(1.04)}
     .steps-list{border-top:1px solid #E8ECE9;background:#FFFFFF}
-    .step{display:flex;gap:14px;padding:18px 0;border-bottom:1px solid #EEF1EF;align-items:flex-start}
-    .step-index{width:30px;height:30px;border-radius:999px;background:#EAF6EE;color:#7AA07E;display:grid;place-items:center;font-size:13px;font-weight:800;flex:0 0 auto}
+    .step{display:flex;gap:14px;padding:18px 0;border-bottom:1px solid #EEF1EF;align-items:flex-start;transition:background 0.15s ease;border-radius:4px;margin:0 -4px;padding-left:4px;padding-right:4px}
+    .step:hover{background:#FAFCFB}
+    .step-index{width:30px;height:30px;border-radius:999px;background:#EAF6EE;color:#7AA07E;display:grid;place-items:center;font-size:13px;font-weight:800;flex:0 0 auto;transition:background 0.2s ease,color 0.2s ease,transform 0.2s cubic-bezier(0.34,1.56,0.64,1)}
+    .step:hover .step-index{background:#164F3F;color:#FFFFFF;transform:scale(1.1)}
     .step-title{margin:0;color:#1F2937;font-size:15px;line-height:1.3;font-weight:800;letter-spacing:-0.02em}
     .step-body{margin:4px 0 0;color:#97A1A8;font-size:12px;line-height:1.35}
     .sticky-order{position:sticky;bottom:0;background:#FFFFFF;border-top:1px solid #E8ECE9;padding:14px 0 calc(14px + env(safe-area-inset-bottom, 0px));margin-top:-1px}
-    .sticky-order a{width:100%;min-height:42px;border-radius:10px;border:1px solid #D6E2DB;background:#F8FCFA;color:#53616A;display:flex;align-items:center;justify-content:center;gap:6px;text-decoration:none;font-size:13px;font-weight:700}
+    .sticky-order a{width:100%;min-height:42px;border-radius:10px;border:1px solid #D6E2DB;background:#F8FCFA;color:#53616A;display:flex;align-items:center;justify-content:center;gap:6px;text-decoration:none;font-size:13px;font-weight:700;transition:background 0.2s ease,border-color 0.2s ease,transform 0.2s ease}
+    .sticky-order a:hover{background:#EDF7F2;border-color:#164F3F;transform:translateY(-1px)}
+    .sticky-order a:active{transform:translateY(0)}
     .sticky-order strong{color:#164F3F}
     .sticky-order span{display:inline-flex;align-items:center;gap:6px}
     @media (max-width:900px){.hero{grid-template-columns:1fr;gap:8px;padding:12px 0 0}.phone-stage{display:none}h1{font-size:31px;max-width:220px}.intro{max-width:310px;font-size:13px;line-height:1.28}.store-buttons{margin-top:22px}.store-button{flex:1;min-width:0}.steps-band{padding-bottom:86px}.toplinks{display:none}.steps-head{padding:18px 0 8px}}
@@ -360,11 +381,11 @@ function renderHomeLayout(page: PageDefinition): string {
         <h1>${escape(page.heading)}</h1>
         <p class="intro">${escape(page.intro)}</p>
         <div class="store-buttons">
-          <a class="store-button" href="https://culinarytales.app" aria-label="Download Eki on the App Store">
+          <a class="store-button" href="https://apps.apple.com/app/id" aria-label="Download Eki on the App Store">
             <span class="store-small">Download on the</span>
             <span class="store-main">App Store</span>
           </a>
-          <a class="store-button google" href="https://culinarytales.app" aria-label="Get Eki on Google Play">
+          <a class="store-button google" href="https://play.google.com/store/apps/details?id=com.ekiapp.mobile" aria-label="Get Eki on Google Play">
             <span class="store-small">Get it on</span>
             <span class="store-main">Google Play</span>
           </a>
