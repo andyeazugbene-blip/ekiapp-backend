@@ -34,7 +34,7 @@ export const disputeService = {
 
     // For escrow: only allow DISPATCHED orders that haven't had OTP confirmed
     // For non-escrow: allow DISPATCHED, IN_TRANSIT, DELIVERED orders
-    const allowedStatuses = isEscrow ? ["DISPATCHED"] : ["DISPATCHED", "IN_TRANSIT", "DELIVERED"];
+    const allowedStatuses = isEscrow ? ["DISPATCHED", "IN_TRANSIT"] : ["DISPATCHED", "IN_TRANSIT", "DELIVERED"];
     if (!allowedStatuses.includes(order.status)) {
       throw new AppError(isEscrow ? "Can only dispute orders that have been dispatched" : "Can only report issues for active orders", 400);
     }

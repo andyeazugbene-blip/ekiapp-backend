@@ -233,7 +233,7 @@ export const escrowService = {
     if (!order) throw new AppError("Order not found", 404);
     if (order.buyerId !== buyerId) throw new AppError("Forbidden", 403);
     if (order.escrowType !== "DOMESTIC_AFRICA") throw new AppError("Not an escrow order", 400);
-    if (order.status !== "DISPATCHED") throw new AppError("Delivery OTP can only be resent after dispatch", 400);
+    if (!["DISPATCHED", "IN_TRANSIT"].includes(order.status)) throw new AppError("Delivery OTP can only be resent after dispatch", 400);
     if (!order.deliveryOtp || order.deliveryOtp.confirmedAt) {
       throw new AppError("Delivery is already confirmed or the OTP is unavailable", 409);
     }
@@ -289,7 +289,7 @@ export const escrowService = {
     if (!order) throw new AppError("Order not found", 404);
     if (order.buyerId !== buyerId) throw new AppError("Forbidden", 403);
     if (order.escrowType !== "DOMESTIC_AFRICA") throw new AppError("Not an escrow order", 400);
-    if (order.status !== "DISPATCHED") {
+    if (!["DISPATCHED", "IN_TRANSIT"].includes(order.status)) {
       throw new AppError(`Cannot confirm delivery for order in ${order.status} status`, 400);
     }
 
@@ -363,7 +363,7 @@ export const escrowService = {
     const expiredOrders = await prisma.order.findMany({
       where: {
         escrowType: "DOMESTIC_AFRICA",
-        status: "DISPATCHED",
+        status: { in: ["DISPATCHED", "IN_TRANSIT"] },
         escrowExpiresAt: { lt: now },
       },
       select: {
