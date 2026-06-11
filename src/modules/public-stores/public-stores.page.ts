@@ -2,6 +2,7 @@ import type { Request, Response } from "express";
 
 import { publicStoresService } from "./public-stores.service";
 import type { PublicProduct, PublicStore, PublicStoreTrackedOrder } from "./public-stores.types";
+import { getExchangeRates } from "../../shared/exchange-rates";
 
 const PAGE_PRODUCTS_LIMIT = 48;
 
@@ -707,9 +708,37 @@ function baseStyles(title: string, description: string, extraHead = ""): string 
       .secure-strip{margin:10px -8px 0;border-left:0;border-right:0;border-radius:0;font-size:9px}
       .primary-action{min-height:42px;border-radius:5px}
     }
+    .currency-btn{display:inline-flex;align-items:center;gap:4px;min-height:22px;padding:0 10px;border-radius:6px;border:1px solid rgba(255,255,255,.35);background:rgba(255,255,255,.08);color:#fff;font-size:10px;font-weight:700;cursor:pointer}
+    .currency-btn:hover{background:rgba(255,255,255,.16)}
+    .currency-wrap{position:relative;display:inline-block}
+    .currency-drop{position:absolute;top:calc(100% + 4px);right:0;z-index:50;min-width:120px;background:#fff;border:1px solid #dbe7dd;border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.12);padding:4px;display:none}
+    .currency-drop.open{display:block}
+    .currency-drop button{display:block;width:100%;padding:6px 10px;border:0;border-radius:4px;background:transparent;color:#111827;font-size:12px;font-weight:600;cursor:pointer;text-align:left}
+    .currency-drop button:hover{background:#e4f2e8;color:#134f3b}
+    .currency-drop button.active{background:#134f3b;color:#fff}
   </style>
+  <script>
+    var EKI_RATES=null,EKI_STORE_CURRENCY=null;
+    function ekiFormat(n,c){try{return new Intl.NumberFormat('en-GB',{style:'currency',currency:c}).format(n/100)}catch(e){return (n/100).toFixed(2)+' '+c}}
+    function ekiConv(n,f,t){if(!EKI_RATES||f===t)return n;var g=n/(EKI_RATES[f]||1);return g*(EKI_RATES[t]||1)}
+    function ekiRefresh(){var c=localStorage.getItem('eki_currency')||EKI_STORE_CURRENCY||'GBP';document.querySelectorAll('[data-base-price]').forEach(function(e){var b=parseFloat(e.getAttribute('data-base-price')),s=(e.getAttribute('data-currency')||EKI_STORE_CURRENCY||'GBP').toUpperCase();if(!b)return;e.textContent=ekiFormat(Math.round(ekiConv(b,s,c)),c)});document.querySelectorAll('.currency-drop button').forEach(function(b){b.classList.toggle('active',b.getAttribute('data-code')===c)});var lb=document.querySelector('.currency-btn .cur-label');if(lb)lb.textContent=c}
+    function ekiSetCur(c){localStorage.setItem('eki_currency',c);ekiRefresh();var dd=document.querySelector('.currency-drop');if(dd)dd.classList.remove('open')}
+    document.addEventListener('click',function(e){var dd=document.querySelector('.currency-drop');if(!dd)return;if(e.target.closest('.currency-btn'))dd.classList.toggle('open');else if(!e.target.closest('.currency-drop'))dd.classList.remove('open')});
+  </script>
 </head>
 <body>`;
+}
+
+function renderRatesInit(rates: Record<string, number> | null, storeCurrency: string): string {
+  return `<script>EKI_RATES=${JSON.stringify(rates ?? {})};EKI_STORE_CURRENCY="${storeCurrency.toUpperCase()}";ekiRefresh();<\/script>`;
+}
+
+function renderCurrencySelector(): string {
+  const codes = ["GBP","USD","EUR","NGN","GHS","KES","CAD"];
+  return `<div class="currency-wrap">
+    <button class="currency-btn" type="button"><span class="cur-label">GBP</span> ▾</button>
+    <div class="currency-drop">${codes.map(c => `<button data-code="${c}" onclick="ekiSetCur('${c}')">${c}</button>`).join("")}</div>
+  </div>`;
 }
 
 function renderTopbar(right: string): string {
@@ -718,7 +747,7 @@ function renderTopbar(right: string): string {
     <div class="topbar-inner">
       <a class="brand" href="/">eki.</a>
       <div class="mini-copy">+ Auto-synced from Eki app</div>
-      <div>${right}</div>
+      <div style="display:flex;align-items:center;gap:8px">${renderCurrencySelector()}${right}</div>
     </div>
   </div>`;
 }
@@ -981,7 +1010,7 @@ function renderProductPage(store: PublicStore, product: PublicProduct): string {
             <span>Ships from ${escape(store.city || store.country || "Birmingham")}</span>
             <span>Delivery 2-4 days</span>
           </div>
-          <p class="product-price" id="detail-price" style="font-size:34px;margin-top:12px">${escape(formatPrice(product.priceInCents, product.currency))}</p>
+          <p class="product-price" id="detail-price" style="font-size:34px;margin-top:12px" data-base-price="${product.priceInCents}" data-currency="${escape(product.currency)}">${escape(formatPrice(product.priceInCents, product.currency))}</p>
           <div class="desc">${escape(product.description || `Freshly packed ${product.title}. Sourced directly from trusted African foodstuff vendors and prepared for fast secure checkout.`)}</div>
           <div class="qty-row">
             <label>Quantity</label>
@@ -1432,11 +1461,14 @@ export async function getPublicStorePage(request: Request, response: Response): 
   }
 
   try {
-    const [store, productsResult] = await Promise.all([
+    const [store, productsResult, rates] = await Promise.all([
       publicStoresService.getStoreBySlug(slug),
       publicStoresService.listStoreProducts(slug, { limit: PAGE_PRODUCTS_LIMIT }),
+      getExchangeRates(),
     ]);
-    response.status(200).send(renderStorePage(store, productsResult.items));
+    const page = renderStorePage(store, productsResult.items);
+    const storeCurrency = productsResult.items[0]?.currency ?? "GBP";
+    response.status(200).send(page.replace("</body>", renderRatesInit(rates, storeCurrency) + "</body>"));
   } catch (error) {
     const status = (error as { statusCode?: number }).statusCode ?? 500;
     response.status(status === 404 ? 404 : 500).send(status === 404 ? renderNotFound(slug) : renderError());
@@ -1462,11 +1494,13 @@ export async function getPublicStoreProductPage(request: Request, response: Resp
   response.setHeader("Cache-Control", "public, max-age=60, s-maxage=300");
 
   try {
-    const [store, product] = await Promise.all([
+    const [store, product, rates] = await Promise.all([
       publicStoresService.getStoreBySlug(slug),
       publicStoresService.getStoreProductById(slug, productId),
+      getExchangeRates(),
     ]);
-    response.status(200).send(renderProductPage(store, product));
+    const page = renderProductPage(store, product);
+    response.status(200).send(page.replace("</body>", renderRatesInit(rates, product.currency) + "</body>"));
   } catch (error) {
     const status = (error as { statusCode?: number }).statusCode ?? 500;
     response.status(status === 404 ? 404 : 500).send(status === 404 ? renderNotFound(slug) : renderError());
@@ -1479,12 +1513,15 @@ export async function getPublicStoreCheckoutPage(request: Request, response: Res
   response.setHeader("Cache-Control", "no-store");
 
   try {
-    const [store, productsResult] = await Promise.all([
+    const [store, productsResult, rates] = await Promise.all([
       publicStoresService.getStoreBySlug(slug),
       publicStoresService.listStoreProducts(slug, { limit: PAGE_PRODUCTS_LIMIT }),
+      getExchangeRates(),
     ]);
     const promoParam = typeof request.query.promo === "string" ? request.query.promo : undefined;
-    response.status(200).send(renderCheckoutPage(store, productsResult.items, request.query.cancelled === "true", promoParam));
+    let page = renderCheckoutPage(store, productsResult.items, request.query.cancelled === "true", promoParam);
+    const storeCurrency = productsResult.items[0]?.currency ?? "GBP";
+    response.status(200).send(page.replace("</body>", renderRatesInit(rates, storeCurrency) + "</body>"));
   } catch (error) {
     const status = (error as { statusCode?: number }).statusCode ?? 500;
     response.status(status === 404 ? 404 : 500).send(status === 404 ? renderNotFound(slug) : renderError());
@@ -1503,11 +1540,13 @@ export async function getPublicStoreConfirmedPage(request: Request, response: Re
   }
 
   try {
-    const [store, order] = await Promise.all([
+    const [store, order, rates] = await Promise.all([
       publicStoresService.getStoreBySlug(slug),
       publicStoresService.getStoreOrderByCheckoutSession(slug, sessionId),
+      getExchangeRates(),
     ]);
-    response.status(200).send(renderConfirmationPage(store, order));
+    const page = renderConfirmationPage(store, order);
+    response.status(200).send(page.replace("</body>", renderRatesInit(rates, order.currency) + "</body>"));
   } catch (error) {
     const status = (error as { statusCode?: number }).statusCode ?? 500;
     response.status(status === 404 ? 404 : 500).send(status === 404 ? renderNotFound(slug) : renderError());
@@ -1521,11 +1560,13 @@ export async function getPublicStoreTrackedOrderPage(request: Request, response:
   response.setHeader("Cache-Control", "no-store");
 
   try {
-    const [store, order] = await Promise.all([
+    const [store, order, rates] = await Promise.all([
       publicStoresService.getStoreBySlug(slug),
       publicStoresService.getStoreOrderByNumber(slug, orderNumber),
+      getExchangeRates(),
     ]);
-    response.status(200).send(renderTrackPage(store, order));
+    const page = renderTrackPage(store, order);
+    response.status(200).send(page.replace("</body>", renderRatesInit(rates, order.currency) + "</body>"));
   } catch (error) {
     const status = (error as { statusCode?: number }).statusCode ?? 500;
     response.status(status === 404 ? 404 : 500).send(status === 404 ? renderNotFound(slug) : renderError());
