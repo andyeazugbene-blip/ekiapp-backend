@@ -41,6 +41,7 @@
     "register:smoke": "tsx scripts/register-smoke.ts",
     "check:domains": "tsx scripts/check-domain-links.ts",
     "check:no-old-domain": "tsx scripts/check-no-old-domain.ts",
+    "test:payout-flow": "tsx scripts/test-payout-flow.ts",
     "prepare": "husky"
   },
   "prisma": {

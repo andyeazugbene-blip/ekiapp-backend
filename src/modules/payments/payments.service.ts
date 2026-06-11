@@ -15,6 +15,8 @@ import type { CreatePaymentIntentResponse, PricedOrderItem } from "./payments.ty
 
 import { MAX_VENDOR_WEIGHT_GRAMS } from "../../shared/constants";
 import { resolveStripeCurrency } from "../../shared/currency";
+import { enqueueEmail } from "../../lib/email-queue";
+import { emailTemplates } from "../../lib/email-templates";
 
 interface VendorGroup {
   vendorId: string;
@@ -444,6 +446,14 @@ class PaymentsService {
         });
       });
 
+      // ─── Send buyer confirmation email for wallet-paid orders ─────────
+      this.sendBuyerConfirmationEmails(buyerId, orderIds, vendorGroups, currency).catch((error) => {
+        logger.error("Failed to send buyer confirmation emails for wallet-paid checkout", {
+          buyerId,
+          errorMessage: error instanceof Error ? error.message : String(error),
+        });
+      });
+
       return {
         paymentIntentId: "",
         clientSecret: "wallet_paid",
@@ -518,6 +528,63 @@ class PaymentsService {
       discountAmount: promoDiscount,
       promoCode: promoCodeApplied,
     };
+  }
+
+  /**
+   * Send buyer payment confirmation emails for wallet-paid orders.
+   */
+  private async sendBuyerConfirmationEmails(
+    buyerId: string,
+    orderIds: string[],
+    vendorGroups: VendorGroup[],
+    currency: string,
+  ): Promise<void> {
+    try {
+      const buyer = await prisma.user.findUnique({
+        where: { id: buyerId },
+        select: { email: true, name: true },
+      });
+      if (!buyer?.email) return;
+
+      for (let i = 0; i < orderIds.length; i++) {
+        const group = vendorGroups[i];
+        const orderId = orderIds[i];
+        if (!group || !orderId) continue;
+
+        const order = await prisma.order.findUnique({
+          where: { id: orderId },
+          select: { orderNumber: true, _count: { select: { items: true } } },
+        });
+        if (!order) continue;
+
+        const vendor = await prisma.vendor.findUnique({
+          where: { id: group.vendorId },
+          select: { storeName: true, contactEmail: true },
+        });
+
+        const template = emailTemplates.paymentConfirmation({
+          name: buyer.name ?? "Valued Customer",
+          email: buyer.email,
+          orderNumber: order.orderNumber,
+          totalAmount: group.totalAmount,
+          currency,
+          itemCount: order._count.items,
+          storeName: vendor?.storeName ?? "Eki Store",
+          storeSupportEmail: vendor?.contactEmail ?? undefined,
+        });
+
+        await enqueueEmail({
+          to: buyer.email,
+          subject: template.subject,
+          html: template.html,
+        });
+      }
+    } catch (error) {
+      logger.error("sendBuyerConfirmationEmails failed", {
+        buyerId,
+        errorMessage: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 }
 

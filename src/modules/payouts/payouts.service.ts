@@ -7,11 +7,14 @@ import {
 } from "@prisma/client";
 
 import { prisma } from "../../lib/prisma";
+import { logger } from "../../lib/logger";
 import { CURSOR_ORDER_BY } from "../../shared/constants";
 import { calculateWithdrawalFee } from "../../shared/pricing";
 import { notificationsService } from "../notifications/notifications.service";
 import { resolveVendorWithdrawalFeeBps } from "../subscriptions/subscription-plan-utils";
 import { AppError } from "../../shared/errors/app-error";
+import { emailTemplates } from "../../lib/email-templates";
+import { enqueueEmail } from "../../lib/email-queue";
 import type {
   CreatePayoutRequestInput,
   ListPayoutRequestsQuery,
@@ -120,6 +123,43 @@ export const payoutsService = {
         title: "Payout approved",
         body: `Your payout of ${payout.netAmount ?? payout.amount} ${payout.currency} has been approved.`,
         data: { payoutRequestId: payout.id },
+      });
+    }
+
+    // ─── Send email receipt to vendor ─────────────────────────────────────
+    try {
+      const vendorRecord = await prisma.vendor.findUnique({
+        where: { id: payout.vendorId },
+        select: {
+          storeName: true,
+          user: { select: { email: true, name: true } },
+        },
+      });
+
+      if (vendorRecord?.user?.email) {
+        const netAmount = payout.netAmount ?? payout.amount;
+        const feeAmount = payout.withdrawalFeeAmount ?? (payout.amount - netAmount);
+        const template = emailTemplates.payoutApproved({
+          name: vendorRecord.user.name ?? vendorRecord.storeName,
+          storeName: vendorRecord.storeName,
+          amount: payout.amount,
+          netAmount,
+          feeAmount,
+          currency: payout.currency,
+          payoutId: payout.id,
+        });
+        await enqueueEmail({
+          to: vendorRecord.user.email,
+          subject: template.subject,
+          html: template.html,
+        });
+      }
+    } catch (emailError) {
+      // Email failure must not break the payout approval flow
+      logger.error("Failed to send payout receipt email", {
+        payoutId: payout.id,
+        vendorId: payout.vendorId,
+        errorMessage: emailError instanceof Error ? emailError.message : String(emailError),
       });
     }
 

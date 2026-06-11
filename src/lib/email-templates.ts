@@ -2,7 +2,7 @@
 // All amounts are in cents — format before rendering.
 
 function formatAmount(cents: number, currency: string): string {
-  const symbols: Record<string, string> = { usd: "$", gbp: "£", eur: "€" };
+  const symbols: Record<string, string> = { usd: "$", gbp: "£", eur: "€", ngn: "₦" };
   const symbol = symbols[currency.toLowerCase()] ?? currency.toUpperCase() + " ";
   return `${symbol}${(cents / 100).toFixed(2)}`;
 }
@@ -20,6 +20,15 @@ function baseLayout(content: string): string {
   </div>
 </body>
 </html>`.trim();
+}
+
+/**
+ * Format cents to display string (e.g. "£15.50")
+ */
+export function formatAmountDisplay(cents: number, currency: string): string {
+  const symbols: Record<string, string> = { usd: "$", gbp: "£", eur: "€", ngn: "₦" };
+  const symbol = symbols[currency.toLowerCase()] ?? currency.toUpperCase() + " ";
+  return `${symbol}${(cents / 100).toFixed(2)}`;
 }
 
 export const emailTemplates = {
@@ -54,6 +63,35 @@ export const emailTemplates = {
           <p style="margin: 8px 0 0; color: #374151;"><strong>Total:</strong> ${formatAmount(params.totalAmount, params.currency)}</p>
         </div>
         <p style="color: #6b7280; font-size: 14px;">We'll notify you when your order ships.</p>
+      `),
+    };
+  },
+
+  paymentConfirmation(params: {
+    name: string;
+    email: string;
+    orderNumber: string;
+    totalAmount: number;
+    currency: string;
+    itemCount: number;
+    storeName: string;
+    storeSupportEmail?: string;
+  }): { subject: string; html: string } {
+    return {
+      subject: `🧾 Payment received — ${params.orderNumber}`,
+      html: baseLayout(`
+        <h2 style="color: #111827; margin: 0 0 16px;">Payment Received ✅</h2>
+        <p style="color: #374151;">Thank you for your purchase, <strong>${params.name}</strong>!</p>
+        <p style="color: #374151;">We have received your payment of <strong>${formatAmount(params.totalAmount, params.currency)}</strong> for order <strong>${params.orderNumber}</strong>.</p>
+        <div style="background: #f3f4f6; border-radius: 12px; padding: 20px; margin: 16px 0;">
+          <table style="width: 100%; border-collapse: collapse;">
+            <tr><td style="padding: 6px 0; color: #6b7280;">Store</td><td style="padding: 6px 0; text-align: right; font-weight: 600; color: #111827;">${params.storeName}</td></tr>
+            <tr><td style="padding: 6px 0; color: #6b7280;">Items</td><td style="padding: 6px 0; text-align: right; font-weight: 600; color: #111827;">${params.itemCount}</td></tr>
+            <tr><td style="padding: 6px 0; border-top: 1px solid #e5e7eb; color: #6b7280;">Amount paid</td><td style="padding: 6px 0; border-top: 1px solid #e5e7eb; text-align: right; font-weight: 700; font-size: 18px; color: #059669;">${formatAmount(params.totalAmount, params.currency)}</td></tr>
+          </table>
+        </div>
+        <p style="color: #6b7280; font-size: 14px;">The vendor will prepare your order and notify you when it ships. You can track your order status in the app.</p>
+        ${params.storeSupportEmail ? `<p style="color: #6b7280; font-size: 14px;">For questions about this order, contact <a href="mailto:${params.storeSupportEmail}" style="color: #2D6654;">${params.storeSupportEmail}</a>.</p>` : ""}
       `),
     };
   },
@@ -105,13 +143,27 @@ export const emailTemplates = {
     name: string;
     amount: number;
     currency: string;
+    netAmount: number;
+    feeAmount: number;
+    payoutId: string;
+    storeName: string;
   }): { subject: string; html: string } {
     return {
-      subject: "Your payout has been approved",
+      subject: `✅ Payout Receipt — ${formatAmount(params.netAmount, params.currency)} approved`,
       html: baseLayout(`
-        <h2 style="color: #111827; margin: 0 0 16px;">Payout Approved ✅</h2>
+        <h2 style="color: #111827; margin: 0 0 16px;">Payout Receipt ✅</h2>
         <p style="color: #374151;">Hi ${params.name},</p>
-        <p style="color: #374151;">Your payout of <strong>${formatAmount(params.amount, params.currency)}</strong> has been approved and will be processed shortly.</p>
+        <p style="color: #374151;">Your payout from <strong>${params.storeName}</strong> has been approved.</p>
+        <div style="background: #f3f4f6; border-radius: 12px; padding: 24px; margin: 16px 0;">
+          <table style="width: 100%; border-collapse: collapse;">
+            <tr><td style="padding: 8px 0; color: #6b7280;">Reference</td><td style="padding: 8px 0; text-align: right; font-weight: 600; color: #111827;">${params.payoutId.slice(0, 12).toUpperCase()}</td></tr>
+            <tr><td style="padding: 8px 0; border-top: 1px solid #e5e7eb; color: #6b7280;">Gross amount</td><td style="padding: 8px 0; border-top: 1px solid #e5e7eb; text-align: right; color: #111827;">${formatAmount(params.amount, params.currency)}</td></tr>
+            <tr><td style="padding: 8px 0; border-top: 1px solid #e5e7eb; color: #6b7280;">Withdrawal fee</td><td style="padding: 8px 0; border-top: 1px solid #e5e7eb; text-align: right; color: #dc2626;">-${formatAmount(params.feeAmount, params.currency)}</td></tr>
+            <tr><td style="padding: 12px 0 8px; border-top: 2px solid #111827; font-weight: 700; color: #111827;">Net amount</td><td style="padding: 12px 0 8px; border-top: 2px solid #111827; text-align: right; font-weight: 700; font-size: 18px; color: #059669;">${formatAmount(params.netAmount, params.currency)}</td></tr>
+          </table>
+        </div>
+        <p style="color: #6b7280; font-size: 14px;">This amount will be sent to your registered payout method. Processing typically takes 1–3 business days.</p>
+        <p style="color: #9ca3af; font-size: 12px; margin-top: 16px;">Receipt #${params.payoutId} · Eki Marketplace</p>
       `),
     };
   },

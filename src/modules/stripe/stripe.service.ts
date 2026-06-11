@@ -8,6 +8,8 @@ import { pushNotifications } from "../../lib/push-notifications";
 import { stripe } from "../../lib/stripe";
 import { notificationsService } from "../notifications/notifications.service";
 import { referralsService } from "../referrals/referrals.service";
+import { enqueueEmail } from "../../lib/email-queue";
+import { emailTemplates } from "../../lib/email-templates";
 import { AppError } from "../../shared/errors/app-error";
 import type { StripeWebhookInput, StripeWebhookResult } from "./stripe.types";
 
@@ -539,6 +541,11 @@ class StripeWebhookService {
   }
 
   private sendSuccessNotifications(buyerId: string, orders: { id: string; vendorId: string | null; items: { vendorId: string }[] }[]): void {
+    // Fire async work — errors must not propagate
+    void this.sendSuccessNotificationsAsync(buyerId, orders);
+  }
+
+  private async sendSuccessNotificationsAsync(buyerId: string, orders: { id: string; vendorId: string | null; items: { vendorId: string }[] }[]): Promise<void> {
     // In-app notifications
     notificationsService.enqueue({
       userId: buyerId,
@@ -554,20 +561,64 @@ class StripeWebhookService {
     for (const order of orders) {
       const vendorId = order.vendorId ?? order.items[0]?.vendorId;
       if (!vendorId) continue;
-      prisma.vendor.findUnique({ where: { id: vendorId }, select: { userId: true } })
-        .then((v) => {
-          if (v) {
-            notificationsService.enqueue({
-              userId: v.userId,
-              type: NotificationType.BALANCE_CREDITED,
-              title: "New order received",
-              body: `Order ${order.id} has been paid.`,
-              data: { orderId: order.id },
-            }).catch(() => {});
-            // Push notification to vendor
-            pushNotifications.vendorNewOrder(v.userId, order.id);
+
+      // Load vendor and buyer info for email (separate queries to avoid Prisma include issues)
+      const vendorInfo = await prisma.vendor.findUnique({
+        where: { id: vendorId },
+        select: { storeName: true, contactEmail: true, userId: true },
+      });
+
+      if (!vendorInfo) continue;
+
+      // ─── Send buyer payment confirmation email ─────────────────────────
+      const buyer = await prisma.user.findUnique({
+        where: { id: buyerId },
+        select: { email: true, name: true },
+      });
+      if (buyer?.email) {
+        try {
+          const orderForEmail = await prisma.order.findUnique({
+            where: { id: order.id },
+            select: { orderNumber: true, totalAmount: true, currency: true, _count: { select: { items: true } } },
+          });
+
+          if (orderForEmail) {
+            const template = emailTemplates.paymentConfirmation({
+              name: buyer.name ?? "Valued Customer",
+              email: buyer.email,
+              orderNumber: orderForEmail.orderNumber,
+              totalAmount: orderForEmail.totalAmount,
+              currency: orderForEmail.currency,
+              itemCount: orderForEmail._count.items,
+              storeName: vendorInfo.storeName ?? "Eki Store",
+              storeSupportEmail: vendorInfo.contactEmail ?? undefined,
+            });
+            await enqueueEmail({
+              to: buyer.email,
+              subject: template.subject,
+              html: template.html,
+            });
           }
+        } catch (emailError) {
+          logger.error("Failed to send buyer payment confirmation email", {
+            orderId: order.id,
+            buyerId,
+            errorMessage: emailError instanceof Error ? emailError.message : String(emailError),
+          });
+        }
+      }
+
+      // ─── Vendor notification ─────────────────────────────────────────
+      if (vendorInfo.userId) {
+        notificationsService.enqueue({
+          userId: vendorInfo.userId,
+          type: NotificationType.BALANCE_CREDITED,
+          title: "New order received",
+          body: `Order ${order.id} has been paid.`,
+          data: { orderId: order.id },
         }).catch(() => {});
+        pushNotifications.vendorNewOrder(vendorInfo.userId, order.id);
+      }
     }
   }
 
