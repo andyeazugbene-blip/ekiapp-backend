@@ -1,8 +1,10 @@
 import type { Shipment } from "@prisma/client";
 
 import { prisma } from "../../lib/prisma";
+import { pushNotifications } from "../../lib/push-notifications";
 import { CURSOR_ORDER_BY } from "../../shared/constants";
 import { AppError } from "../../shared/errors/app-error";
+import { releaseVendorEarnings } from "../../shared/utils/wallet-release";
 import type { CreateShipmentInput, ListShipmentsQuery, UpdateShipmentInput } from "./shipments.types";
 
 export const shipmentsService = {
@@ -104,10 +106,69 @@ export const shipmentsService = {
       data.estimatedDeliveryAt = input.estimatedDeliveryAt ? new Date(input.estimatedDeliveryAt) : null;
     }
 
-    return prisma.shipment.update({
-      where: { id: shipmentId },
-      data,
+    const nextOrderStatus =
+      input.status === "IN_TRANSIT"
+        ? "IN_TRANSIT"
+        : input.status === "DELIVERED"
+          ? "DELIVERED"
+          : null;
+
+    const updated = await prisma.$transaction(async (tx) => {
+      const nextShipment = await tx.shipment.update({
+        where: { id: shipmentId },
+        data,
+      });
+
+      if (nextOrderStatus) {
+        const orderUpdate = await tx.order.updateMany({
+          where: {
+            id: shipment.orderId,
+            vendorId: vendor.id,
+            status: { in: ["PAID", "CONFIRMED", "PROCESSING", "DISPATCHED", "IN_TRANSIT"] },
+          },
+          data: {
+            status: nextOrderStatus,
+            ...(nextOrderStatus === "DELIVERED" ? { deliveredAt: new Date() } : {}),
+          },
+        });
+
+        if (orderUpdate.count === 1) {
+          const order = await tx.order.findUnique({
+            where: { id: shipment.orderId },
+            select: { buyerId: true, orderNumber: true },
+          });
+          if (order) {
+            await tx.notification.create({
+              data: {
+                userId: order.buyerId,
+                type: "ADMIN_BROADCAST",
+                title: "Order status updated",
+                body: `Order ${order.orderNumber} is now ${nextOrderStatus.toLowerCase().replace("_", " ")}.`,
+                data: { orderId: shipment.orderId, status: nextOrderStatus },
+              },
+            });
+          }
+        }
+      }
+
+      return nextShipment;
     });
+
+    if (nextOrderStatus === "DELIVERED") {
+      releaseVendorEarnings(shipment.orderId).catch(() => {});
+    }
+
+    if (nextOrderStatus) {
+      const order = await prisma.order.findUnique({
+        where: { id: shipment.orderId },
+        select: { buyerId: true, orderNumber: true },
+      });
+      if (order) {
+        pushNotifications.orderStatusUpdate(order.buyerId, order.orderNumber, nextOrderStatus);
+      }
+    }
+
+    return updated;
   },
 
   async listVendorShipments(

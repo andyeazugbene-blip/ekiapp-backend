@@ -23,6 +23,8 @@ async function main() {
   check("GET /api/health/detailed", hd.status === 200, `status=${hdData?.status}`);
   check("Database connectivity", hdData?.checks?.database?.status === "ok", hdData?.checks?.database?.status);
   check("Stripe connectivity", hdData?.checks?.stripe?.status === "ok", hdData?.checks?.stripe?.status);
+  check("Stripe live mode", hdData?.checks?.stripe?.detail === "live", hdData?.checks?.stripe?.detail ?? "unknown");
+  check("Storage connectivity", hdData?.checks?.storage?.status === "ok", hdData?.checks?.storage?.status ?? "missing");
 
   // 3. OpenAPI spec
   const spec = await fetch(`${BASE}/openapi.json`);

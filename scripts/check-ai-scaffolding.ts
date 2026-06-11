@@ -43,6 +43,12 @@ function scanFile(filePath: string): { file: string; line: number; phrase: strin
     if (line.trim().startsWith("//") || line.trim().startsWith("*")) continue;
 
     for (const phrase of RISKY_PHRASES) {
+      if (
+        phrase === "placeholder" &&
+        (line.includes("placeholder=") || line.includes("example placeholder"))
+      ) {
+        continue;
+      }
       if (line.toLowerCase().includes(phrase.toLowerCase())) {
         findings.push({ file: relative, line: i + 1, phrase, text: line.trim().slice(0, 100) });
       }

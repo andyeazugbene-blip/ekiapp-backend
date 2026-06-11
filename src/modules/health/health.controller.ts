@@ -4,6 +4,7 @@ import { prisma } from "../../lib/prisma";
 import { stripe } from "../../lib/stripe";
 import { paystack } from "../../lib/paystack";
 import { isSentryEnabled } from "../../lib/sentry";
+import { isStorageConfigured } from "../../lib/storage";
 
 export function getHealth(_request: Request, response: Response): void {
   response.status(200).json({ status: "ok" });
@@ -44,7 +45,12 @@ export async function getHealthDetailed(_request: Request, response: Response): 
   const stripeStart = Date.now();
   try {
     await stripe.balance.retrieve();
-    checks.stripe = { status: "ok", latencyMs: Date.now() - stripeStart };
+    const stripeMode = process.env.STRIPE_SECRET_KEY?.startsWith("sk_live_")
+      ? "live"
+      : process.env.STRIPE_SECRET_KEY?.startsWith("sk_test_")
+        ? "test"
+        : "unknown";
+    checks.stripe = { status: "ok", latencyMs: Date.now() - stripeStart, detail: stripeMode };
   } catch (error) {
     checks.stripe = { status: "error", latencyMs: Date.now() - stripeStart, detail: error instanceof Error ? error.message : String(error) };
   }
@@ -65,8 +71,15 @@ export async function getHealthDetailed(_request: Request, response: Response): 
     checks.paystack = { status: "skipped", detail: "PAYSTACK_SECRET_KEY not configured" };
   }
 
-  // Critical = database + stripe
-  const critical = checks.database.status === "ok" && checks.stripe.status === "ok";
+  checks.storage = isStorageConfigured()
+    ? { status: "ok" }
+    : { status: "error", detail: "S3-compatible storage is not configured" };
+
+  // Critical = database + stripe + storage
+  const critical =
+    checks.database.status === "ok" &&
+    checks.stripe.status === "ok" &&
+    checks.storage.status === "ok";
   const overall = critical ? "ok" : "degraded";
 
   response.status(critical ? 200 : 503).json({ status: overall, checks });
