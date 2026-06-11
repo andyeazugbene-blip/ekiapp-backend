@@ -381,7 +381,7 @@ function renderHomeLayout(page: PageDefinition): string {
         <h1>${escape(page.heading)}</h1>
         <p class="intro">${escape(page.intro)}</p>
         <div class="store-buttons">
-          <a class="store-button" href="https://apps.apple.com/app/id" aria-label="Download Eki on the App Store">
+          <a class="store-button" href="https://apps.apple.com/app/id6776307497" aria-label="Download Eki on the App Store">
             <span class="store-small">Download on the</span>
             <span class="store-main">App Store</span>
           </a>
