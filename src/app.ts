@@ -70,6 +70,8 @@ const defaultOrigins = [
   "https://culinarytales.app",
   "https://www.culinarytales.app",
   "https://ekiapp-backend.vercel.app",
+  "https://admin-web-eta-six.vercel.app",
+  "https://ekiapp-admin.vercel.app",
 ];
 const allowedOrigins = process.env.CORS_ORIGINS
   ? process.env.CORS_ORIGINS.split(",").map((origin) => origin.trim())
@@ -159,6 +161,25 @@ app.get("/store/:slug/order/:orderNumber", (req, res, next) => {
 });
 app.get("/store/:slug", (req, res, next) => {
   Promise.resolve(getPublicStorePage(req, res)).catch(next);
+});
+
+// Apple App Site Association for deep linking (Universal Links)
+app.get("/.well-known/apple-app-site-association", (_req, res) => {
+  res.setHeader("Content-Type", "application/json");
+  res.status(200).json({
+    applinks: {
+      apps: [],
+      details: [
+        {
+          appID: "6776307497.com.ekiapp.mobilee",
+          paths: ["/store/*", "/product/*", "/order/*", "/chat/*", "/invite/*", "/find-order"],
+        },
+      ],
+    },
+  });
+});
+app.get("/apple-app-site-association", (_req, res) => {
+  res.redirect(301, "/.well-known/apple-app-site-association");
 });
 
 // Error handling

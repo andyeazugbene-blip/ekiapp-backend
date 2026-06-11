@@ -106,6 +106,31 @@ export const adminListingsService = {
     return user;
   },
 
+  async getVendor(vendorId: string) {
+    const vendor = await prisma.vendor.findUnique({
+      where: { id: vendorId },
+      include: {
+        user: { select: { id: true, email: true, name: true, role: true, isSuspended: true } },
+        _count: { select: { products: true } },
+      },
+    });
+    if (!vendor) throw new AppError("Vendor not found", 404);
+    return vendor;
+  },
+
+  async getOrder(orderId: string) {
+    const order = await prisma.order.findUnique({
+      where: { id: orderId },
+      include: {
+        items: { include: { product: { select: { id: true, title: true, images: true, currency: true } } } },
+        payment: { select: { id: true, status: true, stripePaymentIntentId: true, provider: true, amount: true } },
+        buyer: { select: { id: true, name: true, email: true } },
+      },
+    });
+    if (!order) throw new AppError("Order not found", 404);
+    return order;
+  },
+
   async listVendors(query: Record<string, unknown>) {
     const verificationStatus = optionalEnum(
       query.status,

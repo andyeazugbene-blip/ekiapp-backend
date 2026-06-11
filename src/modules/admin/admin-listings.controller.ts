@@ -83,12 +83,24 @@ export async function listVendors(request: Request, response: Response): Promise
   response.status(200).json(await adminListingsService.listVendors(q(request)));
 }
 
+export async function getVendor(request: Request, response: Response): Promise<void> {
+  const vendorId = requireIdParam(request);
+  const vendor = await adminListingsService.getVendor(vendorId);
+  response.status(200).json({ vendor });
+}
+
 export async function listProducts(request: Request, response: Response): Promise<void> {
   response.status(200).json(await adminListingsService.listProducts(q(request)));
 }
 
 export async function listOrders(request: Request, response: Response): Promise<void> {
   response.status(200).json(await adminListingsService.listOrders(q(request)));
+}
+
+export async function getOrder(request: Request, response: Response): Promise<void> {
+  const orderId = requireIdParam(request);
+  const order = await adminListingsService.getOrder(orderId);
+  response.status(200).json({ order });
 }
 
 export async function listPayments(request: Request, response: Response): Promise<void> {
