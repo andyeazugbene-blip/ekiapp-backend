@@ -4,6 +4,8 @@ import { prisma } from "../../lib/prisma";
 import { paystack } from "../../lib/paystack";
 import { logger } from "../../lib/logger";
 import { sendSms } from "../../lib/sms";
+import { enqueueEmail } from "../../lib/email-queue";
+import { emailTemplates } from "../../lib/email-templates";
 import { AppError } from "../../shared/errors/app-error";
 import { releaseVendorEarnings } from "../../shared/utils/wallet-release";
 import { notificationsService } from "../notifications/notifications.service";
@@ -146,7 +148,7 @@ export const escrowService = {
         escrowType: true,
         buyerId: true,
         orderNumber: true,
-        buyer: { select: { phone: true } },
+        buyer: { select: { phone: true, email: true, name: true } },
       },
     });
 
@@ -187,11 +189,21 @@ export const escrowService = {
     });
 
     let smsSent = false;
+    let emailSent = false;
     if (order.buyer?.phone) {
       smsSent = await sendSms({
         to: order.buyer.phone,
         message: `Culinary Tales delivery OTP for order ${order.orderNumber}: ${code}. This code expires in ${AUTO_RELEASE_HOURS} hours.`,
       });
+    }
+    if ((!order.buyer?.phone || !smsSent) && order.buyer?.email) {
+      const otpTemplate = emailTemplates.otpVerification({ code });
+      await enqueueEmail({
+        to: order.buyer.email,
+        subject: `Delivery OTP for order ${order.orderNumber}`,
+        html: `<h2>Delivery OTP</h2><p>Hi ${order.buyer.name ?? "Valued Customer"},</p><p>Your delivery OTP for order <strong>${order.orderNumber}</strong>:</p><div style="background:#f3f4f6;border-radius:8px;padding:24px;margin:16px 0;text-align:center;font-size:32px;font-weight:700;letter-spacing:6px;color:#111827">${code}</div><p>This code expires in ${AUTO_RELEASE_HOURS} hours. Enter it in the app or on the web to confirm delivery.</p>`,
+      });
+      emailSent = true;
     }
 
     await notificationsService.enqueue({
@@ -208,7 +220,7 @@ export const escrowService = {
       status: "DISPATCHED",
       deliveryCode: code,
       expiresAt,
-      otpSentTo: maskPhone(order.buyer?.phone),
+      otpSentTo: emailSent && order.buyer?.email ? `email: ${order.buyer.email.slice(0, 3)}...@${order.buyer.email.split("@").pop()}` : maskPhone(order.buyer?.phone),
       smsSent,
     };
   },
@@ -225,7 +237,7 @@ export const escrowService = {
         status: true,
         escrowType: true,
         orderNumber: true,
-        buyer: { select: { phone: true } },
+        buyer: { select: { phone: true, email: true, name: true } },
         deliveryOtp: { select: { confirmedAt: true } },
       },
     });
@@ -237,8 +249,8 @@ export const escrowService = {
     if (!order.deliveryOtp || order.deliveryOtp.confirmedAt) {
       throw new AppError("Delivery is already confirmed or the OTP is unavailable", 409);
     }
-    if (!order.buyer?.phone) {
-      throw new AppError("No phone number is available for this buyer", 409);
+    if (!order.buyer?.phone && !order.buyer?.email) {
+      throw new AppError("No phone or email is available for this buyer", 409);
     }
 
     const code = String(crypto.randomInt(100000, 999999));
@@ -255,10 +267,22 @@ export const escrowService = {
       },
     });
 
-    const smsSent = await sendSms({
-      to: order.buyer.phone,
-      message: `Culinary Tales delivery OTP for order ${order.orderNumber}: ${code}. This code expires in ${AUTO_RELEASE_HOURS} hours.`,
-    });
+    let smsSent = false;
+    let emailSent = false;
+    if (order.buyer?.phone) {
+      smsSent = await sendSms({
+        to: order.buyer.phone,
+        message: `Culinary Tales delivery OTP for order ${order.orderNumber}: ${code}. This code expires in ${AUTO_RELEASE_HOURS} hours.`,
+      });
+    }
+    if ((!order.buyer?.phone || !smsSent) && order.buyer?.email) {
+      await enqueueEmail({
+        to: order.buyer.email,
+        subject: `Delivery OTP for order ${order.orderNumber}`,
+        html: `<h2>Delivery OTP (resent)</h2><p>Hi ${order.buyer.name ?? "Valued Customer"},</p><p>Your new delivery OTP for order <strong>${order.orderNumber}</strong>:</p><div style="background:#f3f4f6;border-radius:8px;padding:24px;margin:16px 0;text-align:center;font-size:32px;font-weight:700;letter-spacing:6px;color:#111827">${code}</div><p>This code expires in ${AUTO_RELEASE_HOURS} hours.</p>`,
+      });
+      emailSent = true;
+    }
 
     await notificationsService.enqueue({
       userId: buyerId,
@@ -271,7 +295,7 @@ export const escrowService = {
     return {
       resent: true,
       expiresAt,
-      otpSentTo: maskPhone(order.buyer.phone),
+      otpSentTo: emailSent ? (order.buyer.email ? `email ending with @${order.buyer.email.split("@").pop()}` : null) : maskPhone(order.buyer?.phone),
       smsSent,
     };
   },

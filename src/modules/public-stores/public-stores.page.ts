@@ -239,9 +239,9 @@ function baseStyles(title: string, description: string, extraHead = ""): string 
     }
     .product-top img{
       width:100%;
-      height:90px;
+      height:180px;
       object-fit:cover;
-      border-radius:8px;
+      border-radius:12px;
       display:block;
     }
     .placeholder-pill{
@@ -693,7 +693,7 @@ function baseStyles(title: string, description: string, extraHead = ""): string 
       .page-wrap{padding:0;max-width:none}
       .panel-media{padding:0;border:0;background:#e5f6e8}
       .panel-media .back-link{position:absolute;top:8px;left:8px;z-index:2}
-      .hero-image{height:292px;min-height:292px;padding:0}
+      .hero-image{height:380px;min-height:380px;padding:0}
       .hero-image img{width:100%;height:100%;max-height:none;border-radius:0;object-fit:cover}
       .hero-image .placeholder-pill{margin:auto}
       .panel-copy{padding:10px 8px 14px;background:#fff}
@@ -1077,7 +1077,7 @@ function renderProductPage(store: PublicStore, product: PublicProduct): string {
 </html>`;
 }
 
-function renderCheckoutPage(store: PublicStore, products: PublicProduct[], cancelled: boolean): string {
+function renderCheckoutPage(store: PublicStore, products: PublicProduct[], cancelled: boolean, promoCodeRaw?: string): string {
   const serializedProducts = JSON.stringify(products.map((product) => ({
     id: product.id,
     title: product.title,
@@ -1116,6 +1116,14 @@ function renderCheckoutPage(store: PublicStore, products: PublicProduct[], cance
               </div>
             </div>
             <div class="form-card">
+              <p class="section-label">Promo code</p>
+              <div style="display:flex;gap:8px;">
+                <input id="promo-input" type="text" placeholder="Enter code" value="${escape(promoCodeRaw || "")}" style="flex:1;min-height:40px;border:1px solid #dbe7dd;border-radius:6px;padding:0 12px;font-size:13px;outline:none" />
+                <button type="button" id="apply-promo" style="min-height:40px;padding:0 16px;border:0;border-radius:6px;background:#134f3b;color:#fff;font-weight:700;font-size:12px">Apply</button>
+              </div>
+              <div id="promo-message" style="margin-top:6px;font-size:11px;color:#6b7280"></div>
+            </div>
+            <div class="form-card">
               <p class="section-label">Payment</p>
               <div class="payment-box">💳 Credit / Debit Card <span class="muted">Visa, Mastercard, Amex</span></div>
               <button class="summary-pay" type="submit" id="checkout-submit">Pay Securely</button>
@@ -1148,6 +1156,7 @@ function renderCheckoutPage(store: PublicStore, products: PublicProduct[], cance
         try { var parsed = JSON.parse(localStorage.getItem(cartKey) || '[]'); return Array.isArray(parsed) ? parsed : []; }
         catch (_error) { return []; }
       }
+      function escapeHtml(value){ return String(value||'').replace(/[&<>"']/g,function(c){return({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c]}); }
       function formatPrice(amount, currency){
         try { return new Intl.NumberFormat('en-GB', { style:'currency', currency:String(currency || 'EUR').toUpperCase() }).format(amount / 100); }
         catch (_error) { return (amount / 100).toFixed(2) + ' ' + String(currency || 'EUR').toUpperCase(); }
@@ -1164,11 +1173,11 @@ function renderCheckoutPage(store: PublicStore, products: PublicProduct[], cance
           document.getElementById('summary-total').textContent = formatPrice(0, currency);
           return;
         }
-        if(itemsWrap) itemsWrap.innerHTML = cart.map(function(item){
+        if(itemsWrap) itemsWrap.innerHTML = cart.map(function(item, idx){
           var product = products.find(function(entry){ return entry.id === item.productId; });
           if(!product) return '';
           subtotal += product.priceInCents * Number(item.quantity || 0);
-          return '<div class="summary-item"><div class="summary-item-name"><span class="mini-code">' + product.title.split(/\\s+/).map(function(part){return part[0] || '';}).join('').slice(0,2).toUpperCase() + '</span><div><strong>' + product.title + '</strong><br><span class="muted">' + product.weightLabel + '</span></div></div><strong>' + formatPrice(product.priceInCents * Number(item.quantity || 0), currency) + '</strong></div>';
+          return '<div class="summary-item"><div class="summary-item-name"><span class="mini-code" style="background:#eef8ee;min-width:36px;height:36px;border-radius:8px;display:inline-flex;align-items:center;justify-content:center">' + (product.image ? '<img src="' + escapeHtml(product.image) + '" style="width:36px;height:36px;border-radius:6px;object-fit:cover" />' : product.title.split(/\\s+/).map(function(p){return p[0]||'';}).join('').slice(0,2).toUpperCase()) + '</span><div><strong>' + escapeHtml(product.title) + '</strong><br><span class="muted">' + product.weightLabel + ' · Qty ' + Number(item.quantity || 0) + '</span></div></div><div style="display:flex;align-items:center;gap:8px"><strong>' + formatPrice(product.priceInCents * Number(item.quantity || 0), currency) + '</strong><button class="cart-remove" data-index="' + idx + '" style="width:28px;height:28px;border-radius:6px;border:1px solid #e5e7eb;background:#fff;color:#ef4444;font-weight:700;cursor:pointer;font-size:14px">✕</button></div></div>';
         }).join('');
         if(promo){
           var allowed = new Set(Array.isArray(promo.productIds) ? promo.productIds : []);
@@ -1246,6 +1255,39 @@ function renderCheckoutPage(store: PublicStore, products: PublicProduct[], cance
             if(submit) submit.disabled = false;
           });
       });
+      // ─── Cart remove handler ─────────────────────────────────────────────
+      document.addEventListener('click', function(evt){
+        var target = evt.target;
+        if(!target || !target.classList || !target.classList.contains('cart-remove')) return;
+        var idx = parseInt(target.getAttribute('data-index'), 10);
+        if(isNaN(idx)) return;
+        var cart = readCart();
+        if(idx >= 0 && idx < cart.length) cart.splice(idx, 1);
+        writeCart(cart);
+        renderSummary();
+        if(cart.length === 0) window.location.href = '/store/' + encodeURIComponent(storeSlug);
+      });
+      // ─── Promo apply handler ─────────────────────────────────────────────
+      function applyPromo(){
+        var input = document.getElementById('promo-input');
+        var msg = document.getElementById('promo-message');
+        var code = String(input ? input.value : '').trim().toUpperCase();
+        if(!code){ if(msg) msg.textContent = 'Enter a promo code.'; return; }
+        fetch('/api/public/stores/' + encodeURIComponent(storeSlug) + '/promo/' + encodeURIComponent(code))
+          .then(function(response){
+            if(!response.ok) throw new Error('Invalid or expired code');
+            return response.json();
+          })
+          .then(function(data){
+            if(data && data.promo){ promo = data.promo; promoCode = code; if(msg) msg.textContent = '✅ Coupon applied!'; renderSummary(); }
+            else { promo = null; promoCode = ''; if(msg) msg.textContent = '❌ Invalid code'; renderSummary(); }
+          })
+          .catch(function(){
+            promo = null; promoCode = ''; if(msg) msg.textContent = '❌ Invalid or expired code'; renderSummary();
+          });
+      }
+      document.getElementById('apply-promo')?.addEventListener('click', applyPromo);
+      document.getElementById('promo-input')?.addEventListener('keydown', function(evt){ if(evt.key === 'Enter'){ evt.preventDefault(); applyPromo(); } });
       renderSummary();
     })();
   </script>
@@ -1441,7 +1483,8 @@ export async function getPublicStoreCheckoutPage(request: Request, response: Res
       publicStoresService.getStoreBySlug(slug),
       publicStoresService.listStoreProducts(slug, { limit: PAGE_PRODUCTS_LIMIT }),
     ]);
-    response.status(200).send(renderCheckoutPage(store, productsResult.items, request.query.cancelled === "true"));
+    const promoParam = typeof request.query.promo === "string" ? request.query.promo : undefined;
+    response.status(200).send(renderCheckoutPage(store, productsResult.items, request.query.cancelled === "true", promoParam));
   } catch (error) {
     const status = (error as { statusCode?: number }).statusCode ?? 500;
     response.status(status === 404 ? 404 : 500).send(status === 404 ? renderNotFound(slug) : renderError());
