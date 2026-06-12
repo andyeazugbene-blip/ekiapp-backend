@@ -31,6 +31,7 @@ export interface AuthUser {
   country: string | null;
   referralCode: string | null;
   role: UserRole;
+  hasVendor: boolean;
   trustScore: number;
   createdAt: Date;
   storeName?: string;

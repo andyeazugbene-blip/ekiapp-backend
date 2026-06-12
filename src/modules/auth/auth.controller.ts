@@ -60,3 +60,9 @@ export async function verifyEmail(request: Request, response: Response): Promise
   const result = await authService.verifyEmail(token);
   response.status(200).json(result);
 }
+
+export async function switchRole(request: Request, response: Response): Promise<void> {
+  if (!request.user) throw new AppError("Unauthorized", 401);
+  const result = await authService.switchRole(request.user.id);
+  response.status(200).json(result);
+}

@@ -110,11 +110,12 @@ function toAuthUser(user: AuthUserRecord): AuthUser {
     country: user.country,
     referralCode: user.referralCode,
     role: user.role,
+    hasVendor: user.vendor !== null && user.vendor !== undefined,
     trustScore: user.trustScore,
     createdAt: user.createdAt,
   };
 
-  if (user.role === UserRole.VENDOR && user.vendor) {
+  if (user.vendor) {
     authUser.storeName = user.vendor.storeName;
     authUser.storeSlug = user.vendor.storeSlug;
     authUser.storeDescription = user.vendor.description;
@@ -460,5 +461,41 @@ export const authService = {
    */
   signTokenPublic(user: { id: string; role: UserRole; email: string; tokenVersion: number }): string {
     return signToken(user);
+  },
+
+  /**
+   * Switch the user's active role between BUYER and VENDOR.
+   * Only allowed if the user has a vendor profile.
+   * Returns a new token with the updated role.
+   */
+  async switchRole(userId: string): Promise<{ user: AuthUser; token: string }> {
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      include: { vendor: true },
+    });
+
+    if (!user) {
+      throw new AppError("User not found", 404);
+    }
+
+    if (!user.vendor) {
+      throw new AppError("No vendor profile. Create a store first.", 400);
+    }
+
+    const newRole = user.role === UserRole.VENDOR ? UserRole.BUYER : UserRole.VENDOR;
+
+    const updated = await prisma.user.update({
+      where: { id: userId },
+      data: {
+        role: newRole,
+        tokenVersion: { increment: 1 },
+      },
+      include: { vendor: true },
+    });
+
+    return {
+      user: toAuthUser(updated),
+      token: signToken(updated),
+    };
   },
 };
