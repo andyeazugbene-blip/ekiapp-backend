@@ -102,6 +102,7 @@ import {
   adminListUploads,
 } from "../uploads/uploads.controller";
 import { adminRewardsRouter } from "../rewards/rewards.routes";
+import { adminGiftCardsRouter } from "../gift-cards/gift-cards.routes";
 
 export const adminRouter = Router();
 
@@ -198,6 +199,9 @@ adminRouter.patch("/escrow/providers/:id", asyncHandler(requireAdminPermission("
 
 // Rewards / Gifts management
 adminRouter.use("/rewards", adminRewardsRouter);
+
+// Gift Cards management
+adminRouter.use("/gift-cards", adminGiftCardsRouter);
 
 // ─── 2FA Management ─────────────────────────────────────────────────────────
 adminRouter.post("/2fa/setup", asyncHandler(requireAdminPermission("security.mutate")), asyncHandler(setup2fa));

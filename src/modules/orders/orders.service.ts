@@ -1,9 +1,12 @@
-import type { Order, OrderStatus } from "@prisma/client";
+import type { NotificationType, Order, OrderStatus } from "@prisma/client";
 
 import { prisma } from "../../lib/prisma";
+import { logger } from "../../lib/logger";
 import { CURSOR_ORDER_BY } from "../../shared/constants";
 import { AppError } from "../../shared/errors/app-error";
 import { releaseVendorEarnings } from "../../shared/utils/wallet-release";
+import { pushNotifications } from "../../lib/push-notifications";
+import { notificationsService } from "../notifications/notifications.service";
 import type { ListBuyerOrdersQuery, ListVendorOrdersQuery } from "./orders.types";
 import { VENDOR_STATUS_TRANSITIONS, BUYER_STATUS_TRANSITIONS } from "./orders.types";
 
@@ -34,6 +37,53 @@ const orderInclude = {
     select: { id: true, name: true, country: true },
   },
 };
+
+// ─── Notification helpers ────────────────────────────────────────────
+
+const statusLabels: Record<string, string> = {
+  CONFIRMED: "confirmed",
+  PROCESSING: "being processed",
+  DISPATCHED: "dispatched",
+  IN_TRANSIT: "in transit",
+  DELIVERED: "delivered",
+};
+
+async function sendOrderStatusNotification(order: { id: string; buyerId: string; orderNumber: string }, newStatus: OrderStatus): Promise<void> {
+  const label = statusLabels[newStatus];
+  if (!label) return;
+
+  await notificationsService.enqueue({
+    userId: order.buyerId,
+    type: "ORDER_PAID" as NotificationType,
+    title: `Order ${label}`,
+    body: `Your order ${order.orderNumber} is now ${label}.`,
+    data: { orderId: order.id, status: newStatus },
+  });
+
+  pushNotifications.orderStatusUpdate(order.buyerId, order.orderNumber, label);
+
+  if (newStatus === "DELIVERED") {
+    pushNotifications.orderDelivered(order.buyerId, order.orderNumber);
+  }
+}
+
+async function sendEarningsReleasedNotification(vendorId: string, orderId: string, amount: number, currency: string): Promise<void> {
+  const vendor = await prisma.vendor.findUnique({
+    where: { id: vendorId },
+    select: { userId: true, storeName: true },
+  });
+  if (!vendor) return;
+
+  await notificationsService.enqueue({
+    userId: vendor.userId,
+    type: "BALANCE_CREDITED" as NotificationType,
+    title: "Earnings Released",
+    body: `${amount / 100} ${currency} in earnings have been released to your wallet for order.`,
+    data: { orderId },
+  });
+
+  pushNotifications.earningsReleased(vendor.userId, amount, currency);
+}
 
 export const ordersService = {
   async listBuyerOrders(
@@ -183,9 +233,22 @@ export const ordersService = {
       include: orderInclude,
     });
 
+    // Notify buyer about status change
+    sendOrderStatusNotification(order, newStatus).catch((err) => {
+      logger.error("Failed to send order status notification", { orderId, newStatus, error: String(err) });
+    });
+
     // When vendor marks order DELIVERED, release pending earnings to available balance
     if (newStatus === "DELIVERED") {
-      releaseVendorEarnings(orderId).catch(() => {});
+      releaseVendorEarnings(orderId).then((result) => {
+        logger.info("Vendor earnings released on delivery", { orderId, vendorId: vendor.id, amount: result.amount });
+        // Notify vendor that earnings are available
+        sendEarningsReleasedNotification(vendor.id, orderId, result.amount, order.currency).catch((e) => {
+          logger.error("Failed to send earnings released notification", { orderId, error: String(e) });
+        });
+      }).catch((err) => {
+        logger.error("Failed to release vendor earnings on delivery", { orderId, error: String(err) });
+      });
     }
 
     return updated;
@@ -219,8 +282,43 @@ export const ordersService = {
     });
 
     // Release pending earnings to available balance
-    releaseVendorEarnings(orderId).catch(() => {});
+    releaseVendorEarnings(orderId).then((result) => {
+      if (result.released && order.vendorId) {
+        logger.info("Vendor earnings released on buyer completion", { orderId, vendorId: order.vendorId, amount: result.amount });
+        sendEarningsReleasedNotification(order.vendorId, orderId, result.amount, order.currency).catch((e) => {
+          logger.error("Failed to send earnings released notification", { orderId, error: String(e) });
+        });
+      }
+    }).catch((err) => {
+      logger.error("Failed to release vendor earnings on buyer completion", { orderId, error: String(err) });
+    });
 
     return updated;
+  },
+
+  async updateDeliveryAddress(buyerId: string, orderId: string, deliveryAddress: string): Promise<Order> {
+    const order = await prisma.order.findUnique({
+      where: { id: orderId },
+      select: { id: true, buyerId: true, status: true },
+    });
+
+    if (!order) {
+      throw new AppError("Order not found", 404);
+    }
+    if (order.buyerId !== buyerId) {
+      throw new AppError("Forbidden", 403);
+    }
+
+    // Only allow address change before order is shipped
+    const editableStatuses = ["PENDING", "PAID", "CONFIRMED", "PROCESSING"];
+    if (!editableStatuses.includes(order.status)) {
+      throw new AppError("Cannot change delivery address once order has been dispatched", 400);
+    }
+
+    return prisma.order.update({
+      where: { id: orderId },
+      data: { deliveryAddress },
+      include: orderInclude,
+    });
   },
 };

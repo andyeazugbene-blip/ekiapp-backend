@@ -138,6 +138,7 @@ model User {
   orders              Order[]        @relation("BuyerOrders")
   cart                Cart?
   notifications       Notification[]
+  purchasedGiftCards  PurchasedGiftCard[]
   adminTwoFactor      AdminTwoFactor?
   adminRoleAssignments AdminRoleAssignment[]
   createdAt           DateTime       @default(now())
@@ -838,6 +839,44 @@ model UserReward {
 
   @@index([userId])
   @@index([rewardId])
+}
+
+// ─── Gift Cards ───────────────────────────────────────────────────────────────
+
+model GiftCard {
+  id          String    @id @default(cuid())
+  title       String
+  description String?
+  priceAmount Int
+  currency    String    @default("EUR")
+  imageUrl    String?
+  isActive    Boolean   @default(true)
+  purchases   PurchasedGiftCard[]
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  @@index([isActive])
+}
+
+model PurchasedGiftCard {
+  id              String    @id @default(cuid())
+  buyerId         String
+  giftCardId      String
+  recipientEmail  String?
+  recipientName   String?
+  message         String?
+  amount          Int
+  currency        String    @default("EUR")
+  stripePaymentIntentId String?
+  isRedeemed      Boolean   @default(false)
+  redeemedAt      DateTime?
+  createdAt       DateTime  @default(now())
+
+  buyer     User     @relation(fields: [buyerId], references: [id], onDelete: Restrict)
+  giftCard  GiftCard @relation(fields: [giftCardId], references: [id], onDelete: Restrict)
+
+  @@index([buyerId])
+  @@index([isRedeemed])
 }
 
 // ─── Phase 8: Subscriptions ─────────────────────────────────────────────────

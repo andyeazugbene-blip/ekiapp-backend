@@ -63,3 +63,16 @@ export async function completeBuyerOrder(request: Request, response: Response): 
   const order = await ordersService.completeBuyerOrder(requireUserId(request), requireIdParam(request));
   response.status(200).json({ order });
 }
+
+export async function updateDeliveryAddress(request: Request, response: Response): Promise<void> {
+  const { deliveryAddress } = request.body as { deliveryAddress?: string };
+  if (!deliveryAddress || typeof deliveryAddress !== "string" || deliveryAddress.trim().length === 0) {
+    throw new AppError("deliveryAddress is required", 400);
+  }
+  const order = await ordersService.updateDeliveryAddress(
+    requireUserId(request),
+    requireIdParam(request),
+    deliveryAddress.trim(),
+  );
+  response.status(200).json({ order });
+}

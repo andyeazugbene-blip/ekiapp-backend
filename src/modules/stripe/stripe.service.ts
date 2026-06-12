@@ -68,6 +68,10 @@ class StripeWebhookService {
       return this.handleWalletTopUpSucceeded(event, paymentIntent);
     }
 
+    if (kind === "gift_card_purchase") {
+      return this.handleGiftCardPurchaseSucceeded(event, paymentIntent);
+    }
+
     return this.processPaymentSucceeded(event, paymentIntent);
   }
 
@@ -275,6 +279,55 @@ class StripeWebhookService {
     }
   }
 
+  // ─── Gift Card Purchase Webhook Handler ───────────────────────────────
+
+  private async handleGiftCardPurchaseSucceeded(event: Stripe.Event, paymentIntent: Stripe.PaymentIntent): Promise<StripeWebhookResult> {
+    const purchasedGiftCardId = paymentIntent.metadata?.purchasedGiftCardId;
+    const buyerId = paymentIntent.metadata?.buyerId;
+
+    if (!purchasedGiftCardId || !buyerId) {
+      logger.warn("Gift card purchase webhook missing metadata", { eventId: event.id });
+      return { received: true, ignored: true, eventId: event.id, type: event.type };
+    }
+
+    try {
+      return await prisma.$transaction(async (tx) => {
+        if (await this.isDuplicate(tx, event.id, event.type, { orderId: purchasedGiftCardId })) {
+          return { received: true, duplicate: true, eventId: event.id, type: event.type };
+        }
+
+        // Mark the purchased gift card as completed (payment confirmed)
+        const existing = await tx.purchasedGiftCard.findUnique({
+          where: { id: purchasedGiftCardId },
+          select: { stripePaymentIntentId: true },
+        });
+
+        if (!existing) {
+          logger.error("Gift card purchase: purchased record not found", { purchasedGiftCardId, eventId: event.id });
+          await this.markEventIgnored(tx, event.id);
+          return { received: true, ignored: true, eventId: event.id, type: event.type };
+        }
+
+        await tx.webhookEvent.update({
+          where: { stripeEventId: event.id },
+          data: { status: "PROCESSED", processedAt: new Date() },
+        });
+
+        logger.info("Webhook processed: gift_card_purchase succeeded", {
+          eventId: event.id, buyerId, purchasedGiftCardId,
+        });
+
+        return { received: true, eventId: event.id, type: event.type };
+      }, { isolationLevel: "Serializable" });
+    } catch (error) {
+      if (this.isUniqueConstraintError(error)) {
+        return { received: true, duplicate: true, eventId: event.id, type: event.type };
+      }
+      logger.error("Webhook failed: gift_card_purchase", { eventId: event.id, ...serializeError(error) });
+      throw error;
+    }
+  }
+
   // ─── Payment Failed / Canceled ──────────────────────────────────────────
 
   private async handleCheckoutSessionCompleted(event: Stripe.Event): Promise<StripeWebhookResult> {
@@ -432,6 +485,25 @@ class StripeWebhookService {
           }
           await tx.webhookEvent.update({ where: { stripeEventId: event.id }, data: { status: "PROCESSED", processedAt: new Date() } });
           logger.info(`Webhook processed: wallet_topup ${event.type}`, { eventId: event.id });
+          return { received: true, eventId: event.id, type: event.type };
+        }, { isolationLevel: "Serializable" });
+      } catch (error) {
+        if (this.isUniqueConstraintError(error)) {
+          return { received: true, duplicate: true, eventId: event.id, type: event.type };
+        }
+        throw error;
+      }
+    }
+
+    // Gift card purchase canceled/failed: nothing to reverse (payment never completed)
+    if (kind === "gift_card_purchase") {
+      try {
+        return await prisma.$transaction(async (tx) => {
+          if (await this.isDuplicate(tx, event.id, event.type, {})) {
+            return { received: true, duplicate: true, eventId: event.id, type: event.type };
+          }
+          await tx.webhookEvent.update({ where: { stripeEventId: event.id }, data: { status: "PROCESSED", processedAt: new Date() } });
+          logger.info(`Webhook processed: gift_card_purchase ${event.type}`, { eventId: event.id });
           return { received: true, eventId: event.id, type: event.type };
         }, { isolationLevel: "Serializable" });
       } catch (error) {

@@ -9,6 +9,7 @@ import { emailTemplates } from "../../lib/email-templates";
 import { AppError } from "../../shared/errors/app-error";
 import { releaseVendorEarnings } from "../../shared/utils/wallet-release";
 import { notificationsService } from "../notifications/notifications.service";
+import { pushNotifications } from "../../lib/push-notifications";
 
 const VENDOR_TIMEOUT_HOURS = Number(process.env.ESCROW_VENDOR_TIMEOUT_HOURS ?? "48");
 const AUTO_RELEASE_HOURS = Number(process.env.ESCROW_AUTO_RELEASE_HOURS ?? "24");
@@ -409,6 +410,9 @@ export const escrowService = {
           body: `Order ${order.orderNumber} delivery confirmed. Payment will be released to your account.`,
           data: { orderId },
         });
+
+        // Push notification to vendor
+        pushNotifications.orderStatusUpdate(vendor.userId, order.orderNumber, "completed");
       }
     }
 

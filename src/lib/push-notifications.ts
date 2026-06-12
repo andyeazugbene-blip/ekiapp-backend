@@ -69,4 +69,22 @@ export const pushNotifications = {
       data: { type: "low_stock" },
     });
   },
+
+  /** Buyer: order delivered by vendor — ready to confirm */
+  orderDelivered(buyerUserId: string, orderNumber: string): void {
+    sendPushToUser(buyerUserId, {
+      title: "Order Delivered! 📦",
+      body: `Order ${orderNumber} has been marked as delivered. Please confirm you've received it.`,
+      data: { type: "order_delivered", orderNumber },
+    });
+  },
+
+  /** Vendor: earnings released after buyer confirms delivery */
+  earningsReleased(vendorUserId: string, amount: number, currency: string): void {
+    sendPushToUser(vendorUserId, {
+      title: "Earnings Released ✅",
+      body: `${amount / 100} ${currency} in earnings have been released to your wallet. You can now request a payout.`,
+      data: { type: "earnings_released" },
+    });
+  },
 };

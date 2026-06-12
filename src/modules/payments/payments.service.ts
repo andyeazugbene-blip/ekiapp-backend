@@ -322,6 +322,7 @@ class PaymentsService {
             totalAmount: group.totalAmount,
             currency,
             deliveryZoneId: group.deliveryZoneId,
+            deliveryAddress: payload.deliveryAddress ?? null,
           },
           select: { id: true },
         });

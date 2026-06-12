@@ -8,6 +8,7 @@ import {
   getVendorOrder,
   listBuyerOrders,
   listVendorOrders,
+  updateDeliveryAddress,
   updateVendorOrderStatus,
 } from "./orders.controller";
 import { buyerConfirmDelivery, resendBuyerDeliveryOtp } from "../paystack/escrow.controller";
@@ -23,6 +24,9 @@ ordersRouter.get("/:id", asyncHandler(getBuyerOrder));
 
 // Buyer: mark delivered order as completed (received)
 ordersRouter.post("/:id/complete", asyncHandler(completeBuyerOrder));
+
+// Buyer: update delivery address on an existing order (before dispatch)
+ordersRouter.patch("/:id/delivery-address", asyncHandler(updateDeliveryAddress));
 
 // Buyer: confirm delivery with OTP (escrow orders)
 ordersRouter.post("/:id/confirm-delivery", asyncHandler(buyerConfirmDelivery));
