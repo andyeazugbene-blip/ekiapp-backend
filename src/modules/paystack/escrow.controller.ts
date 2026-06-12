@@ -39,11 +39,9 @@ export async function buyerConfirmDelivery(request: Request, response: Response)
   if (!orderId) throw new AppError("Order ID required", 400);
 
   const { code } = request.body as Record<string, unknown>;
-  if (typeof code !== "string" || !/^\d{6}$/.test(code.trim())) {
-    throw new AppError("code must be a 6-digit number", 400);
-  }
+  const otpCode = typeof code === "string" && code.trim().length > 0 ? code.trim() : undefined;
 
-  const result = await escrowService.buyerConfirmDelivery(request.user.id, orderId, code.trim());
+  const result = await escrowService.buyerConfirmDelivery(request.user.id, orderId, otpCode);
   response.status(200).json(result);
 }
 

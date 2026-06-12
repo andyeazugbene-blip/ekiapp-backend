@@ -303,7 +303,7 @@ export const escrowService = {
   async buyerConfirmDelivery(
     buyerId: string,
     orderId: string,
-    code: string,
+    code?: string,
   ): Promise<{ confirmed: boolean }> {
     const order = await prisma.order.findUnique({
       where: { id: orderId },
@@ -312,47 +312,61 @@ export const escrowService = {
 
     if (!order) throw new AppError("Order not found", 404);
     if (order.buyerId !== buyerId) throw new AppError("Forbidden", 403);
-    if (order.escrowType !== "DOMESTIC_AFRICA") throw new AppError("Not an escrow order", 400);
-    if (!["DISPATCHED", "IN_TRANSIT"].includes(order.status)) {
+    if (!["DISPATCHED", "IN_TRANSIT", "SHIPPED"].includes(order.status)) {
       throw new AppError(`Cannot confirm delivery for order in ${order.status} status`, 400);
     }
 
-    const otp = await prisma.deliveryOtp.findUnique({ where: { orderId } });
-    if (!otp) throw new AppError("No delivery code found for this order", 400);
-    if (otp.expiresAt < new Date()) throw new AppError("Delivery code has expired", 400);
-    if (otp.confirmedAt) throw new AppError("Delivery already confirmed", 409);
-    if (otp.attempts >= OTP_MAX_ATTEMPTS) throw new AppError("Too many attempts. Contact support.", 429);
+    const isEscrow = order.escrowType === "DOMESTIC_AFRICA";
 
-    await prisma.deliveryOtp.update({
-      where: { id: otp.id },
-      data: { attempts: { increment: 1 } },
-    });
+    // Escrow orders: OTP code required
+    if (isEscrow) {
+      if (!code || code.length !== 6) {
+        throw new AppError("Delivery code is required for this order", 400);
+      }
 
-    const inputHash = crypto.createHash("sha256").update(code).digest("hex");
-    if (inputHash !== otp.codeHash) {
-      const remaining = OTP_MAX_ATTEMPTS - otp.attempts - 1;
-      throw new AppError(
-        `Incorrect delivery code. ${remaining > 0 ? `${remaining} attempts remaining.` : "No attempts remaining."}`,
-        400,
-      );
-    }
+      const otp = await prisma.deliveryOtp.findUnique({ where: { orderId } });
+      if (!otp) throw new AppError("No delivery code found for this order", 400);
+      if (otp.expiresAt < new Date()) throw new AppError("Delivery code has expired", 400);
+      if (otp.confirmedAt) throw new AppError("Delivery already confirmed", 409);
+      if (otp.attempts >= OTP_MAX_ATTEMPTS) throw new AppError("Too many attempts. Contact support.", 429);
 
-    await prisma.$transaction(async (tx) => {
-      await tx.deliveryOtp.update({
+      await prisma.deliveryOtp.update({
         where: { id: otp.id },
-        data: { confirmedAt: new Date() },
+        data: { attempts: { increment: 1 } },
       });
 
-      await tx.order.update({
+      const inputHash = crypto.createHash("sha256").update(code).digest("hex");
+      if (inputHash !== otp.codeHash) {
+        const remaining = OTP_MAX_ATTEMPTS - otp.attempts - 1;
+        throw new AppError(
+          `Incorrect delivery code. ${remaining > 0 ? `${remaining} attempts remaining.` : "No attempts remaining."}`,
+          400,
+        );
+      }
+
+      await prisma.$transaction(async (tx) => {
+        await tx.deliveryOtp.update({
+          where: { id: otp.id },
+          data: { confirmedAt: new Date() },
+        });
+
+        await tx.order.update({
+          where: { id: orderId },
+          data: { status: "COMPLETED", deliveredAt: new Date() },
+        });
+
+        await tx.user.update({
+          where: { id: buyerId },
+          data: { trustScore: { increment: 2 } },
+        });
+      });
+    } else {
+      // Non-escrow: simple order completion
+      await prisma.order.update({
         where: { id: orderId },
         data: { status: "COMPLETED", deliveredAt: new Date() },
       });
-
-      await tx.user.update({
-        where: { id: buyerId },
-        data: { trustScore: { increment: 2 } },
-      });
-    });
+    }
 
     if (order.vendorId) {
       const vendor = await prisma.vendor.findUnique({ where: { id: order.vendorId }, select: { userId: true } });
