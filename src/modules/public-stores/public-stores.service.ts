@@ -4,6 +4,7 @@ import bcrypt from "bcryptjs";
 import { Prisma } from "@prisma/client";
 
 import { prisma } from "../../lib/prisma";
+import { logger } from "../../lib/logger";
 import { stripe } from "../../lib/stripe";
 import { CURSOR_ORDER_BY, MAX_VENDOR_WEIGHT_GRAMS } from "../../shared/constants";
 import { AppError } from "../../shared/errors/app-error";
@@ -1139,24 +1140,13 @@ export const publicStoresService = {
 
     const publicBaseUrl = process.env.FRONTEND_URL ?? "https://www.culinarytales.app";
 
-    const session = await stripe.checkout.sessions.create({
-      mode: "payment",
-      customer_email: normalizeEmail(input.email),
-      success_url: `${publicBaseUrl}/store/${vendor.storeSlug}/confirmed?session_id={CHECKOUT_SESSION_ID}`,
-      cancel_url: `${publicBaseUrl}/store/${vendor.storeSlug}/checkout?cancelled=true`,
-      metadata: {
-        kind: "public_store_checkout",
-        checkoutId,
-        buyerId: buyer.id,
-        orderIds: orderId,
-        vendorIds: vendor.id,
-        orderNumber,
-        storeSlug: vendor.storeSlug,
-        walletDeduction: "0",
-        promoCode: promo?.code ?? "",
-        discountAmount: String(discountAmount),
-      },
-      payment_intent_data: {
+    let session;
+    try {
+      session = await stripe.checkout.sessions.create({
+        mode: "payment",
+        customer_email: normalizeEmail(input.email),
+        success_url: `${publicBaseUrl}/store/${vendor.storeSlug}/confirmed?session_id={CHECKOUT_SESSION_ID}`,
+        cancel_url: `${publicBaseUrl}/store/${vendor.storeSlug}/checkout?cancelled=true`,
         metadata: {
           kind: "public_store_checkout",
           checkoutId,
@@ -1169,41 +1159,71 @@ export const publicStoresService = {
           promoCode: promo?.code ?? "",
           discountAmount: String(discountAmount),
         },
-      },
-      line_items: [
-        ...discountedLineItems.filter((item) => item.checkoutAmount > 0).map((item) => ({
-          quantity: 1,
-          price_data: {
-            currency,
-            unit_amount: item.checkoutAmount,
-            product_data: {
-              name: `${item.productTitle} x ${item.quantity}`,
-              metadata: { productId: item.productId, promoDiscount: String(item.itemDiscount) },
-            },
+        payment_intent_data: {
+          metadata: {
+            kind: "public_store_checkout",
+            checkoutId,
+            buyerId: buyer.id,
+            orderIds: orderId,
+            vendorIds: vendor.id,
+            orderNumber,
+            storeSlug: vendor.storeSlug,
+            walletDeduction: "0",
+            promoCode: promo?.code ?? "",
+            discountAmount: String(discountAmount),
           },
-        })),
-        ...(deliveryFeeAmount > 0
-          ? [{
-              quantity: 1,
-              price_data: {
-                currency,
-                unit_amount: deliveryFeeAmount,
-                product_data: {
-                  name: "Delivery",
-                  description: normalizedCountry,
-                },
+        },
+        line_items: [
+          ...discountedLineItems.filter((item) => item.checkoutAmount > 0).map((item) => ({
+            quantity: 1,
+            price_data: {
+              currency,
+              unit_amount: item.checkoutAmount,
+              product_data: {
+                name: `${item.productTitle} x ${item.quantity}`,
+                metadata: { productId: item.productId, promoDiscount: String(item.itemDiscount) },
               },
-            }]
-          : []),
-      ],
-    });
+            },
+          })),
+          ...(deliveryFeeAmount > 0
+            ? [{
+                quantity: 1,
+                price_data: {
+                  currency,
+                  unit_amount: deliveryFeeAmount,
+                  product_data: {
+                    name: "Delivery",
+                    description: normalizedCountry,
+                  },
+                },
+              }]
+            : []),
+        ],
+      });
 
-    if (!session.url) {
-      throw new AppError("Could not create checkout session", 502);
+      if (!session.url) {
+        throw new AppError("Could not create checkout session", 502);
+      }
+    } catch (stripeError) {
+      const stripeErr = stripeError as { type?: string; code?: string; message?: string; statusCode?: number };
+      logger.error("Stripe checkout session creation failed", {
+        storeSlug: slug,
+        checkoutId,
+        errorMessage: stripeErr.message ?? String(stripeError),
+        stripeType: stripeErr.type,
+        stripeCode: stripeErr.code,
+      });
+      if (stripeErr.type === "StripeCardError") {
+        throw new AppError(stripeErr.message ?? "Card declined", 400);
+      }
+      if (stripeErr.type === "StripeInvalidRequestError") {
+        throw new AppError(stripeErr.message ?? "Payment request invalid", 400);
+      }
+      throw new AppError("Payment provider unavailable", 502);
     }
 
     return {
-      checkoutUrl: session.url,
+      checkoutUrl: session!.url,
       orderNumber,
       checkoutId,
     };
