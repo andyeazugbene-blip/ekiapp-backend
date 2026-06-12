@@ -288,6 +288,16 @@ class StripeWebhookService {
 
   private async handleCheckoutSessionCompleted(event: Stripe.Event): Promise<StripeWebhookResult> {
     const session = event.data.object as Stripe.Checkout.Session;
+
+    // Public store checkout: delegate to payment_intent.succeeded via metadata
+    if (session.metadata?.kind === "public_store_checkout") {
+      logger.info("Checkout session completed for public store order", {
+        eventId: event.id, checkoutId: session.metadata.checkoutId, orderNumber: session.metadata.orderNumber,
+      });
+      return { received: true, eventId: event.id, type: event.type };
+    }
+
+    // Vendor subscription checkout
     if (session.mode !== "subscription" || session.metadata?.kind !== "vendor_subscription") {
       return { received: true, ignored: true, eventId: event.id, type: event.type };
     }

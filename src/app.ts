@@ -159,6 +159,9 @@ app.get("/store/:slug/confirmed", (req, res, next) => {
 app.get("/store/:slug/order/:orderNumber", (req, res, next) => {
   Promise.resolve(getPublicStoreTrackedOrderPage(req, res)).catch(next);
 });
+app.get("/store/:slug/track/:orderNumber", (req, res, next) => {
+  Promise.resolve(getPublicStoreTrackedOrderPage(req, res)).catch(next);
+});
 app.get("/store/:slug", (req, res, next) => {
   Promise.resolve(getPublicStorePage(req, res)).catch(next);
 });
