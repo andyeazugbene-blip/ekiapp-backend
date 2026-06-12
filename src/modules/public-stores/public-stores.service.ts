@@ -1219,7 +1219,11 @@ export const publicStoresService = {
       if (stripeErr.type === "StripeInvalidRequestError") {
         throw new AppError(stripeErr.message ?? "Payment request invalid", 400);
       }
-      throw new AppError("Payment provider unavailable", 502);
+      if (stripeErr.type === "StripeAuthenticationError") {
+        throw new AppError(`Stripe auth error: ${stripeErr.message ?? "Invalid key"}`, 502);
+      }
+      // TEMP: surface the raw Stripe error for debugging
+      throw new AppError(`Stripe: ${stripeErr.message ?? String(stripeError)}`, 502);
     }
 
     return {
