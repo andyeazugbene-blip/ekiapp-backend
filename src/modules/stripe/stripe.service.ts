@@ -91,11 +91,11 @@ class StripeWebhookService {
       return { received: true, ignored: true, eventId: event.id, type: event.type };
     }
 
+    let paidOrders: { id: string; vendorId: string | null; items: { vendorId: string }[] }[] = [];
+
     try {
-      return await prisma.$transaction(async (tx) => {
-        if (await this.isDuplicate(tx, event.id, event.type, { checkoutId })) {
-          return { received: true, duplicate: true, eventId: event.id, type: event.type };
-        }
+      await prisma.$transaction(async (tx) => {
+        if (await this.isDuplicate(tx, event.id, event.type, { checkoutId })) return;
 
         const checkout = await tx.checkout.findUnique({
           where: { id: checkoutId },
@@ -115,7 +115,7 @@ class StripeWebhookService {
           return { received: true, ignored: true, eventId: event.id, type: event.type };
         }
 
-        if (checkout.status === PaymentStatus.SUCCEEDED) {
+        if (checkout.status === "SUCCEEDED") {
           await this.markEventIgnored(tx, event.id);
           return { received: true, duplicate: true, eventId: event.id, type: event.type };
         }
@@ -167,31 +167,18 @@ class StripeWebhookService {
 
           const vendorId = order.vendorId ?? order.items[0]?.vendorId;
           if (vendorId && order.payment.vendorEarningsAmount > 0) {
-            // Auto-create wallet if missing (defensive for legacy vendors)
-            let wallet = await tx.wallet.findUnique({ where: { vendorId } });
-            if (!wallet) {
-              wallet = await tx.wallet.create({
-                data: { vendorId, currency: order.payment.currency },
-              });
-            }
+            let w = await tx.wallet.findUnique({ where: { vendorId } });
+            if (!w) w = await tx.wallet.create({ data: { vendorId, currency: order.payment.currency } });
             await tx.walletTransaction.create({
-              data: {
-                walletId: wallet.id,
-                vendorId,
-                orderId: order.id,
-                paymentId: order.payment.id,
-                type: "PAYMENT_PENDING_CREDIT",
-                amount: order.payment.vendorEarningsAmount,
-                currency: order.payment.currency,
-                description: `Pending credit for order ${order.id}`,
-              },
+              data: { walletId: w.id, vendorId, orderId: order.id, paymentId: order.payment.id,
+                type: "PAYMENT_PENDING_CREDIT", amount: order.payment.vendorEarningsAmount,
+                currency: order.payment.currency, description: `Pending credit for order ${order.id}` },
             });
-            await tx.wallet.update({
-              where: { id: wallet.id },
-              data: { pendingBalance: { increment: order.payment.vendorEarningsAmount } },
-            });
+            await tx.wallet.update({ where: { id: w.id }, data: { pendingBalance: { increment: order.payment.vendorEarningsAmount } } });
           }
         }
+
+        paidOrders = checkout.orders.map((o) => ({ id: o.id, vendorId: o.vendorId, items: o.items }));
 
         await this.clearBuyerCart(tx, buyerId);
 
@@ -200,17 +187,9 @@ class StripeWebhookService {
           data: { status: "PROCESSED", processedAt: new Date() },
         });
 
-        this.sendSuccessNotifications(buyerId, checkout.orders);
-
-        referralsService.creditReferralBonusOnFirstOrder(buyerId).catch((err) => {
-          logger.error("Referral bonus credit failed", { buyerId, error: String(err) });
-        });
-
         logger.info("Webhook processed: payment succeeded", {
-          eventId: event.id, checkoutId, orderCount: checkout.orders.length, source: paymentIntent.metadata?.kind ?? "app",
+          eventId: event.id, checkoutId, orderCount: checkout.orders.length,
         });
-
-        return { received: true, eventId: event.id, type: event.type };
       }, { isolationLevel: "Serializable" });
     } catch (error) {
       if (this.isUniqueConstraintError(error)) {
@@ -219,6 +198,16 @@ class StripeWebhookService {
       logger.error("Webhook failed: payment processing", { eventId: event.id, ...serializeError(error) });
       throw error;
     }
+
+    // Fire notifications AFTER transaction commits
+    if (paidOrders.length > 0) {
+      this.sendSuccessNotifications(buyerId, paidOrders);
+    }
+    referralsService.creditReferralBonusOnFirstOrder(buyerId).catch((err) => {
+      logger.error("Referral bonus credit failed", { buyerId, error: String(err) });
+    });
+
+    return { received: true, eventId: event.id, type: event.type };
   }
 
   // ─── Wallet Top-Up Webhook Handler ──────────────────────────────────────
