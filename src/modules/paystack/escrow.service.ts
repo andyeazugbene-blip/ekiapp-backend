@@ -368,6 +368,37 @@ export const escrowService = {
       });
     }
 
+    // ─── Send confirmation email to buyer ─────────────────────────────
+    try {
+      const buyer = await prisma.user.findUnique({
+        where: { id: buyerId },
+        select: { email: true, name: true },
+      });
+      const orderDetails = await prisma.order.findUnique({
+        where: { id: orderId },
+        select: { orderNumber: true, totalAmount: true, currency: true, _count: { select: { items: true } } },
+      });
+      if (buyer?.email && orderDetails) {
+        const template = emailTemplates.orderConfirmation({
+          name: buyer.name ?? "Valued Customer",
+          orderNumber: orderDetails.orderNumber,
+          totalAmount: orderDetails.totalAmount,
+          currency: orderDetails.currency,
+          itemCount: orderDetails._count.items,
+        });
+        await enqueueEmail({
+          to: buyer.email,
+          subject: template.subject,
+          html: template.html,
+        });
+      }
+    } catch (emailError) {
+      logger.error("Failed to send delivery confirmation email", {
+        orderId, buyerId,
+        errorMessage: emailError instanceof Error ? emailError.message : String(emailError),
+      });
+    }
+
     if (order.vendorId) {
       const vendor = await prisma.vendor.findUnique({ where: { id: order.vendorId }, select: { userId: true } });
       if (vendor) {
@@ -381,7 +412,7 @@ export const escrowService = {
       }
     }
 
-    logger.info("Escrow: delivery confirmed via OTP", { orderId, buyerId });
+    logger.info("Delivery confirmed", { orderId, buyerId, isEscrow });
 
     this.initiateVendorPayout(orderId).catch((err) => {
       logger.error("Post-OTP payout initiation failed", { orderId, error: String(err) });

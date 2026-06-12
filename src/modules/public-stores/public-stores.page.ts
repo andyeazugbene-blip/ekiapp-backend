@@ -1284,17 +1284,18 @@ function renderCheckoutPage(store: PublicStore, products: PublicProduct[], cance
             if(submit) submit.disabled = false;
           });
       });
-      // ─── Cart remove handler ─────────────────────────────────────────────
+      // ─── Cart remove handler (event delegation) ──────────────────────────
       document.addEventListener('click', function(evt){
         var target = evt.target;
         if(!target || !target.classList || !target.classList.contains('cart-remove')) return;
         var idx = parseInt(target.getAttribute('data-index'), 10);
         if(isNaN(idx)) return;
+        evt.preventDefault();
+        evt.stopPropagation();
         var cart = readCart();
         if(idx >= 0 && idx < cart.length) cart.splice(idx, 1);
         writeCart(cart);
         renderSummary();
-        if(cart.length === 0) window.location.href = '/store/' + encodeURIComponent(storeSlug);
       });
       // ─── Promo apply handler ─────────────────────────────────────────────
       function applyPromo(){
