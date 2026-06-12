@@ -1185,6 +1185,7 @@ function renderCheckoutPage(store: PublicStore, products: PublicProduct[], cance
         try { var parsed = JSON.parse(localStorage.getItem(cartKey) || '[]'); return Array.isArray(parsed) ? parsed : []; }
         catch (_error) { return []; }
       }
+      function writeCart(cart){ localStorage.setItem(cartKey, JSON.stringify(cart)); }
       function escapeHtml(value){ return String(value||'').replace(/[&<>"']/g,function(c){return({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c]}); }
       function formatPrice(amount, currency){
         try { return new Intl.NumberFormat('en-GB', { style:'currency', currency:String(currency || 'EUR').toUpperCase() }).format(amount / 100); }

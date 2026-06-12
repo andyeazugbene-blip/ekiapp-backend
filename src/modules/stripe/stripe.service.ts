@@ -64,12 +64,21 @@ class StripeWebhookService {
     const paymentIntent = event.data.object as Stripe.PaymentIntent;
     const kind = paymentIntent.metadata?.kind;
 
-    // ─── Wallet top-up flow ───────────────────────────────────────────────
     if (kind === "wallet_topup") {
       return this.handleWalletTopUpSucceeded(event, paymentIntent);
     }
 
-    // ─── Checkout flow ────────────────────────────────────────────────────
+    return this.processPaymentSucceeded(event, paymentIntent);
+  }
+
+  /**
+   * Process a succeeded payment: mark checkout/orders PAID, credit wallet, notify.
+   * Shared between payment_intent.succeeded and checkout.session.completed.
+   */
+  private async processPaymentSucceeded(
+    event: Stripe.Event,
+    paymentIntent: { id: string; metadata: Record<string, string>; amount: number; currency: string },
+  ): Promise<StripeWebhookResult> {
     const checkoutId = paymentIntent.metadata?.checkoutId;
     const buyerId = paymentIntent.metadata?.buyerId;
 
@@ -80,12 +89,10 @@ class StripeWebhookService {
 
     try {
       return await prisma.$transaction(async (tx) => {
-        // Idempotency: insert webhook event
         if (await this.isDuplicate(tx, event.id, event.type, { checkoutId })) {
           return { received: true, duplicate: true, eventId: event.id, type: event.type };
         }
 
-        // Load checkout
         const checkout = await tx.checkout.findUnique({
           where: { id: checkoutId },
           include: {
@@ -104,20 +111,17 @@ class StripeWebhookService {
           return { received: true, ignored: true, eventId: event.id, type: event.type };
         }
 
-        // Already processed? Idempotent return.
         if (checkout.status === PaymentStatus.SUCCEEDED) {
           await this.markEventIgnored(tx, event.id);
           return { received: true, duplicate: true, eventId: event.id, type: event.type };
         }
 
-        // Validate buyer
         if (checkout.buyerId !== buyerId) {
           logger.error("Webhook: buyer mismatch", { checkoutId, expected: checkout.buyerId, got: buyerId, eventId: event.id });
           await this.markEventIgnored(tx, event.id);
           return { received: true, ignored: true, eventId: event.id, type: event.type };
         }
 
-        // Validate currency against the Stripe currency stored in metadata
         const checkoutMeta = checkout.metadata as { stripeCurrency?: string; walletDeduction?: unknown } | null;
         const expectedStripeCurrency = (checkoutMeta?.stripeCurrency ?? checkout.currency).toLowerCase();
         if (expectedStripeCurrency !== paymentIntent.currency.toLowerCase()) {
@@ -126,9 +130,6 @@ class StripeWebhookService {
           return { received: true, ignored: true, eventId: event.id, type: event.type };
         }
 
-        // Validate the amount charged by Stripe. Mixed wallet/card checkouts charge
-        // only the remainder after the wallet deduction, while checkout.totalAmount
-        // remains the full basket total for the order ledger.
         const rawWalletDeduction = Number(checkoutMeta?.walletDeduction ?? paymentIntent.metadata?.walletDeduction ?? 0);
         const walletDeduction = Number.isFinite(rawWalletDeduction) ? rawWalletDeduction : 0;
         const expectedStripeAmount = Math.max(checkout.totalAmount - walletDeduction, 0);
@@ -138,7 +139,6 @@ class StripeWebhookService {
           return { received: true, ignored: true, eventId: event.id, type: event.type };
         }
 
-        // Mark checkout SUCCEEDED (conditional)
         const checkoutUpdate = await tx.checkout.updateMany({
           where: { id: checkoutId, status: PaymentStatus.PENDING },
           data: { status: "SUCCEEDED", processedAt: new Date(), stripePaymentIntentId: paymentIntent.id },
@@ -148,23 +148,19 @@ class StripeWebhookService {
           return { received: true, duplicate: true, eventId: event.id, type: event.type };
         }
 
-        // Process each vendor order
         for (const order of checkout.orders) {
           if (!order.payment) continue;
 
-          // Mark payment SUCCEEDED
           await tx.payment.updateMany({
             where: { id: order.payment.id, status: PaymentStatus.PENDING },
             data: { status: "SUCCEEDED", processedAt: new Date(), stripePaymentIntentId: paymentIntent.id },
           });
 
-          // Mark order PAID
           await tx.order.updateMany({
             where: { id: order.id, status: "PENDING" },
             data: { status: "PAID" },
           });
 
-          // Credit vendor wallet
           const vendorId = order.vendorId ?? order.items[0]?.vendorId;
           if (vendorId && order.payment.vendorEarningsAmount > 0) {
             const wallet = await tx.wallet.findUnique({ where: { vendorId }, select: { id: true } });
@@ -181,7 +177,6 @@ class StripeWebhookService {
                   description: `Pending credit for order ${order.id}`,
                 },
               });
-
               await tx.wallet.update({
                 where: { id: wallet.id },
                 data: { pendingBalance: { increment: order.payment.vendorEarningsAmount } },
@@ -190,25 +185,21 @@ class StripeWebhookService {
           }
         }
 
-        // Clear buyer cart
         await this.clearBuyerCart(tx, buyerId);
 
-        // Mark webhook processed
         await tx.webhookEvent.update({
           where: { stripeEventId: event.id },
           data: { status: "PROCESSED", processedAt: new Date() },
         });
 
-        // Notifications (fire-and-forget)
         this.sendSuccessNotifications(buyerId, checkout.orders);
 
-        // Referral bonus: credit referrer on referred user's first paid order (fire-and-forget)
         referralsService.creditReferralBonusOnFirstOrder(buyerId).catch((err) => {
           logger.error("Referral bonus credit failed", { buyerId, error: String(err) });
         });
 
-        logger.info("Webhook processed: payment_intent.succeeded (multi-vendor)", {
-          eventId: event.id, checkoutId, orderCount: checkout.orders.length,
+        logger.info("Webhook processed: payment succeeded", {
+          eventId: event.id, checkoutId, orderCount: checkout.orders.length, source: paymentIntent.metadata?.kind ?? "app",
         });
 
         return { received: true, eventId: event.id, type: event.type };
@@ -217,7 +208,7 @@ class StripeWebhookService {
       if (this.isUniqueConstraintError(error)) {
         return { received: true, duplicate: true, eventId: event.id, type: event.type };
       }
-      logger.error("Webhook failed: payment_intent.succeeded", { eventId: event.id, ...serializeError(error) });
+      logger.error("Webhook failed: payment processing", { eventId: event.id, ...serializeError(error) });
       throw error;
     }
   }
@@ -289,12 +280,48 @@ class StripeWebhookService {
   private async handleCheckoutSessionCompleted(event: Stripe.Event): Promise<StripeWebhookResult> {
     const session = event.data.object as Stripe.Checkout.Session;
 
-    // Public store checkout: delegate to payment_intent.succeeded via metadata
+    // Public store checkout: look up checkoutId from session metadata and process
     if (session.metadata?.kind === "public_store_checkout") {
-      logger.info("Checkout session completed for public store order", {
-        eventId: event.id, checkoutId: session.metadata.checkoutId, orderNumber: session.metadata.orderNumber,
+      const checkoutId = session.metadata.checkoutId;
+      const buyerId = session.metadata.buyerId;
+
+      if (!checkoutId || !buyerId) {
+        logger.warn("Public store checkout session missing metadata", { eventId: event.id, checkoutId, buyerId });
+        return { received: true, ignored: true, eventId: event.id, type: event.type };
+      }
+
+      logger.info("Processing public store checkout session", {
+        eventId: event.id, checkoutId, orderNumber: session.metadata.orderNumber,
       });
-      return { received: true, eventId: event.id, type: event.type };
+
+      // Process via the same path as payment_intent.succeeded
+      const paymentIntent = typeof session.payment_intent === "string"
+        ? session.payment_intent
+        : session.payment_intent?.id;
+
+      // Create a fake payment intent object with the metadata
+      const piLike = {
+        id: paymentIntent ?? "checkout_session",
+        metadata: {
+          checkoutId,
+          buyerId,
+          walletDeduction: "0",
+          stripeCurrency: (session.currency ?? "").toLowerCase(),
+          ...session.metadata,
+        },
+        amount: session.amount_total ?? 0,
+        currency: session.currency ?? "eur",
+      } as unknown as Stripe.PaymentIntent;
+
+      try {
+        return this.processPaymentSucceeded(event, piLike);
+      } catch (error) {
+        if (this.isUniqueConstraintError(error)) {
+          return { received: true, duplicate: true, eventId: event.id, type: event.type };
+        }
+        logger.error("Webhook failed: public store checkout", { eventId: event.id, ...serializeError(error) });
+        throw error;
+      }
     }
 
     // Vendor subscription checkout
