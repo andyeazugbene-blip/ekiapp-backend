@@ -41,7 +41,7 @@ export async function getHealthDetailed(_request: Request, response: Response): 
     checks.database = { status: "error", latencyMs: Date.now() - dbStart, detail: error instanceof Error ? error.message : String(error) };
   }
 
-  // Stripe
+  // Stripe via SDK
   const stripeStart = Date.now();
   try {
     await stripe.balance.retrieve();
@@ -53,6 +53,17 @@ export async function getHealthDetailed(_request: Request, response: Response): 
     checks.stripe = { status: "ok", latencyMs: Date.now() - stripeStart, detail: stripeMode };
   } catch (error) {
     checks.stripe = { status: "error", latencyMs: Date.now() - stripeStart, detail: error instanceof Error ? error.message : String(error) };
+  }
+
+  // Raw Stripe connection test (bypass SDK)
+  const rawStripeStart = Date.now();
+  try {
+    const rawRes = await fetch("https://api.stripe.com/v1/balance", {
+      headers: { Authorization: `Bearer ${process.env.STRIPE_SECRET_KEY}` },
+    });
+    checks.stripe_raw = { status: rawRes.ok ? "ok" : "error", latencyMs: Date.now() - rawStripeStart, detail: rawRes.ok ? "raw fetch works" : `HTTP ${rawRes.status}: ${await rawRes.text().catch(() => "no body")}` };
+  } catch (error) {
+    checks.stripe_raw = { status: "error", latencyMs: Date.now() - rawStripeStart, detail: error instanceof Error ? `${error.name}: ${error.message}` : String(error) };
   }
 
   // Paystack (optional — only check if configured)
