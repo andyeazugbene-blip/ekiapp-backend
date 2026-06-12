@@ -1,0 +1,71 @@
+{
+  "version": "6.19.3",
+  "steps": [
+    {
+      "tag": "CreateEnum",
+      "enum": "RewardType",
+      "values": ["DISCOUNT_COUPON", "WALLET_BONUS", "FREE_SHIPPING"]
+    },
+    {
+      "tag": "CreateTable",
+      "table": "Reward",
+      "columns": [
+        { "name": "id", "type": "Text", "default": { "name": "cuid" }, "isRequired": true },
+        { "name": "name", "type": "Text", "isRequired": true },
+        { "name": "description", "type": "Text", "isRequired": false },
+        { "name": "type", "type": "RewardType", "isRequired": true },
+        { "name": "value", "type": "Int", "isRequired": true },
+        { "name": "currency", "type": "String", "default": "'GBP'", "isRequired": true },
+        { "name": "minOrderAmount", "type": "Int", "isRequired": false },
+        { "name": "isActive", "type": "Boolean", "default": true, "isRequired": true },
+        { "name": "maxClaims", "type": "Int", "isRequired": false },
+        { "name": "claimedCount", "type": "Int", "default": 0, "isRequired": true },
+        { "name": "expiresAt", "type": "DateTime", "isRequired": false },
+        { "name": "createdAt", "type": "DateTime", "default": { "name": "now" }, "isRequired": true },
+        { "name": "updatedAt", "type": "DateTime", "updatedAt": true, "isRequired": true }
+      ],
+      "primaryKey": { "columns": ["id"] }
+    },
+    {
+      "tag": "CreateTable",
+      "table": "UserReward",
+      "columns": [
+        { "name": "id", "type": "Text", "default": { "name": "cuid" }, "isRequired": true },
+        { "name": "userId", "type": "Text", "isRequired": true },
+        { "name": "rewardId", "type": "Text", "isRequired": true },
+        { "name": "claimedAt", "type": "DateTime", "default": { "name": "now" }, "isRequired": true },
+        { "name": "usedAt", "type": "DateTime", "isRequired": false },
+        { "name": "expiresAt", "type": "DateTime", "isRequired": false },
+        { "name": "orderId", "type": "Text", "isRequired": false },
+        { "name": "metadata", "type": "Json", "isRequired": false }
+      ],
+      "primaryKey": { "columns": ["id"] }
+    },
+    {
+      "tag": "CreateIndex",
+      "table": "Reward",
+      "columns": ["isActive"],
+      "type": "Normal"
+    },
+    {
+      "tag": "CreateIndex",
+      "table": "UserReward",
+      "columns": ["userId"],
+      "type": "Normal"
+    },
+    {
+      "tag": "CreateIndex",
+      "table": "UserReward",
+      "columns": ["rewardId"],
+      "type": "Normal"
+    },
+    {
+      "tag": "CreateForeignKey",
+      "table": "UserReward",
+      "columns": ["rewardId"],
+      "referencedTable": "Reward",
+      "referencedColumns": ["id"]
+    }
+  ],
+  "datamodel": "datasource db {\n  provider = \"postgresql\"\n  url      = env(\"DATABASE_URL\")\n}\n\ngenerator client {\n  provider = \"prisma-client-js\"\n}\n\nmodel Reward {\n  id             String     @id @default(cuid())\n  name           String\n  description    String?\n  type           RewardType\n  value          Int\n  currency       String     @default(\"GBP\")\n  minOrderAmount Int?\n  isActive       Boolean    @default(true)\n  maxClaims      Int?\n  claimedCount   Int        @default(0)\n  expiresAt      DateTime?\n  createdAt      DateTime   @default(now())\n  updatedAt      DateTime   @updatedAt\n  userRewards    UserReward[]\n\n  @@index([isActive])\n}\n\nmodel UserReward {\n  id        String      @id @default(cuid())\n  userId    String\n  rewardId  String\n  claimedAt DateTime    @default(now())\n  usedAt    DateTime?\n  expiresAt DateTime?\n  orderId   String?\n  metadata  Json?\n\n  reward Reward @relation(fields: [rewardId], references: [id])\n\n  @@index([userId])\n  @@index([rewardId])\n}\n"
+}
