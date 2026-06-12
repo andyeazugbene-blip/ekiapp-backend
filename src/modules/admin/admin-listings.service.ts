@@ -187,8 +187,9 @@ export const adminListingsService = {
         prisma.order.findMany({
           where: status ? { status } : {},
           include: {
-            items: true,
-            payment: { select: { id: true, status: true, stripePaymentIntentId: true } },
+            items: { select: { id: true, productTitle: true, quantity: true, unitAmount: true, totalAmount: true } },
+            payment: { select: { id: true, status: true, stripePaymentIntentId: true, provider: true, amount: true, platformFeeAmount: true, vendorEarningsAmount: true, currency: true } },
+            buyer: { select: { id: true, name: true, email: true } },
           },
           orderBy: CURSOR_ORDER_BY,
           take,
@@ -207,6 +208,20 @@ export const adminListingsService = {
       ({ take, cursor, skip }) =>
         prisma.payment.findMany({
           where: status ? { status } : {},
+          include: {
+            order: {
+              select: {
+                id: true,
+                orderNumber: true,
+                status: true,
+                totalAmount: true,
+                currency: true,
+                vendorId: true,
+                buyerId: true,
+                buyer: { select: { name: true, email: true } },
+              },
+            },
+          },
           orderBy: CURSOR_ORDER_BY,
           take,
           cursor,
@@ -230,6 +245,12 @@ export const adminListingsService = {
           where: {
             ...(type ? { type } : {}),
             ...(vendorId ? { vendorId } : {}),
+          },
+          include: {
+            vendor: { select: { id: true, storeName: true } },
+            order: { select: { id: true, orderNumber: true, status: true, totalAmount: true, currency: true } },
+            payment: { select: { id: true, status: true, stripePaymentIntentId: true, provider: true } },
+            payoutRequest: { select: { id: true, status: true, amount: true } },
           },
           orderBy: CURSOR_ORDER_BY,
           take,

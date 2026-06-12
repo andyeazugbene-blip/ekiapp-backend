@@ -4,6 +4,7 @@ export interface AdminDashboardData {
   activeVendors: number;
   suspendedVendors: number;
   totalOrders: number;
+  pendingOrders: number;
   totalRevenue: number;
   totalBuyers: number;
   newVendorsThisWeek: number;
