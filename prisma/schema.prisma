@@ -796,6 +796,50 @@ model Referral {
   @@index([referrerId])
 }
 
+// ─── Phase 5: Rewards & Gifts ────────────────────────────────────────────────
+
+enum RewardType {
+  DISCOUNT_COUPON
+  WALLET_BONUS
+  FREE_SHIPPING
+}
+
+model Reward {
+  id             String     @id @default(cuid())
+  name           String
+  description    String?
+  type           RewardType
+  value          Int
+  currency       String     @default("GBP")
+  minOrderAmount Int?
+  isActive       Boolean    @default(true)
+  maxClaims      Int?
+  claimedCount   Int        @default(0)
+  expiresAt      DateTime?
+  createdAt      DateTime   @default(now())
+  updatedAt      DateTime   @updatedAt
+
+  userRewards UserReward[]
+
+  @@index([isActive])
+}
+
+model UserReward {
+  id         String      @id @default(cuid())
+  userId     String
+  rewardId   String
+  claimedAt  DateTime    @default(now())
+  usedAt     DateTime?
+  expiresAt  DateTime?
+  orderId    String?
+  metadata   Json?
+
+  reward Reward @relation(fields: [rewardId], references: [id])
+
+  @@index([userId])
+  @@index([rewardId])
+}
+
 // ─── Phase 8: Subscriptions ─────────────────────────────────────────────────
 
 enum SubscriptionPlan {

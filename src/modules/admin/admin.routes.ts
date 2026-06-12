@@ -101,6 +101,7 @@ import {
   adminGetUploadReadUrl,
   adminListUploads,
 } from "../uploads/uploads.controller";
+import { adminRewardsRouter } from "../rewards/rewards.routes";
 
 export const adminRouter = Router();
 
@@ -194,6 +195,9 @@ adminRouter.delete("/users/:id", asyncHandler(requireAdminPermission("users.muta
 // Escrow health monitoring
 adminRouter.get("/escrow/health", asyncHandler(requireAdminPermission("escrow.read")), asyncHandler(getEscrowHealth));
 adminRouter.patch("/escrow/providers/:id", asyncHandler(requireAdminPermission("settings.mutate")), asyncHandler(updateEscrowProvider));
+
+// Rewards / Gifts management
+adminRouter.use("/rewards", adminRewardsRouter);
 
 // ─── 2FA Management ─────────────────────────────────────────────────────────
 adminRouter.post("/2fa/setup", asyncHandler(requireAdminPermission("security.mutate")), asyncHandler(setup2fa));
