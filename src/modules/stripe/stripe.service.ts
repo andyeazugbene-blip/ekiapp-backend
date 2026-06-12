@@ -167,25 +167,29 @@ class StripeWebhookService {
 
           const vendorId = order.vendorId ?? order.items[0]?.vendorId;
           if (vendorId && order.payment.vendorEarningsAmount > 0) {
-            const wallet = await tx.wallet.findUnique({ where: { vendorId }, select: { id: true } });
-            if (wallet) {
-              await tx.walletTransaction.create({
-                data: {
-                  walletId: wallet.id,
-                  vendorId,
-                  orderId: order.id,
-                  paymentId: order.payment.id,
-                  type: "PAYMENT_PENDING_CREDIT",
-                  amount: order.payment.vendorEarningsAmount,
-                  currency: order.payment.currency,
-                  description: `Pending credit for order ${order.id}`,
-                },
-              });
-              await tx.wallet.update({
-                where: { id: wallet.id },
-                data: { pendingBalance: { increment: order.payment.vendorEarningsAmount } },
+            // Auto-create wallet if missing (defensive for legacy vendors)
+            let wallet = await tx.wallet.findUnique({ where: { vendorId } });
+            if (!wallet) {
+              wallet = await tx.wallet.create({
+                data: { vendorId, currency: order.payment.currency },
               });
             }
+            await tx.walletTransaction.create({
+              data: {
+                walletId: wallet.id,
+                vendorId,
+                orderId: order.id,
+                paymentId: order.payment.id,
+                type: "PAYMENT_PENDING_CREDIT",
+                amount: order.payment.vendorEarningsAmount,
+                currency: order.payment.currency,
+                description: `Pending credit for order ${order.id}`,
+              },
+            });
+            await tx.wallet.update({
+              where: { id: wallet.id },
+              data: { pendingBalance: { increment: order.payment.vendorEarningsAmount } },
+            });
           }
         }
 

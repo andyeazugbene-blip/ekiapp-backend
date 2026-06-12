@@ -362,12 +362,15 @@ class PaymentsService {
         });
 
         if (stripeAmount === 0 && payment.vendorEarningsAmount > 0) {
-          const vendorWallet = await tx.wallet.findUnique({
+          let vendorWallet = await tx.wallet.findUnique({
             where: { vendorId: group.vendorId },
             select: { id: true },
           });
           if (!vendorWallet) {
-            throw new AppError("Vendor wallet not found", 500);
+            vendorWallet = await tx.wallet.create({
+              data: { vendorId: group.vendorId, currency },
+              select: { id: true },
+            });
           }
 
           await tx.walletTransaction.create({
