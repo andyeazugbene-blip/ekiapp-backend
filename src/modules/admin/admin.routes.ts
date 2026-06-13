@@ -62,6 +62,7 @@ import {
   deleteUser,
   disableProduct,
   getOrder,
+  getProduct,
   getUser,
   getVendor,
   listOrders,
@@ -130,6 +131,7 @@ adminRouter.get("/users/:id", asyncHandler(requireAdminPermission("users.read"))
 adminRouter.get("/vendors", asyncHandler(requireAdminPermission("vendors.read")), asyncHandler(listVendors));
 adminRouter.get("/vendors/:id", asyncHandler(requireAdminPermission("vendors.read")), asyncHandler(getVendor));
 adminRouter.get("/products", asyncHandler(requireAdminPermission("products.read")), asyncHandler(listProducts));
+adminRouter.get("/products/:id", asyncHandler(requireAdminPermission("products.read")), asyncHandler(getProduct));
 adminRouter.get("/orders", asyncHandler(requireAdminPermission("orders.read")), asyncHandler(listOrders));
 adminRouter.post("/orders/force-process/:id", asyncHandler(requireAdminPermission("orders.mutate")), asyncHandler(processStuckOrder));
 adminRouter.get("/orders/:id", asyncHandler(requireAdminPermission("orders.read")), asyncHandler(getOrder));

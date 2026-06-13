@@ -93,6 +93,11 @@ export async function listProducts(request: Request, response: Response): Promis
   response.status(200).json(await adminListingsService.listProducts(q(request)));
 }
 
+export async function getProduct(request: Request, response: Response): Promise<void> {
+  const product = await adminListingsService.getProduct(requireIdParam(request));
+  response.status(200).json({ product });
+}
+
 export async function listOrders(request: Request, response: Response): Promise<void> {
   response.status(200).json(await adminListingsService.listOrders(q(request)));
 }

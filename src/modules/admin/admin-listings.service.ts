@@ -184,7 +184,7 @@ export const adminListingsService = {
       ({ take, cursor, skip }) =>
         prisma.product.findMany({
           where: isActive === undefined ? {} : { isActive },
-          include: { vendor: { select: { storeName: true } } },
+          include: { vendor: { select: { storeName: true, country: true, city: true } } },
           orderBy: CURSOR_ORDER_BY,
           take,
           cursor,
@@ -195,6 +195,35 @@ export const adminListingsService = {
     // Map vendor name to top level
     const enriched = (items as any[]).map((p: any) => ({ ...p, vendorName: p.vendor?.storeName ?? null, vendor: undefined }));
     return { items: enriched, nextCursor };
+  },
+
+  async getProduct(productId: string) {
+    const product = await prisma.product.findUnique({
+      where: { id: productId },
+      include: {
+        vendor: {
+          select: {
+            storeName: true, contactEmail: true, country: true, city: true,
+            stripeAccountId: true, verificationStatus: true,
+          },
+        },
+        orderItems: {
+          select: { id: true, quantity: true, totalAmount: true, orderId: true },
+          orderBy: { id: "desc" },
+          take: 10,
+        },
+      },
+    });
+    if (!product) throw new AppError("Product not found", 404);
+    const deliveryZones = await prisma.deliveryZone.findMany({
+      where: { vendorId: product.vendorId, isActive: true },
+      select: { name: true, country: true, baseFeeAmount: true, feePerKgAmount: true },
+    });
+    const globalZones = await prisma.deliveryZone.findMany({
+      where: { vendorId: null, isActive: true, country: product.vendor?.country ?? undefined },
+      select: { name: true, country: true, baseFeeAmount: true, feePerKgAmount: true },
+    });
+    return { ...product, deliveryZones: [...deliveryZones, ...globalZones], vendorName: product.vendor?.storeName ?? null };
   },
 
   async listOrders(query: Record<string, unknown>) {
