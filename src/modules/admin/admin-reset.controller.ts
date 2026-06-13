@@ -27,6 +27,7 @@ export async function adminResetUsers(_req: Request, res: Response): Promise<voi
       }
       await prisma.cartItem.deleteMany({ where: { product: { vendorId: v.id } } });
       await prisma.product.deleteMany({ where: { vendorId: v.id } });
+      await prisma.promoCode.deleteMany({ where: { vendorId: v.id } });
       await prisma.payoutRequest.deleteMany({ where: { vendorId: v.id } });
       await prisma.payoutMethod.deleteMany({ where: { vendorId: v.id } });
       await prisma.vendorBankAccount.deleteMany({ where: { vendorId: v.id } });
