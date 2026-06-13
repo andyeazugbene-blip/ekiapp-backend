@@ -16,7 +16,7 @@ export async function adminResetUsers(_req: Request, res: Response): Promise<voi
       // Delete orders for this vendor
       const orderIds = (await prisma.order.findMany({ where: { vendorId: v.id }, select: { id: true } })).map(o => o.id);
       if (orderIds.length > 0) {
-        await prisma.payment.deleteMany({ where: { orderId: { in: orderIds } } });
+        await prisma.walletTransaction.deleteMany({ where: { payment: { orderId: { in: orderIds } } } }); await prisma.payment.deleteMany({ where: { orderId: { in: orderIds } } });
         await prisma.orderItem.deleteMany({ where: { orderId: { in: orderIds } } });
         await prisma.order.deleteMany({ where: { id: { in: orderIds } } });
       }
@@ -26,7 +26,7 @@ export async function adminResetUsers(_req: Request, res: Response): Promise<voi
     // Delete buyer orders
     const buyerOrderIds = (await prisma.order.findMany({ where: { buyerId: u.id }, select: { id: true } })).map(o => o.id);
     if (buyerOrderIds.length > 0) {
-      await prisma.payment.deleteMany({ where: { orderId: { in: buyerOrderIds } } });
+      await prisma.walletTransaction.deleteMany({ where: { payment: { orderId: { in: buyerOrderIds } } } }); await prisma.payment.deleteMany({ where: { orderId: { in: buyerOrderIds } } });
       await prisma.orderItem.deleteMany({ where: { orderId: { in: buyerOrderIds } } });
       await prisma.order.deleteMany({ where: { id: { in: buyerOrderIds } } });
     }
