@@ -43,6 +43,7 @@ import {
   adminReviewDocument,
 } from "../verification/verification.controller";
 import { asyncHandler } from "../../shared/utils/async-handler";
+import { AppError } from "../../shared/errors/app-error";
 import {
   getAdminAnalytics,
   getAdminDashboard,
