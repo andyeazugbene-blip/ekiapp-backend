@@ -210,13 +210,13 @@ export const payoutsService = {
    * Uses conditional updateMany on wallet to prevent negative balance.
    * Idempotent: if already PAID, returns 409.
    */
-  async adminMarkPaid(adminId: string, payoutRequestId: string): Promise<PayoutRequest> {
+  async adminMarkPaid(adminId: string, payoutRequestId: string, transferProof?: string): Promise<PayoutRequest> {
     try {
       const payout = await prisma.$transaction(async (tx) => {
         // Conditional status transition: APPROVED → PAID
         const transitionResult = await tx.payoutRequest.updateMany({
           where: { id: payoutRequestId, status: PayoutRequestStatus.APPROVED },
-          data: { status: PayoutRequestStatus.PAID, paidById: adminId, paidAt: new Date() },
+          data: { status: PayoutRequestStatus.PAID, paidById: adminId, paidAt: new Date(), notes: transferProof ? (`Transfer proof: ${transferProof}`) : undefined },
         });
 
         if (transitionResult.count === 0) {

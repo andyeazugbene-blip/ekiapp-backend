@@ -71,9 +71,12 @@ export async function adminMarkPayoutRequestPaid(
   request: Request,
   response: Response,
 ): Promise<void> {
+  const body = request.body || {};
+  const transferProof = typeof body.transferProof === "string" ? body.transferProof.trim() : undefined;
   const payoutRequest = await payoutsService.adminMarkPaid(
     requireUserId(request),
     requireIdParam(request),
+    transferProof,
   );
   response.status(200).json({ payoutRequest });
 }
