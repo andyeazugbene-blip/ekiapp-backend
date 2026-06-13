@@ -66,6 +66,7 @@ export async function sendExpoPush(messages: ExpoPushMessage[]): Promise<void> {
 /**
  * Send a push notification to all devices of a user.
  * Loads tokens from DB, sends via Expo, never throws.
+ * channelId maps to Android notification channels (default, orders, payouts, messages).
  */
 export async function sendPushToUser(
   userId: string,
@@ -79,12 +80,21 @@ export async function sendPushToUser(
 
     if (tokens.length === 0) return;
 
+    // Map notification type to Android channel
+    const rawType = notification.data?.type;
+    const channelId =
+      typeof rawType === "string" && rawType.includes("payout") ? "payouts"
+      : typeof rawType === "string" && rawType.includes("message") ? "messages"
+      : typeof rawType === "string" && (rawType.includes("order") || rawType.includes("new_order")) ? "orders"
+      : "default";
+
     const messages: ExpoPushMessage[] = tokens.map((t) => ({
       to: t.token,
       title: notification.title,
       body: notification.body,
       data: notification.data,
       sound: "default",
+      channelId,
     }));
 
     await sendExpoPush(messages);
