@@ -77,3 +77,10 @@ export async function adminMarkPayoutRequestPaid(
   );
   response.status(200).json({ payoutRequest });
 }
+export async function adminGetPayoutRequest(
+  request: Request,
+  response: Response,
+): Promise<void> {
+  const payoutRequest = await payoutsService.adminGet(requireIdParam(request));
+  response.status(200).json({ payoutRequest });
+}

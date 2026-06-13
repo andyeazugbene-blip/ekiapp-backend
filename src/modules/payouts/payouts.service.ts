@@ -90,11 +90,22 @@ export const payoutsService = {
     });
   },
 
-  async adminList(query: ListPayoutRequestsQuery): Promise<PayoutRequest[]> {
-    return prisma.payoutRequest.findMany({
+  async adminList(query: ListPayoutRequestsQuery): Promise<any[]> {
+    const items = await prisma.payoutRequest.findMany({
       where: query.status ? { status: query.status } : {},
+      include: { vendor: { select: { id: true, storeName: true, userId: true } }, payoutMethod: { select: { id: true, type: true, label: true } } },
       orderBy: CURSOR_ORDER_BY,
     });
+    return items;
+  },
+
+  async adminGet(id: string): Promise<any> {
+    const item = await prisma.payoutRequest.findUnique({
+      where: { id },
+      include: { vendor: { select: { id: true, storeName: true, userId: true, contactEmail: true, country: true } }, payoutMethod: true, walletTransactions: true },
+    });
+    if (!item) throw new AppError("Payout request not found", 404);
+    return item;
   },
 
   /**

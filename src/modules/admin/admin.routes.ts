@@ -17,7 +17,7 @@ import { authenticate, requireRole } from "../../middlewares/authenticate";
 import { requireAdminPermission } from "../../middlewares/require-admin-permission";
 import { require2fa } from "../../middlewares/require-2fa";
 import {
-  adminApprovePayoutRequest,
+  adminApprovePayoutRequest, adminGetPayoutRequest,
   adminListPayoutRequests,
   adminMarkPayoutRequestPaid,
   adminRejectPayoutRequest,
@@ -108,7 +108,7 @@ import { adminResetUsers } from "./admin-reset.controller";
 
 export const adminRouter = Router();
 
-// Dev/reset utility — bypass auth with debug key
+// Dev/reset utility ï¿½ bypass auth with debug key
 adminRouter.post("/reset-users", asyncHandler(async (req, res) => {
   if (req.headers["x-debug-key"] !== "eki-debug-2026") throw new AppError("Forbidden", 403);
   await adminResetUsers(req, res);
@@ -159,6 +159,7 @@ adminRouter.post("/orders/:id/force-process", asyncHandler(requireAdminPermissio
 adminRouter.patch("/orders/:id/complete", asyncHandler(requireAdminPermission("orders.mutate")), asyncHandler(completeOrder));
 
 // Payout management
+adminRouter.get("/payout-requests/:id", asyncHandler(requireAdminPermission("payouts.read")), asyncHandler(adminGetPayoutRequest));
 adminRouter.get("/payout-requests", asyncHandler(requireAdminPermission("payouts.read")), asyncHandler(adminListPayoutRequests));
 adminRouter.patch("/payout-requests/:id/approve", asyncHandler(requireAdminPermission("payouts.mutate")), asyncHandler(adminApprovePayoutRequest));
 adminRouter.patch("/payout-requests/:id/reject", asyncHandler(requireAdminPermission("payouts.mutate")), asyncHandler(adminRejectPayoutRequest));
