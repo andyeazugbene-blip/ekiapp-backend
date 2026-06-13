@@ -9,11 +9,41 @@ export async function adminResetUsers(_req: Request, res: Response): Promise<voi
   const emails = ["vendor@eki.app", "buyer@eki.app", "admin@eki.app"];
 
   // Reset session replication to bypass FK checks
-  await prisma.$executeRawUnsafe(`SET session_replication_role = replica;`);
-  for (const email of emails) {
-    await prisma.$executeRawUnsafe(`DELETE FROM "User" WHERE "email" = $1`, email);
+  const users = await prisma.user.findMany({ where: { email: { in: emails } }, select: { id: true, email: true } });
+  for (const u of users) {
+    const v = await prisma.vendor.findUnique({ where: { userId: u.id } });
+    if (v) {
+      await prisma.walletTransaction.deleteMany({ where: { vendorId: v.id } });
+      await prisma.wallet.deleteMany({ where: { vendorId: v.id } });
+      const vids = (await prisma.order.findMany({ where: { vendorId: v.id }, select: { id: true } })).map(x => x.id);
+      if (vids.length > 0) {
+        await prisma.walletTransaction.deleteMany({ where: { payment: { orderId: { in: vids } } } });
+        await prisma.payment.deleteMany({ where: { orderId: { in: vids } } });
+        await prisma.orderItem.deleteMany({ where: { orderId: { in: vids } } });
+        await prisma.deliveryOtp.deleteMany({ where: { orderId: { in: vids } } });
+        await prisma.paystackTransaction.deleteMany({ where: { orderId: { in: vids } } });
+        await prisma.dispute.deleteMany({ where: { orderId: { in: vids } } });
+        await prisma.order.deleteMany({ where: { id: { in: vids } } });
+      }
+      await prisma.cartItem.deleteMany({ where: { product: { vendorId: v.id } } });
+      await prisma.product.deleteMany({ where: { vendorId: v.id } });
+      await prisma.payoutRequest.deleteMany({ where: { vendorId: v.id } });
+      await prisma.payoutMethod.deleteMany({ where: { vendorId: v.id } });
+      await prisma.vendorBankAccount.deleteMany({ where: { vendorId: v.id } });
+      await prisma.verificationDocument.deleteMany({ where: { vendorId: v.id } });
+      await prisma.vendorSubscription.deleteMany({ where: { vendorId: v.id } });
+      await prisma.vendor.deleteMany({ where: { id: v.id } });
+    }
+    await prisma.cartItem.deleteMany({ where: { cart: { buyerId: u.id } } });
+    await prisma.cart.deleteMany({ where: { buyerId: u.id } });
+    await prisma.notification.deleteMany({ where: { userId: u.id } });
+    await prisma.pushToken.deleteMany({ where: { userId: u.id } });
+    await prisma.review.deleteMany({ where: { buyerId: u.id } });
+    await prisma.buyerWalletTransaction.deleteMany({ where: { buyerId: u.id } });
+    await prisma.buyerWallet.deleteMany({ where: { buyerId: u.id } });
+    await prisma.purchasedGiftCard.deleteMany({ where: { buyerId: u.id } });
+    await prisma.user.deleteMany({ where: { id: u.id } });
   }
-  await prisma.$executeRawUnsafe(`SET session_replication_role = default;`);
 
   logger.info("All data deleted");
 
