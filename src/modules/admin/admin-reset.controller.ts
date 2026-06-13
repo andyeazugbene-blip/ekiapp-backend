@@ -32,6 +32,11 @@ export async function adminResetUsers(_req: Request, res: Response): Promise<voi
       ]) { await prisma.$executeRawUnsafe(sql, v.id); }
     }
     for (const sql of [
+      `DELETE FROM "OrderItem" WHERE "orderId" IN (SELECT id FROM "Order" WHERE "buyerId" = $1)`,
+      `DELETE FROM "DeliveryOtp" WHERE "orderId" IN (SELECT id FROM "Order" WHERE "buyerId" = $1)`,
+      `DELETE FROM "PaystackTransaction" WHERE "orderId" IN (SELECT id FROM "Order" WHERE "buyerId" = $1)`,
+      `DELETE FROM "Dispute" WHERE "orderId" IN (SELECT id FROM "Order" WHERE "buyerId" = $1)`,
+      `DELETE FROM "Payment" WHERE "orderId" IN (SELECT id FROM "Order" WHERE "buyerId" = $1)`,
       `DELETE FROM "Order" WHERE "buyerId" = $1`,
       `DELETE FROM "Checkout" WHERE "buyerId" = $1`,
       `DELETE FROM "CartItem" WHERE "cartId" IN (SELECT id FROM "Cart" WHERE "buyerId" = $1)`,
