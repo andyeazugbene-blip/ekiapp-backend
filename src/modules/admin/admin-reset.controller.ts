@@ -42,6 +42,14 @@ export async function adminResetUsers(_req: Request, res: Response): Promise<voi
     await prisma.buyerWalletTransaction.deleteMany({ where: { buyerId: u.id } });
     await prisma.buyerWallet.deleteMany({ where: { buyerId: u.id } });
     await prisma.purchasedGiftCard.deleteMany({ where: { buyerId: u.id } });
+    const boids = (await prisma.order.findMany({ where: { buyerId: u.id }, select: { id: true } })).map(x => x.id);
+    if (boids.length > 0) {
+      await prisma.walletTransaction.deleteMany({ where: { payment: { orderId: { in: boids } } } });
+      await prisma.payment.deleteMany({ where: { orderId: { in: boids } } });
+      await prisma.orderItem.deleteMany({ where: { orderId: { in: boids } } });
+      await prisma.order.deleteMany({ where: { id: { in: boids } } });
+      await prisma.checkout.deleteMany({ where: { id: { in: (await prisma.checkout.findMany({ where: { buyerId: u.id }, select: { id: true } })).map(x => x.id) } } });
+    }
     await prisma.user.deleteMany({ where: { id: u.id } });
   }
 
