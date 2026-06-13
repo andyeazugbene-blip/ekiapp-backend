@@ -4,18 +4,20 @@ import { prisma } from "../../lib/prisma";
 import { logger } from "../../lib/logger";
 
 export async function adminResetUsers(_req: Request, res: Response): Promise<void> {
+  const start = Date.now();
   const hash = await bcrypt.hash("Abdou22314", 10);
   const emails = ["vendor@eki.app", "buyer@eki.app", "admin@eki.app"];
   const users = await prisma.user.findMany({ where: { email: { in: emails } }, select: { id: true, email: true } });
   for (const u of users) {
     const v = await prisma.vendor.findUnique({ where: { userId: u.id } });
     if (v) {
-      for (const sql of [
+      const sqls = [
         `DELETE FROM "DeliveryOtp" WHERE "orderId" IN (SELECT id FROM "Order" WHERE "vendorId" = $1)`,
         `DELETE FROM "PaystackTransaction" WHERE "orderId" IN (SELECT id FROM "Order" WHERE "vendorId" = $1)`,
         `DELETE FROM "Dispute" WHERE "orderId" IN (SELECT id FROM "Order" WHERE "vendorId" = $1)`,
         `DELETE FROM "Shipment" WHERE "vendorId" = $1`,
         `DELETE FROM "OrderItem" WHERE "vendorId" = $1`,
+        `DELETE FROM "WalletTransaction" WHERE "paymentId" IN (SELECT id FROM "Payment" WHERE "orderId" IN (SELECT id FROM "Order" WHERE "vendorId" = $1))`,
         `DELETE FROM "Payment" WHERE "orderId" IN (SELECT id FROM "Order" WHERE "vendorId" = $1)`,
         `DELETE FROM "Checkout" WHERE "id" IN (SELECT "checkoutId" FROM "Order" WHERE "vendorId" = $1)`,
         `DELETE FROM "Order" WHERE "vendorId" = $1`,
@@ -29,13 +31,15 @@ export async function adminResetUsers(_req: Request, res: Response): Promise<voi
         `DELETE FROM "VerificationDocument" WHERE "vendorId" = $1`,
         `DELETE FROM "VendorSubscription" WHERE "vendorId" = $1`,
         `DELETE FROM "Vendor" WHERE "id" = $1`,
-      ]) { await prisma.$executeRawUnsafe(sql, v.id); }
+      ];
+      for (const sql of sqls) { await prisma.$executeRawUnsafe(sql, v.id); }
     }
-    for (const sql of [
+    const sqls2 = [
       `DELETE FROM "OrderItem" WHERE "orderId" IN (SELECT id FROM "Order" WHERE "buyerId" = $1)`,
       `DELETE FROM "DeliveryOtp" WHERE "orderId" IN (SELECT id FROM "Order" WHERE "buyerId" = $1)`,
       `DELETE FROM "PaystackTransaction" WHERE "orderId" IN (SELECT id FROM "Order" WHERE "buyerId" = $1)`,
       `DELETE FROM "Dispute" WHERE "orderId" IN (SELECT id FROM "Order" WHERE "buyerId" = $1)`,
+      `DELETE FROM "WalletTransaction" WHERE "paymentId" IN (SELECT id FROM "Payment" WHERE "orderId" IN (SELECT id FROM "Order" WHERE "buyerId" = $1))`,
       `DELETE FROM "Payment" WHERE "orderId" IN (SELECT id FROM "Order" WHERE "buyerId" = $1)`,
       `DELETE FROM "Order" WHERE "buyerId" = $1`,
       `DELETE FROM "Checkout" WHERE "buyerId" = $1`,
@@ -48,14 +52,15 @@ export async function adminResetUsers(_req: Request, res: Response): Promise<voi
       `DELETE FROM "BuyerWallet" WHERE "buyerId" = $1`,
       `DELETE FROM "Conversation" WHERE "participantA" = $1 OR "participantB" = $1`,
       `DELETE FROM "User" WHERE "id" = $1`,
-    ]) { await prisma.$executeRawUnsafe(sql, u.id); }
+    ];
+    for (const sql of sqls2) { await prisma.$executeRawUnsafe(sql, u.id); }
   }
   const vu = await prisma.user.create({ data: { email: "vendor@eki.app", name: "Queen African Foods", password: hash, phone: "+447700900111", country: "United Kingdom", role: "VENDOR", emailVerifiedAt: new Date(), referralCode: "QUEENAFRO10", trustScore: 85 } });
   const v = await prisma.vendor.create({ data: { userId: vu.id, storeName: "Queen African Foods", storeSlug: "queen-african-foods", description: "Premium African foodstuff.", contactEmail: "vendor@eki.app", contactPhone: "+447700900111", country: "United Kingdom", city: "London", businessType: "registered", sellerRegion: "africa", currency: "EUR", verificationStatus: "VERIFIED" } });
   await prisma.wallet.create({ data: { vendorId: v.id, currency: "EUR", pendingBalance: 0, availableBalance: 0 } });
   await prisma.user.create({ data: { email: "buyer@eki.app", name: "Amara Buyer", password: hash, phone: "+447700900222", country: "United Kingdom", role: "BUYER", emailVerifiedAt: new Date(), referralCode: "BUYERAMARA10", trustScore: 50 } });
   await prisma.user.create({ data: { email: "admin@eki.app", name: "Admin", password: hash, role: "ADMIN", emailVerifiedAt: new Date() } });
-  logger.info("Accounts reset");
+  logger.info("Accounts reset in " + (Date.now()-start) + "ms");
   res.json({ message: "Accounts reset", accounts: [
     { email: "vendor@eki.app", password: "Abdou22314", role: "VENDOR", note: "Dual-role" },
     { email: "buyer@eki.app", password: "Abdou22314", role: "BUYER" },
