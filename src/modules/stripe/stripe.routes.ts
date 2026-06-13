@@ -22,6 +22,8 @@ stripeRouter.post("/webhook-test", asyncHandler(async (req, res) => {
   if (!orderId) throw new AppError("orderId required", 400);
   const order = await prisma.order.findUnique({ where: { id: orderId }, include: { payment: true, items: { select: { vendorId: true } } } });
   if (!order || !order.payment) throw new AppError("Order or payment not found", 404);
+  await prisma.payment.update({ where: { id: order.payment.id }, data: { status: "SUCCEEDED", processedAt: new Date() } });
+  await prisma.order.update({ where: { id: orderId }, data: { status: "PAID" } });
   const vendorId = order.vendorId ?? order.items[0]?.vendorId;
   if (!vendorId) throw new AppError("No vendor", 400);
   let wallet = await prisma.wallet.findUnique({ where: { vendorId } });
@@ -30,5 +32,6 @@ stripeRouter.post("/webhook-test", asyncHandler(async (req, res) => {
   await prisma.wallet.update({ where: { id: wallet.id }, data: { pendingBalance: { increment: order.payment.vendorEarningsAmount } } });
   const released = await releaseVendorEarnings(orderId);
   logger.info("Test webhook: wallet credited", { orderId, vendorId, amount: order.payment.vendorEarningsAmount });
-  res.json({ success: true, amount: order.payment.vendorEarningsAmount, released: released.released, availableBalance: wallet.availableBalance + order.payment.vendorEarningsAmount });
+  const w2 = await prisma.wallet.findUnique({ where: { vendorId }, select: { pendingBalance: true, availableBalance: true } });
+  res.json({ success: true, amount: order.payment.vendorEarningsAmount, released: released.released, pendingBalance: w2?.pendingBalance, availableBalance: w2?.availableBalance });
 }));
