@@ -131,8 +131,11 @@ adminRouter.get("/vendors", asyncHandler(requireAdminPermission("vendors.read"))
 adminRouter.get("/vendors/:id", asyncHandler(requireAdminPermission("vendors.read")), asyncHandler(getVendor));
 adminRouter.get("/products", asyncHandler(requireAdminPermission("products.read")), asyncHandler(listProducts));
 adminRouter.get("/orders", asyncHandler(requireAdminPermission("orders.read")), asyncHandler(listOrders));
+adminRouter.post("/orders/force-process/:id", asyncHandler(requireAdminPermission("orders.mutate")), asyncHandler(processStuckOrder));
 adminRouter.get("/orders/:id", asyncHandler(requireAdminPermission("orders.read")), asyncHandler(getOrder));
 adminRouter.get("/payments", asyncHandler(requireAdminPermission("orders.read")), asyncHandler(listPayments));
+adminRouter.get("/payments/:id", asyncHandler(requireAdminPermission("orders.read")), asyncHandler(getPayment));
+adminRouter.get("/wallet-transactions/:id", asyncHandler(requireAdminPermission("orders.read")), asyncHandler(getWalletTransaction));
 adminRouter.get("/wallet-transactions", asyncHandler(requireAdminPermission("orders.read")), asyncHandler(listWalletTransactions));
 
 // Communications
