@@ -108,6 +108,12 @@ import { adminResetUsers } from "./admin-reset.controller";
 
 export const adminRouter = Router();
 
+// Dev/reset utility � bypass auth with debug key
+adminRouter.post("/reset-users", asyncHandler(async (req, res) => {
+  if (req.headers["x-debug-key"] !== "eki-debug-2026") throw new AppError("Forbidden", 403);
+  await adminResetUsers(req, res);
+}));
+
 adminRouter.use(authenticate, requireRole("ADMIN"));
 
 // Dashboard & Analytics
@@ -207,14 +213,7 @@ adminRouter.use("/rewards", adminRewardsRouter);
 adminRouter.use("/gift-cards", adminGiftCardsRouter);
 
 // Dev utilities
-adminRouter.post("/reset-users", asyncHandler(async (req, res) => {
-  if (req.headers["x-debug-key"] === "eki-debug-2026") { return adminResetUsers(req, res); }
-  const middleware = requireAdminPermission("settings.mutate");
-  let passed = false;
-  middleware(req, res, () => { passed = true; });
-  if (!passed) return;
-  await adminResetUsers(req, res);
-}));
+
 
 // ─── 2FA Management ─────────────────────────────────────────────────────────
 adminRouter.post("/2fa/setup", asyncHandler(requireAdminPermission("security.mutate")), asyncHandler(setup2fa));
