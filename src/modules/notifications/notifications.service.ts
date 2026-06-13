@@ -2,6 +2,7 @@ import type { Notification, NotificationType, Prisma } from "@prisma/client";
 
 import { logger } from "../../lib/logger";
 import { prisma } from "../../lib/prisma";
+import { sendPushToUser } from "../../lib/expo-push";
 import { CURSOR_ORDER_BY } from "../../shared/constants";
 import { notificationsQueue } from "../../queues";
 import { AppError } from "../../shared/errors/app-error";
@@ -45,11 +46,22 @@ export const notificationsService = {
   // is unavailable, fall back to a direct DB insert so the app keeps
   // working in local dev. Never throws — notifications must not break
   // the calling business operation.
+  //
+  // After the DB record is created, fire an Expo push notification if
+  // the user has registered push tokens. This ensures push notifications
+  // work even when no Redis/worker infrastructure is available.
   async enqueue(input: CreateNotificationInput): Promise<void> {
     if (notificationsQueue) {
       try {
         await notificationsQueue.add(NOTIFICATION_JOB, input, {
           jobId: undefined,
+        });
+        // Send Expo push in parallel — worker only creates DB records,
+        // it does not send pushes.
+        sendPushToUser(input.userId, {
+          title: input.title,
+          body: input.body ?? "",
+          data: input.data as Record<string, unknown> | undefined,
         });
         return;
       } catch (error) {
@@ -62,6 +74,12 @@ export const notificationsService = {
 
     try {
       await this.create(input);
+      // Fire Expo push after saving to DB
+      sendPushToUser(input.userId, {
+        title: input.title,
+        body: input.body ?? "",
+        data: input.data as Record<string, unknown> | undefined,
+      });
     } catch (error) {
       logger.error("Notification fallback insert failed", {
         type: input.type,
