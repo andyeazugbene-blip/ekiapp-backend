@@ -1,6 +1,6 @@
 {
   "name": "marketplace-payments-backend",
-  "version": "1.0.0",
+  "version": "1.3.0",
   "private": true,
   "description": "Backend payment foundation for a multi-vendor marketplace",
   "main": "dist/src/server.js",
