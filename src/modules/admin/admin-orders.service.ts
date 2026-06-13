@@ -83,7 +83,7 @@ export const adminOrdersService = {
         });
       }
       await tx.order.updateMany({
-        where: { id: orderId, status: "PENDING" },
+        where: { id: orderId, status: { in: ["PENDING", "PAID", "CONFIRMED", "PROCESSING"] } },
         data: { status: "PAID" },
       });
 

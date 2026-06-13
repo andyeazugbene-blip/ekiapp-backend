@@ -123,12 +123,27 @@ export const adminListingsService = {
       where: { id: orderId },
       include: {
         items: { include: { product: { select: { id: true, title: true, images: true, currency: true } } } },
-        payment: { select: { id: true, status: true, stripePaymentIntentId: true, provider: true, amount: true } },
+        payment: {
+          select: {
+            id: true, status: true, stripePaymentIntentId: true, provider: true,
+            amount: true, platformFeeAmount: true, vendorEarningsAmount: true,
+            currency: true, processedAt: true,
+            sellerPlanId: true, sellerPlanSlug: true, commissionBps: true, withdrawalFeeBps: true,
+          },
+        },
         buyer: { select: { id: true, name: true, email: true } },
+        deliveryZone: { select: { id: true, name: true, country: true } },
+        checkout: { select: { id: true, stripePaymentIntentId: true, totalAmount: true } },
       },
     });
     if (!order) throw new AppError("Order not found", 404);
-    return order;
+    // Enrich with vendor name
+    let vendorName: string | null = null;
+    if (order.vendorId) {
+      const vendor = await prisma.vendor.findUnique({ where: { id: order.vendorId }, select: { storeName: true } });
+      vendorName = vendor?.storeName ?? null;
+    }
+    return { ...order, vendorName };
   },
 
   async listVendors(query: Record<string, unknown>) {
@@ -204,31 +219,34 @@ export const adminListingsService = {
     const status = optionalEnum(query.status, PaymentStatus, "status");
     const pagination = parsePagination(query);
 
-    return paginate(
+    const { items, nextCursor } = await paginate(
       ({ take, cursor, skip }) =>
         prisma.payment.findMany({
           where: status ? { status } : {},
           include: {
             order: {
               select: {
-                id: true,
-                orderNumber: true,
-                status: true,
-                totalAmount: true,
-                currency: true,
-                vendorId: true,
-                buyerId: true,
+                id: true, orderNumber: true, status: true, totalAmount: true, currency: true,
+                vendorId: true, buyerId: true,
                 buyer: { select: { name: true, email: true } },
               },
             },
           },
           orderBy: CURSOR_ORDER_BY,
-          take,
-          cursor,
-          skip,
+          take, cursor, skip,
         }),
       pagination,
     );
+
+    // Enrich with vendor store names (Order has vendorId as plain field, no relation)
+    const vids = [...new Set(items.map((p: any) => p.order?.vendorId).filter(Boolean))] as string[];
+    if (vids.length > 0) {
+      const vendors = await prisma.vendor.findMany({ where: { id: { in: vids } }, select: { id: true, storeName: true } });
+      const vm = new Map(vendors.map((v) => [v.id, v.storeName]));
+      for (const p of items as any[]) { if (p.order?.vendorId) p.vendorName = vm.get(p.order.vendorId) ?? null; }
+    }
+
+    return { items, nextCursor };
   },
 
   async listWalletTransactions(query: Record<string, unknown>) {
