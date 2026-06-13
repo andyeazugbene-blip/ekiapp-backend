@@ -20,7 +20,7 @@ export async function adminResetUsers(_req: Request, res: Response): Promise<voi
         await prisma.orderItem.deleteMany({ where: { orderId: { in: orderIds } } });
         await prisma.order.deleteMany({ where: { id: { in: orderIds } } });
       }
-      await prisma.product.deleteMany({ where: { vendorId: v.id } });
+      await prisma.cartItem.deleteMany({ where: { product: { vendorId: v.id } } }); await prisma.product.deleteMany({ where: { vendorId: v.id } });
       await prisma.vendor.delete({ where: { id: v.id } });
     }
     // Delete buyer orders
