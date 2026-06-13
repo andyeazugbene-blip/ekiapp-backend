@@ -240,15 +240,15 @@ export const ordersService = {
 
     // When vendor marks order DELIVERED, release pending earnings to available balance
     if (newStatus === "DELIVERED") {
-      releaseVendorEarnings(orderId).then((result) => {
+      try {
+        const result = await releaseVendorEarnings(orderId);
         logger.info("Vendor earnings released on delivery", { orderId, vendorId: vendor.id, amount: result.amount });
-        // Notify vendor that earnings are available
         sendEarningsReleasedNotification(vendor.id, orderId, result.amount, order.currency).catch((e) => {
           logger.error("Failed to send earnings released notification", { orderId, error: String(e) });
         });
-      }).catch((err) => {
+      } catch (err) {
         logger.error("Failed to release vendor earnings on delivery", { orderId, error: String(err) });
-      });
+      }
     }
 
     return updated;
@@ -281,17 +281,18 @@ export const ordersService = {
       include: orderInclude,
     });
 
-    // Release pending earnings to available balance
-    releaseVendorEarnings(orderId).then((result) => {
+    // Release pending earnings to available balance (AWAITED — not fire-and-forget)
+    try {
+      const result = await releaseVendorEarnings(orderId);
       if (result.released && order.vendorId) {
         logger.info("Vendor earnings released on buyer completion", { orderId, vendorId: order.vendorId, amount: result.amount });
         sendEarningsReleasedNotification(order.vendorId, orderId, result.amount, order.currency).catch((e) => {
           logger.error("Failed to send earnings released notification", { orderId, error: String(e) });
         });
       }
-    }).catch((err) => {
+    } catch (err) {
       logger.error("Failed to release vendor earnings on buyer completion", { orderId, error: String(err) });
-    });
+    }
 
     return updated;
   },
