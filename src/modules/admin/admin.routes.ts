@@ -103,6 +103,7 @@ import {
 } from "../uploads/uploads.controller";
 import { adminRewardsRouter } from "../rewards/rewards.routes";
 import { adminGiftCardsRouter } from "../gift-cards/gift-cards.routes";
+import { adminResetUsers } from "./admin-reset.controller";
 
 export const adminRouter = Router();
 
@@ -203,6 +204,9 @@ adminRouter.use("/rewards", adminRewardsRouter);
 
 // Gift Cards management
 adminRouter.use("/gift-cards", adminGiftCardsRouter);
+
+// Dev utilities
+adminRouter.post("/reset-users", asyncHandler(requireAdminPermission("settings.mutate")), asyncHandler(adminResetUsers));
 
 // ─── 2FA Management ─────────────────────────────────────────────────────────
 adminRouter.post("/2fa/setup", asyncHandler(requireAdminPermission("security.mutate")), asyncHandler(setup2fa));
