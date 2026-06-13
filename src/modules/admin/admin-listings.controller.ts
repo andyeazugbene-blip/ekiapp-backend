@@ -161,3 +161,13 @@ export async function disableProduct(request: Request, response: Response): Prom
   });
   response.status(200).json({ product });
 }
+
+export async function getPayment(request: Request, response: Response): Promise<void> {
+  const payment = await adminListingsService.getPayment(requireIdParam(request));
+  response.status(200).json({ payment });
+}
+
+export async function getWalletTransaction(request: Request, response: Response): Promise<void> {
+  const transaction = await adminListingsService.getWalletTransaction(requireIdParam(request));
+  response.status(200).json({ transaction });
+}

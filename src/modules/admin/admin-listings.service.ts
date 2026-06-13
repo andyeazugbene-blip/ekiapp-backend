@@ -38,10 +38,10 @@ function optionalEnum<T extends string>(
   field: string,
 ): T | undefined {
   if (value === undefined) return undefined;
-  if (typeof value !== "string" || !(value in allowed)) {
-    throw new AppError(`Invalid ${field}`, 400);
-  }
-  return allowed[value as keyof typeof allowed];
+  if (typeof value !== "string") throw new AppError(`Invalid ${field}`, 400);
+  const upper = value.toUpperCase();
+  if (upper in allowed) return allowed[upper as keyof typeof allowed];
+  throw new AppError(`Invalid ${field}`, 400);
 }
 
 async function paginate<TItem extends { id: string }>(
@@ -315,6 +315,43 @@ export const adminListingsService = {
     });
   },
 
+
+  async getPayment(paymentId: string) {
+    const payment = await prisma.payment.findUnique({
+      where: { id: paymentId },
+      include: {
+        order: {
+          select: {
+            id: true, orderNumber: true, status: true, totalAmount: true, currency: true,
+            vendorId: true, buyerId: true, deliveryAddress: true, createdAt: true,
+            deliveryZone: { select: { name: true, country: true } },
+            buyer: { select: { id: true, name: true, email: true } },
+          },
+        },
+      },
+    });
+    if (!payment) throw new AppError("Payment not found", 404);
+    let vendorName: string | null = null;
+    if (payment.order?.vendorId) {
+      const v = await prisma.vendor.findUnique({ where: { id: payment.order.vendorId }, select: { storeName: true } });
+      vendorName = v?.storeName ?? null;
+    }
+    return { ...payment, vendorName };
+  },
+
+  async getWalletTransaction(txId: string) {
+    const tx = await prisma.walletTransaction.findUnique({
+      where: { id: txId },
+      include: {
+        vendor: { select: { id: true, storeName: true, contactEmail: true, country: true } },
+        order: { select: { id: true, orderNumber: true, status: true, totalAmount: true, currency: true, createdAt: true } },
+        payment: { select: { id: true, status: true, stripePaymentIntentId: true, provider: true, amount: true, platformFeeAmount: true, vendorEarningsAmount: true } },
+        payoutRequest: { select: { id: true, status: true, amount: true, netAmount: true, createdAt: true } },
+      },
+    });
+    if (!tx) throw new AppError("Wallet transaction not found", 404);
+    return tx;
+  },
   async suspendUser(userId: string, reason?: string) {
     const user = await prisma.user.findUnique({ where: { id: userId } });
     if (!user) throw new AppError("User not found", 404);

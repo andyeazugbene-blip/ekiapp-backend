@@ -71,7 +71,7 @@ import {
   suspendUser,
   unsuspendUser,
   listVendors,
-  listWalletTransactions,
+  listWalletTransactions, getPayment, getWalletTransaction,
   rejectVendor,
 } from "./admin-listings.controller";
 import { sendAdminBroadcast } from "./admin-communications.controller";
