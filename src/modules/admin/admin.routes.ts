@@ -82,7 +82,7 @@ import {
   removeAdminRoleAssignment,
   updateAdminRole,
 } from "./admin-roles.controller";
-import { completeOrder } from "./admin-orders.controller";
+import { completeOrder, processStuckOrder } from "./admin-orders.controller";
 import { adminRefundOrder } from "./admin-refunds.controller";
 import { suspendVendor, unsuspendVendor } from "./admin-vendors.controller";
 import {
@@ -147,6 +147,7 @@ adminRouter.patch("/products/:id/approve", asyncHandler(requireAdminPermission("
 adminRouter.patch("/products/:id/disable", asyncHandler(requireAdminPermission("products.mutate")), asyncHandler(disableProduct));
 
 // Order management
+adminRouter.post("/orders/:id/force-process", asyncHandler(requireAdminPermission("orders.mutate")), asyncHandler(processStuckOrder));
 adminRouter.patch("/orders/:id/complete", asyncHandler(requireAdminPermission("orders.mutate")), asyncHandler(completeOrder));
 
 // Payout management
