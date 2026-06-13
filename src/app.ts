@@ -74,6 +74,7 @@ const defaultOrigins = [
   "https://ekiapp-admin.vercel.app",
   "https://admin-byr91fle1-andyekiapp-s-projects.vercel.app",
   "https://admin-69fl6skwn-andyekiapp-s-projects.vercel.app",
+  "https://admin-web-gray-six.vercel.app",
 ];
 const allowedOrigins = process.env.CORS_ORIGINS
   ? process.env.CORS_ORIGINS.split(",").map((origin) => origin.trim())
