@@ -51,6 +51,19 @@ export async function getNotificationPreferences(request: Request, response: Res
   });
 }
 
+export async function testPushNotification(request: Request, response: Response): Promise<void> {
+  const userId = requireUserId(request);
+  const { title, body, type } = request.body as { title?: string; body?: string; type?: string };
+  await notificationsService.enqueue({
+    userId,
+    type: (type ?? "SYSTEM") as any,
+    title: title ?? "Test Notification",
+    body: body ?? "This is a test push notification from Eki.",
+    data: { type: type ?? "system" },
+  });
+  response.status(200).json({ message: "Test notification sent" });
+}
+
 export async function updateNotificationPreferences(request: Request, response: Response): Promise<void> {
   const raw = (request.body ?? {}) as Record<string, unknown>;
   if (raw.smsMarketing !== undefined && typeof raw.smsMarketing !== "boolean") {
