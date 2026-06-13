@@ -9,6 +9,7 @@ import { resolveUniqueSlug } from "../../shared/utils/slug";
 import type {
   CreatePayoutMethodInput,
   CreateVendorInput,
+  UpdatePayoutMethodInput,
   UpdateVendorInput,
 } from "./vendors.types";
 
@@ -283,6 +284,89 @@ export const vendorsService = {
     return prisma.payoutMethod.findMany({
       where: { vendorId: vendor.id },
       orderBy: [{ isDefault: "desc" }, { createdAt: "asc" }],
+    });
+  },
+
+  async updatePayoutMethod(
+    userId: string,
+    methodId: string,
+    input: UpdatePayoutMethodInput,
+  ): Promise<PayoutMethod> {
+    const vendor = await prisma.vendor.findUnique({ where: { userId } });
+    if (!vendor) throw new AppError("Vendor profile not found", 404);
+
+    const method = await prisma.payoutMethod.findUnique({ where: { id: methodId } });
+    if (!method || method.vendorId !== vendor.id) {
+      throw new AppError("Payout method not found", 404);
+    }
+
+    return prisma.$transaction(async (tx) => {
+      if (input.isDefault) {
+        await tx.payoutMethod.updateMany({
+          where: { vendorId: vendor.id, isDefault: true, id: { not: methodId } },
+          data: { isDefault: false },
+        });
+      }
+
+      const data: Record<string, unknown> = {};
+      if (input.label !== undefined) data.label = input.label;
+      if (input.details !== undefined) data.details = input.details as Prisma.InputJsonValue;
+      if (input.isDefault !== undefined) data.isDefault = input.isDefault;
+
+      return tx.payoutMethod.update({ where: { id: methodId }, data });
+    });
+  },
+
+  async deletePayoutMethod(userId: string, methodId: string): Promise<void> {
+    const vendor = await prisma.vendor.findUnique({ where: { userId } });
+    if (!vendor) throw new AppError("Vendor profile not found", 404);
+
+    const method = await prisma.payoutMethod.findUnique({ where: { id: methodId } });
+    if (!method || method.vendorId !== vendor.id) {
+      throw new AppError("Payout method not found", 404);
+    }
+
+    // Can't delete the only default method without setting a new one
+    const count = await prisma.payoutMethod.count({ where: { vendorId: vendor.id } });
+    if (count <= 1 && method.isDefault) {
+      throw new AppError("Cannot delete your only payout method. Add another first.", 400);
+    }
+
+    await prisma.payoutMethod.delete({ where: { id: methodId } });
+
+    // If we deleted the default, make the oldest remaining the default
+    if (method.isDefault) {
+      const remaining = await prisma.payoutMethod.findFirst({
+        where: { vendorId: vendor.id },
+        orderBy: { createdAt: "asc" },
+      });
+      if (remaining) {
+        await prisma.payoutMethod.update({
+          where: { id: remaining.id },
+          data: { isDefault: true },
+        });
+      }
+    }
+  },
+
+  async setDefaultPayoutMethod(userId: string, methodId: string): Promise<PayoutMethod> {
+    const vendor = await prisma.vendor.findUnique({ where: { userId } });
+    if (!vendor) throw new AppError("Vendor profile not found", 404);
+
+    const method = await prisma.payoutMethod.findUnique({ where: { id: methodId } });
+    if (!method || method.vendorId !== vendor.id) {
+      throw new AppError("Payout method not found", 404);
+    }
+
+    return prisma.$transaction(async (tx) => {
+      await tx.payoutMethod.updateMany({
+        where: { vendorId: vendor.id, isDefault: true },
+        data: { isDefault: false },
+      });
+      return tx.payoutMethod.update({
+        where: { id: methodId },
+        data: { isDefault: true },
+      });
     });
   },
 };

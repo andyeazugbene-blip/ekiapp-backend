@@ -5,6 +5,7 @@ import { normalizePhoneNumber } from "../../shared/utils/phone";
 import type {
   CreatePayoutMethodInput,
   CreateVendorInput,
+  UpdatePayoutMethodInput,
   UpdateVendorInput,
 } from "./vendors.types";
 
@@ -153,4 +154,32 @@ export function validateCreatePayoutMethodInput(input: unknown): CreatePayoutMet
     details: raw.details as Record<string, unknown>,
     isDefault: raw.isDefault === true,
   };
+}
+
+export function validateUpdatePayoutMethodInput(input: unknown): UpdatePayoutMethodInput {
+  if (!input || typeof input !== "object") {
+    throw new AppError("Invalid request body", 400);
+  }
+  const raw = input as Record<string, unknown>;
+
+  const update: UpdatePayoutMethodInput = {};
+
+  if (raw.label !== undefined) {
+    update.label = optionalString(raw.label, "label");
+  }
+  if (raw.details !== undefined) {
+    if (typeof raw.details !== "object" || Array.isArray(raw.details)) {
+      throw new AppError("Invalid payout method details", 400);
+    }
+    update.details = raw.details as Record<string, unknown>;
+  }
+  if (raw.isDefault !== undefined) {
+    update.isDefault = raw.isDefault === true;
+  }
+
+  if (Object.keys(update).length === 0) {
+    throw new AppError("No fields to update", 400);
+  }
+
+  return update;
 }

@@ -262,8 +262,8 @@ export const vendorAnalyticsService = {
     const totalDeliveryCost = orders.reduce((sum, order) => sum + order.deliveryFeeAmount, 0);
     const totalPlatformFees = orders.reduce((sum, order) => sum + order.platformFeeAmount, 0);
     const estimatedProfit = hasCompleteCostData
-      ? totalRevenue - totalProductCost - totalDeliveryCost - totalPlatformFees
-      : vendorEarnings - totalProductCost - totalDeliveryCost;
+      ? totalRevenue - totalProductCost - totalPlatformFees
+      : vendorEarnings - totalProductCost;
     const completedOrders = orders.filter((order) => COMPLETED_STATUSES.has(order.status)).length;
     const orderBuyerIds = new Map<string, { count: number; lastOrderAt: Date }>();
     const rangeBuyerIds = new Set(orders.map((order) => order.buyerId));

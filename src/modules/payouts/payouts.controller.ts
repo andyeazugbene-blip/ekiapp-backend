@@ -87,3 +87,11 @@ export async function adminGetPayoutRequest(
   const payoutRequest = await payoutsService.adminGet(requireIdParam(request));
   response.status(200).json({ payoutRequest });
 }
+
+export async function listOwnPayoutRequestsWithDetails(
+  request: Request,
+  response: Response,
+): Promise<void> {
+  const payoutRequests = await payoutsService.listOwnWithDetails(requireUserId(request));
+  response.status(200).json({ payoutRequests });
+}

@@ -993,8 +993,8 @@ export const publicStoresService = {
     const subtotalAmount = Math.max(0, originalSubtotalAmount - discountAmount);
     const commission = await resolveVendorCommission(vendor.id, subtotalAmount);
     const platformFeeAmount = calcPlatformFee(subtotalAmount, commission.platformFeeBps);
-    const vendorEarningsAmount = subtotalAmount - platformFeeAmount;
     const totalAmount = subtotalAmount + deliveryFeeAmount;
+    const vendorEarningsAmount = totalAmount - platformFeeAmount;
     if (totalAmount <= 0) {
       throw new AppError("The checkout total must be greater than zero", 400);
     }

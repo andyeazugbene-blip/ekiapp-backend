@@ -46,9 +46,10 @@ export function calculateDeliveryFee(input: {
 }
 
 /**
- * Vendor earnings = subtotal − platform fee. Delivery fee is excluded
- * from vendor earnings by design.
+ * Vendor earnings = total amount (subtotal + delivery fee) − platform fee.
+ * Delivery fee is included in vendor earnings so the vendor is compensated
+ * for shipping costs. The platform fee is still calculated on subtotal only.
  */
-export function calculateVendorEarnings(subtotalAmount: number, platformFeeAmount: number): number {
-  return subtotalAmount - platformFeeAmount;
+export function calculateVendorEarnings(totalAmount: number, platformFeeAmount: number): number {
+  return totalAmount - platformFeeAmount;
 }

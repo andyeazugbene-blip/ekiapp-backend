@@ -27,3 +27,9 @@ export interface CreatePayoutMethodInput {
   details: Record<string, unknown>;
   isDefault?: boolean;
 }
+
+export interface UpdatePayoutMethodInput {
+  label?: string;
+  details?: Record<string, unknown>;
+  isDefault?: boolean;
+}

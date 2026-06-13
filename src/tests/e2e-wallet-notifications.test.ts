@@ -112,8 +112,8 @@ describe("🧪 REAL E2E: Wallet & Notification Flow", () => {
     const subtotal = 2000;
     const deliveryFee = 500;
     const platformFee = 200;
-    const vendorEarnings = subtotal - platformFee;
     const total = subtotal + deliveryFee;
+    const vendorEarnings = total - platformFee;
 
     // Create checkout
     const checkout = await prisma.checkout.create({

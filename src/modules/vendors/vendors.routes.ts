@@ -19,6 +19,9 @@ import {
   listPublicVendors,
   listPayoutMethods,
   updateOwnVendor,
+  updatePayoutMethod,
+  deletePayoutMethod,
+  setDefaultPayoutMethod,
 } from "./vendors.controller";
 import {
   getVendorDashboard,
@@ -64,6 +67,9 @@ vendorsRouter.get("/me/buyers", requireRole("VENDOR", "ADMIN"), asyncHandler(lis
 vendorsRouter.get("/me/buyers/:id", requireRole("VENDOR", "ADMIN"), asyncHandler(getVendorBuyer));
 vendorsRouter.post("/me/payout-methods", requireRole("VENDOR", "ADMIN"), asyncHandler(createPayoutMethod));
 vendorsRouter.get("/me/payout-methods", requireRole("VENDOR", "ADMIN"), asyncHandler(listPayoutMethods));
+vendorsRouter.patch("/me/payout-methods/:id", requireRole("VENDOR", "ADMIN"), asyncHandler(updatePayoutMethod));
+vendorsRouter.delete("/me/payout-methods/:id", requireRole("VENDOR", "ADMIN"), asyncHandler(deletePayoutMethod));
+vendorsRouter.patch("/me/payout-methods/:id/default", requireRole("VENDOR", "ADMIN"), asyncHandler(setDefaultPayoutMethod));
 
 // Stripe Connect
 vendorsRouter.post("/me/stripe-connect/onboard", requireRole("VENDOR", "ADMIN"), asyncHandler(onboardStripeConnect));

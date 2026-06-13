@@ -8,6 +8,7 @@ import { buildVendorShareUrl, vendorsService } from "./vendors.service";
 import {
   validateCreatePayoutMethodInput,
   validateCreateVendorInput,
+  validateUpdatePayoutMethodInput,
   validateUpdateVendorInput,
 } from "./vendors.validation";
 
@@ -16,6 +17,12 @@ function requireUserId(request: Request): string {
     throw new AppError("Unauthorized", 401);
   }
   return request.user.id;
+}
+
+function requireIdParam(request: Request): string {
+  const id = request.params.id;
+  if (typeof id !== "string" || id.length === 0) throw new AppError("Invalid id", 400);
+  return id;
 }
 
 /**
@@ -82,4 +89,24 @@ export async function listPayoutMethods(request: Request, response: Response): P
   const userId = requireUserId(request);
   const payoutMethods = await vendorsService.listPayoutMethods(userId);
   response.status(200).json({ payoutMethods });
+}
+
+export async function updatePayoutMethod(request: Request, response: Response): Promise<void> {
+  const userId = requireUserId(request);
+  const methodId = requireIdParam(request);
+  const input = validateUpdatePayoutMethodInput(request.body);
+  const payoutMethod = await vendorsService.updatePayoutMethod(userId, methodId, input);
+  response.status(200).json({ payoutMethod });
+}
+
+export async function deletePayoutMethod(request: Request, response: Response): Promise<void> {
+  const userId = requireUserId(request);
+  await vendorsService.deletePayoutMethod(userId, requireIdParam(request));
+  response.status(200).json({ message: "Payout method deleted" });
+}
+
+export async function setDefaultPayoutMethod(request: Request, response: Response): Promise<void> {
+  const userId = requireUserId(request);
+  const payoutMethod = await vendorsService.setDefaultPayoutMethod(userId, requireIdParam(request));
+  response.status(200).json({ payoutMethod });
 }

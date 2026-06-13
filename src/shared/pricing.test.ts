@@ -86,15 +86,17 @@ describe("calculateDeliveryFee", () => {
 });
 
 describe("calculateVendorEarnings", () => {
-  it("equals subtotal minus platform fee", () => {
+  it("equals total amount minus platform fee", () => {
     expect(calculateVendorEarnings(10000, 1000)).toBe(9000);
   });
 
-  it("ignores delivery fee (caller must pass subtotal only)", () => {
+  it("includes delivery fee in earnings", () => {
     const subtotal = 10000;
+    const deliveryFee = 5000;
+    const total = subtotal + deliveryFee;
     const platformFee = calculatePlatformFee(subtotal, 1000);
-    const earnings = calculateVendorEarnings(subtotal, platformFee);
-    // Delivery fee not part of earnings — invariant for the marketplace.
-    expect(earnings + platformFee).toBe(subtotal);
+    const earnings = calculateVendorEarnings(total, platformFee);
+    // Vendor keeps the delivery fee (minus platform commission on subtotal).
+    expect(earnings + platformFee).toBe(total);
   });
 });

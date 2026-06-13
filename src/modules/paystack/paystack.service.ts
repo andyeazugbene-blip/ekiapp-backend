@@ -106,8 +106,8 @@ export const paystackService = {
     const deliveryFee = zone?.baseFeeAmount ?? 0;
     const commission = await resolveVendorCommission(vendorId, subtotal);
     const platformFee = calculatePlatformFee(subtotal, commission.platformFeeBps);
-    const vendorEarnings = subtotal - platformFee;
     const grandTotal = subtotal + deliveryFee;
+    const vendorEarnings = grandTotal - platformFee;
 
     // Generate unique reference
     const reference = `eki-escrow-${crypto.randomBytes(12).toString("hex")}`;

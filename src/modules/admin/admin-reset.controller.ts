@@ -44,19 +44,19 @@ export async function adminResetUsers(_req: Request, res: Response): Promise<voi
 
   // ─── Order 1 (PAID - USA) ───────────────────────────────────
   const co1 = await prisma.checkout.create({ data: { buyerId: bu.id, totalAmount: 7200, currency: "EUR", status: "SUCCEEDED", processedAt: new Date(), metadata: { stripeCurrency: "eur" } } });
-  const o1 = await prisma.order.create({ data: { checkoutId: co1.id, buyerId: bu.id, vendorId: v.id, orderNumber: "EKI-DEMO-001", status: "PAID", subtotalAmount: 5500, deliveryFeeAmount: 1200, platformFeeAmount: 550, vendorEarnings: 4950, totalAmount: 7200, currency: "EUR", deliveryZoneId: us.id, deliveryAddress: "123 Main St, New York, NY 10001" } });
+  const o1 = await prisma.order.create({ data: { checkoutId: co1.id, buyerId: bu.id, vendorId: v.id, orderNumber: "EKI-DEMO-001", status: "PAID", subtotalAmount: 5500, deliveryFeeAmount: 1200, platformFeeAmount: 550, vendorEarnings: 6650, totalAmount: 7200, currency: "EUR", deliveryZoneId: us.id, deliveryAddress: "123 Main St, New York, NY 10001" } });
   await prisma.orderItem.create({ data: { orderId: o1.id, productId: p1.id, vendorId: v.id, quantity: 1, unitAmount: 5500, totalAmount: 5500, currency: "EUR", productTitle: "Dried Fish Pack (500g)" } });
-  const pm1 = await prisma.payment.create({ data: { orderId: o1.id, amount: 7200, platformFeeAmount: 550, vendorEarningsAmount: 4950, currency: "EUR", status: "SUCCEEDED", provider: "stripe", stripePaymentIntentId: "pi_demo_001", processedAt: new Date() } });
-  await prisma.walletTransaction.create({ data: { walletId: w.id, vendorId: v.id, orderId: o1.id, paymentId: pm1.id, type: "PAYMENT_PENDING_CREDIT", amount: 4950, currency: "EUR", description: "Pending credit for order EKI-DEMO-001" } });
-  await prisma.wallet.update({ where: { id: w.id }, data: { pendingBalance: { increment: 4950 } } });
+  const pm1 = await prisma.payment.create({ data: { orderId: o1.id, amount: 7200, platformFeeAmount: 550, vendorEarningsAmount: 6650, currency: "EUR", status: "SUCCEEDED", provider: "stripe", stripePaymentIntentId: "pi_demo_001", processedAt: new Date() } });
+  await prisma.walletTransaction.create({ data: { walletId: w.id, vendorId: v.id, orderId: o1.id, paymentId: pm1.id, type: "PAYMENT_PENDING_CREDIT", amount: 6650, currency: "EUR", description: "Pending credit for order EKI-DEMO-001" } });
+  await prisma.wallet.update({ where: { id: w.id }, data: { pendingBalance: { increment: 6650 } } });
 
   // ─── Order 2 (DELIVERED - UK) ──────────────────────────────
   const co2 = await prisma.checkout.create({ data: { buyerId: bu.id, totalAmount: 1350, currency: "EUR", status: "SUCCEEDED", processedAt: new Date(), metadata: { stripeCurrency: "eur" } } });
-  const o2 = await prisma.order.create({ data: { checkoutId: co2.id, buyerId: bu.id, vendorId: v.id, orderNumber: "EKI-DEMO-002", status: "DELIVERED", subtotalAmount: 850, deliveryFeeAmount: 500, platformFeeAmount: 85, vendorEarnings: 765, totalAmount: 1350, currency: "EUR", deliveryZoneId: uk.id, deliveryAddress: "10 Downing St, London, SW1A 2AA", deliveredAt: new Date() } });
+  const o2 = await prisma.order.create({ data: { checkoutId: co2.id, buyerId: bu.id, vendorId: v.id, orderNumber: "EKI-DEMO-002", status: "DELIVERED", subtotalAmount: 850, deliveryFeeAmount: 500, platformFeeAmount: 85, vendorEarnings: 1265, totalAmount: 1350, currency: "EUR", deliveryZoneId: uk.id, deliveryAddress: "10 Downing St, London, SW1A 2AA", deliveredAt: new Date() } });
   await prisma.orderItem.create({ data: { orderId: o2.id, productId: p2.id, vendorId: v.id, quantity: 1, unitAmount: 850, totalAmount: 850, currency: "EUR", productTitle: "Egusi Ground (1kg)" } });
-  const pm2 = await prisma.payment.create({ data: { orderId: o2.id, amount: 1350, platformFeeAmount: 85, vendorEarningsAmount: 765, currency: "EUR", status: "SUCCEEDED", provider: "stripe", stripePaymentIntentId: "pi_demo_002", processedAt: new Date() } });
-  await prisma.walletTransaction.create({ data: { walletId: w.id, vendorId: v.id, orderId: o2.id, paymentId: pm2.id, type: "PAYMENT_PENDING_CREDIT", amount: 765, currency: "EUR", description: "Pending credit for order EKI-DEMO-002" } });
-  await prisma.wallet.update({ where: { id: w.id }, data: { pendingBalance: { increment: 765 } } });
+  const pm2 = await prisma.payment.create({ data: { orderId: o2.id, amount: 1350, platformFeeAmount: 85, vendorEarningsAmount: 1265, currency: "EUR", status: "SUCCEEDED", provider: "stripe", stripePaymentIntentId: "pi_demo_002", processedAt: new Date() } });
+  await prisma.walletTransaction.create({ data: { walletId: w.id, vendorId: v.id, orderId: o2.id, paymentId: pm2.id, type: "PAYMENT_PENDING_CREDIT", amount: 1265, currency: "EUR", description: "Pending credit for order EKI-DEMO-002" } });
+  await prisma.wallet.update({ where: { id: w.id }, data: { pendingBalance: { increment: 1265 } } });
 
   // ─── Conversation + Messages ────────────────────────────────
   const conv = await prisma.conversation.create({ data: { type: "BUYER_VENDOR", participantA: bu.id, participantB: vu.id, orderId: o1.id, lastMessageAt: new Date() } });

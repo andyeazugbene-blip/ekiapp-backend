@@ -150,14 +150,15 @@ class PaymentsService {
       const deliveryFee = effectiveZone.baseFeeAmount + Math.ceil(totalWeight / 1000) * effectiveZone.feePerKgAmount;
       const commission = await resolveVendorCommission(vendorId, subtotal);
       const platformFee = calcPlatformFee(subtotal, commission.platformFeeBps);
-      const vendorEarnings = subtotal - platformFee;
+      const totalAmount = subtotal + deliveryFee;
+      const vendorEarnings = totalAmount - platformFee;
 
       vendorGroups.push({
         vendorId,
         items,
         subtotalAmount: subtotal,
         deliveryFeeAmount: deliveryFee,
-        totalAmount: subtotal + deliveryFee,
+        totalAmount,
         platformFeeAmount: platformFee,
         vendorEarningsAmount: vendorEarnings,
         sellerPlanId: commission.sellerPlanId,
@@ -197,8 +198,8 @@ class PaymentsService {
       // Recalculate platform fee and earnings on discounted subtotal
       const commission = await resolveVendorCommission(targetGroup.vendorId, targetGroup.subtotalAmount);
       targetGroup.platformFeeAmount = calcPlatformFee(targetGroup.subtotalAmount, commission.platformFeeBps);
-      targetGroup.vendorEarningsAmount = targetGroup.subtotalAmount - targetGroup.platformFeeAmount;
       targetGroup.totalAmount = targetGroup.subtotalAmount + targetGroup.deliveryFeeAmount;
+      targetGroup.vendorEarningsAmount = targetGroup.totalAmount - targetGroup.platformFeeAmount;
       grandTotal = vendorGroups.reduce((sum, group) => sum + group.totalAmount, 0);
     }
 

@@ -180,10 +180,11 @@ export const adminListingsService = {
       else throw new AppError("Invalid isActive", 400);
     }
 
-    return paginate(
+    const { items, nextCursor } = await paginate(
       ({ take, cursor, skip }) =>
         prisma.product.findMany({
           where: isActive === undefined ? {} : { isActive },
+          include: { vendor: { select: { storeName: true } } },
           orderBy: CURSOR_ORDER_BY,
           take,
           cursor,
@@ -191,6 +192,9 @@ export const adminListingsService = {
         }),
       pagination,
     );
+    // Map vendor name to top level
+    const enriched = (items as any[]).map((p: any) => ({ ...p, vendorName: p.vendor?.storeName ?? null, vendor: undefined }));
+    return { items: enriched, nextCursor };
   },
 
   async listOrders(query: Record<string, unknown>) {

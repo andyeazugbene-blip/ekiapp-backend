@@ -6,6 +6,7 @@ import {
   type PayoutRequest,
 } from "@prisma/client";
 
+import { stripe } from "../../lib/stripe";
 import { prisma } from "../../lib/prisma";
 import { logger } from "../../lib/logger";
 import { CURSOR_ORDER_BY } from "../../shared/constants";
@@ -102,7 +103,11 @@ export const payoutsService = {
   async adminGet(id: string): Promise<any> {
     const item = await prisma.payoutRequest.findUnique({
       where: { id },
-      include: { vendor: { select: { id: true, storeName: true, userId: true, contactEmail: true, country: true } }, payoutMethod: true, walletTransactions: true },
+      include: {
+        vendor: { select: { id: true, storeName: true, userId: true, contactEmail: true, country: true, stripeAccountId: true } },
+        payoutMethod: true,
+        walletTransactions: true,
+      },
     });
     if (!item) throw new AppError("Payout request not found", 404);
     return item;
@@ -209,14 +214,25 @@ export const payoutsService = {
    * Mark payout as paid with atomic balance deduction.
    * Uses conditional updateMany on wallet to prevent negative balance.
    * Idempotent: if already PAID, returns 409.
+   *
+   * For Stripe Connect methods, auto-transfers the net amount to the vendor's
+   * Stripe account. For bank transfers, admin uploads a transfer proof URL.
    */
   async adminMarkPaid(adminId: string, payoutRequestId: string, transferProof?: string): Promise<PayoutRequest> {
     try {
       const payout = await prisma.$transaction(async (tx) => {
         // Conditional status transition: APPROVED → PAID
+        const notesParts: string[] = [];
+        if (transferProof) notesParts.push(`Transfer proof: ${transferProof}`);
+
         const transitionResult = await tx.payoutRequest.updateMany({
           where: { id: payoutRequestId, status: PayoutRequestStatus.APPROVED },
-          data: { status: PayoutRequestStatus.PAID, paidById: adminId, paidAt: new Date(), notes: transferProof ? (`Transfer proof: ${transferProof}`) : undefined },
+          data: {
+            status: PayoutRequestStatus.PAID,
+            paidById: adminId,
+            paidAt: new Date(),
+            notes: notesParts.length > 0 ? notesParts.join("; ") : undefined,
+          },
         });
 
         if (transitionResult.count === 0) {
@@ -257,26 +273,136 @@ export const payoutsService = {
           },
         });
 
-        return payoutRecord;
+        return { payoutRecord, wallet };
       });
 
-      const vendorUserId = await getVendorUserId(payout.vendorId);
+      // ─── Stripe Connect auto-transfer ───────────────────────────────────
+      const method = await prisma.payoutMethod.findUnique({
+        where: { id: payout.payoutRecord.payoutMethodId },
+      });
+
+      const methodType = method?.type ?? "OTHER";
+      const methodDetails = (method?.details ?? {}) as Record<string, unknown>;
+      const isStripe = methodType === "OTHER" && methodDetails.provider === "stripe";
+      const isPaypal = methodType === "OTHER" && methodDetails.provider === "paypal";
+
+      if (isStripe) {
+        const vendor = await prisma.vendor.findUnique({
+          where: { id: payout.payoutRecord.vendorId },
+          select: { stripeAccountId: true, stripePayoutsEnabled: true },
+        });
+
+        if (vendor?.stripeAccountId && vendor?.stripePayoutsEnabled) {
+          try {
+            const netAmount = payout.payoutRecord.netAmount ?? payout.payoutRecord.amount;
+            await stripe.transfers.create({
+              amount: netAmount,
+              currency: payout.payoutRecord.currency.toLowerCase(),
+              destination: vendor.stripeAccountId,
+              description: `Payout ${payout.payoutRecord.id}`,
+            });
+            logger.info("Stripe Connect auto-transfer completed", {
+              payoutId: payout.payoutRecord.id,
+              vendorId: payout.payoutRecord.vendorId,
+              amount: netAmount,
+              stripeAccountId: vendor.stripeAccountId,
+            });
+
+            await prisma.payoutRequest.update({
+              where: { id: payout.payoutRecord.id },
+              data: {
+                notes: `${payout.payoutRecord.notes ?? ""}${payout.payoutRecord.notes ? "; " : ""}Stripe Connect auto-transfer completed`,
+              },
+            });
+          } catch (stripeError) {
+            logger.error("Stripe Connect auto-transfer failed", {
+              payoutId: payout.payoutRecord.id,
+              error: stripeError instanceof Error ? stripeError.message : String(stripeError),
+            });
+          }
+        } else {
+          logger.warn("Stripe Connect: vendor not eligible for auto-transfer", {
+            vendorId: payout.payoutRecord.vendorId,
+            stripeAccountId: vendor?.stripeAccountId,
+            payoutsEnabled: vendor?.stripePayoutsEnabled,
+          });
+        }
+      } else if (isPaypal) {
+        logger.info("PayPal payout — manual processing required", {
+          payoutId: payout.payoutRecord.id,
+          vendorId: payout.payoutRecord.vendorId,
+        });
+      }
+
+      // ─── Notifications ──────────────────────────────────────────────────
+      const vendorUserId = await getVendorUserId(payout.payoutRecord.vendorId);
       if (vendorUserId) {
         await notificationsService.enqueue({
           userId: vendorUserId,
           type: NotificationType.PAYOUT_PAID,
           title: "Payout paid",
-          body: `Your payout of ${payout.netAmount ?? payout.amount} ${payout.currency} has been paid.`,
-          data: { payoutRequestId: payout.id },
+          body: `Your payout of ${payout.payoutRecord.netAmount ?? payout.payoutRecord.amount} ${payout.payoutRecord.currency} has been paid.`,
+          data: { payoutRequestId: payout.payoutRecord.id },
         });
       }
 
-      return payout;
+      // ─── Email receipt to vendor ────────────────────────────────────────
+      try {
+        const vendorRecord = await prisma.vendor.findUnique({
+          where: { id: payout.payoutRecord.vendorId },
+          select: { storeName: true, user: { select: { email: true, name: true } } },
+        });
+
+        if (vendorRecord?.user?.email) {
+          const netAmount = payout.payoutRecord.netAmount ?? payout.payoutRecord.amount;
+          const feeAmount = payout.payoutRecord.withdrawalFeeAmount ?? (payout.payoutRecord.amount - netAmount);
+          const template = {
+            subject: `Payout completed — ${(netAmount / 100).toFixed(2)} ${payout.payoutRecord.currency}`,
+            html: `<p>Hi ${vendorRecord.user.name ?? vendorRecord.storeName},</p>
+<p>Your payout of <strong>${(netAmount / 100).toFixed(2)} ${payout.payoutRecord.currency}</strong> has been completed.</p>
+<p><strong>Details:</strong><br/>
+Gross amount: ${(payout.payoutRecord.amount / 100).toFixed(2)} ${payout.payoutRecord.currency}<br/>
+Fee: ${(feeAmount / 100).toFixed(2)} ${payout.payoutRecord.currency}<br/>
+Net amount: ${(netAmount / 100).toFixed(2)} ${payout.payoutRecord.currency}</p>
+<p>You can view your payout history in your Eki vendor dashboard.</p>`,
+          };
+          await enqueueEmail({
+            to: vendorRecord.user.email,
+            subject: template.subject,
+            html: template.html,
+          });
+        }
+      } catch (emailError) {
+        logger.error("Failed to send payout completed email", {
+          payoutId: payout.payoutRecord.id,
+          errorMessage: emailError instanceof Error ? emailError.message : String(emailError),
+        });
+      }
+
+      return payout.payoutRecord;
     } catch (error) {
       if ((error as any)?.code === "P2002") {
         throw new AppError("Payout already processed", 409);
       }
       throw error;
     }
+  },
+
+  /**
+   * Vendor: get payout request history with pagination.
+   */
+  async listOwnWithDetails(userId: string): Promise<any[]> {
+    const vendor = await getVendorForUser(userId);
+    const items = await prisma.payoutRequest.findMany({
+      where: { vendorId: vendor.id },
+      include: {
+        payoutMethod: { select: { id: true, type: true, label: true } },
+        walletTransactions: {
+          select: { id: true, type: true, amount: true, createdAt: true },
+        },
+      },
+      orderBy: CURSOR_ORDER_BY,
+    });
+    return items;
   },
 };
