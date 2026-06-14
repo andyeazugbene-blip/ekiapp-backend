@@ -62,7 +62,15 @@ export const reviewsService = {
     });
     let nextCursor: string | null = null;
     if (items.length > query.limit) { const next = items.pop(); nextCursor = next?.id ?? null; }
-    return { items: items.map((r: any) => ({ ...r, vendorName: (r as any).vendor?.storeName ?? null, buyerName: (r as any).buyer?.name ?? null })), nextCursor };
+    const vids = [...new Set(items.map(r => r.vendorId))];
+    const bids = [...new Set(items.map(r => r.buyerId))];
+    const [vendors, buyers] = await Promise.all([
+      vids.length ? prisma.vendor.findMany({ where: { id: { in: vids } }, select: { id: true, storeName: true } }) : [],
+      bids.length ? prisma.user.findMany({ where: { id: { in: bids } }, select: { id: true, name: true } }) : [],
+    ]);
+    const vm: Map<string, string> = new Map(); vendors.forEach((v: any) => vm.set(v.id, v.storeName));
+    const bm: Map<string, string> = new Map(); buyers.forEach((b: any) => bm.set(b.id, b.name));
+    return { items: items.map(r => ({ ...r, vendorName: vm.get(r.vendorId) ?? null, buyerName: bm.get(r.buyerId) ?? null })), nextCursor };
   },
 
   async moderateReview(reviewId: string, adminId: string, input: ModerateReviewInput): Promise<Review> {
