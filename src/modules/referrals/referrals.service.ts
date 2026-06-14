@@ -164,7 +164,20 @@ export const referralsService = {
       return; // No paid order yet
     }
 
-    // Transactional: atomically claim the referral, credit wallet, and write ledger.
+    // Look up active rewards from the admin Gifts & Rewards panel.
+    // These determine the amounts for referrer and referee.
+    const referralReward = await prisma.reward.findFirst({
+      where: { name: "Referral Bonus", isActive: true },
+    });
+    const welcomeReward = await prisma.reward.findFirst({
+      where: { name: "Welcome Gift", isActive: true },
+    });
+    const referrerAmount = referralReward?.value ?? referral.bonusAmount;
+    const referrerCurrency = referralReward?.currency ?? referral.currency;
+    const refereeAmount = welcomeReward?.value ?? 500;
+    const refereeCurrency = welcomeReward?.currency ?? referral.currency;
+
+    // Transactional: atomically credit both wallets and mark rewards claimed.
     await prisma.$transaction(async (tx) => {
       const ref = await tx.referral.findUnique({ where: { referredId: referredUserId } });
       if (!ref || ref.creditedAt || ref.referrerId === referredUserId) return;
@@ -191,32 +204,90 @@ export const referralsService = {
       });
       if (claim.count !== 1) return;
 
-      const wallet = await tx.buyerWallet.upsert({
+      // ─── 1. Credit referrer wallet ─────────────────────────────────
+      const referrerWallet = await tx.buyerWallet.upsert({
         where: { buyerId: ref.referrerId },
         update: {},
-        create: { buyerId: ref.referrerId, currency: ref.currency },
+        create: { buyerId: ref.referrerId, currency: referrerCurrency },
       });
 
       await tx.buyerWalletTransaction.create({
         data: {
-          walletId: wallet.id,
+          walletId: referrerWallet.id,
           buyerId: ref.referrerId,
           type: "REFERRAL_BONUS",
-          amount: ref.bonusAmount,
-          currency: ref.currency,
+          amount: referrerAmount,
+          currency: referrerCurrency,
           description: "Referral bonus for inviting a friend",
         },
       });
 
       await tx.buyerWallet.update({
-        where: { id: wallet.id },
-        data: { balance: { increment: ref.bonusAmount } },
+        where: { id: referrerWallet.id },
+        data: { balance: { increment: referrerAmount } },
       });
 
-      logger.info("Referral bonus credited", {
+      // Mark referral reward as claimed for referrer (no unique constraint, use findFirst)
+      if (referralReward) {
+        const alreadyClaimed = await tx.userReward.findFirst({
+          where: { userId: ref.referrerId, rewardId: referralReward.id },
+        });
+        if (!alreadyClaimed) {
+          await tx.userReward.create({
+            data: { userId: ref.referrerId, rewardId: referralReward.id },
+          });
+          await tx.reward.updateMany({
+            where: { id: referralReward.id, claimedCount: { lt: referralReward.maxClaims ?? 999999 } },
+            data: { claimedCount: { increment: 1 } },
+          });
+        }
+      }
+
+      // ─── 2. Credit referred friend wallet ──────────────────────────
+      if (refereeAmount > 0) {
+        const refereeWallet = await tx.buyerWallet.upsert({
+          where: { buyerId: referredUserId },
+          update: {},
+          create: { buyerId: referredUserId, currency: refereeCurrency },
+        });
+
+        await tx.buyerWalletTransaction.create({
+          data: {
+            walletId: refereeWallet.id,
+            buyerId: referredUserId,
+            type: "REFERRAL_BONUS",
+            amount: refereeAmount,
+            currency: refereeCurrency,
+            description: "Welcome gift for joining via referral",
+          },
+        });
+
+        await tx.buyerWallet.update({
+          where: { id: refereeWallet.id },
+          data: { balance: { increment: refereeAmount } },
+        });
+
+        if (welcomeReward) {
+          const alreadyClaimed = await tx.userReward.findFirst({
+            where: { userId: referredUserId, rewardId: welcomeReward.id },
+          });
+          if (!alreadyClaimed) {
+            await tx.userReward.create({
+              data: { userId: referredUserId, rewardId: welcomeReward.id },
+            });
+            await tx.reward.updateMany({
+              where: { id: welcomeReward.id, claimedCount: { lt: welcomeReward.maxClaims ?? 999999 } },
+              data: { claimedCount: { increment: 1 } },
+            });
+          }
+        }
+      }
+
+      logger.info("Referral bonuses credited", {
         referrerId: ref.referrerId,
         referredId: referredUserId,
-        amount: ref.bonusAmount,
+        referrerAmount,
+        refereeAmount,
       });
     }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
   },
