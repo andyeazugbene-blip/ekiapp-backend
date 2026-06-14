@@ -30,7 +30,7 @@ type PrismaLike = Prisma.TransactionClient | typeof prisma;
 
 export const notificationsService = {
   async create(input: CreateNotificationInput, tx: PrismaLike = prisma): Promise<Notification> {
-    const notification = await tx.notification.create({
+    return tx.notification.create({
       data: {
         userId: input.userId,
         type: input.type,
@@ -39,8 +39,6 @@ export const notificationsService = {
         data: input.data,
       },
     });
-    if (tx === prisma) sendPushToUser(input.userId, { title: input.title, body: input.body ?? "", data: input.data as Record<string, unknown> | undefined });
-    return notification;
   },
 
   // Async path: when Redis is configured, push the notification to the
