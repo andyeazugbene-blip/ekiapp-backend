@@ -328,7 +328,7 @@ function renderHomeLayout(page: PageDefinition): string {
     .brand{display:inline-flex;align-items:center;justify-content:center;min-width:40px;height:24px;padding:0 10px;border-radius:5px;background:#2B8256;color:#FFFFFF;text-decoration:none;font-weight:800;font-size:13px;letter-spacing:-0.03em;line-height:1}
     .toplinks{display:flex;align-items:center;gap:16px;color:rgba(255,255,255,.76);font-size:12px;font-weight:600}
     .toplinks a{text-decoration:none}
-    .hero{display:grid;grid-template-columns:minmax(0,1fr) minmax(280px,380px);align-items:center;gap:52px;padding:14px 0 34px;min-height:360px}
+    .hero{display:grid;grid-template-columns:minmax(0,1fr) minmax(260px,340px);align-items:center;gap:52px;padding:14px 0 34px;min-height:360px}
     .copy{max-width:520px;padding:8px 0 0}
     h1{margin:0;max-width:10ch;font-size:56px;line-height:0.98;letter-spacing:-0.045em;font-weight:800}
     .intro{margin:16px 0 0;max-width:430px;color:rgba(255,255,255,0.82);font-size:15px;line-height:1.4}
@@ -341,10 +341,42 @@ function renderHomeLayout(page: PageDefinition): string {
     .store-button.google:active{transform:translateY(0) scale(0.98)}
     .store-small{font-size:9px;font-weight:600;opacity:.74}
     .store-main{font-size:14px;font-weight:800;margin-top:1px}
-    .scan-copy{margin-top:14px;color:rgba(255,255,255,.72);font-size:12px;line-height:1.4}
-    .phone-stage{position:relative;min-height:310px;display:flex;align-items:center;justify-content:center}
-    .phone{width:min(82vw,390px);max-height:400px;object-fit:contain;object-position:center;filter:drop-shadow(0 28px 40px rgba(0,0,0,.32));transition:transform 0.3s ease}
-    .phone:hover{transform:scale(1.02)}
+    .scan-copy{margin-top:12px;color:rgba(255,255,255,.7);font-size:11px;line-height:1.4}
+    .smart-badge{display:inline-flex;gap:8px;margin-top:16px;flex-wrap:wrap;align-items:center}
+
+    /* Phone mockup — pure CSS vendor dashboard */
+    .phone-stage{position:relative;min-height:460px;display:flex;align-items:center;justify-content:center}
+    .phone{width:min(62vw,300px);background:#0D0D0D;border-radius:36px;padding:10px;box-shadow:0 28px 60px rgba(0,0,0,.4),0 0 0 1px rgba(255,255,255,.06);transition:transform .3s ease}
+    .phone:hover{transform:scale(1.02) translateY(-4px)}
+    .phone-notch{width:110px;height:20px;background:#0D0D0D;border-radius:0 0 14px 14px;margin:-10px auto 0;position:relative;z-index:2}
+    .phone-screen{background:#F7F8F6;border-radius:26px;overflow:hidden;position:relative}
+    .phone-status{display:flex;justify-content:space-between;padding:10px 16px 4px;font-size:10px;font-weight:700;color:#111;background:#fff}
+    .phone-header{background:#164F3F;color:#fff;padding:10px 14px 16px;display:flex;justify-content:space-between;align-items:center}
+    .phone-greeting{font-size:11px;font-weight:700;opacity:.8}
+    .phone-date{font-size:9px;opacity:.6}
+    .phone-avatar{width:26px;height:26px;border-radius:13px;background:rgba(255,255,255,.2);display:grid;place-items:center;font-weight:800;font-size:10px}
+    .phone-balance{background:#164F3F;padding:0 14px 14px;color:#fff}
+    .phone-balance-label{font-size:9px;opacity:.65}
+    .phone-balance-amt{font-size:22px;font-weight:800;margin-top:2px;letter-spacing:-.03em}
+    .phone-balance-sub{font-size:9px;opacity:.5;margin-top:2px}
+    .phone-grid{padding:10px;display:grid;grid-template-columns:1fr 1fr;gap:6px}
+    .phone-tile{background:#fff;border-radius:10px;padding:10px;min-height:64px;display:flex;flex-direction:column;justify-content:center;box-shadow:0 1px 3px rgba(0,0,0,.04)}
+    .phone-tile-dark{background:#164F3F;color:#fff}
+    .phone-tile-label{font-size:8px;font-weight:700;opacity:.5;text-transform:uppercase;letter-spacing:.03em}
+    .phone-tile-value{font-size:15px;font-weight:800;margin-top:3px;letter-spacing:-.02em}
+    .phone-tile-sub{font-size:7px;opacity:.45;margin-top:1px}
+    .phone-section{font-size:9px;font-weight:800;padding:10px 10px 4px;color:#111}
+    .phone-insights{display:grid;grid-template-columns:1fr 1fr;gap:6px;padding:0 10px 8px}
+    .phone-insight{background:#fff;border-radius:8px;padding:8px 10px;display:flex;align-items:center;gap:6px;box-shadow:0 1px 2px rgba(0,0,0,.04)}
+    .phone-insight-dot{width:6px;height:6px;border-radius:3px;flex:0 0 auto}
+    .phone-insight-text{font-size:7px;font-weight:600;color:#4a4a4a;line-height:1.2}
+    .phone-tabbar{display:flex;justify-content:space-around;padding:6px 4px 4px;background:#fff;border-top:1px solid #eee}
+    .phone-tab{display:flex;flex-direction:column;align-items:center;gap:2px;font-size:7px;font-weight:700;color:#999}
+    .phone-tab.active{color:#164F3F}
+    .phone-tab-icon{width:16px;height:16px;border-radius:4px;background:#e8ece9;display:grid;place-items:center;font-size:8px;color:#777}
+    .phone-tab.active .phone-tab-icon{background:#164F3F;color:#fff}
+    .phone-indicator{height:3px;width:80px;background:#ddd;border-radius:2px;margin:4px auto 2px}
+
     .steps-band{background:#FFFFFF;padding:0 0 92px}
     .steps-head{padding:26px 0 10px;display:flex;align-items:center;justify-content:space-between;gap:16px}
     .steps-kicker{color:#164F3F;font-size:12px;font-weight:800;letter-spacing:.01em;text-transform:uppercase}
@@ -381,19 +413,67 @@ function renderHomeLayout(page: PageDefinition): string {
         <h1>${escape(page.heading)}</h1>
         <p class="intro">${escape(page.intro)}</p>
         <div class="store-buttons">
-          <a class="store-button" href="https://apps.apple.com/app/id6776307497" aria-label="Download Eki on the App Store">
+          <a class="store-button" href="https://apps.apple.com/app/id6776307497">
             <span class="store-small">Download on the</span>
             <span class="store-main">App Store</span>
           </a>
-          <a class="store-button google" href="https://play.google.com/store/apps/details?id=com.ekiapp.mobile" aria-label="Get Eki on Google Play">
+          <a class="store-button google" href="https://play.google.com/store/apps/details?id=com.ekiapp.mobile">
             <span class="store-small">Get it on</span>
             <span class="store-main">Google Play</span>
           </a>
         </div>
-        <p class="scan-copy">Scan the QR code in the app to get started instantly.</p>
       </section>
       <section class="phone-stage" aria-label="Eki app preview">
-        <img class="phone" src="/assets/public-site/hero-phone-mockup.png" alt="Eki vendor dashboard phone mockup" />
+        <div class="phone">
+          <div class="phone-notch"></div>
+          <div class="phone-screen">
+            <div class="phone-status"><span>9:41</span><span>📶 🔋</span></div>
+            <div class="phone-header">
+              <div><div class="phone-greeting">Good morning 👋</div><div class="phone-date">Sat, 14 Jun</div></div>
+              <div class="phone-avatar">Q</div>
+            </div>
+            <div class="phone-balance">
+              <div class="phone-balance-label">Available Balance</div>
+              <div class="phone-balance-amt">€4,280</div>
+              <div class="phone-balance-sub">+€320 earned this week</div>
+            </div>
+            <div class="phone-grid">
+              <div class="phone-tile">
+                <div class="phone-tile-label">Sales today</div>
+                <div class="phone-tile-value">€143</div>
+                <div class="phone-tile-sub">+12% vs yesterday</div>
+              </div>
+              <div class="phone-tile phone-tile-dark">
+                <div class="phone-tile-label" style="opacity:.7">Sales this week</div>
+                <div class="phone-tile-value">€2,456</div>
+                <div class="phone-tile-sub" style="opacity:.5">3 orders pending</div>
+              </div>
+              <div class="phone-tile">
+                <div class="phone-tile-label">Pending payout</div>
+                <div class="phone-tile-value">€890</div>
+                <div class="phone-tile-sub">Available after delivery</div>
+              </div>
+              <div class="phone-tile">
+                <div class="phone-tile-label">Sales this month</div>
+                <div class="phone-tile-value">€8,340</div>
+                <div class="phone-tile-sub">12 orders completed</div>
+              </div>
+            </div>
+            <div class="phone-section">Business Insights</div>
+            <div class="phone-insights">
+              <div class="phone-insight"><div class="phone-insight-dot" style="background:#10b981"></div><div class="phone-insight-text">3 new orders today</div></div>
+              <div class="phone-insight"><div class="phone-insight-dot" style="background:#3b82f6"></div><div class="phone-insight-text">Buyer messages (2)</div></div>
+            </div>
+            <div class="phone-tabbar">
+              <div class="phone-tab active"><div class="phone-tab-icon">⬡</div>Dashboard</div>
+              <div class="phone-tab"><div class="phone-tab-icon">⊞</div>Orders</div>
+              <div class="phone-tab"><div class="phone-tab-icon">◉</div>Product</div>
+              <div class="phone-tab"><div class="phone-tab-icon">✉</div>Inbox</div>
+              <div class="phone-tab"><div class="phone-tab-icon">⚙</div>Settings</div>
+            </div>
+            <div class="phone-indicator"></div>
+          </div>
+        </div>
       </section>
     </main>
   </div>
@@ -409,28 +489,28 @@ function renderHomeLayout(page: PageDefinition): string {
           <div class="step-index">1</div>
           <div>
             <h2 class="step-title">Shop from verified vendors</h2>
-            <p class="step-body">Every vendor reviewed before listing.</p>
+            <p class="step-body">Every vendor reviewed and approved before listing on the marketplace.</p>
           </div>
         </article>
         <article class="step">
           <div class="step-index">2</div>
           <div>
-            <h2 class="step-title">Live order tracking</h2>
-            <p class="step-body">From vendor confirmation to delivery.</p>
+            <h2 class="step-title">Real-time order tracking</h2>
+            <p class="step-body">Follow your order from vendor confirmation to delivery, with push notifications at every stage.</p>
           </div>
         </article>
         <article class="step">
           <div class="step-index">3</div>
           <div>
-            <h2 class="step-title">Secure Eki checkout</h2>
-            <p class="step-body">Order and payment record protected by Eki.</p>
+            <h2 class="step-title">Secure checkout with wallet</h2>
+            <p class="step-body">Pay by card or use your Eki wallet. Your payment is protected until delivery is confirmed.</p>
           </div>
         </article>
         <article class="step">
           <div class="step-index">4</div>
           <div>
             <h2 class="step-title">One-tap reorder</h2>
-            <p class="step-body">Saved vendors reorder in a single tap.</p>
+            <p class="step-body">Save your favourite vendors and reorder in seconds. No need to re-enter delivery details.</p>
           </div>
         </article>
       </div>
