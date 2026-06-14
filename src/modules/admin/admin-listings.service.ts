@@ -110,19 +110,51 @@ export const adminListingsService = {
     const vendor = await prisma.vendor.findUnique({
       where: { id: vendorId },
       include: {
-        user: { select: { id: true, email: true, name: true, role: true, isSuspended: true } },
-        _count: { select: { products: true } },
+        user: { select: { id: true, email: true, name: true, role: true, isSuspended: true, createdAt: true } },
+        _count: { select: { products: true, payoutMethods: true } },
       },
     });
     if (!vendor) throw new AppError("Vendor not found", 404);
-    return vendor;
+
+    const [products, recentOrders, reviewAgg, totalRevenue] = await Promise.all([
+      prisma.product.findMany({
+        where: { vendorId },
+        select: { id: true, title: true, priceInCents: true, currency: true, stock: true, isActive: true, images: true, createdAt: true },
+        orderBy: { createdAt: "desc" },
+        take: 20,
+      }),
+      prisma.order.findMany({
+        where: { vendorId },
+        select: { id: true, orderNumber: true, status: true, totalAmount: true, currency: true, createdAt: true },
+        orderBy: { createdAt: "desc" },
+        take: 10,
+      }),
+      prisma.review.aggregate({
+        where: { vendorId, status: "APPROVED" },
+        _avg: { rating: true },
+        _count: true,
+      }),
+      prisma.orderItem.aggregate({
+        where: { vendorId, order: { status: { notIn: ["PENDING", "FAILED", "CANCELLED"] } } },
+        _sum: { totalAmount: true },
+      }),
+    ]);
+
+    return {
+      ...vendor,
+      products,
+      recentOrders,
+      avgRating: reviewAgg._avg.rating,
+      totalReviews: reviewAgg._count,
+      totalRevenue: totalRevenue._sum.totalAmount ?? 0,
+    };
   },
 
   async getOrder(orderId: string) {
     const order = await prisma.order.findUnique({
       where: { id: orderId },
       include: {
-        items: { include: { product: { select: { id: true, title: true, images: true, currency: true } } } },
+        items: { include: { product: { select: { id: true, title: true, images: true, currency: true, priceInCents: true } } } },
         payment: {
           select: {
             id: true, status: true, stripePaymentIntentId: true, provider: true,
@@ -132,18 +164,13 @@ export const adminListingsService = {
           },
         },
         buyer: { select: { id: true, name: true, email: true } },
-        deliveryZone: { select: { id: true, name: true, country: true } },
-        checkout: { select: { id: true, stripePaymentIntentId: true, totalAmount: true } },
+        deliveryZone: { select: { id: true, name: true, country: true, baseFeeAmount: true, feePerKgAmount: true } },
+        checkout: { select: { id: true, stripePaymentIntentId: true, totalAmount: true, metadata: true } },
       },
     });
     if (!order) throw new AppError("Order not found", 404);
-    // Enrich with vendor name
-    let vendorName: string | null = null;
-    if (order.vendorId) {
-      const vendor = await prisma.vendor.findUnique({ where: { id: order.vendorId }, select: { storeName: true } });
-      vendorName = vendor?.storeName ?? null;
-    }
-    return { ...order, vendorName };
+    let vInfo: Record<string, unknown> | null = null; if (order.vendorId) { vInfo = await prisma.vendor.findUnique({ where: { id: order.vendorId }, select: { storeName: true, contactEmail: true, country: true, city: true, verificationStatus: true } }); }
+    return { ...order, vendorName: vInfo?.storeName ?? null, vendorInfo: vInfo };
   },
 
   async listVendors(query: Record<string, unknown>) {
@@ -510,3 +537,4 @@ export const adminListingsService = {
     });
   },
 };
+
