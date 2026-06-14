@@ -1,4 +1,4 @@
-import type { Request, Response } from "express";
+﻿import type { Request, Response } from "express";
 
 function escape(value: unknown): string {
   if (value === null || value === undefined) return "";
@@ -902,7 +902,7 @@ function renderVendorSubscriptionLayout(): string {
     .plans{display:grid;gap:12px;margin-top:16px}.plan{width:100%;padding:16px;text-align:left;border:1px solid #dde7e2;border-radius:16px;background:#fff;cursor:pointer}
     .plan.active{border-color:#076b51;background:#f1faf5}.plan-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
     .plan-name{font-size:18px;font-weight:800}.fee{margin-top:5px;color:#66736d;font-size:12px}.price{margin-top:14px;color:#076b51;font-size:28px;font-weight:800}.price small{color:#66736d;font-size:13px;font-weight:400}
-    .features{margin:12px 0 0;padding:0;list-style:none;color:#34423c;font-size:13px;line-height:1.6}.features li:before{content:"✓";color:#076b51;font-weight:800;margin-right:8px}
+    .features{margin:12px 0 0;padding:0;list-style:none;color:#34423c;font-size:13px;line-height:1.6}.features li:before{content:"âœ“";color:#076b51;font-weight:800;margin-right:8px}
     .radio{width:23px;height:23px;border:1px solid #b7c6bf;border-radius:50%;display:grid;place-items:center;color:#fff}.active .radio{background:#076b51;border-color:#076b51}
     .status{display:none;margin:16px 0 0;padding:12px;border-radius:12px;font-size:13px;line-height:1.4}.status.ok{display:block;background:#eaf8ef;border:1px solid #cbeed9;color:#076b51}.status.warn{display:block;background:#fff7e8;border:1px solid #f2d399;color:#8d5100}.status.error{display:block;background:#fff0f0;border:1px solid #f3caca;color:#a62e2e}
     .summary{margin-top:18px;padding:14px;border-radius:13px;background:#f6f8f7;font-size:13px;color:#66736d}.summary strong{display:block;margin-top:4px;color:#0d1b16;font-size:15px}
@@ -912,7 +912,7 @@ function renderVendorSubscriptionLayout(): string {
   </style>
 </head>
 <body>
-  <nav class="nav"><a class="logo" href="/">eki</a><a class="home" href="/">Home →</a></nav>
+  <nav class="nav"><a class="logo" href="/">eki</a><a class="home" href="/">Home â†’</a></nav>
   <main class="layout">
     <section class="intro">
       <span class="eyebrow">Vendor subscriptions</span>
@@ -945,7 +945,7 @@ function renderVendorSubscriptionLayout(): string {
     function esc(value){return String(value||'').replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[char])}
     function money(plan){return new Intl.NumberFormat('en-GB',{style:'currency',currency:plan.currency||'GBP',maximumFractionDigits:0}).format(Number(plan.monthlyPriceCents||0)/100)}
     function planId(plan){const value=String(plan.plan||plan.id||'').toUpperCase();return value==='GROWTH'||value==='PRO'?value:null}
-    function render(){plansNode.innerHTML=plans.map(plan=>{const id=planId(plan),active=id===selected,features=[plan.maxProducts===-1?'Unlimited active products':plan.maxProducts+' active products',plan.analytics?'Analytics access':'Basic dashboard',plan.discounts?'Discount campaigns':'Standard listings',plan.prioritySupport?'Priority support':'Standard support'];return '<button type="button" class="plan '+(active?'active':'')+'" data-plan="'+id+'"><div class="plan-head"><div><div class="plan-name">'+esc(plan.name||id)+'</div><div class="fee">'+esc(((Number(plan.platformFeeBps||0)/100).toFixed(2).replace(/\\.00$/,'')+'%'))+' platform fee per order</div></div><span class="radio">'+(active?'✓':'')+'</span></div><div class="price">'+esc(money(plan))+' <small>/ month</small></div><ul class="features">'+features.map(item=>'<li>'+esc(item)+'</li>').join('')+'</ul></button>'}).join('');plansNode.querySelectorAll('[data-plan]').forEach(button=>button.addEventListener('click',()=>{selected=button.dataset.plan;render()}));const active=plans.find(plan=>planId(plan)===selected);summary.hidden=!active;if(active)summaryValue.textContent=(active.name||selected)+' - '+money(active)+'/month';checkoutButton.disabled=!active}
+    function render(){plansNode.innerHTML=plans.map(plan=>{const id=planId(plan),active=id===selected,features=[plan.maxProducts===-1?'Unlimited active products':plan.maxProducts+' active products',plan.analytics?'Analytics access':'Basic dashboard',plan.discounts?'Discount campaigns':'Standard listings',plan.prioritySupport?'Priority support':'Standard support'];return '<button type="button" class="plan '+(active?'active':'')+'" data-plan="'+id+'"><div class="plan-head"><div><div class="plan-name">'+esc(plan.name||id)+'</div><div class="fee">'+esc(((Number(plan.platformFeeBps||0)/100).toFixed(2).replace(/\\.00$/,'')+'%'))+' platform fee per order</div></div><span class="radio">'+(active?'âœ“':'')+'</span></div><div class="price">'+esc(money(plan))+' <small>/ month</small></div><ul class="features">'+features.map(item=>'<li>'+esc(item)+'</li>').join('')+'</ul></button>'}).join('');plansNode.querySelectorAll('[data-plan]').forEach(button=>button.addEventListener('click',()=>{selected=button.dataset.plan;render()}));const active=plans.find(plan=>planId(plan)===selected);summary.hidden=!active;if(active)summaryValue.textContent=(active.name||selected)+' - '+money(active)+'/month';checkoutButton.disabled=!active}
     fetch('/api/subscriptions/plans').then(response=>response.json().then(data=>({response,data}))).then(({response,data})=>{if(!response.ok)throw new Error(data.message||'Unable to load plans.');plans=(Array.isArray(data.plans)?data.plans:[]).filter(plan=>planId(plan));if(!plans.some(plan=>planId(plan)===selected)&&plans[0])selected=planId(plans[0]);render();if(!plans.length)show(errorNode,'No paid plans are currently available.','error')}).catch(error=>{plansNode.innerHTML='';show(errorNode,error.message||'Unable to load plans.','error')});
     form.addEventListener('submit',async event=>{event.preventDefault();clear(errorNode);const email=emailInput.value.trim().toLowerCase();if(!email){show(errorNode,'Enter the email used by your Eki vendor account.','error');return}checkoutButton.disabled=true;checkoutButton.textContent='Opening secure checkout...';try{const response=await fetch('/api/subscriptions/web-checkout',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email,plan:selected})});const data=await response.json().catch(()=>({}));if(!response.ok)throw new Error(data.message||'Could not start checkout.');if(!data.checkoutUrl)throw new Error('Checkout URL was not returned.');location.assign(data.checkoutUrl)}catch(error){show(errorNode,error.message||'Could not start checkout.','error');checkoutButton.disabled=false;checkoutButton.textContent='Continue to Stripe'}});
   </script>
@@ -1070,14 +1070,14 @@ async function loadDash(){
     const r=await fetch(API+'/api/vendors/me/earnings',{headers:{'Authorization':'Bearer '+T}});
     const d=await r.json();const e=d.earnings||d||{};
     $('tabAnalytics').innerHTML='<div class="grid-4">'+
-      '<div class="stat-card"><div class="stat-label">Sales Today</div><div class="stat-value">'+(e.salesToday?fmt(e.salesToday,e.currency):'€0')+'</div><div class="stat-sub">Live</div></div>'+
-      '<div class="stat-card"><div class="stat-label">This Week</div><div class="stat-value">'+(e.salesThisWeek?fmt(e.salesThisWeek,e.currency):'€0')+'</div><div class="stat-sub">7 days</div></div>'+
-      '<div class="stat-card"><div class="stat-label">This Month</div><div class="stat-value">'+(e.salesThisMonth?fmt(e.salesThisMonth,e.currency):'€0')+'</div><div class="stat-sub">Monthly</div></div>'+
-      '<div class="stat-card"><div class="stat-label">Available</div><div class="stat-value">'+(e.availableBalance?fmt(e.availableBalance,e.currency):'€0')+'</div><div class="stat-sub">For payout</div></div></div>';
+      '<div class="stat-card"><div class="stat-label">Sales Today</div><div class="stat-value">'+(e.salesToday?fmt(e.salesToday,e.currency):'â‚¬0')+'</div><div class="stat-sub">Live</div></div>'+
+      '<div class="stat-card"><div class="stat-label">This Week</div><div class="stat-value">'+(e.salesThisWeek?fmt(e.salesThisWeek,e.currency):'â‚¬0')+'</div><div class="stat-sub">7 days</div></div>'+
+      '<div class="stat-card"><div class="stat-label">This Month</div><div class="stat-value">'+(e.salesThisMonth?fmt(e.salesThisMonth,e.currency):'â‚¬0')+'</div><div class="stat-sub">Monthly</div></div>'+
+      '<div class="stat-card"><div class="stat-label">Available</div><div class="stat-value">'+(e.availableBalance?fmt(e.availableBalance,e.currency):'â‚¬0')+'</div><div class="stat-sub">For payout</div></div></div>';
     $('storePreview').innerHTML='<div style="font-weight:800;font-size:13px;margin-bottom:6px">'+($('email').value)+'</div>'+
-      '<div class="phone-row"><span class="phone-lbl">Revenue</span><span class="phone-val">'+(e.salesThisMonth?fmt(e.salesThisMonth,e.currency):'€0')+'</span></div>'+
-      '<div class="phone-row"><span class="phone-lbl">Balance</span><span class="phone-val">'+(e.availableBalance?fmt(e.availableBalance,e.currency):'€0')+'</span></div>'+
-      '<div class="phone-row" style="border-bottom:0"><span class="phone-lbl">Pending</span><span class="phone-val">'+(e.pendingPayout?fmt(e.pendingPayout,e.currency):'€0')+'</span></div>';
+      '<div class="phone-row"><span class="phone-lbl">Revenue</span><span class="phone-val">'+(e.salesThisMonth?fmt(e.salesThisMonth,e.currency):'â‚¬0')+'</span></div>'+
+      '<div class="phone-row"><span class="phone-lbl">Balance</span><span class="phone-val">'+(e.availableBalance?fmt(e.availableBalance,e.currency):'â‚¬0')+'</span></div>'+
+      '<div class="phone-row" style="border-bottom:0"><span class="phone-lbl">Pending</span><span class="phone-val">'+(e.pendingPayout?fmt(e.pendingPayout,e.currency):'â‚¬0')+'</span></div>';
   }catch(e){$('tabAnalytics').innerHTML='<div class="msg err" style="display:block">'+e.message+'</div>';console.error(e)}
 }
 function fmt(n,c){return new Intl.NumberFormat('en-GB',{style:'currency',currency:c||'EUR',maximumFractionDigits:0}).format((n||0)/100)}
@@ -1108,7 +1108,7 @@ body{margin:0;background:#F5F6F5;color:#111;font-family:'Inter',sans-serif}
 </style></head><body>
 <div class="topbar"><a class="brand" href="/"><span class="brand-dot"></span> Eki</a><div class="toplinks"><a href="/store">Store</a><a href="/">Home</a></div></div>
 <div class="shell" style="padding:40px 0;text-align:center">
-  <div style="font-size:48px;margin-bottom:16px">🛒</div>
+  <div style="font-size:48px;margin-bottom:16px">ðŸ›’</div>
   <h1 style="font-size:24px;font-weight:800;margin:0">Your Cart</h1>
   <p style="color:#999;font-size:13px;margin:8px 0 24px">Add items using the Eki app, then come here to review.</p>
   <div class="card" style="max-width:400px;margin:0 auto;text-align:left;font-size:13px;line-height:1.6">
@@ -1116,7 +1116,7 @@ body{margin:0;background:#F5F6F5;color:#111;font-family:'Inter',sans-serif}
     <ol style="margin:10px 0 0;padding-left:18px;color:#666">
       <li>Browse vendors and add items in the <strong>Eki app</strong></li>
       <li>Review your cart and checkout</li>
-      <li>Pay by card or wallet — track delivery live</li>
+      <li>Pay by card or wallet â€” track delivery live</li>
     </ol>
     <a href="/store" class="btn" style="margin-top:14px;width:100%;display:flex">Browse Vendors</a>
   </div>
@@ -1128,9 +1128,62 @@ export async function getPublicVendorPortalPage(_request: Request, response: Res
   response.status(200).send(renderVendorPortalLayout());
 }
 
+export async function getPublicCheckoutPage(_request: Request, response: Response): Promise<void> {
+  response.setHeader("Content-Type","text/html; charset=utf-8");
+  response.setHeader("Cache-Control","no-cache");
+  response.status(200).send(renderCheckoutStandaloneLayout());
+}
+
+function renderCheckoutStandaloneLayout(): string {
+  return `<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"><meta name="theme-color" content="#164F3F"><title>Checkout | Eki</title>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin /><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" />
+<style>
+*,*::before,*::after{box-sizing:border-box}html,body{margin:0;padding:0}
+body{background:#f6f8f7;color:#111;font-family:'Inter',sans-serif}
+.shell{width:min(960px,calc(100% - 24px));margin:0 auto}
+.top{height:48px;background:#fff;border-bottom:1px solid #e5e7eb;display:flex;align-items:center;justify-content:space-between;padding:0 max(12px,calc((100vw - 960px)/2))}
+.brand{font-weight:800;font-size:14px;color:#164F3F;display:flex;align-items:center;gap:6px}.brand-dot{width:8px;height:8px;border-radius:4px;background:#164F3F;display:inline-block}
+.nav a{font-size:12px;font-weight:600;color:#666;text-decoration:none;margin-left:16px}.nav a:hover{color:#164F3F}
+.g{display:grid;grid-template-columns:1fr 340px;gap:20px;padding:24px 0 48px}
+.card{background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:20px;margin-bottom:14px}
+h2{font-size:16px;font-weight:800;margin:0 0 12px}.field{margin-bottom:12px}.field label{display:block;font-size:11px;font-weight:700;color:#444;margin-bottom:4px}
+.inp{width:100%;height:40px;border:1px solid #dce3e0;border-radius:6px;padding:0 10px;font-size:13px;outline:none}.inp:focus{border-color:#164F3F;box-shadow:0 0 0 3px rgba(22,79,63,.08)}
+.g2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.btn{width:100%;height:48px;border:0;border-radius:10px;background:#164F3F;color:#fff;font-weight:700;font-size:14px;cursor:pointer;margin-top:8px}
+.item{display:flex;gap:12px;padding:10px 0;border-bottom:1px solid #f0f0f0;align-items:center}
+.item-img{width:44px;height:44px;border-radius:8px;background:#e8ece9;flex:0 0 auto}
+.item-info{flex:1;min-width:0}.item-name{font-weight:700;font-size:13px}.item-qty{font-size:11px;color:#999;margin-top:2px}
+.item-price{font-weight:800;font-size:14px;color:#164F3F;text-align:right;white-space:nowrap}
+@media(max-width:768px){.g{grid-template-columns:1fr}}
+</style></head><body>
+<div class="top"><a class="brand" href="/"><span class="brand-dot"></span> Eki</a><div class="nav"><a href="/store">Stores</a><a href="/cart">Cart</a><a href="/">Home</a></div></div>
+<div class="shell"><div class="g"><div><h2 style="font-size:20px;margin-top:24px">Checkout</h2>
+<div class="card"><h2>Your details</h2><div class="g2"><div class="field"><label>First name</label><input class="inp" id="cfn" /></div><div class="field"><label>Last name</label><input class="inp" id="cln" /></div></div><div class="field"><label>Email</label><input class="inp" id="cemail" type="email" /></div></div>
+<div class="card"><h2>Delivery</h2><div class="field"><label>Address</label><input class="inp" id="caddr" /></div><div class="g2"><div class="field"><label>City</label><input class="inp" id="ccity" /></div><div class="field"><label>Postcode</label><input class="inp" id="czip" /></div></div><div class="field"><label>Country</label><input class="inp" id="ccountry" value="United Kingdom" /></div></div></div>
+<div><div class="card"><h2>Cart items</h2><div id="cartItems"></div><div id="totalArea"></div><div id="errorMsg" style="color:#e55353;font-size:12px;display:none;margin:6px 0"></div>
+<button class="btn" id="placeOrder">Place Order</button></div></div></div></div>
+<script>
+var cart=JSON.parse(localStorage.getItem('eki_cart')||'[]');
+function loadCart(){var h='',s=0;if(!cart.length){document.getElementById('cartItems').innerHTML='<div style="color:#999;padding:16px 0;text-align:center">Cart empty — <a href="/store" style="color:#164F3F;font-weight:700">Browse stores</a></div>';document.getElementById('totalArea').innerHTML='';return}
+for(var i=0;i<cart.length;i++){var item=cart[i];h+='<div class="item"><div class="item-img"></div><div class="item-info"><div class="item-name">'+item.title+'</div><div class="item-qty">Qty: '+(item.qty||1)+'</div></div><div class="item-price">'+fmt((item.price||0)*(item.qty||1),item.currency)+'</div></div>';s+=(item.price||0)*(item.qty||1)}
+document.getElementById('cartItems').innerHTML=h;document.getElementById('totalArea').innerHTML='<div style="font-weight:800;font-size:18px;color:#164F3F;padding-top:10px;border-top:1px solid #eee;margin-top:6px">Total: '+fmt(s,cart[0]?cart[0].currency:'EUR')+'</div>'}
+function fmt(n,c){try{return new Intl.NumberFormat('en-GB',{style:'currency',currency:c||'EUR'}).format(n/100)}catch{return(c||'€')+' '+(n/100).toFixed(2)}}
+loadCart();
+function $(id){var e=document.getElementById(id);return e?e.value:''}
+document.getElementById('placeOrder').addEventListener('click',async function(){if(!cart.length)return;var data={items:cart.map(function(i){return{productId:i.id,quantity:i.qty||1,storeSlug:i.storeSlug}}),deliveryAddress:($('caddr')+', '+$('ccity')+', '+$('czip')+', '+$('ccountry')).trim(),deliveryCountry:$('ccountry'),email:$('cemail'),name:$('cfn')+' '+$('cln')};if(!data.email||!$('caddr').trim()){alert('Enter email and address');return}
+this.disabled=true;this.textContent='Processing...';var em=document.getElementById('errorMsg');em.style.display='none'
+try{var r=await fetch('https://ekiapp-backend.vercel.app/api/public/stores/guest-checkout',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});var d=await r.json();if(!r.ok)throw new Error(d.message||'Checkout failed');
+if(d.checkoutUrl){window.location.assign(d.checkoutUrl);return}
+localStorage.removeItem('eki_cart');alert('Order placed!');cart.length=0;loadCart()}catch(err){em.textContent=err.message;em.style.display='block'}
+finally{this.disabled=false;this.textContent='Place Order'}
+});
+</script></body></html>`; }
+
 export async function getPublicBuyerCartPage(_request: Request, response: Response): Promise<void> {
   response.setHeader("Content-Type", "text/html; charset=utf-8");
   response.setHeader("Cache-Control", "public, max-age=120, s-maxage=300");
   response.status(200).send(renderBuyerCartLayout());
 }
+
 
