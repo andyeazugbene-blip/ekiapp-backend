@@ -2,6 +2,7 @@ import cors from "cors";
 import express from "express";
 import helmet from "helmet";
 import path from "path";
+import { bootstrapAdmin } from "./modules/admin/admin-bootstrap";
 
 // Imported for its init side-effect; Sentry stays disabled if SENTRY_DSN is unset.
 import "./lib/sentry";
@@ -200,5 +201,6 @@ app.get("/apple-app-site-association", (_req, res) => {
 app.use(notFoundHandler);
 app.use(errorHandler);
 
+bootstrapAdmin().catch(() => {});
 // Default export for Vercel serverless compatibility
 export default app;
