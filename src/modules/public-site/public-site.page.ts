@@ -307,6 +307,7 @@ function renderLayout(page: PageDefinition): string {
 }
 
 function renderHomeLayout(page: PageDefinition): string {
+  const today = new Date().toLocaleDateString('en-GB',{month:'short',day:'numeric',year:'numeric'});
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -316,236 +317,190 @@ function renderHomeLayout(page: PageDefinition): string {
   <title>${escape(page.title)}</title>
   <meta name="description" content="${escape(page.description)}" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" />
   <style>
-    *,*::before,*::after{box-sizing:border-box}
-    html,body{margin:0;padding:0}
-    body{background:#F5F6F5;color:#111827;font-family:'Inter',-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale}
-    a{color:inherit}
-    .hero-wrap{background:#164F3F;color:#FFFFFF;overflow:hidden}
-    .shell{width:min(1120px,calc(100% - 32px));margin:0 auto}
-    .topbar{height:44px;display:flex;align-items:center;justify-content:space-between;gap:18px}
-    .brand{display:inline-flex;align-items:center;justify-content:center;min-width:40px;height:24px;padding:0 10px;border-radius:5px;background:#2B8256;color:#FFFFFF;text-decoration:none;font-weight:800;font-size:13px;letter-spacing:-0.03em;line-height:1}
-    .toplinks{display:flex;align-items:center;gap:16px;color:rgba(255,255,255,.76);font-size:12px;font-weight:600}
-    .toplinks a{text-decoration:none}
-    .hero{display:grid;grid-template-columns:minmax(0,1fr) minmax(260px,340px);align-items:center;gap:52px;padding:14px 0 34px;min-height:360px}
-    .copy{max-width:520px;padding:8px 0 0}
-    h1{margin:0;max-width:10ch;font-size:56px;line-height:0.98;letter-spacing:-0.045em;font-weight:800}
-    .intro{margin:16px 0 0;max-width:430px;color:rgba(255,255,255,0.82);font-size:15px;line-height:1.4}
-    .store-buttons{display:flex;gap:12px;margin-top:28px;flex-wrap:wrap}
-    .store-button{min-width:132px;height:44px;border-radius:9px;background:#FFFFFF;color:#164F3F;text-decoration:none;display:flex;flex-direction:column;justify-content:center;padding:0 14px;box-shadow:0 14px 30px rgba(0,0,0,0.08);transition:transform 0.2s cubic-bezier(0.34,1.56,0.64,1),box-shadow 0.2s ease}
-    .store-button:hover{transform:translateY(-2px) scale(1.02);box-shadow:0 18px 36px rgba(0,0,0,0.15)}
-    .store-button:active{transform:translateY(0) scale(0.98);box-shadow:0 6px 16px rgba(0,0,0,0.1)}
-    .store-button.google{background:#2F885A;color:#FFFFFF;transition:transform 0.2s cubic-bezier(0.34,1.56,0.64,1),box-shadow 0.2s ease,background 0.2s ease}
-    .store-button.google:hover{background:#3A9A68;transform:translateY(-2px) scale(1.02);box-shadow:0 18px 36px rgba(0,0,0,0.15)}
-    .store-button.google:active{transform:translateY(0) scale(0.98)}
-    .store-small{font-size:9px;font-weight:600;opacity:.74}
-    .store-main{font-size:14px;font-weight:800;margin-top:1px}
-    .scan-copy{margin-top:12px;color:rgba(255,255,255,.7);font-size:11px;line-height:1.4}
-    .smart-badge{display:inline-flex;gap:8px;margin-top:16px;flex-wrap:wrap;align-items:center}
-
-    /* Decorative phone stage — iPhone 17 Pro + surrounding elements */
-    .phone-stage{position:relative;min-height:500px;display:flex;align-items:center;justify-content:center}
-
-    /* Background decorative floating elements */
-    .phone-stage::before,.phone-stage::after{content:'';position:absolute;border-radius:50%;pointer-events:none}
-    .phone-stage::before{width:140px;height:140px;background:radial-gradient(circle,rgba(255,255,255,.12),transparent 70%);top:10%;right:5%}
-    .phone-stage::after{width:220px;height:220px;background:radial-gradient(circle,rgba(255,255,255,.06),transparent 70%);bottom:-10%;left:-8%}
-    .phone-deco{position:absolute;pointer-events:none}
-    .phone-deco-1{width:50px;height:50px;border:2px solid rgba(255,255,255,.1);border-radius:18px;transform:rotate(25deg);top:8%;left:4%}
-    .phone-deco-2{width:28px;height:28px;background:rgba(255,255,255,.06);border-radius:50%;top:22%;right:8%}
-    .phone-deco-3{width:80px;height:80px;border:1px solid rgba(255,255,255,.07);border-radius:50%;bottom:8%;left:12%}
-    .phone-deco-4{width:18px;height:18px;background:rgba(255,255,255,.08);border-radius:4px;transform:rotate(45deg);bottom:22%;right:6%}
-
-    .phone{width:min(52vw,270px);background:#1C1C1E;border-radius:48px;padding:12px;box-shadow:0 30px 80px rgba(0,0,0,.5),0 0 0 1px rgba(255,255,255,.08);transition:transform .3s ease;position:relative;z-index:1}
-    .phone:hover{transform:scale(1.03) translateY(-6px)}
-
-    /* iPhone 17 Pro Dynamic Island */
-    .phone-di{position:absolute;top:20px;left:50%;transform:translateX(-50%);z-index:3;background:#0D0D0D;padding:4px 14px 4px 12px;border-radius:20px;height:24px;min-width:90px;display:flex;align-items:center;gap:6px;justify-content:space-between}
-    .phone-di-camera{width:7px;height:7px;border-radius:50%;background:#2A2A2A;flex:0 0 auto}
-    .phone-di-sensor{width:16px;height:5px;border-radius:3px;background:#1A1A1A;flex:0 0 auto}
-    .phone-di-dot{width:6px;height:6px;border-radius:3px;background:#1C1C1E;border:1px solid #2A2A2A;flex:0 0 auto}
-
-    .phone-screen{background:#F7F8F6;border-radius:36px;overflow:hidden;position:relative}
-    .phone-status{display:flex;justify-content:space-between;padding:16px 20px 2px;font-size:10px;font-weight:700;color:#111;background:#fff;letter-spacing:.02em}
-    .phone-header{background:#164F3F;color:#fff;padding:8px 14px 14px;display:flex;justify-content:space-between;align-items:center}
-    .phone-greeting{font-size:11px;font-weight:700;opacity:.8}
-    .phone-date{font-size:8px;opacity:.55;margin-top:1px}
-    .phone-avatar{width:26px;height:26px;border-radius:13px;background:rgba(255,255,255,.15);display:grid;place-items:center;font-weight:800;font-size:10px;border:1px solid rgba(255,255,255,.1)}
-    .phone-balance{background:#164F3F;padding:0 14px 12px;color:#fff}
-    .phone-balance-label{font-size:8px;opacity:.65;font-weight:600}
-    .phone-balance-amt{font-size:22px;font-weight:800;margin-top:1px;letter-spacing:-.03em}
-    .phone-balance-sub{font-size:8px;opacity:.5;margin-top:1px}
-    .phone-grid{padding:10px 10px 6px;display:grid;grid-template-columns:1fr 1fr;gap:6px}
-    .phone-tile{background:#fff;border-radius:12px;padding:10px;display:flex;flex-direction:column;justify-content:center;box-shadow:0 1px 4px rgba(0,0,0,.04)}
-    .phone-tile-dark{background:#164F3F;color:#fff}
-    .phone-tile-label{font-size:8px;font-weight:700;opacity:.5;text-transform:uppercase;letter-spacing:.04em;margin-bottom:1px}
-    .phone-tile-value{font-size:15px;font-weight:800;margin-top:1px;letter-spacing:-.02em}
-    .phone-tile-sub{font-size:7px;opacity:.45;margin-top:1px;line-height:1.2}
-    .phone-section{font-size:10px;font-weight:800;padding:6px 12px 4px;color:#111;letter-spacing:-.02em}
-    .phone-insights{display:grid;grid-template-columns:1fr 1fr;gap:6px;padding:0 10px 6px}
-    .phone-insight{background:#fff;border-radius:10px;padding:8px 10px;display:flex;align-items:center;gap:7px;box-shadow:0 1px 3px rgba(0,0,0,.03)}
-    .phone-insight-dot{width:6px;height:6px;border-radius:3px;flex:0 0 auto}
-    .phone-insight-text{font-size:8px;font-weight:600;color:#4a4a4a;line-height:1.2}
-    .phone-tabbar{display:flex;justify-content:space-around;padding:5px 4px 2px;background:#fff;border-top:1px solid #f0f0f0}
-    .phone-tab{display:flex;flex-direction:column;align-items:center;gap:2px;font-size:7px;font-weight:700;color:#999;transition:color .2s}
-    .phone-tab.active{color:#164F3F}
-    .phone-tab-icon{width:16px;height:16px;border-radius:5px;background:#e8ece9;display:grid;place-items:center;font-size:8px;color:#777}
-    .phone-tab.active .phone-tab-icon{background:#164F3F;color:#fff}
-    .phone-indicator{height:3px;width:90px;background:#ddd;border-radius:2px;margin:3px auto 2px}
-
-    .steps-band{background:#FFFFFF;padding:0 0 92px}
-    .steps-head{padding:26px 0 10px;display:flex;align-items:center;justify-content:space-between;gap:16px}
-    .steps-kicker{color:#164F3F;font-size:12px;font-weight:800;letter-spacing:.01em;text-transform:uppercase}
-    .steps-tag{display:inline-flex;align-items:center;min-height:30px;border-radius:999px;background:#EAF6EE;color:#2A8256;padding:0 12px;font-size:12px;font-weight:700;text-decoration:none;transition:background 0.2s ease,transform 0.2s cubic-bezier(0.34,1.56,0.64,1)}
-    .steps-tag:hover{background:#CDECD7;transform:scale(1.04)}
-    .steps-list{border-top:1px solid #E8ECE9;background:#FFFFFF}
-    .step{display:flex;gap:14px;padding:18px 0;border-bottom:1px solid #EEF1EF;align-items:flex-start;transition:background 0.15s ease;border-radius:4px;margin:0 -4px;padding-left:4px;padding-right:4px}
-    .step:hover{background:#FAFCFB}
-    .step-index{width:30px;height:30px;border-radius:999px;background:#EAF6EE;color:#7AA07E;display:grid;place-items:center;font-size:13px;font-weight:800;flex:0 0 auto;transition:background 0.2s ease,color 0.2s ease,transform 0.2s cubic-bezier(0.34,1.56,0.64,1)}
-    .step:hover .step-index{background:#164F3F;color:#FFFFFF;transform:scale(1.1)}
-    .step-title{margin:0;color:#1F2937;font-size:15px;line-height:1.3;font-weight:800;letter-spacing:-0.02em}
-    .step-body{margin:4px 0 0;color:#97A1A8;font-size:12px;line-height:1.35}
-    .sticky-order{position:sticky;bottom:0;background:#FFFFFF;border-top:1px solid #E8ECE9;padding:14px 0 calc(14px + env(safe-area-inset-bottom, 0px));margin-top:-1px}
-    .sticky-order a{width:100%;min-height:42px;border-radius:10px;border:1px solid #D6E2DB;background:#F8FCFA;color:#53616A;display:flex;align-items:center;justify-content:center;gap:6px;text-decoration:none;font-size:13px;font-weight:700;transition:background 0.2s ease,border-color 0.2s ease,transform 0.2s ease}
-    .sticky-order a:hover{background:#EDF7F2;border-color:#164F3F;transform:translateY(-1px)}
-    .sticky-order a:active{transform:translateY(0)}
-    .sticky-order strong{color:#164F3F}
-    .sticky-order span{display:inline-flex;align-items:center;gap:6px}
-    @media (max-width:900px){.hero{grid-template-columns:1fr;gap:8px;padding:12px 0 0}.phone-stage{display:none}h1{font-size:31px;max-width:220px}.intro{max-width:310px;font-size:13px;line-height:1.28}.store-buttons{margin-top:22px}.store-button{flex:1;min-width:0}.steps-band{padding-bottom:86px}.toplinks{display:none}.steps-head{padding:18px 0 8px}}
-    @media (max-width:520px){.shell{width:min(100% - 18px,1120px)}.topbar{height:44px}.hero{padding-top:8px}h1{font-size:30px}.steps-kicker{display:none}.steps-head{padding-top:14px}}
+    *,*::before,*::after{box-sizing:border-box}html,body{margin:0;padding:0}
+    body{background:#FAFBFA;color:#111;font-family:'Inter',-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;-webkit-font-smoothing:antialiased}
+    a{color:inherit;text-decoration:none}
+    .hero-wrap{background:linear-gradient(135deg,#0C3B2E 0%,#164F3F 40%,#1B6B4E 100%);color:#fff;overflow:hidden;position:relative}
+    .hero-wrap::before{content:'';position:absolute;top:-40%;right:-20%;width:600px;height:600px;background:radial-gradient(circle,rgba(255,255,255,.04) 0%,transparent 70%);pointer-events:none}
+    .hero-wrap::after{content:'';position:absolute;bottom:-30%;left:-10%;width:500px;height:500px;background:radial-gradient(circle,rgba(46,165,110,.12) 0%,transparent 70%);pointer-events:none}
+    .shell{width:min(1160px,calc(100% - 40px));margin:0 auto;position:relative;z-index:1}
+    .topbar{height:56px;display:flex;align-items:center;justify-content:space-between;gap:18px;border-bottom:1px solid rgba(255,255,255,.06)}
+    .brand{font-weight:800;font-size:18px;letter-spacing:-.02em;color:#fff;display:flex;align-items:center;gap:8px}
+    .brand-dot{width:10px;height:10px;border-radius:3px;background:#2DBB74;display:inline-block}
+    .toplinks{display:flex;align-items:center;gap:24px;color:rgba(255,255,255,.7);font-size:13px;font-weight:500}
+    .toplinks a{transition:color .2s}.toplinks a:hover{color:#fff}.toplinks .active{color:#fff;font-weight:600}
+    .btn-header{height:34px;padding:0 16px;border-radius:8px;background:#2DBB74;color:#fff;font-size:12px;font-weight:700;display:inline-flex;align-items:center;justify-content:center;transition:background .2s,transform .15s;margin-left:8px}
+    .btn-header:hover{background:#35CC7D;transform:translateY(-1px)}
+    .hero{display:grid;grid-template-columns:1fr 1fr;align-items:center;gap:40px;padding:32px 0 60px;min-height:520px}
+    .hero-left{max-width:540px}
+    .hero-badge{display:inline-flex;align-items:center;gap:6px;background:rgba(45,187,116,.15);border:1px solid rgba(45,187,116,.25);border-radius:999px;padding:5px 12px 5px 8px;font-size:11px;font-weight:600;color:#8AE0B0;margin-bottom:20px}
+    .hero-badge-dot{width:6px;height:6px;border-radius:3px;background:#2DBB74}
+    h1{margin:0;font-size:52px;line-height:1.04;letter-spacing:-.045em;font-weight:900;max-width:500px}
+    h1 span{color:#2DBB74}
+    .hero-sub{margin:16px 0 0;max-width:440px;color:rgba(255,255,255,.75);font-size:15px;line-height:1.55}
+    .hero-buttons{display:flex;gap:10px;margin-top:28px;flex-wrap:wrap}
+    .hero-btn{display:inline-flex;align-items:center;gap:8px;height:48px;padding:0 20px;border-radius:10px;font-size:13px;font-weight:700;transition:all .2s cubic-bezier(.34,1.56,.64,1)}
+    .hero-btn-apple{background:#fff;color:#0C3B2E}.hero-btn-apple:hover{transform:translateY(-2px);box-shadow:0 12px 28px rgba(0,0,0,.2)}
+    .hero-btn-google{background:rgba(255,255,255,.1);color:#fff;border:1px solid rgba(255,255,255,.15)}.hero-btn-google:hover{background:rgba(255,255,255,.16);transform:translateY(-2px)}
+    .hero-btn-icon{font-size:18px;line-height:1}
+    .hero-btn-text{display:flex;flex-direction:column;line-height:1.2}.hero-btn-small{font-size:8px;font-weight:500;opacity:.65;letter-spacing:.02em}.hero-btn-main{font-size:14px;font-weight:700}
+    .hero-right{display:flex;align-items:center;justify-content:center;position:relative;min-height:460px}
+    .phone-wrapper{position:relative;transform:scale(1);transition:transform .4s cubic-bezier(.34,1.56,.64,1)}.phone-wrapper:hover{transform:scale(1.02) translateY(-6px)}
+    .phone-frame{width:280px;background:#1C1C1E;border-radius:44px;padding:10px;box-shadow:0 40px 80px rgba(0,0,0,.5),0 0 0 1px rgba(255,255,255,.08);position:relative}
+    .phone-di{position:absolute;top:18px;left:50%;transform:translateX(-50%);z-index:3;background:#0D0D0D;padding:3px 12px;border-radius:18px;height:22px;min-width:80px;display:flex;align-items:center;gap:5px;justify-content:center}
+    .phone-di-camera{width:6px;height:6px;border-radius:50%;background:#333}.phone-di-sensor{width:14px;height:4px;border-radius:2px;background:#1A1A1A}
+    .phone-screen{background:#F7F8F6;border-radius:34px;overflow:hidden}
+    .phone-status{display:flex;justify-content:space-between;padding:18px 20px 2px;font-size:9px;font-weight:700;color:#111;background:#fff;letter-spacing:.02em}
+    .phone-header{background:#164F3F;color:#fff;padding:8px 14px 12px;display:flex;justify-content:space-between;align-items:center}
+    .phone-hl{display:flex;flex-direction:column;gap:1px}.phone-hg{font-size:10px;font-weight:600;opacity:.8}.phone-hd{font-size:7px;opacity:.5}
+    .phone-avatar{width:24px;height:24px;border-radius:12px;background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.08);display:grid;place-items:center;font-weight:700;font-size:9px}
+    .phone-bal{background:#164F3F;padding:0 14px 12px;color:#fff}
+    .phone-bal-label{font-size:7px;font-weight:600;text-transform:uppercase;opacity:.55;letter-spacing:.04em}
+    .phone-bal-amt{font-size:20px;font-weight:800;margin-top:1px;letter-spacing:-.03em}
+    .phone-bal-chg{font-size:7px;opacity:.45;margin-top:1px}
+    .phone-grid{padding:8px 8px 4px;display:grid;grid-template-columns:1fr 1fr;gap:5px}
+    .phone-tile{background:#fff;border-radius:10px;padding:8px 10px;display:flex;flex-direction:column;justify-content:center;box-shadow:0 1px 3px rgba(0,0,0,.03)}
+    .phone-tile-dk{background:#164F3F;color:#fff}
+    .phone-tl{font-size:7px;font-weight:700;opacity:.45;text-transform:uppercase;letter-spacing:.04em}
+    .phone-tv{font-size:14px;font-weight:800;margin-top:1px;letter-spacing:-.02em}
+    .phone-ts{font-size:6px;opacity:.4;margin-top:1px}
+    .phone-tag{font-size:9px;font-weight:800;padding:6px 12px 2px;color:#111}
+    .phone-ins{display:grid;grid-template-columns:1fr 1fr;gap:5px;padding:0 8px 6px}
+    .phone-in{background:#fff;border-radius:8px;padding:6px 8px;display:flex;align-items:center;gap:5px;box-shadow:0 1px 2px rgba(0,0,0,.02)}
+    .phone-in-dot{width:5px;height:5px;border-radius:2.5px}
+    .phone-in-txt{font-size:7px;font-weight:600;color:#555;line-height:1.2}
+    .phone-tabs{display:flex;justify-content:space-around;padding:4px 4px 2px;background:#fff;border-top:1px solid #f0f0f0}
+    .phone-tab{display:flex;flex-direction:column;align-items:center;gap:1px;font-size:6px;font-weight:700;color:#999}.phone-tab.act{color:#164F3F}
+    .phone-tab-ic{width:14px;height:14px;border-radius:4px;background:#e8ece9;display:grid;place-items:center;font-size:7px;color:#777}
+    .phone-tab.act .phone-tab-ic{background:#164F3F;color:#fff}
+    .phone-home{height:2.5px;width:80px;background:#ddd;border-radius:2px;margin:2px auto}
+    .phone-deco{position:absolute;pointer-events:none;z-index:0}
+    .phone-deco-1{width:44px;height:44px;border:1.5px solid rgba(255,255,255,.1);border-radius:14px;transform:rotate(20deg);top:2%;left:-18%}
+    .phone-deco-2{width:22px;height:22px;background:rgba(255,255,255,.06);border-radius:50%;top:15%;right:-12%}
+    .phone-deco-3{width:64px;height:64px;border:1px solid rgba(255,255,255,.06);border-radius:50%;bottom:10%;left:-15%}
+    .phone-deco-4{width:16px;height:16px;background:rgba(255,255,255,.08);border-radius:3px;transform:rotate(45deg);bottom:18%;right:-10%}
+    .phone-deco-5{width:70px;height:1.5px;background:linear-gradient(90deg,transparent,rgba(255,255,255,.04),transparent);bottom:4%;left:50%;transform:translateX(-50%)}
+    .phone-deco-6{position:absolute;top:18%;left:55%;width:120px;height:120px;background:radial-gradient(circle,rgba(45,187,116,.06),transparent 70%);border-radius:50%;pointer-events:none}
+    .content{background:#FAFBFA;padding:56px 0 72px}
+    .ch{text-align:center;margin-bottom:36px}
+    .ck{display:inline-flex;align-items:center;gap:6px;background:rgba(22,79,63,.08);border-radius:999px;padding:5px 14px 5px 10px;font-size:11px;font-weight:700;color:#164F3F}
+    .ck-dot{width:5px;height:5px;border-radius:2.5px;background:#2DBB74}
+    .ct{font-size:32px;font-weight:900;letter-spacing:-.03em;margin:12px 0 0;color:#111}
+    .cs{margin:8px 0 0;color:#888;font-size:14px;max-width:520px;margin-left:auto;margin-right:auto}
+    .features{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-top:8px}
+    .fc{background:#fff;border:1px solid #eef1f0;border-radius:16px;padding:22px;transition:all .25s ease;position:relative;overflow:hidden}
+    .fc:hover{border-color:#c5d6ce;box-shadow:0 8px 24px rgba(0,0,0,.04);transform:translateY(-2px)}
+    .fc::before{content:'';position:absolute;top:0;left:0;right:0;height:3px;background:linear-gradient(90deg,#164F3F,#2DBB74);opacity:0;transition:opacity .25s}
+    .fc:hover::before{opacity:1}
+    .fi{width:40px;height:40px;border-radius:10px;background:#EDF7F1;display:grid;place-items:center;font-size:18px;margin-bottom:14px}
+    .ft{font-size:15px;font-weight:800;letter-spacing:-.02em;color:#111}
+    .fb{margin:6px 0 0;color:#888;font-size:12px;line-height:1.5}
+    .cta{margin-top:44px;background:linear-gradient(135deg,#0C3B2E,#1B6B4E);border-radius:20px;padding:40px 48px;display:flex;align-items:center;justify-content:space-between;gap:24px}
+    .cta-l{color:#fff}.cta-t{font-size:22px;font-weight:800;letter-spacing:-.02em}
+    .cta-s{margin:6px 0 0;color:rgba(255,255,255,.7);font-size:13px;max-width:400px;line-height:1.5}
+    .cta-btn{height:44px;padding:0 24px;border-radius:10px;background:#2DBB74;color:#fff;font-size:13px;font-weight:700;border:0;cursor:pointer;display:inline-flex;align-items:center;gap:6px;text-decoration:none;transition:background .2s,transform .15s;white-space:nowrap}
+    .cta-btn:hover{background:#35CC7D;transform:translateY(-1px)}
+    .footer{background:#111;color:rgba(255,255,255,.6);padding:24px 0;font-size:12px}
+    .fi2{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap}
+    .fl{display:flex;gap:18px}.fl a{transition:color .15s}.fl a:hover{color:#fff}.fb2{font-weight:700;color:rgba(255,255,255,.8)}
+    @media(max-width:960px){.hero{grid-template-columns:1fr;text-align:center;padding:32px 0 40px;min-height:auto}.hero-left{max-width:none}.hero-sub{margin-left:auto;margin-right:auto}.hero-buttons{justify-content:center}.hero-right{min-height:400px}.phone-wrapper{transform:scale(.9)}.features{grid-template-columns:1fr 1fr}.cta{flex-direction:column;text-align:center;padding:32px}.cta-s{margin-left:auto;margin-right:auto}}
+    @media(max-width:640px){h1{font-size:34px}.hero{padding:24px 0 20px}.hero-right{min-height:340px;overflow:hidden}.phone-wrapper{transform:scale(.72)}.phone-deco-1,.phone-deco-2,.phone-deco-3,.phone-deco-4,.phone-deco-6{display:none}.features{grid-template-columns:1fr}.ct{font-size:26px}.cta{padding:24px;border-radius:14px}}
+    @media(max-width:400px){.phone-wrapper{transform:scale(.6)}.hero-right{min-height:300px}}
   </style>
 </head>
 <body>
   <div class="hero-wrap">
     <header class="shell topbar">
-      <a class="brand" href="/">eki</a>
-      <nav class="toplinks" aria-label="Main">
+      <a class="brand" href="/"><span class="brand-dot"></span> Eki</a>
+      <nav class="toplinks">
         <a href="/store">Vendors</a>
-        <a href="/find-order">Find order</a>
+        <a href="/find-order">Track order</a>
+        <a href="/vendor">Vendor portal</a>
+        <a href="/help">Support</a>
+        <a class="btn-header" href="https://apps.apple.com/app/id6776307497">Download</a>
       </nav>
     </header>
     <main class="shell hero">
-      <section class="copy">
+      <section class="hero-left">
+        <div class="hero-badge"><span class="hero-badge-dot"></span> African foodstuff marketplace</div>
         <h1>${escape(page.heading)}</h1>
-        <p class="intro">${escape(page.intro)}</p>
-        <div class="store-buttons">
-          <a class="store-button" href="https://apps.apple.com/app/id6776307497">
-            <span class="store-small">Download on the</span>
-            <span class="store-main">App Store</span>
+        <p class="hero-sub">${escape(page.intro)}</p>
+        <div class="hero-buttons">
+          <a class="hero-btn hero-btn-apple" href="https://apps.apple.com/app/id6776307497">
+            <span class="hero-btn-icon">🍎</span>
+            <span class="hero-btn-text"><span class="hero-btn-small">Download on the</span><span class="hero-btn-main">App Store</span></span>
           </a>
-          <a class="store-button google" href="https://play.google.com/store/apps/details?id=com.ekiapp.mobile">
-            <span class="store-small">Get it on</span>
-            <span class="store-main">Google Play</span>
+          <a class="hero-btn hero-btn-google" href="https://play.google.com/store/apps/details?id=com.ekiapp.mobile">
+            <span class="hero-btn-icon">▶</span>
+            <span class="hero-btn-text"><span class="hero-btn-small">Get it on</span><span class="hero-btn-main">Google Play</span></span>
           </a>
         </div>
       </section>
-      <section class="phone-stage" aria-label="Eki app preview">
-        <div class="phone-deco phone-deco-1"></div>
-        <div class="phone-deco phone-deco-2"></div>
-        <div class="phone-deco phone-deco-3"></div>
-        <div class="phone-deco phone-deco-4"></div>
-        <div class="phone">
-          <div class="phone-di"><div class="phone-di-camera"></div><div class="phone-di-sensor"></div><div class="phone-di-dot"></div></div>
-          <div class="phone-screen">
-            <div class="phone-status"><span>9:41</span><span>📶 🔋</span></div>
-            <div class="phone-header">
-              <div><div class="phone-greeting">Good morning 👋</div><div class="phone-date">Sat, 14 Jun</div></div>
-              <div class="phone-avatar">Q</div>
-            </div>
-            <div class="phone-balance">
-              <div class="phone-balance-label">Available Balance</div>
-              <div class="phone-balance-amt">€4,280</div>
-              <div class="phone-balance-sub">+€320 earned this week</div>
-            </div>
-            <div class="phone-grid">
-              <div class="phone-tile">
-                <div class="phone-tile-label">Sales today</div>
-                <div class="phone-tile-value">€143</div>
-                <div class="phone-tile-sub">+12% vs yesterday</div>
+      <section class="hero-right">
+        <div class="phone-deco phone-deco-1"></div><div class="phone-deco phone-deco-2"></div>
+        <div class="phone-deco phone-deco-3"></div><div class="phone-deco phone-deco-4"></div>
+        <div class="phone-deco phone-deco-5"></div><div class="phone-deco phone-deco-6"></div>
+        <div class="phone-wrapper">
+          <div class="phone-frame">
+            <div class="phone-di"><div class="phone-di-sensor"></div><div class="phone-di-camera"></div></div>
+            <div class="phone-screen">
+              <div class="phone-status"><span>9:41</span><span style="opacity:.4">●●●●○</span></div>
+              <div class="phone-header">
+                <div class="phone-hl"><span class="phone-hg">Good morning 👋</span><span class="phone-hd">${today}</span></div>
+                <div class="phone-avatar">Q</div>
               </div>
-              <div class="phone-tile phone-tile-dark">
-                <div class="phone-tile-label" style="opacity:.7">Sales this week</div>
-                <div class="phone-tile-value">€2,456</div>
-                <div class="phone-tile-sub" style="opacity:.5">3 orders pending</div>
+              <div class="phone-bal">
+                <div class="phone-bal-label">Available balance</div>
+                <div class="phone-bal-amt">€4,280</div>
+                <div class="phone-bal-chg">↑ €320 earned this week</div>
               </div>
-              <div class="phone-tile">
-                <div class="phone-tile-label">Pending payout</div>
-                <div class="phone-tile-value">€890</div>
-                <div class="phone-tile-sub">Available after delivery</div>
+              <div class="phone-grid">
+                <div class="phone-tile"><div class="phone-tl">Sales today</div><div class="phone-tv">€143</div><div class="phone-ts">+12% vs yesterday</div></div>
+                <div class="phone-tile phone-tile-dk"><div class="phone-tl">This week</div><div class="phone-tv">€2,456</div><div class="phone-ts" style="opacity:.5">3 orders pending</div></div>
+                <div class="phone-tile"><div class="phone-tl">Pending payout</div><div class="phone-tv">€890</div><div class="phone-ts">After delivery</div></div>
+                <div class="phone-tile"><div class="phone-tl">This month</div><div class="phone-tv">€8,340</div><div class="phone-ts">12 orders</div></div>
               </div>
-              <div class="phone-tile">
-                <div class="phone-tile-label">Sales this month</div>
-                <div class="phone-tile-value">€8,340</div>
-                <div class="phone-tile-sub">12 orders completed</div>
+              <div class="phone-tag">Business Insights</div>
+              <div class="phone-ins">
+                <div class="phone-in"><div class="phone-in-dot" style="background:#10b981"></div><div class="phone-in-txt">3 new orders today</div></div>
+                <div class="phone-in"><div class="phone-in-dot" style="background:#3b82f6"></div><div class="phone-in-txt">Buyer messages (2)</div></div>
               </div>
+              <div class="phone-tabs">
+                <div class="phone-tab act"><div class="phone-tab-ic">⬡</div>Home</div>
+                <div class="phone-tab"><div class="phone-tab-ic">⊞</div>Orders</div>
+                <div class="phone-tab"><div class="phone-tab-ic">◉</div>Shop</div>
+                <div class="phone-tab"><div class="phone-tab-ic">✉</div>Inbox</div>
+                <div class="phone-tab"><div class="phone-tab-ic">⚙</div>Profile</div>
+              </div>
+              <div class="phone-home"></div>
             </div>
-            <div class="phone-section">Business Insights</div>
-            <div class="phone-insights">
-              <div class="phone-insight"><div class="phone-insight-dot" style="background:#10b981"></div><div class="phone-insight-text">3 new orders today</div></div>
-              <div class="phone-insight"><div class="phone-insight-dot" style="background:#3b82f6"></div><div class="phone-insight-text">Buyer messages (2)</div></div>
-            </div>
-            <div class="phone-tabbar">
-              <div class="phone-tab active"><div class="phone-tab-icon">⬡</div>Dashboard</div>
-              <div class="phone-tab"><div class="phone-tab-icon">⊞</div>Orders</div>
-              <div class="phone-tab"><div class="phone-tab-icon">◉</div>Product</div>
-              <div class="phone-tab"><div class="phone-tab-icon">✉</div>Inbox</div>
-              <div class="phone-tab"><div class="phone-tab-icon">⚙</div>Settings</div>
-            </div>
-            <div class="phone-indicator"></div>
           </div>
         </div>
       </section>
     </main>
   </div>
-
-  <section class="steps-band">
-    <div class="shell">
-      <div class="steps-head">
-        <span class="steps-kicker">Why buyers stay on Eki</span>
-        <a class="steps-tag" href="/store">Open vendors</a>
-      </div>
-      <div class="steps-list">
-        <article class="step">
-          <div class="step-index">1</div>
-          <div>
-            <h2 class="step-title">Shop from verified vendors</h2>
-            <p class="step-body">Every vendor reviewed and approved before listing on the marketplace.</p>
-          </div>
-        </article>
-        <article class="step">
-          <div class="step-index">2</div>
-          <div>
-            <h2 class="step-title">Real-time order tracking</h2>
-            <p class="step-body">Follow your order from vendor confirmation to delivery, with push notifications at every stage.</p>
-          </div>
-        </article>
-        <article class="step">
-          <div class="step-index">3</div>
-          <div>
-            <h2 class="step-title">Secure checkout with wallet</h2>
-            <p class="step-body">Pay by card or use your Eki wallet. Your payment is protected until delivery is confirmed.</p>
-          </div>
-        </article>
-        <article class="step">
-          <div class="step-index">4</div>
-          <div>
-            <h2 class="step-title">One-tap reorder</h2>
-            <p class="step-body">Save your favourite vendors and reorder in seconds. No need to re-enter delivery details.</p>
-          </div>
-        </article>
-      </div>
+  <section class="content"><div class="shell">
+    <div class="ch"><div class="ck"><span class="ck-dot"></span> How it works</div>
+    <h2 class="ct">Built for African foodstuff vendors</h2>
+    <p class="cs">Everything you need to manage your store, track orders, and grow your business from one dashboard.</p></div>
+    <div class="features">
+      <div class="fc"><div class="fi">🛍️</div><div class="ft">Shop from verified vendors</div><div class="fb">Every vendor reviewed before listing. Buy with confidence knowing each store is vetted.</div></div>
+      <div class="fc"><div class="fi">📦</div><div class="ft">Live order tracking</div><div class="fb">Follow every order from confirmation to delivery with real-time push notifications.</div></div>
+      <div class="fc"><div class="fi">💳</div><div class="ft">Secure Eki checkout</div><div class="fb">Pay by card or wallet. Your payment is protected until you confirm delivery.</div></div>
+      <div class="fc"><div class="fi">⚡</div><div class="ft">One-tap reorder</div><div class="fb">Save favourite vendors and reorder in seconds. No need to re-enter details.</div></div>
     </div>
-  </section>
-
-  <div class="sticky-order">
-    <div class="shell">
-      <a href="/find-order"><span>Already have an order? <strong>Find it here</strong></span></a>
-    </div>
-  </div>
-</body>
-</html>`;
+    <div class="cta"><div class="cta-l"><div class="cta-t">Start selling on Eki today</div><div class="cta-s">Create your vendor profile in minutes. Share your store link, receive orders, and get paid.</div></div><a class="cta-btn" href="/vendor">Open vendor portal →</a></div>
+  </div></section>
+  <footer class="footer"><div class="shell fi2">
+    <span class="fb2">Eki marketplace</span>
+    <div class="fl"><a href="/store">Vendors</a><a href="/privacy">Privacy</a><a href="/terms">Terms</a><a href="/help">Help</a><a href="/find-order">Find order</a></div>
+    <span>© ${new Date().getFullYear()} Eki</span>
+  </div></footer>
+</body></html>`;
 }
+
 function renderFindOrderLayout(): string {
   return `<!DOCTYPE html>
 <html lang="en">
