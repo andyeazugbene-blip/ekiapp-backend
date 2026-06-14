@@ -201,6 +201,8 @@ app.get("/apple-app-site-association", (_req, res) => {
 app.use(notFoundHandler);
 app.use(errorHandler);
 
-bootstrapAdmin().catch(() => {});
+let bootstrapped = false;
+app.use((_req, _res, next) => { if (!bootstrapped) { bootstrapped = true; bootstrapAdmin().catch(e => console.error('Bootstrap error:', e)); } next(); });
+
 // Default export for Vercel serverless compatibility
 export default app;
