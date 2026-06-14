@@ -55,9 +55,8 @@ export const reviewsService = {
   },
 
   async adminListReviews(query: AdminListReviewsQuery): Promise<{ items: any[]; nextCursor: string | null }> {
-    const items = await (prisma.review as any).findMany({
+    const items = await prisma.review.findMany({
       where: query.status ? { status: query.status } : {},
-      include: { vendor: { select: { storeName: true } }, buyer: { select: { name: true } } },
       orderBy: CURSOR_ORDER_BY, take: query.limit + 1,
       ...(query.cursor ? { cursor: { id: query.cursor }, skip: 1 } : {}),
     });
@@ -78,7 +77,7 @@ export const reviewsService = {
   },
 
   async listMyReviews(buyerId: string, query: { limit: number; cursor?: string }): Promise<{ items: Array<{ id: string; vendorId: string; productId: string | null; orderId: string; rating: number; comment: string | null; status: string; createdAt: Date }>; nextCursor: string | null }> {
-    const items = await (prisma.review as any).findMany({ where: { buyerId }, orderBy: CURSOR_ORDER_BY, take: query.limit + 1, ...(query.cursor ? { cursor: { id: query.cursor }, skip: 1 } : {}), select: { id: true, vendorId: true, productId: true, orderId: true, rating: true, comment: true, status: true, createdAt: true } });
+    const items = await prisma.review.findMany({ where: { buyerId }, orderBy: CURSOR_ORDER_BY, take: query.limit + 1, ...(query.cursor ? { cursor: { id: query.cursor }, skip: 1 } : {}), select: { id: true, vendorId: true, productId: true, orderId: true, rating: true, comment: true, status: true, createdAt: true } });
     let nextCursor: string | null = null;
     if (items.length > query.limit) { const next = items.pop(); nextCursor = next?.id ?? null; }
     return { items, nextCursor };
