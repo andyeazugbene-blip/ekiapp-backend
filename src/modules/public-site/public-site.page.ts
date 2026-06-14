@@ -310,196 +310,91 @@ function renderHomeLayout(page: PageDefinition): string {
   const today = new Date().toLocaleDateString('en-GB',{month:'short',day:'numeric',year:'numeric'});
   return `<!DOCTYPE html>
 <html lang="en">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <meta name="theme-color" content="#164F3F" />
-  <title>${escape(page.title)}</title>
-  <meta name="description" content="${escape(page.description)}" />
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" />
-  <style>
-    *,*::before,*::after{box-sizing:border-box}html,body{margin:0;padding:0}
-    body{background:#FAFBFA;color:#111;font-family:'Inter',-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;-webkit-font-smoothing:antialiased}
-    a{color:inherit;text-decoration:none}
-    .hero-wrap{background:linear-gradient(135deg,#0C3B2E 0%,#164F3F 40%,#1B6B4E 100%);color:#fff;overflow:hidden;position:relative}
-    .hero-wrap::before{content:'';position:absolute;top:-40%;right:-20%;width:600px;height:600px;background:radial-gradient(circle,rgba(255,255,255,.04) 0%,transparent 70%);pointer-events:none}
-    .hero-wrap::after{content:'';position:absolute;bottom:-30%;left:-10%;width:500px;height:500px;background:radial-gradient(circle,rgba(46,165,110,.12) 0%,transparent 70%);pointer-events:none}
-    .shell{width:min(1160px,calc(100% - 40px));margin:0 auto;position:relative;z-index:1}
-    .topbar{height:56px;display:flex;align-items:center;justify-content:space-between;gap:18px;border-bottom:1px solid rgba(255,255,255,.06)}
-    .brand{font-weight:800;font-size:18px;letter-spacing:-.02em;color:#fff;display:flex;align-items:center;gap:8px}
-    .brand-dot{width:10px;height:10px;border-radius:3px;background:#2DBB74;display:inline-block}
-    .toplinks{display:flex;align-items:center;gap:24px;color:rgba(255,255,255,.7);font-size:13px;font-weight:500}
-    .toplinks a{transition:color .2s}.toplinks a:hover{color:#fff}.toplinks .active{color:#fff;font-weight:600}
-    .btn-header{height:34px;padding:0 16px;border-radius:8px;background:#2DBB74;color:#fff;font-size:12px;font-weight:700;display:inline-flex;align-items:center;justify-content:center;transition:background .2s,transform .15s;margin-left:8px}
-    .btn-header:hover{background:#35CC7D;transform:translateY(-1px)}
-    .hero{display:grid;grid-template-columns:1fr 1fr;align-items:center;gap:40px;padding:32px 0 60px;min-height:520px}
-    .hero-left{max-width:540px}
-    .hero-badge{display:inline-flex;align-items:center;gap:6px;background:rgba(45,187,116,.15);border:1px solid rgba(45,187,116,.25);border-radius:999px;padding:5px 12px 5px 8px;font-size:11px;font-weight:600;color:#8AE0B0;margin-bottom:20px}
-    .hero-badge-dot{width:6px;height:6px;border-radius:3px;background:#2DBB74}
-    h1{margin:0;font-size:52px;line-height:1.04;letter-spacing:-.045em;font-weight:900;max-width:500px}
-    h1 span{color:#2DBB74}
-    .hero-sub{margin:16px 0 0;max-width:440px;color:rgba(255,255,255,.75);font-size:15px;line-height:1.55}
-    .hero-buttons{display:flex;gap:10px;margin-top:28px;flex-wrap:wrap}
-    .hero-btn{display:inline-flex;align-items:center;gap:8px;height:48px;padding:0 20px;border-radius:10px;font-size:13px;font-weight:700;transition:all .2s cubic-bezier(.34,1.56,.64,1)}
-    .hero-btn-apple{background:#fff;color:#0C3B2E}.hero-btn-apple:hover{transform:translateY(-2px);box-shadow:0 12px 28px rgba(0,0,0,.2)}
-    .hero-btn-google{background:rgba(255,255,255,.1);color:#fff;border:1px solid rgba(255,255,255,.15)}.hero-btn-google:hover{background:rgba(255,255,255,.16);transform:translateY(-2px)}
-    .hero-btn-icon{font-size:18px;line-height:1}
-    .hero-btn-text{display:flex;flex-direction:column;line-height:1.2}.hero-btn-small{font-size:8px;font-weight:500;opacity:.65;letter-spacing:.02em}.hero-btn-main{font-size:14px;font-weight:700}
-    .hero-right{display:flex;align-items:center;justify-content:center;position:relative;min-height:460px}
-    .phone-wrapper{position:relative;transform:scale(1);transition:transform .4s cubic-bezier(.34,1.56,.64,1)}.phone-wrapper:hover{transform:scale(1.02) translateY(-6px)}
-    .phone-frame{width:280px;background:#1C1C1E;border-radius:44px;padding:10px;box-shadow:0 40px 80px rgba(0,0,0,.5),0 0 0 1px rgba(255,255,255,.08);position:relative}
-    .phone-di{position:absolute;top:18px;left:50%;transform:translateX(-50%);z-index:3;background:#0D0D0D;padding:3px 12px;border-radius:18px;height:22px;min-width:80px;display:flex;align-items:center;gap:5px;justify-content:center}
-    .phone-di-camera{width:6px;height:6px;border-radius:50%;background:#333}.phone-di-sensor{width:14px;height:4px;border-radius:2px;background:#1A1A1A}
-    .phone-screen{background:#F7F8F6;border-radius:34px;overflow:hidden}
-    .phone-status{display:flex;justify-content:space-between;padding:18px 20px 2px;font-size:9px;font-weight:700;color:#111;background:#fff;letter-spacing:.02em}
-    .phone-header{background:#164F3F;color:#fff;padding:8px 14px 12px;display:flex;justify-content:space-between;align-items:center}
-    .phone-hl{display:flex;flex-direction:column;gap:1px}.phone-hg{font-size:10px;font-weight:600;opacity:.8}.phone-hd{font-size:7px;opacity:.5}
-    .phone-avatar{width:24px;height:24px;border-radius:12px;background:rgba(255,255,255,.12);border:1px solid rgba(255,255,255,.08);display:grid;place-items:center;font-weight:700;font-size:9px}
-    .phone-bal{background:#164F3F;padding:0 14px 12px;color:#fff}
-    .phone-bal-label{font-size:7px;font-weight:600;text-transform:uppercase;opacity:.55;letter-spacing:.04em}
-    .phone-bal-amt{font-size:20px;font-weight:800;margin-top:1px;letter-spacing:-.03em}
-    .phone-bal-chg{font-size:7px;opacity:.45;margin-top:1px}
-    .phone-grid{padding:8px 8px 4px;display:grid;grid-template-columns:1fr 1fr;gap:5px}
-    .phone-tile{background:#fff;border-radius:10px;padding:8px 10px;display:flex;flex-direction:column;justify-content:center;box-shadow:0 1px 3px rgba(0,0,0,.03)}
-    .phone-tile-dk{background:#164F3F;color:#fff}
-    .phone-tl{font-size:7px;font-weight:700;opacity:.45;text-transform:uppercase;letter-spacing:.04em}
-    .phone-tv{font-size:14px;font-weight:800;margin-top:1px;letter-spacing:-.02em}
-    .phone-ts{font-size:6px;opacity:.4;margin-top:1px}
-    .phone-tag{font-size:9px;font-weight:800;padding:6px 12px 2px;color:#111}
-    .phone-ins{display:grid;grid-template-columns:1fr 1fr;gap:5px;padding:0 8px 6px}
-    .phone-in{background:#fff;border-radius:8px;padding:6px 8px;display:flex;align-items:center;gap:5px;box-shadow:0 1px 2px rgba(0,0,0,.02)}
-    .phone-in-dot{width:5px;height:5px;border-radius:2.5px}
-    .phone-in-txt{font-size:7px;font-weight:600;color:#555;line-height:1.2}
-    .phone-tabs{display:flex;justify-content:space-around;padding:4px 4px 2px;background:#fff;border-top:1px solid #f0f0f0}
-    .phone-tab{display:flex;flex-direction:column;align-items:center;gap:1px;font-size:6px;font-weight:700;color:#999}.phone-tab.act{color:#164F3F}
-    .phone-tab-ic{width:14px;height:14px;border-radius:4px;background:#e8ece9;display:grid;place-items:center;font-size:7px;color:#777}
-    .phone-tab.act .phone-tab-ic{background:#164F3F;color:#fff}
-    .phone-home{height:2.5px;width:80px;background:#ddd;border-radius:2px;margin:2px auto}
-    .phone-deco{position:absolute;pointer-events:none;z-index:0}
-    .phone-deco-1{width:44px;height:44px;border:1.5px solid rgba(255,255,255,.1);border-radius:14px;transform:rotate(20deg);top:2%;left:-18%}
-    .phone-deco-2{width:22px;height:22px;background:rgba(255,255,255,.06);border-radius:50%;top:15%;right:-12%}
-    .phone-deco-3{width:64px;height:64px;border:1px solid rgba(255,255,255,.06);border-radius:50%;bottom:10%;left:-15%}
-    .phone-deco-4{width:16px;height:16px;background:rgba(255,255,255,.08);border-radius:3px;transform:rotate(45deg);bottom:18%;right:-10%}
-    .phone-deco-5{width:70px;height:1.5px;background:linear-gradient(90deg,transparent,rgba(255,255,255,.04),transparent);bottom:4%;left:50%;transform:translateX(-50%)}
-    .phone-deco-6{position:absolute;top:18%;left:55%;width:120px;height:120px;background:radial-gradient(circle,rgba(45,187,116,.06),transparent 70%);border-radius:50%;pointer-events:none}
-    .content{background:#FAFBFA;padding:56px 0 72px}
-    .ch{text-align:center;margin-bottom:36px}
-    .ck{display:inline-flex;align-items:center;gap:6px;background:rgba(22,79,63,.08);border-radius:999px;padding:5px 14px 5px 10px;font-size:11px;font-weight:700;color:#164F3F}
-    .ck-dot{width:5px;height:5px;border-radius:2.5px;background:#2DBB74}
-    .ct{font-size:32px;font-weight:900;letter-spacing:-.03em;margin:12px 0 0;color:#111}
-    .cs{margin:8px 0 0;color:#888;font-size:14px;max-width:520px;margin-left:auto;margin-right:auto}
-    .features{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-top:8px}
-    .fc{background:#fff;border:1px solid #eef1f0;border-radius:16px;padding:22px;transition:all .25s ease;position:relative;overflow:hidden}
-    .fc:hover{border-color:#c5d6ce;box-shadow:0 8px 24px rgba(0,0,0,.04);transform:translateY(-2px)}
-    .fc::before{content:'';position:absolute;top:0;left:0;right:0;height:3px;background:linear-gradient(90deg,#164F3F,#2DBB74);opacity:0;transition:opacity .25s}
-    .fc:hover::before{opacity:1}
-    .fi{width:40px;height:40px;border-radius:10px;background:#EDF7F1;display:grid;place-items:center;font-size:18px;margin-bottom:14px}
-    .ft{font-size:15px;font-weight:800;letter-spacing:-.02em;color:#111}
-    .fb{margin:6px 0 0;color:#888;font-size:12px;line-height:1.5}
-    .cta{margin-top:44px;background:linear-gradient(135deg,#0C3B2E,#1B6B4E);border-radius:20px;padding:40px 48px;display:flex;align-items:center;justify-content:space-between;gap:24px}
-    .cta-l{color:#fff}.cta-t{font-size:22px;font-weight:800;letter-spacing:-.02em}
-    .cta-s{margin:6px 0 0;color:rgba(255,255,255,.7);font-size:13px;max-width:400px;line-height:1.5}
-    .cta-btn{height:44px;padding:0 24px;border-radius:10px;background:#2DBB74;color:#fff;font-size:13px;font-weight:700;border:0;cursor:pointer;display:inline-flex;align-items:center;gap:6px;text-decoration:none;transition:background .2s,transform .15s;white-space:nowrap}
-    .cta-btn:hover{background:#35CC7D;transform:translateY(-1px)}
-    .footer{background:#111;color:rgba(255,255,255,.6);padding:24px 0;font-size:12px}
-    .fi2{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap}
-    .fl{display:flex;gap:18px}.fl a{transition:color .15s}.fl a:hover{color:#fff}.fb2{font-weight:700;color:rgba(255,255,255,.8)}
-    @media(max-width:960px){.hero{grid-template-columns:1fr;text-align:center;padding:32px 0 40px;min-height:auto}.hero-left{max-width:none}.hero-sub{margin-left:auto;margin-right:auto}.hero-buttons{justify-content:center}.hero-right{min-height:400px}.phone-wrapper{transform:scale(.9)}.features{grid-template-columns:1fr 1fr}.cta{flex-direction:column;text-align:center;padding:32px}.cta-s{margin-left:auto;margin-right:auto}}
-    @media(max-width:640px){h1{font-size:34px}.hero{padding:24px 0 20px}.hero-right{min-height:340px;overflow:hidden}.phone-wrapper{transform:scale(.72)}.phone-deco-1,.phone-deco-2,.phone-deco-3,.phone-deco-4,.phone-deco-6{display:none}.features{grid-template-columns:1fr}.ct{font-size:26px}.cta{padding:24px;border-radius:14px}}
-    @media(max-width:400px){.phone-wrapper{transform:scale(.6)}.hero-right{min-height:300px}}
-  </style>
-</head>
-<body>
-  <div class="hero-wrap">
-    <header class="shell topbar">
-      <a class="brand" href="/"><span class="brand-dot"></span> Eki</a>
-      <nav class="toplinks">
-        <a href="/store">Vendors</a>
-        <a href="/find-order">Track order</a>
-        <a href="/vendor">Vendor portal</a>
-        <a href="/help">Support</a>
-        <a class="btn-header" href="https://apps.apple.com/app/id6776307497">Download</a>
-      </nav>
-    </header>
-    <main class="shell hero">
-      <section class="hero-left">
-        <div class="hero-badge"><span class="hero-badge-dot"></span> African foodstuff marketplace</div>
-        <h1>${escape(page.heading)}</h1>
-        <p class="hero-sub">${escape(page.intro)}</p>
-        <div class="hero-buttons">
-          <a class="hero-btn hero-btn-apple" href="https://apps.apple.com/app/id6776307497">
-            <span class="hero-btn-icon">🍎</span>
-            <span class="hero-btn-text"><span class="hero-btn-small">Download on the</span><span class="hero-btn-main">App Store</span></span>
-          </a>
-          <a class="hero-btn hero-btn-google" href="https://play.google.com/store/apps/details?id=com.ekiapp.mobile">
-            <span class="hero-btn-icon">▶</span>
-            <span class="hero-btn-text"><span class="hero-btn-small">Get it on</span><span class="hero-btn-main">Google Play</span></span>
-          </a>
-        </div>
-      </section>
-      <section class="hero-right">
-        <div class="phone-deco phone-deco-1"></div><div class="phone-deco phone-deco-2"></div>
-        <div class="phone-deco phone-deco-3"></div><div class="phone-deco phone-deco-4"></div>
-        <div class="phone-deco phone-deco-5"></div><div class="phone-deco phone-deco-6"></div>
-        <div class="phone-wrapper">
-          <div class="phone-frame">
-            <div class="phone-di"><div class="phone-di-sensor"></div><div class="phone-di-camera"></div></div>
-            <div class="phone-screen">
-              <div class="phone-status"><span>9:41</span><span style="opacity:.4">●●●●○</span></div>
-              <div class="phone-header">
-                <div class="phone-hl"><span class="phone-hg">Good morning 👋</span><span class="phone-hd">${today}</span></div>
-                <div class="phone-avatar">Q</div>
-              </div>
-              <div class="phone-bal">
-                <div class="phone-bal-label">Available balance</div>
-                <div class="phone-bal-amt">€4,280</div>
-                <div class="phone-bal-chg">↑ €320 earned this week</div>
-              </div>
-              <div class="phone-grid">
-                <div class="phone-tile"><div class="phone-tl">Sales today</div><div class="phone-tv">€143</div><div class="phone-ts">+12% vs yesterday</div></div>
-                <div class="phone-tile phone-tile-dk"><div class="phone-tl">This week</div><div class="phone-tv">€2,456</div><div class="phone-ts" style="opacity:.5">3 orders pending</div></div>
-                <div class="phone-tile"><div class="phone-tl">Pending payout</div><div class="phone-tv">€890</div><div class="phone-ts">After delivery</div></div>
-                <div class="phone-tile"><div class="phone-tl">This month</div><div class="phone-tv">€8,340</div><div class="phone-ts">12 orders</div></div>
-              </div>
-              <div class="phone-tag">Business Insights</div>
-              <div class="phone-ins">
-                <div class="phone-in"><div class="phone-in-dot" style="background:#10b981"></div><div class="phone-in-txt">3 new orders today</div></div>
-                <div class="phone-in"><div class="phone-in-dot" style="background:#3b82f6"></div><div class="phone-in-txt">Buyer messages (2)</div></div>
-              </div>
-              <div class="phone-tabs">
-                <div class="phone-tab act"><div class="phone-tab-ic">⬡</div>Home</div>
-                <div class="phone-tab"><div class="phone-tab-ic">⊞</div>Orders</div>
-                <div class="phone-tab"><div class="phone-tab-ic">◉</div>Shop</div>
-                <div class="phone-tab"><div class="phone-tab-ic">✉</div>Inbox</div>
-                <div class="phone-tab"><div class="phone-tab-ic">⚙</div>Profile</div>
-              </div>
-              <div class="phone-home"></div>
-            </div>
-          </div>
-        </div>
-      </section>
-    </main>
-  </div>
-  <section class="content"><div class="shell">
-    <div class="ch"><div class="ck"><span class="ck-dot"></span> How it works</div>
-    <h2 class="ct">Built for African foodstuff vendors</h2>
-    <p class="cs">Everything you need to manage your store, track orders, and grow your business from one dashboard.</p></div>
-    <div class="features">
-      <div class="fc"><div class="fi">🛍️</div><div class="ft">Shop from verified vendors</div><div class="fb">Every vendor reviewed before listing. Buy with confidence knowing each store is vetted.</div></div>
-      <div class="fc"><div class="fi">📦</div><div class="ft">Live order tracking</div><div class="fb">Follow every order from confirmation to delivery with real-time push notifications.</div></div>
-      <div class="fc"><div class="fi">💳</div><div class="ft">Secure Eki checkout</div><div class="fb">Pay by card or wallet. Your payment is protected until you confirm delivery.</div></div>
-      <div class="fc"><div class="fi">⚡</div><div class="ft">One-tap reorder</div><div class="fb">Save favourite vendors and reorder in seconds. No need to re-enter details.</div></div>
-    </div>
-    <div class="cta"><div class="cta-l"><div class="cta-t">Start selling on Eki today</div><div class="cta-s">Create your vendor profile in minutes. Share your store link, receive orders, and get paid.</div></div><a class="cta-btn" href="/vendor">Open vendor portal →</a></div>
-  </div></section>
-  <footer class="footer"><div class="shell fi2">
-    <span class="fb2">Eki marketplace</span>
-    <div class="fl"><a href="/store">Vendors</a><a href="/privacy">Privacy</a><a href="/terms">Terms</a><a href="/help">Help</a><a href="/find-order">Find order</a></div>
-    <span>© ${new Date().getFullYear()} Eki</span>
-  </div></footer>
-</body></html>`;
-}
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"><meta name="theme-color" content="#164F3F">
+<title>${escape(page.title)}</title><meta name="description" content="${escape(page.description)}" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" />
+<style>
+*,*::before,*::after{box-sizing:border-box}html,body{margin:0;padding:0}
+body{background:#FAFBFA;color:#111;font-family:'Inter',sans-serif;-webkit-font-smoothing:antialiased}a{color:inherit;text-decoration:none}
+.hero-wrap{background:linear-gradient(135deg,#0C3B2E,#164F3F 50%,#1B6B4E);color:#fff;overflow:hidden;position:relative}
+.shell{width:min(1160px,calc(100% - 40px));margin:0 auto;position:relative;z-index:1}
+.topbar{height:52px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid rgba(255,255,255,.06)}
+.brand{font-weight:800;font-size:18px;color:#fff;display:flex;align-items:center;gap:8px}.brand-dot{width:10px;height:10px;border-radius:3px;background:#2DBB74;display:inline-block}
+.nav{display:flex;align-items:center;gap:20px;color:rgba(255,255,255,.65);font-size:13px;font-weight:500}.nav a:hover{color:#fff}
+.nav-dl{height:34px;padding:0 16px;border-radius:8px;background:#2DBB74;color:#fff;font-size:12px;font-weight:700;display:inline-flex;align-items:center;margin-left:8px}
+.hero{display:grid;grid-template-columns:1fr 1fr;align-items:center;gap:48px;padding:28px 0 48px;min-height:480px}
+h1{margin:0;font-size:50px;line-height:1.04;letter-spacing:-.045em;font-weight:900;max-width:480px}.sub{margin:14px 0 0;max-width:440px;color:rgba(255,255,255,.72);font-size:15px;line-height:1.5}
+.btns{display:flex;gap:10px;margin-top:24px;flex-wrap:wrap}
+.btn{display:inline-flex;align-items:center;gap:8px;height:46px;padding:0 18px;border-radius:10px;font-size:13px;font-weight:700;transition:all .2s}
+.btn-ap{background:#fff;color:#0C3B2E}.btn-ap:hover{transform:translateY(-2px);box-shadow:0 12px 28px rgba(0,0,0,.2)}
+.btn-gp{background:rgba(255,255,255,.1);color:#fff;border:1px solid rgba(255,255,255,.15)}.btn-gp:hover{background:rgba(255,255,255,.18);transform:translateY(-2px)}
+.btn-lg{font-size:14px;font-weight:700}
+.phone-stage{display:flex;align-items:center;justify-content:center;position:relative;min-height:440px}
+.phone{width:270px;background:#1C1C1E;border-radius:44px;padding:10px;box-shadow:0 40px 80px rgba(0,0,0,.5);position:relative;transition:transform .3s}.phone:hover{transform:scale(1.02) translateY(-4px)}
+.phone-di{position:absolute;top:18px;left:50%;transform:translateX(-50%);z-index:3;background:#0D0D0D;padding:3px 12px;border-radius:18px;height:22px;display:flex;align-items:center;gap:5px}
+.phone-scr{background:#F7F8F6;border-radius:34px;overflow:hidden}
+.phone-st{display:flex;justify-content:space-between;padding:18px 20px 2px;font-size:9px;font-weight:700;color:#111;background:#fff}
+.phone-hdr{background:#164F3F;color:#fff;padding:8px 14px 12px;display:flex;justify-content:space-between;align-items:center}
+.phone-hl{display:flex;flex-direction:column;gap:1px}.phone-hg{font-size:10px;font-weight:600;opacity:.8}.phone-hd{font-size:7px;opacity:.5}
+.phone-av{width:24px;height:24px;border-radius:12px;background:rgba(255,255,255,.12);display:grid;place-items:center;font-weight:700;font-size:9px}
+.phone-bal{background:#164F3F;padding:0 14px 10px;color:#fff}
+.phone-bl{font-size:7px;text-transform:uppercase;opacity:.5;letter-spacing:.04em;font-weight:600}
+.phone-bv{font-size:20px;font-weight:800;margin-top:1px;letter-spacing:-.03em}
+.phone-bs{font-size:7px;opacity:.4;margin-top:1px}
+.phone-gr{padding:8px;display:grid;grid-template-columns:1fr 1fr;gap:5px}
+.phone-ti{background:#fff;border-radius:10px;padding:8px 10px;box-shadow:0 1px 3px rgba(0,0,0,.03)}
+.phone-ti-dk{background:#164F3F;color:#fff}
+.phone-tl{font-size:7px;font-weight:700;opacity:.45;text-transform:uppercase;letter-spacing:.04em}
+.phone-tv{font-size:13px;font-weight:800;margin-top:1px;letter-spacing:-.02em}
+.phone-ts{font-size:6px;opacity:.4;margin-top:1px}
+.phone-tag{font-size:9px;font-weight:800;padding:6px 10px 2px;color:#111}
+.phone-ins{display:grid;grid-template-columns:1fr 1fr;gap:5px;padding:0 8px 6px}
+.phone-in{background:#fff;border-radius:8px;padding:6px 8px;display:flex;align-items:center;gap:5px;box-shadow:0 1px 2px rgba(0,0,0,.02)}
+.phone-in-txt{font-size:7px;font-weight:600;color:#555}
+.phone-tabs{display:flex;justify-content:space-around;padding:4px 4px 2px;background:#fff;border-top:1px solid #f0f0f0}
+.phone-tab{display:flex;flex-direction:column;align-items:center;gap:1px;font-size:6px;font-weight:700;color:#999}
+.phone-tab.act{color:#164F3F}.phone-tab-ic{width:14px;height:14px;border-radius:4px;background:#e8ece9;display:grid;place-items:center;font-size:7px;color:#777}
+.phone-tab.act .phone-tab-ic{background:#164F3F;color:#fff}
+.phone-home{height:2.5px;width:80px;background:#ddd;border-radius:2px;margin:2px auto}
+.deco{position:absolute;pointer-events:none;z-index:0}
+.deco-1{width:44px;height:44px;border:1.5px solid rgba(255,255,255,.1);border-radius:14px;transform:rotate(20deg);top:2%;left:-18%}
+.deco-2{width:22px;height:22px;background:rgba(255,255,255,.06);border-radius:50%;top:15%;right:-12%}
+.deco-3{width:64px;height:64px;border:1px solid rgba(255,255,255,.06);border-radius:50%;bottom:10%;left:-15%}
+.deco-4{width:16px;height:16px;background:rgba(255,255,255,.08);border-radius:3px;transform:rotate(45deg);bottom:18%;right:-10%}
+.footer{background:#fff;border-top:1px solid #eee;padding:16px 0;font-size:12px;color:#999}
+.footer .shell{display:flex;align-items:center;justify-content:space-between}
+.fl{display:flex;gap:16px}.fl a:hover{color:#164F3F}
+@media(max-width:960px){.hero{grid-template-columns:1fr;text-align:center;min-height:auto;padding:24px 0}h1{max-width:none;font-size:36px}.sub{margin-left:auto;margin-right:auto}.btns{justify-content:center}.phone-stage{min-height:360px}.phone{width:230px}}
+@media(max-width:640px){.phone{width:200px}.nav{gap:12px;font-size:11px}}
+</style></head><body>
+<div class="hero-wrap"><header class="shell topbar">
+<div class="brand"><span class="brand-dot"></span>Eki</div>
+<nav class="nav"><a href="/store">Vendors</a><a href="/find-order">Track</a><a href="/vendor">Vendor</a><a class="nav-dl" href="https://apps.apple.com/app/id6776307497">Download</a></nav>
+</header>
+<main class="shell hero">
+<div><h1>${escape(page.heading)}</h1><p class="sub">${escape(page.intro)}</p>
+<div class="btns"><a class="btn btn-ap" href="https://apps.apple.com/app/id6776307497"><span class="btn-lg">App Store</span></a>
+<a class="btn btn-gp" href="https://play.google.com/store/apps/details?id=com.ekiapp.mobile"><span class="btn-lg">Google Play</span></a></div></div>
+<div class="phone-stage">
+<div class="deco deco-1"></div><div class="deco deco-2"></div><div class="deco deco-3"></div><div class="deco deco-4"></div>
+<div class="phone"><div class="phone-di"><div style="width:14px;height:4px;border-radius:2px;background:#1A1A1A"></div><div style="width:6px;height:6px;border-radius:50%;background:#333"></div></div>
+<div class="phone-scr">
+<div class="phone-st"><span>9:41</span><span style="opacity:.4">●●●●○</span></div>
+<div class="phone-hdr"><div class="phone-hl"><span class="phone-hg">Good morning</span><span class="phone-hd">${today}</span></div><div class="phone-av">Q</div></div>
+<div class="phone-bal"><div class="phone-bl">Available balance</div><div class="phone-bv">€4,280</div><div class="phone-bs">+€320 this week</div></div>
+<div class="phone-gr">
+<div class="phone-ti"><div class="phone-tl">Sales today</div><div class="phone-tv">€143</div><div class="phone-ts">+12% vs yesterday</div></div>
+<div class="phone-ti phone-ti-dk"><div class="phone-tl">This week</div><div class="phone-tv">€2,456</div><div class="phone-ts" style="opacity:.5">3 pending</div></div>
+<div class="phone-ti"><div class="phone-tl">Pending</div><div class="phone-tv">€890</div><div class="phone-ts">After delivery</div></div>
+<div class="phone-ti"><div class="phone-tl">This month</div><div class="phone-tv">€8,340</div><div class="phone-ts">12 orders</div></div>
+</div>
+<div class="phone-tag">Insights</div>
+<div class="phone-ins"><div class="phone-in"><div style="width:5px;height:5px;border-radius:2.5px;background:#10b981;flex:0 0 auto"></div><div class="phone-in-txt">Orders (3)</div></div><div class="phone-in"><div style="width:5px;height:5px;border-radius:2.5px;background:#3b82f6;flex:0 0 auto"></div><div class="phone-in-txt">Messages (2)</div></div></div>
+<div class="phone-tabs"><div class="phone-tab act"><div class="phone-tab-ic">⬡</div>Home</div><div class="phone-tab"><div class="phone-tab-ic">⊞</div>Orders</div><div class="phone-tab"><div class="phone-tab-ic">◉</div>Shop</div><div class="phone-tab"><div class="phone-tab-ic">✉</div>Inbox</div><div class="phone-tab"><div class="phone-tab-ic">⚙</div>Profile</div></div>
+<div class="phone-home"></div></div></div></div></main></div>
+<footer class="footer"><div class="shell"><div class="fl"><a href="/privacy">Privacy</a><a href="/terms">Terms</a><a href="/help">Help</a></div><span>© ${new Date().getFullYear()} Eki</span></div></footer>
+</body></html>`;}
 
 function renderFindOrderLayout(): string {
   return `<!DOCTYPE html>
@@ -1022,25 +917,19 @@ function renderVendorPortalLayout(): string { return `<!DOCTYPE html>
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" />
 <style>
-*,*::before,*::after{box-sizing:border-box}
-html,body{margin:0;padding:0}
-body{background:#F5F6F5;color:#111;font-family:'Inter',sans-serif;-webkit-font-smoothing:antialiased}
-a{color:inherit;text-decoration:none}
-.shell{width:min(1120px,calc(100% - 24px));margin:0 auto}
+*,*::before,*::after{box-sizing:border-box}html,body{margin:0;padding:0}
+body{background:#F5F6F5;color:#111;font-family:'Inter',sans-serif}
+a{color:inherit;text-decoration:none}.shell{width:min(1120px,calc(100% - 24px));margin:0 auto}
 .topbar{height:48px;background:#fff;border-bottom:1px solid #e5e7eb;display:flex;align-items:center;justify-content:space-between;padding:0 max(12px,calc((100vw - 1120px)/2))}
-.brand{font-weight:800;font-size:14px;color:#164F3F;display:flex;align-items:center;gap:6px}
-.brand-dot{width:8px;height:8px;border-radius:4px;background:#164F3F;display:inline-block}
+.brand{font-weight:800;font-size:14px;color:#164F3F;display:flex;align-items:center;gap:6px}.brand-dot{width:8px;height:8px;border-radius:4px;background:#164F3F;display:inline-block}
 .toplinks{display:flex;gap:16px;font-size:12px;font-weight:600;color:#666}
 .card{background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:18px;box-shadow:0 1px 6px rgba(0,0,0,.04)}
 .btn{display:inline-flex;align-items:center;justify-content:center;height:40px;padding:0 16px;border-radius:8px;font-weight:700;font-size:12px;border:0;cursor:pointer}
-.btn-primary{background:#164F3F;color:#fff}
-.btn-primary:hover{background:#1d664c}
-.btn-secondary{background:#fff;color:#164F3F;border:1px solid #dce3e0}
+.btn-primary{background:#164F3F;color:#fff}.btn-secondary{border:1px solid #dce3e0;background:#fff;color:#164F3F}
 .input{width:100%;height:42px;border:1px solid #dce3e0;border-radius:8px;padding:0 12px;font-size:13px;outline:none}
 .input:focus{border-color:#164F3F;box-shadow:0 0 0 3px rgba(22,79,63,.1)}
 .msg{display:none;padding:10px 12px;border-radius:8px;font-size:12px;margin-bottom:12px}
 .msg.err{display:block;background:#fff0f0;border:1px solid #f3caca;color:#a62e2e}
-.msg.ok{display:block;background:#eaf8ef;border:1px solid #cbeed9;color:#076b51}
 .hidden{display:none!important}
 .loading{text-align:center;padding:40px;color:#999;font-size:13px}
 .grid-4{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}
@@ -1051,21 +940,15 @@ a{color:inherit;text-decoration:none}
 .login-page{min-height:100vh;display:grid;place-items:center;padding:24px}
 .login-card{width:min(100%,380px);background:#fff;border:1px solid #e5e7eb;border-radius:18px;padding:28px;box-shadow:0 8px 24px rgba(0,0,0,.06)}
 .login-logo{width:40px;height:40px;border-radius:10px;background:#164F3F;color:#fff;display:grid;place-items:center;font-weight:800;margin-bottom:18px}
-.login-title{font-size:22px;font-weight:800;letter-spacing:-.03em}
-.login-sub{color:#999;font-size:13px;margin:4px 0 18px}
-.form-group{margin-bottom:14px}
-.form-group label{display:block;font-size:12px;font-weight:700;margin-bottom:5px;color:#444}
+.login-title{font-size:22px;font-weight:800}.login-sub{color:#999;font-size:13px;margin:4px 0 18px}
+.form-group{margin-bottom:14px}.form-group label{display:block;font-size:12px;font-weight:700;margin-bottom:5px;color:#444}
 .dash-grid{display:grid;grid-template-columns:1fr 280px;gap:18px;padding:18px 0}
-.preview-phone{width:100%;background:#1C1C1E;border-radius:32px;padding:8px;box-shadow:0 8px 32px rgba(0,0,0,.15)}
-.preview-screen{background:#F7F8F6;border-radius:24px;overflow:hidden}
-.preview-header{background:#164F3F;color:#fff;padding:10px 12px;display:flex;justify-content:space-between;align-items:center;font-size:10px}
-.preview-body{padding:10px}
-.products-list{display:grid;gap:8px}
-.badge{display:inline-flex;padding:2px 8px;border-radius:999px;font-size:10px;font-weight:700}
-.badge-green{background:#eaf8ef;color:#076b51}
-.badge-blue{background:#e8f0fe;color:#1a56db}
-.badge-yellow{background:#fef3e2;color:#a65d00}
-.badge-gray{background:#f0f0f0;color:#666}
+.phone-frame{width:100%;background:#1C1C1E;border-radius:32px;padding:8px;box-shadow:0 8px 32px rgba(0,0,0,.15)}
+.phone-screen{background:#F7F8F6;border-radius:24px;overflow:hidden}
+.phone-hdr{background:#164F3F;color:#fff;padding:10px 12px;display:flex;justify-content:space-between;align-items:center;font-size:10px}
+.phone-body{padding:10px}
+.phone-row{display:flex;justify-content:space-between;font-size:10px;padding:6px 0;border-bottom:1px solid #eee}
+.phone-lbl{color:#999}.phone-val{font-weight:700;color:#111}
 @media(max-width:768px){.dash-grid{grid-template-columns:1fr}.grid-4{grid-template-columns:1fr 1fr}}
 @media(max-width:480px){.grid-4{grid-template-columns:1fr 1fr;gap:8px}.stat-value{font-size:18px}}
 </style></head><body>
@@ -1074,7 +957,7 @@ a{color:inherit;text-decoration:none}
   <div class="login-card">
     <div class="login-logo">eki</div>
     <div class="login-title">Vendor Portal</div>
-    <div class="login-sub">Sign in to view analytics and store preview.</div>
+    <div class="login-sub">Sign in to view your store analytics.</div>
     <div id="loginMsg" class="msg"></div>
     <form id="loginForm">
       <div class="form-group"><label>Email</label><input id="email" class="input" type="email" placeholder="vendor@eki.app" /></div>
@@ -1088,37 +971,37 @@ a{color:inherit;text-decoration:none}
     <a class="brand" href="/"><span class="brand-dot"></span> Eki Vendor</a>
     <div class="toplinks"><a href="#" id="logoutBtn" style="color:#e55353">Sign out</a></div>
   </div>
-  <div class="shell dash-grid">
-    <div><div id="tabAnalytics"><div class="loading">Sign in to view dashboard</div></div></div>
-    <div class="preview-phone" id="storePreviewCol"><div class="preview-screen"><div class="preview-header"><span>My Store</span></div><div class="preview-body" id="storePreview"><div style="text-align:center;padding:24px;color:#999;font-size:11px">Sign in to see store preview</div></div></div></div>
+  <div class="shell dash-grid" id="dashContent">
+    <div><div id="tabAnalytics"><div class="loading">Sign in to view</div></div></div>
+    <div class="phone-frame"><div class="phone-screen"><div class="phone-hdr"><span>My Store</span></div><div class="phone-body" id="storePreview"><div style="text-align:center;padding:24px;color:#999;font-size:11px">Sign in first</div></div></div></div>
   </div>
 </div></div>
-<script>const API='https://ekiapp-backend.vercel.app';let T='';
+<script>
+const API='https://ekiapp-backend.vercel.app';let T='';
 function $(id){return document.getElementById(id)}
+async function loadDash(){
+  $('tabAnalytics').innerHTML='<div class="loading">Loading...</div>';
+  try{
+    const r=await fetch(API+'/api/vendors/me/earnings',{headers:{'Authorization':'Bearer '+T}});
+    const d=await r.json();const e=d.earnings||d||{};
+    $('tabAnalytics').innerHTML='<div class="grid-4">'+
+      '<div class="stat-card"><div class="stat-label">Sales Today</div><div class="stat-value">'+(e.salesToday?fmt(e.salesToday,e.currency):'€0')+'</div><div class="stat-sub">Live</div></div>'+
+      '<div class="stat-card"><div class="stat-label">This Week</div><div class="stat-value">'+(e.salesThisWeek?fmt(e.salesThisWeek,e.currency):'€0')+'</div><div class="stat-sub">7 days</div></div>'+
+      '<div class="stat-card"><div class="stat-label">This Month</div><div class="stat-value">'+(e.salesThisMonth?fmt(e.salesThisMonth,e.currency):'€0')+'</div><div class="stat-sub">Monthly</div></div>'+
+      '<div class="stat-card"><div class="stat-label">Available</div><div class="stat-value">'+(e.availableBalance?fmt(e.availableBalance,e.currency):'€0')+'</div><div class="stat-sub">For payout</div></div></div>';
+    $('storePreview').innerHTML='<div style="font-weight:800;font-size:13px;margin-bottom:6px">'+($('email').value)+'</div>'+
+      '<div class="phone-row"><span class="phone-lbl">Revenue</span><span class="phone-val">'+(e.salesThisMonth?fmt(e.salesThisMonth,e.currency):'€0')+'</span></div>'+
+      '<div class="phone-row"><span class="phone-lbl">Balance</span><span class="phone-val">'+(e.availableBalance?fmt(e.availableBalance,e.currency):'€0')+'</span></div>'+
+      '<div class="phone-row" style="border-bottom:0"><span class="phone-lbl">Pending</span><span class="phone-val">'+(e.pendingPayout?fmt(e.pendingPayout,e.currency):'€0')+'</span></div>';
+  }catch(e){$('tabAnalytics').innerHTML='<div class="msg err" style="display:block">'+e.message+'</div>';console.error(e)}
+}
+function fmt(n,c){return new Intl.NumberFormat('en-GB',{style:'currency',currency:c||'EUR',maximumFractionDigits:0}).format((n||0)/100)}
 $('loginForm').addEventListener('submit',async e=>{e.preventDefault();
   $('loginBtn').disabled=true;const r=await fetch(API+'/api/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:$('email').value.trim(),password:$('pass').value})});
   const d=await r.json();$('loginBtn').disabled=false;
   if(!r.ok||!d.token){$('loginMsg').textContent=d.message||'Invalid';$('loginMsg').className='msg err';return}
   T=d.token;$('loginScreen').className='hidden';$('dashScreen').className='';loadDash();
 });
-async function loadDash(){
-  $('tabAnalytics').innerHTML='<div class="loading">Loading...</div>';
-  try{
-    const r=await fetch(API+'/api/vendors/me/analytics',{headers:{'Authorization':'Bearer '+T}});
-    const d=await r.json();
-    const a=d.analytics||d;s=a.summary||{};
-    $('tabAnalytics').innerHTML='<div class="grid-4">'+
-      '<div class="stat-card"><div class="stat-label">Revenue</div><div class="stat-value">'+fmt(s.totalRevenue||0,s.currency)+'</div><div class="stat-sub">All time</div></div>'+
-      '<div class="stat-card"><div class="stat-label">Available</div><div class="stat-value">'+fmt(s.availableForPayout||0,s.currency)+'</div><div class="stat-sub">Ready for payout</div></div>'+
-      '<div class="stat-card"><div class="stat-label">Pending</div><div class="stat-value">'+fmt(s.pendingBalance||0,s.currency)+'</div><div class="stat-sub">On hold</div></div>'+
-      '<div class="stat-card"><div class="stat-label">Profit</div><div class="stat-value">'+fmt(s.estimatedProfit||0,s.currency)+'</div><div class="stat-sub">Estimated</div></div></div>';
-      $('storePreview').innerHTML='<div style="font-weight:800;font-size:14px;margin-bottom:8px">'+($('email').value)+'</div>'+
-      '<div style="display:flex;justify-content:space-between;font-size:10px;padding:6px 0;border-bottom:1px solid #eee"><span style="color:#999">Revenue</span><span style="font-weight:700">'+fmt(s.totalRevenue||0,s.currency)+'</span></div>'+
-      '<div style="display:flex;justify-content:space-between;font-size:10px;padding:6px 0;border-bottom:1px solid #eee"><span style="color:#999">Available</span><span style="font-weight:700">'+fmt(s.availableForPayout||0,s.currency)+'</span></div>'+
-      '<div style="display:flex;justify-content:space-between;font-size:10px;padding:6px 0"><span style="color:#999">Pending</span><span style="font-weight:700">'+fmt(s.pendingBalance||0,s.currency)+'</span></div>';
-  }catch(e){$('tabAnalytics').innerHTML='<div class="msg err" style="display:block">'+e.message+'</div>'}
-}
-function fmt(n,c){return new Intl.NumberFormat('en-GB',{style:'currency',currency:c||'EUR',maximumFractionDigits:0}).format((n||0))}
 $('logoutBtn').addEventListener('click',e=>{e.preventDefault();T='';$('dashScreen').className='hidden';$('loginScreen').className=''});
 </script></body></html>`; }
 
