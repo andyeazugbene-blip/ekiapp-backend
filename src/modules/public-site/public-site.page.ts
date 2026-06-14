@@ -344,38 +344,55 @@ function renderHomeLayout(page: PageDefinition): string {
     .scan-copy{margin-top:12px;color:rgba(255,255,255,.7);font-size:11px;line-height:1.4}
     .smart-badge{display:inline-flex;gap:8px;margin-top:16px;flex-wrap:wrap;align-items:center}
 
-    /* Phone mockup — pure CSS vendor dashboard */
-    .phone-stage{position:relative;min-height:460px;display:flex;align-items:center;justify-content:center}
-    .phone{width:min(62vw,300px);background:#0D0D0D;border-radius:36px;padding:10px;box-shadow:0 28px 60px rgba(0,0,0,.4),0 0 0 1px rgba(255,255,255,.06);transition:transform .3s ease}
-    .phone:hover{transform:scale(1.02) translateY(-4px)}
-    .phone-notch{width:110px;height:20px;background:#0D0D0D;border-radius:0 0 14px 14px;margin:-10px auto 0;position:relative;z-index:2}
-    .phone-screen{background:#F7F8F6;border-radius:26px;overflow:hidden;position:relative}
-    .phone-status{display:flex;justify-content:space-between;padding:10px 16px 4px;font-size:10px;font-weight:700;color:#111;background:#fff}
-    .phone-header{background:#164F3F;color:#fff;padding:10px 14px 16px;display:flex;justify-content:space-between;align-items:center}
+    /* Decorative phone stage — iPhone 17 Pro + surrounding elements */
+    .phone-stage{position:relative;min-height:500px;display:flex;align-items:center;justify-content:center}
+
+    /* Background decorative floating elements */
+    .phone-stage::before,.phone-stage::after{content:'';position:absolute;border-radius:50%;pointer-events:none}
+    .phone-stage::before{width:140px;height:140px;background:radial-gradient(circle,rgba(255,255,255,.12),transparent 70%);top:10%;right:5%}
+    .phone-stage::after{width:220px;height:220px;background:radial-gradient(circle,rgba(255,255,255,.06),transparent 70%);bottom:-10%;left:-8%}
+    .phone-deco{position:absolute;pointer-events:none}
+    .phone-deco-1{width:50px;height:50px;border:2px solid rgba(255,255,255,.1);border-radius:18px;transform:rotate(25deg);top:8%;left:4%}
+    .phone-deco-2{width:28px;height:28px;background:rgba(255,255,255,.06);border-radius:50%;top:22%;right:8%}
+    .phone-deco-3{width:80px;height:80px;border:1px solid rgba(255,255,255,.07);border-radius:50%;bottom:8%;left:12%}
+    .phone-deco-4{width:18px;height:18px;background:rgba(255,255,255,.08);border-radius:4px;transform:rotate(45deg);bottom:22%;right:6%}
+
+    .phone{width:min(52vw,270px);background:#1C1C1E;border-radius:48px;padding:12px;box-shadow:0 30px 80px rgba(0,0,0,.5),0 0 0 1px rgba(255,255,255,.08);transition:transform .3s ease;position:relative;z-index:1}
+    .phone:hover{transform:scale(1.03) translateY(-6px)}
+
+    /* iPhone 17 Pro Dynamic Island */
+    .phone-di{position:absolute;top:20px;left:50%;transform:translateX(-50%);z-index:3;background:#0D0D0D;padding:4px 14px 4px 12px;border-radius:20px;height:24px;min-width:90px;display:flex;align-items:center;gap:6px;justify-content:space-between}
+    .phone-di-camera{width:7px;height:7px;border-radius:50%;background:#2A2A2A;flex:0 0 auto}
+    .phone-di-sensor{width:16px;height:5px;border-radius:3px;background:#1A1A1A;flex:0 0 auto}
+    .phone-di-dot{width:6px;height:6px;border-radius:3px;background:#1C1C1E;border:1px solid #2A2A2A;flex:0 0 auto}
+
+    .phone-screen{background:#F7F8F6;border-radius:36px;overflow:hidden;position:relative}
+    .phone-status{display:flex;justify-content:space-between;padding:16px 20px 2px;font-size:10px;font-weight:700;color:#111;background:#fff;letter-spacing:.02em}
+    .phone-header{background:#164F3F;color:#fff;padding:8px 14px 14px;display:flex;justify-content:space-between;align-items:center}
     .phone-greeting{font-size:11px;font-weight:700;opacity:.8}
-    .phone-date{font-size:9px;opacity:.6}
-    .phone-avatar{width:26px;height:26px;border-radius:13px;background:rgba(255,255,255,.2);display:grid;place-items:center;font-weight:800;font-size:10px}
-    .phone-balance{background:#164F3F;padding:0 14px 14px;color:#fff}
-    .phone-balance-label{font-size:9px;opacity:.65}
-    .phone-balance-amt{font-size:22px;font-weight:800;margin-top:2px;letter-spacing:-.03em}
-    .phone-balance-sub{font-size:9px;opacity:.5;margin-top:2px}
-    .phone-grid{padding:10px;display:grid;grid-template-columns:1fr 1fr;gap:6px}
-    .phone-tile{background:#fff;border-radius:10px;padding:10px;min-height:64px;display:flex;flex-direction:column;justify-content:center;box-shadow:0 1px 3px rgba(0,0,0,.04)}
+    .phone-date{font-size:8px;opacity:.55;margin-top:1px}
+    .phone-avatar{width:26px;height:26px;border-radius:13px;background:rgba(255,255,255,.15);display:grid;place-items:center;font-weight:800;font-size:10px;border:1px solid rgba(255,255,255,.1)}
+    .phone-balance{background:#164F3F;padding:0 14px 12px;color:#fff}
+    .phone-balance-label{font-size:8px;opacity:.65;font-weight:600}
+    .phone-balance-amt{font-size:22px;font-weight:800;margin-top:1px;letter-spacing:-.03em}
+    .phone-balance-sub{font-size:8px;opacity:.5;margin-top:1px}
+    .phone-grid{padding:10px 10px 6px;display:grid;grid-template-columns:1fr 1fr;gap:6px}
+    .phone-tile{background:#fff;border-radius:12px;padding:10px;display:flex;flex-direction:column;justify-content:center;box-shadow:0 1px 4px rgba(0,0,0,.04)}
     .phone-tile-dark{background:#164F3F;color:#fff}
-    .phone-tile-label{font-size:8px;font-weight:700;opacity:.5;text-transform:uppercase;letter-spacing:.03em}
-    .phone-tile-value{font-size:15px;font-weight:800;margin-top:3px;letter-spacing:-.02em}
-    .phone-tile-sub{font-size:7px;opacity:.45;margin-top:1px}
-    .phone-section{font-size:9px;font-weight:800;padding:10px 10px 4px;color:#111}
-    .phone-insights{display:grid;grid-template-columns:1fr 1fr;gap:6px;padding:0 10px 8px}
-    .phone-insight{background:#fff;border-radius:8px;padding:8px 10px;display:flex;align-items:center;gap:6px;box-shadow:0 1px 2px rgba(0,0,0,.04)}
+    .phone-tile-label{font-size:8px;font-weight:700;opacity:.5;text-transform:uppercase;letter-spacing:.04em;margin-bottom:1px}
+    .phone-tile-value{font-size:15px;font-weight:800;margin-top:1px;letter-spacing:-.02em}
+    .phone-tile-sub{font-size:7px;opacity:.45;margin-top:1px;line-height:1.2}
+    .phone-section{font-size:10px;font-weight:800;padding:6px 12px 4px;color:#111;letter-spacing:-.02em}
+    .phone-insights{display:grid;grid-template-columns:1fr 1fr;gap:6px;padding:0 10px 6px}
+    .phone-insight{background:#fff;border-radius:10px;padding:8px 10px;display:flex;align-items:center;gap:7px;box-shadow:0 1px 3px rgba(0,0,0,.03)}
     .phone-insight-dot{width:6px;height:6px;border-radius:3px;flex:0 0 auto}
-    .phone-insight-text{font-size:7px;font-weight:600;color:#4a4a4a;line-height:1.2}
-    .phone-tabbar{display:flex;justify-content:space-around;padding:6px 4px 4px;background:#fff;border-top:1px solid #eee}
-    .phone-tab{display:flex;flex-direction:column;align-items:center;gap:2px;font-size:7px;font-weight:700;color:#999}
+    .phone-insight-text{font-size:8px;font-weight:600;color:#4a4a4a;line-height:1.2}
+    .phone-tabbar{display:flex;justify-content:space-around;padding:5px 4px 2px;background:#fff;border-top:1px solid #f0f0f0}
+    .phone-tab{display:flex;flex-direction:column;align-items:center;gap:2px;font-size:7px;font-weight:700;color:#999;transition:color .2s}
     .phone-tab.active{color:#164F3F}
-    .phone-tab-icon{width:16px;height:16px;border-radius:4px;background:#e8ece9;display:grid;place-items:center;font-size:8px;color:#777}
+    .phone-tab-icon{width:16px;height:16px;border-radius:5px;background:#e8ece9;display:grid;place-items:center;font-size:8px;color:#777}
     .phone-tab.active .phone-tab-icon{background:#164F3F;color:#fff}
-    .phone-indicator{height:3px;width:80px;background:#ddd;border-radius:2px;margin:4px auto 2px}
+    .phone-indicator{height:3px;width:90px;background:#ddd;border-radius:2px;margin:3px auto 2px}
 
     .steps-band{background:#FFFFFF;padding:0 0 92px}
     .steps-head{padding:26px 0 10px;display:flex;align-items:center;justify-content:space-between;gap:16px}
@@ -424,8 +441,12 @@ function renderHomeLayout(page: PageDefinition): string {
         </div>
       </section>
       <section class="phone-stage" aria-label="Eki app preview">
+        <div class="phone-deco phone-deco-1"></div>
+        <div class="phone-deco phone-deco-2"></div>
+        <div class="phone-deco phone-deco-3"></div>
+        <div class="phone-deco phone-deco-4"></div>
         <div class="phone">
-          <div class="phone-notch"></div>
+          <div class="phone-di"><div class="phone-di-camera"></div><div class="phone-di-sensor"></div><div class="phone-di-dot"></div></div>
           <div class="phone-screen">
             <div class="phone-status"><span>9:41</span><span>📶 🔋</span></div>
             <div class="phone-header">
