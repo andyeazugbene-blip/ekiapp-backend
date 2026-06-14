@@ -197,12 +197,14 @@ app.get("/apple-app-site-association", (_req, res) => {
   res.redirect(301, "/.well-known/apple-app-site-association");
 });
 
+// Bootstrap admin on first request (before error handlers)
+let bootstrapped = false;
+app.use((_req, _res, next) => { if (!bootstrapped) { bootstrapped = true; bootstrapAdmin().catch(() => {}); } next(); });
+
 // Error handling
 app.use(notFoundHandler);
 app.use(errorHandler);
 
-let bootstrapped = false;
-app.use((_req, _res, next) => { if (!bootstrapped) { bootstrapped = true; bootstrapAdmin().catch(e => console.error('Bootstrap error:', e)); } next(); });
 
 // Default export for Vercel serverless compatibility
 export default app;
