@@ -21,6 +21,8 @@ import {
   getPublicPrivacyPage,
   getPublicTermsPage,
   getPublicVendorSubscriptionPage,
+  getPublicVendorPortalPage,
+  getPublicBuyerCartPage,
 } from "./modules/public-site/public-site.page";
 import {
   getPublicStoreCheckoutPage,
@@ -146,6 +148,12 @@ app.get("/invite/:code", (req, res, next) => {
 });
 app.get("/vendor/subscription", (req, res, next) => {
   Promise.resolve(getPublicVendorSubscriptionPage(req, res)).catch(next);
+});
+app.get("/vendor", (req, res, next) => {
+  Promise.resolve(getPublicVendorPortalPage(req, res)).catch(next);
+});
+app.get("/cart", (req, res, next) => {
+  Promise.resolve(getPublicBuyerCartPage(req, res)).catch(next);
 });
 app.get("/store", (req, res, next) => {
   Promise.resolve(getPublicStoreDirectoryPage(req, res)).catch(next);

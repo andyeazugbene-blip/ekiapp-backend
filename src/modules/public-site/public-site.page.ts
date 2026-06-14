@@ -1060,6 +1060,157 @@ function sendPage(response: Response, page: PageDefinition): void {
   response.status(200).send(renderLayout(page));
 }
 
+function renderVendorPortalLayout(): string { return `<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"><meta name="theme-color" content="#164F3F">
+<title>Vendor Portal | Eki</title>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" />
+<style>
+*,*::before,*::after{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{background:#F5F6F5;color:#111;font-family:'Inter',sans-serif;-webkit-font-smoothing:antialiased}
+a{color:inherit;text-decoration:none}
+.shell{width:min(1120px,calc(100% - 24px));margin:0 auto}
+.topbar{height:48px;background:#fff;border-bottom:1px solid #e5e7eb;display:flex;align-items:center;justify-content:space-between;padding:0 max(12px,calc((100vw - 1120px)/2))}
+.brand{font-weight:800;font-size:14px;color:#164F3F;display:flex;align-items:center;gap:6px}
+.brand-dot{width:8px;height:8px;border-radius:4px;background:#164F3F;display:inline-block}
+.toplinks{display:flex;gap:16px;font-size:12px;font-weight:600;color:#666}
+.card{background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:18px;box-shadow:0 1px 6px rgba(0,0,0,.04)}
+.btn{display:inline-flex;align-items:center;justify-content:center;height:40px;padding:0 16px;border-radius:8px;font-weight:700;font-size:12px;border:0;cursor:pointer}
+.btn-primary{background:#164F3F;color:#fff}
+.btn-primary:hover{background:#1d664c}
+.btn-secondary{background:#fff;color:#164F3F;border:1px solid #dce3e0}
+.input{width:100%;height:42px;border:1px solid #dce3e0;border-radius:8px;padding:0 12px;font-size:13px;outline:none}
+.input:focus{border-color:#164F3F;box-shadow:0 0 0 3px rgba(22,79,63,.1)}
+.msg{display:none;padding:10px 12px;border-radius:8px;font-size:12px;margin-bottom:12px}
+.msg.err{display:block;background:#fff0f0;border:1px solid #f3caca;color:#a62e2e}
+.msg.ok{display:block;background:#eaf8ef;border:1px solid #cbeed9;color:#076b51}
+.hidden{display:none!important}
+.loading{text-align:center;padding:40px;color:#999;font-size:13px}
+.grid-4{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}
+.stat-card{background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:14px}
+.stat-label{font-size:11px;color:#999;font-weight:600;text-transform:uppercase}
+.stat-value{font-size:24px;font-weight:800;margin-top:3px;color:#111}
+.stat-sub{font-size:11px;color:#aaa;margin-top:2px}
+.login-page{min-height:100vh;display:grid;place-items:center;padding:24px}
+.login-card{width:min(100%,380px);background:#fff;border:1px solid #e5e7eb;border-radius:18px;padding:28px;box-shadow:0 8px 24px rgba(0,0,0,.06)}
+.login-logo{width:40px;height:40px;border-radius:10px;background:#164F3F;color:#fff;display:grid;place-items:center;font-weight:800;margin-bottom:18px}
+.login-title{font-size:22px;font-weight:800;letter-spacing:-.03em}
+.login-sub{color:#999;font-size:13px;margin:4px 0 18px}
+.form-group{margin-bottom:14px}
+.form-group label{display:block;font-size:12px;font-weight:700;margin-bottom:5px;color:#444}
+.dash-grid{display:grid;grid-template-columns:1fr 280px;gap:18px;padding:18px 0}
+.preview-phone{width:100%;background:#1C1C1E;border-radius:32px;padding:8px;box-shadow:0 8px 32px rgba(0,0,0,.15)}
+.preview-screen{background:#F7F8F6;border-radius:24px;overflow:hidden}
+.preview-header{background:#164F3F;color:#fff;padding:10px 12px;display:flex;justify-content:space-between;align-items:center;font-size:10px}
+.preview-body{padding:10px}
+.products-list{display:grid;gap:8px}
+.badge{display:inline-flex;padding:2px 8px;border-radius:999px;font-size:10px;font-weight:700}
+.badge-green{background:#eaf8ef;color:#076b51}
+.badge-blue{background:#e8f0fe;color:#1a56db}
+.badge-yellow{background:#fef3e2;color:#a65d00}
+.badge-gray{background:#f0f0f0;color:#666}
+@media(max-width:768px){.dash-grid{grid-template-columns:1fr}.grid-4{grid-template-columns:1fr 1fr}}
+@media(max-width:480px){.grid-4{grid-template-columns:1fr 1fr;gap:8px}.stat-value{font-size:18px}}
+</style></head><body>
+<div id="app">
+<div class="login-page" id="loginScreen">
+  <div class="login-card">
+    <div class="login-logo">eki</div>
+    <div class="login-title">Vendor Portal</div>
+    <div class="login-sub">Sign in to view analytics and store preview.</div>
+    <div id="loginMsg" class="msg"></div>
+    <form id="loginForm">
+      <div class="form-group"><label>Email</label><input id="email" class="input" type="email" placeholder="vendor@eki.app" /></div>
+      <div class="form-group"><label>Password</label><input id="pass" class="input" type="password" /></div>
+      <button class="btn btn-primary" style="width:100%;margin-top:6px" id="loginBtn">Sign In</button>
+    </form>
+  </div>
+</div>
+<div id="dashScreen" class="hidden">
+  <div class="topbar">
+    <a class="brand" href="/"><span class="brand-dot"></span> Eki Vendor</a>
+    <div class="toplinks"><a href="#" id="logoutBtn" style="color:#e55353">Sign out</a></div>
+  </div>
+  <div class="shell dash-grid">
+    <div><div id="tabAnalytics"><div class="loading">Sign in to view dashboard</div></div></div>
+    <div class="preview-phone" id="storePreviewCol"><div class="preview-screen"><div class="preview-header"><span>My Store</span></div><div class="preview-body" id="storePreview"><div style="text-align:center;padding:24px;color:#999;font-size:11px">Sign in to see store preview</div></div></div></div>
+  </div>
+</div></div>
+<script>const API='https://ekiapp-backend.vercel.app';let T='';
+function $(id){return document.getElementById(id)}
+$('loginForm').addEventListener('submit',async e=>{e.preventDefault();
+  $('loginBtn').disabled=true;const r=await fetch(API+'/api/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:$('email').value.trim(),password:$('pass').value})});
+  const d=await r.json();$('loginBtn').disabled=false;
+  if(!r.ok||!d.token){$('loginMsg').textContent=d.message||'Invalid';$('loginMsg').className='msg err';return}
+  T=d.token;$('loginScreen').className='hidden';$('dashScreen').className='';loadDash();
+});
+async function loadDash(){
+  $('tabAnalytics').innerHTML='<div class="loading">Loading...</div>';
+  try{
+    const r=await fetch(API+'/api/vendors/me/analytics',{headers:{'Authorization':'Bearer '+T}});
+    const d=await r.json();
+    const a=d.analytics||d;s=a.summary||{};
+    $('tabAnalytics').innerHTML='<div class="grid-4">'+
+      '<div class="stat-card"><div class="stat-label">Revenue</div><div class="stat-value">'+fmt(s.totalRevenue||0,s.currency)+'</div><div class="stat-sub">All time</div></div>'+
+      '<div class="stat-card"><div class="stat-label">Available</div><div class="stat-value">'+fmt(s.availableForPayout||0,s.currency)+'</div><div class="stat-sub">Ready for payout</div></div>'+
+      '<div class="stat-card"><div class="stat-label">Pending</div><div class="stat-value">'+fmt(s.pendingBalance||0,s.currency)+'</div><div class="stat-sub">On hold</div></div>'+
+      '<div class="stat-card"><div class="stat-label">Profit</div><div class="stat-value">'+fmt(s.estimatedProfit||0,s.currency)+'</div><div class="stat-sub">Estimated</div></div></div>';
+      $('storePreview').innerHTML='<div style="font-weight:800;font-size:14px;margin-bottom:8px">'+($('email').value)+'</div>'+
+      '<div style="display:flex;justify-content:space-between;font-size:10px;padding:6px 0;border-bottom:1px solid #eee"><span style="color:#999">Revenue</span><span style="font-weight:700">'+fmt(s.totalRevenue||0,s.currency)+'</span></div>'+
+      '<div style="display:flex;justify-content:space-between;font-size:10px;padding:6px 0;border-bottom:1px solid #eee"><span style="color:#999">Available</span><span style="font-weight:700">'+fmt(s.availableForPayout||0,s.currency)+'</span></div>'+
+      '<div style="display:flex;justify-content:space-between;font-size:10px;padding:6px 0"><span style="color:#999">Pending</span><span style="font-weight:700">'+fmt(s.pendingBalance||0,s.currency)+'</span></div>';
+  }catch(e){$('tabAnalytics').innerHTML='<div class="msg err" style="display:block">'+e.message+'</div>'}
+}
+function fmt(n,c){return new Intl.NumberFormat('en-GB',{style:'currency',currency:c||'EUR',maximumFractionDigits:0}).format((n||0))}
+$('logoutBtn').addEventListener('click',e=>{e.preventDefault();T='';$('dashScreen').className='hidden';$('loginScreen').className=''});
+</script></body></html>`; }
+
+function renderBuyerCartLayout(): string { return `<!DOCTYPE html>
+<html lang="en"><head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"><meta name="theme-color" content="#164F3F">
+<title>My Cart | Eki</title>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" />
+<style>
+body{margin:0;background:#F5F6F5;color:#111;font-family:'Inter',sans-serif}
+.shell{width:min(960px,calc(100% - 24px));margin:0 auto}
+.topbar{height:48px;background:#fff;border-bottom:1px solid #e5e7eb;display:flex;align-items:center;justify-content:space-between;padding:0 max(12px,calc((100vw - 960px)/2))}
+.brand{font-weight:800;font-size:14px;color:#164F3F;display:flex;align-items:center;gap:6px}
+.brand-dot{width:8px;height:8px;border-radius:4px;background:#164F3F;display:inline-block}
+.toplinks{display:flex;gap:14px;font-size:12px;font-weight:600;color:#666}
+.card{background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:18px;box-shadow:0 1px 6px rgba(0,0,0,.04)}
+.btn{display:inline-flex;align-items:center;justify-content:center;height:40px;padding:0 16px;border-radius:8px;font-weight:700;font-size:12px;border:0;cursor:pointer;background:#164F3F;color:#fff;text-decoration:none}
+</style></head><body>
+<div class="topbar"><a class="brand" href="/"><span class="brand-dot"></span> Eki</a><div class="toplinks"><a href="/store">Store</a><a href="/">Home</a></div></div>
+<div class="shell" style="padding:40px 0;text-align:center">
+  <div style="font-size:48px;margin-bottom:16px">🛒</div>
+  <h1 style="font-size:24px;font-weight:800;margin:0">Your Cart</h1>
+  <p style="color:#999;font-size:13px;margin:8px 0 24px">Add items using the Eki app, then come here to review.</p>
+  <div class="card" style="max-width:400px;margin:0 auto;text-align:left;font-size:13px;line-height:1.6">
+    <strong>How it works:</strong>
+    <ol style="margin:10px 0 0;padding-left:18px;color:#666">
+      <li>Browse vendors and add items in the <strong>Eki app</strong></li>
+      <li>Review your cart and checkout</li>
+      <li>Pay by card or wallet — track delivery live</li>
+    </ol>
+    <a href="/store" class="btn" style="margin-top:14px;width:100%;display:flex">Browse Vendors</a>
+  </div>
+</div></body></html>`; }
+
+export async function getPublicVendorPortalPage(_request: Request, response: Response): Promise<void> {
+  response.setHeader("Content-Type", "text/html; charset=utf-8");
+  response.setHeader("Cache-Control", "no-cache");
+  response.status(200).send(renderVendorPortalLayout());
+}
+
+export async function getPublicBuyerCartPage(_request: Request, response: Response): Promise<void> {
+  response.setHeader("Content-Type", "text/html; charset=utf-8");
+  response.setHeader("Cache-Control", "public, max-age=120, s-maxage=300");
+  response.status(200).send(renderBuyerCartLayout());
+}
+
 export async function getPublicHomePage(_request: Request, response: Response): Promise<void> {
   sendPage(response, homePage);
 }
