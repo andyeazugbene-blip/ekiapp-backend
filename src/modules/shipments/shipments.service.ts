@@ -209,7 +209,7 @@ export const shipmentsService = {
     return { items, nextCursor };
   },
 
-  async getShipmentByOrder(userId: string, orderId: string): Promise<Shipment> {
+  async getShipmentByOrder(userId: string, orderId: string): Promise<Shipment | null> {
     // Buyer can view shipment for their own order
     const order = await prisma.order.findUnique({
       where: { id: orderId },
@@ -232,10 +232,7 @@ export const shipmentsService = {
     }
 
     const shipment = await prisma.shipment.findUnique({ where: { orderId } });
-    if (!shipment) {
-      throw new AppError("Shipment not found", 404);
-    }
-
-    return shipment;
+    // No shipment yet — valid state, return null instead of an error
+    return shipment ?? null;
   },
 };
