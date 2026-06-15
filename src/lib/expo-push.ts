@@ -39,20 +39,39 @@ export async function sendExpoPush(messages: ExpoPushMessage[]): Promise<void> {
     });
 
     if (!response.ok) {
-      logger.warn("Expo Push API returned non-200", { status: response.status });
+      const body = await response.text().catch(() => "");
+      logger.warn("Expo Push API returned non-200", {
+        status: response.status,
+        body: body.slice(0, 500),
+      });
       return;
     }
 
-    const result = await response.json() as { data: ExpoPushTicket[] };
+    const result = await response.json() as { data?: ExpoPushTicket[]; errors?: unknown[] };
+
+    if (!result.data || !Array.isArray(result.data)) {
+      logger.warn("Expo Push API returned unexpected format", {
+        body: JSON.stringify(result).slice(0, 500),
+      });
+      return;
+    }
 
     // Check for invalid tokens and remove them
     for (let i = 0; i < result.data.length; i++) {
       const ticket = result.data[i];
-      if (ticket.status === "error" && ticket.details?.error === "DeviceNotRegistered") {
-        // Remove invalid token from DB
-        const token = messages[i].to;
-        await prisma.pushToken.deleteMany({ where: { token } }).catch(() => {});
-        logger.info("Removed invalid push token (DeviceNotRegistered)");
+      if (ticket.status === "error") {
+        const errorCode = ticket.details?.error ?? ticket.message ?? "unknown";
+        if (errorCode === "DeviceNotRegistered") {
+          const token = messages[i].to;
+          await prisma.pushToken.deleteMany({ where: { token } }).catch(() => {});
+          logger.info("Removed invalid push token (DeviceNotRegistered)", { token: token.slice(0, 30) });
+        } else {
+          logger.warn("Expo push ticket error (non-fatal)", {
+            error: errorCode,
+            message: ticket.message,
+            token: messages[i]?.to?.slice(0, 30),
+          });
+        }
       }
     }
   } catch (error) {
@@ -78,7 +97,10 @@ export async function sendPushToUser(
       select: { token: true },
     });
 
-    if (tokens.length === 0) return;
+    if (tokens.length === 0) {
+      logger.info("Push skipped: no push tokens for user", { userId });
+      return;
+    }
 
     // Map notification type to Android channel
     const rawType = notification.data?.type;
