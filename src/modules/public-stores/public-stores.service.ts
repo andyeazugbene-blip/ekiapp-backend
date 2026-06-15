@@ -912,7 +912,9 @@ export const publicStoresService = {
       throw new AppError("Delivery country is required", 400);
     }
 
-    const baseZone = await prisma.deliveryZone.findFirst({
+    // Find a delivery zone — prefer vendor-specific, fall back to global,
+    // and pick the one whose currency matches the products.
+    const vendorZone = await prisma.deliveryZone.findFirst({
       where: {
         vendorId: vendor.id,
         country: { equals: normalizedCountry, mode: "insensitive" },
@@ -920,12 +922,28 @@ export const publicStoresService = {
       },
     });
 
-    if (!baseZone) {
-      throw new AppError(`Delivery to "${normalizedCountry}" is not available`, 400);
+    let baseZone = vendorZone;
+    if (!baseZone || baseZone.currency.toLowerCase() !== currency) {
+      // Fall back to a global zone (no vendorId) whose currency matches
+      const globalZone = await prisma.deliveryZone.findFirst({
+        where: {
+          vendorId: null,
+          country: { equals: normalizedCountry, mode: "insensitive" },
+          currency: { equals: currency, mode: "insensitive" },
+          isActive: true,
+        },
+      });
+
+      if (globalZone) {
+        baseZone = globalZone;
+      } else if (baseZone) {
+        // Vendor zone exists but currency mismatches, and no global zone with correct currency
+        throw new AppError("Delivery zone currency mismatch", 400);
+      }
     }
 
-    if (baseZone.currency.toLowerCase() !== currency) {
-      throw new AppError("Delivery zone currency mismatch", 400);
+    if (!baseZone) {
+      throw new AppError(`Delivery to "${normalizedCountry}" is not available`, 400);
     }
 
     const pricedItems = itemsInput.map((item) => {

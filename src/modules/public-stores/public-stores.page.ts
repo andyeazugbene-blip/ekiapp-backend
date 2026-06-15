@@ -802,7 +802,7 @@ function renderStorePage(store: PublicStore, products: PublicProduct[]): string 
 
   return `${baseStyles(`${store.storeName} | Eki`, store.description ?? store.storeName)}
   <div class="shell">
-    ${renderTopbar(`<a class="top-btn" id="top-cart-button" href="/store/${encodeURIComponent(store.storeSlug)}/checkout">View Cart (0)</a>`)}
+    ${renderTopbar(`<a class="top-btn" id="top-cart-button" href="/store/${encodeURIComponent(store.storeSlug)}/cart">View Cart (0)</a>`)}
     ${renderStoreHeader(store)}
     <div class="container">
       <input class="store-search" id="store-product-search" type="search" placeholder="Search products..." autocomplete="off" />
@@ -818,7 +818,7 @@ function renderStorePage(store: PublicStore, products: PublicProduct[]): string 
           <small id="cart-copy">0 items in cart</small>
           <strong id="cart-total">${escape(formatPrice(0, products[0]?.currency ?? "EUR"))}</strong>
         </div>
-        <a class="cart-btn" id="bottom-cart-button" href="/store/${encodeURIComponent(store.storeSlug)}/checkout">View Cart →</a>
+        <a class="cart-btn" id="bottom-cart-button" href="/store/${encodeURIComponent(store.storeSlug)}/cart">View Cart →</a>
       </div>
     </div>
   </div>
@@ -989,7 +989,7 @@ function renderStoreDirectoryPage(stores: PublicStore[]): string {
 }
 
 function renderProductPage(store: PublicStore, product: PublicProduct): string {
-  const cartHref = `/store/${encodeURIComponent(store.storeSlug)}/checkout`;
+  const cartHref = `/store/${encodeURIComponent(store.storeSlug)}/cart`;
   return `${baseStyles(`${product.title} | ${store.storeName}`, product.description ?? product.title)}
   <div class="shell">
     ${renderTopbar(`<a class="top-btn" id="product-cart-button" href="${cartHref}">View Cart (0)</a>`)}
@@ -1069,9 +1069,9 @@ function renderProductPage(store: PublicStore, product: PublicProduct): string {
           action.textContent = 'Added to cart';
           action.style.transform = 'scale(0.99)';
         }
-        var next = '/store/' + encodeURIComponent(storeSlug) + '/checkout';
+        var next = '/store/' + encodeURIComponent(storeSlug) + '/cart';
         if(promoCode) next += '?promo=' + encodeURIComponent(promoCode);
-        window.setTimeout(function(){ window.location.href = next; }, 260);
+        window.setTimeout(function(){ window.location.href = next; }, 420);
       }
       var back = document.querySelector('.back-link');
       if(back && promoCode) back.setAttribute('href', '/store/' + encodeURIComponent(storeSlug) + '?promo=' + encodeURIComponent(promoCode));
@@ -1102,6 +1102,176 @@ function renderProductPage(store: PublicStore, product: PublicProduct): string {
       updateCartButton();
     })();
   </script>
+</body>
+</html>`;
+}
+
+function renderCartPage(store: PublicStore, products: PublicProduct[]): string {
+  const serializedProducts = JSON.stringify(products.map((product) => ({
+    id: product.id,
+    title: product.title,
+    priceInCents: product.priceInCents,
+    currency: product.currency,
+    image: product.images[0] ?? null,
+    weightLabel: formatWeight(product.weightGrams),
+    stock: product.stock,
+  })));
+
+  return `${baseStyles(`Your cart | ${store.storeName}`, `Cart review for ${store.storeName}`)}
+  <div class="shell">
+    ${renderTopbar(`<span class="top-btn" style="min-width:100px">🛒 Cart</span>`)}
+    <div class="page-card" style="padding:0;border:0;background:transparent">
+      <div style="padding:24px 0 8px">
+        <a href="/store/${encodeURIComponent(store.storeSlug)}" style="display:inline-flex;align-items:center;gap:6px;color:#6b7280;font-size:12px;font-weight:600;text-decoration:none">← Back to store</a>
+        <h1 style="margin:12px 0 4px;font-size:24px;font-weight:800;letter-spacing:-.03em">Your cart</h1>
+        <p style="margin:0;color:#6b7280;font-size:13px">Review items before checking out.</p>
+      </div>
+      <div style="display:grid;grid-template-columns:minmax(0,1fr) 320px;gap:20px;align-items:start;padding-bottom:48px" class="cart-layout">
+        <div id="cart-items-list" style="display:flex;flex-direction:column;gap:10px">
+          <div style="text-align:center;padding:48px 0;color:#6b7280;font-size:13px" id="cart-empty-msg">Your cart is empty. Browse products and add them to your cart.</div>
+        </div>
+        <aside style="position:sticky;top:72px">
+          <div style="border:1px solid #dbe7dd;border-radius:12px;background:#fff;padding:20px">
+            <h3 style="margin:0 0 14px;font-size:14px;font-weight:800">Order summary</h3>
+            <div id="cart-summary-items"></div>
+            <div style="display:flex;justify-content:space-between;font-size:13px;color:#6b7280;margin:8px 0"><span>Subtotal</span><strong id="cart-subtotal" style="color:#111">—</strong></div>
+            <div style="display:flex;justify-content:space-between;font-size:13px;color:#6b7280;margin:8px 0"><span>Delivery</span><strong id="cart-delivery" style="color:#111">Calculated at checkout</strong></div>
+            <div style="border-top:1px solid #ecf1ed;margin:12px 0 16px"></div>
+            <div style="display:flex;justify-content:space-between;font-size:18px;font-weight:800"><span>Total</span><strong id="cart-total">—</strong></div>
+            <a id="cart-checkout-btn" href="/store/${encodeURIComponent(store.storeSlug)}/checkout" style="display:flex;align-items:center;justify-content:center;width:100%;min-height:48px;margin-top:16px;border:0;border-radius:10px;background:#134f3b;color:#fff;font-weight:700;font-size:14px;text-decoration:none;transition:transform .2s ease,box-shadow .2s ease">Proceed to Checkout →</a>
+            <a href="/store/${encodeURIComponent(store.storeSlug)}" style="display:block;text-align:center;margin-top:12px;color:#6b7280;font-size:12px;text-decoration:none">Continue shopping</a>
+          </div>
+        </aside>
+      </div>
+    </div>
+  </div>
+  <script>
+    (function(){
+      var storeSlug = ${JSON.stringify(store.storeSlug)};
+      var cartKey = 'eki_public_store_cart_' + storeSlug;
+      var products = JSON.parse(${JSON.stringify(serializedProducts)});
+      var promoCode = String(new URLSearchParams(window.location.search).get('promo') || '').trim().toUpperCase();
+
+      function readCart(){
+        try { var p = JSON.parse(localStorage.getItem(cartKey) || '[]'); return Array.isArray(p) ? p : []; }
+        catch(e) { return []; }
+      }
+      function writeCart(cart){ localStorage.setItem(cartKey, JSON.stringify(cart)); }
+      function esc(v){ return String(v||'').replace(/[&<>"']/g,function(c){return({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c]}) }
+      function fmt(n,c){ try{return new Intl.NumberFormat('en-GB',{style:'currency',currency:(c||'EUR').toUpperCase()}).format(n/100)}catch(e){return (n/100).toFixed(2)+' '+c} }
+
+      function renderCart(){
+        var cart = readCart();
+        var list = document.getElementById('cart-items-list');
+        var empty = document.getElementById('cart-empty-msg');
+        var subtotalEl = document.getElementById('cart-subtotal');
+        var totalEl = document.getElementById('cart-total');
+        var checkoutBtn = document.getElementById('cart-checkout-btn');
+        var summaryItems = document.getElementById('cart-summary-items');
+
+        if(!cart.length){
+          empty.style.display = 'block';
+          list.innerHTML = '<div style="text-align:center;padding:48px 0;color:#6b7280;font-size:13px" id="cart-empty-msg">Your cart is empty. Browse products and add them to your cart.</div>';
+          if(subtotalEl) subtotalEl.textContent = fmt(0, 'EUR');
+          if(totalEl) totalEl.textContent = fmt(0, 'EUR');
+          if(summaryItems) summaryItems.innerHTML = '';
+          return;
+        }
+        empty.style.display = 'none';
+
+        var subtotal = 0;
+        var currency = (products[0] && products[0].currency) || 'EUR';
+        var itemsHtml = '';
+        var summaryHtml = '';
+        var itemCount = 0;
+
+        cart.forEach(function(item, idx){
+          var product = products.find(function(p){ return p.id === item.productId; });
+          if(!product) return;
+          var qty = Number(item.quantity || 0);
+          if(qty < 1) return;
+          subtotal += product.priceInCents * qty;
+          itemCount += qty;
+
+          var imgHtml = product.image
+            ? '<img src="'+esc(product.image)+'" style="width:72px;height:72px;border-radius:10px;object-fit:cover;flex-shrink:0" />'
+            : '<div style="width:72px;height:72px;border-radius:10px;background:#eef8f2;display:flex;align-items:center;justify-content:center;font-weight:800;color:#134f3b;font-size:16px;flex-shrink:0">'+esc(product.title.slice(0,2).toUpperCase())+'</div>';
+
+          itemsHtml += '<div class="cart-item" data-index="'+idx+'" style="display:flex;gap:14px;padding:16px;border:1px solid #dbe7dd;border-radius:12px;background:#fff;align-items:center">'+
+            imgHtml +
+            '<div style="flex:1;min-width:0">'+
+              '<div style="font-weight:700;font-size:14px;color:#111">'+esc(product.title)+'</div>'+
+              '<div style="color:#6b7280;font-size:12px;margin-top:2px">'+esc(product.weightLabel||'')+'</div>'+
+              '<div style="font-weight:800;font-size:16px;color:#134f3b;margin-top:4px">'+fmt(product.priceInCents * qty, currency)+'</div>'+
+            '</div>'+
+            '<div style="display:flex;flex-direction:column;align-items:center;gap:6px">'+
+              '<div style="display:flex;align-items:center;gap:6px;border:1px solid #dbe7dd;border-radius:8px;padding:2px;background:#fff">'+
+                '<button class="qty-btn" data-index="'+idx+'" data-action="minus" style="width:30px;height:30px;border:0;border-radius:6px;background:#f3f5f4;color:#134f3b;font-size:16px;font-weight:700;cursor:pointer;display:flex;align-items:center;justify-content:center">−</button>'+
+                '<span style="min-width:24px;text-align:center;font-size:13px;font-weight:700">'+qty+'</span>'+
+                '<button class="qty-btn" data-index="'+idx+'" data-action="plus" style="width:30px;height:30px;border:0;border-radius:6px;background:#f3f5f4;color:#134f3b;font-size:16px;font-weight:700;cursor:pointer;display:flex;align-items:center;justify-content:center">+</button>'+
+              '</div>'+
+              '<button class="remove-btn" data-index="'+idx+'" style="border:0;background:transparent;color:#ef4444;font-size:11px;font-weight:600;cursor:pointer;padding:2px 6px;border-radius:4px">Remove</button>'+
+            '</div>'+
+          '</div>';
+
+          summaryHtml += '<div style="display:flex;justify-content:space-between;font-size:12px;margin:6px 0"><span>'+esc(product.title)+' × '+qty+'</span><strong>'+fmt(product.priceInCents * qty, currency)+'</strong></div>';
+        });
+
+        if(!itemsHtml){
+          list.innerHTML = '<div style="text-align:center;padding:48px 0;color:#6b7280;font-size:13px">No matching products found in your cart.</div>';
+          if(subtotalEl) subtotalEl.textContent = fmt(0, currency);
+          if(totalEl) totalEl.textContent = fmt(0, currency);
+          if(summaryItems) summaryItems.innerHTML = '';
+          return;
+        }
+
+        list.innerHTML = itemsHtml;
+        if(summaryItems) summaryItems.innerHTML = summaryHtml;
+        if(subtotalEl) subtotalEl.textContent = fmt(subtotal, currency);
+        if(totalEl) totalEl.textContent = fmt(subtotal, currency);
+
+        var checkoutHref = '/store/'+encodeURIComponent(storeSlug)+'/checkout';
+        if(promoCode) checkoutHref += '?promo='+encodeURIComponent(promoCode);
+        if(checkoutBtn) checkoutBtn.href = checkoutHref;
+
+        // Quantity buttons
+        document.querySelectorAll('.qty-btn').forEach(function(btn){
+          btn.addEventListener('click', function(){
+            var idx = parseInt(btn.getAttribute('data-index'), 10);
+            var action = btn.getAttribute('data-action');
+            if(isNaN(idx)) return;
+            var cart = readCart();
+            if(idx < 0 || idx >= cart.length) return;
+            if(action === 'plus') cart[idx].quantity = (cart[idx].quantity || 1) + 1;
+            else if(action === 'minus' && cart[idx].quantity > 1) cart[idx].quantity -= 1;
+            else { cart.splice(idx, 1); }
+            writeCart(cart);
+            renderCart();
+          });
+        });
+
+        // Remove buttons
+        document.querySelectorAll('.remove-btn').forEach(function(btn){
+          btn.addEventListener('click', function(){
+            var idx = parseInt(btn.getAttribute('data-index'), 10);
+            if(isNaN(idx)) return;
+            var cart = readCart();
+            if(idx >= 0 && idx < cart.length) cart.splice(idx, 1);
+            writeCart(cart);
+            renderCart();
+          });
+        });
+      }
+
+      renderCart();
+    })();
+  </script>
+  <style>
+    @media (max-width:768px){
+      .cart-layout{grid-template-columns:1fr!important}
+      .cart-item{flex-wrap:wrap!important}
+    }
+  </style>
 </body>
 </html>`;
 }
@@ -1503,6 +1673,24 @@ export async function getPublicStoreProductPage(request: Request, response: Resp
     ]);
     const page = renderProductPage(store, product);
     response.status(200).send(page.replace("</body>", renderRatesInit(rates, product.currency) + "</body>"));
+  } catch (error) {
+    const status = (error as { statusCode?: number }).statusCode ?? 500;
+    response.status(status === 404 ? 404 : 500).send(status === 404 ? renderNotFound(slug) : renderError());
+  }
+}
+
+export async function getPublicStoreCartPage(request: Request, response: Response): Promise<void> {
+  const slug = parseSlug(request);
+  response.setHeader("Content-Type", "text/html; charset=utf-8");
+  response.setHeader("Cache-Control", "no-store");
+
+  try {
+    const [store, productsResult] = await Promise.all([
+      publicStoresService.getStoreBySlug(slug),
+      publicStoresService.listStoreProducts(slug, { limit: PAGE_PRODUCTS_LIMIT }),
+    ]);
+    const page = renderCartPage(store, productsResult.items);
+    response.status(200).send(page);
   } catch (error) {
     const status = (error as { statusCode?: number }).statusCode ?? 500;
     response.status(status === 404 ? 404 : 500).send(status === 404 ? renderNotFound(slug) : renderError());

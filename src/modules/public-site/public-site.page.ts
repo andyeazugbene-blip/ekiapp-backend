@@ -1,4 +1,4 @@
-﻿import type { Request, Response } from "express";
+import type { Request, Response } from "express";
 
 function escape(value: unknown): string {
   if (value === null || value === undefined) return "";
@@ -312,136 +312,561 @@ function renderHomeLayout(page: PageDefinition): string {
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <meta name="theme-color" content="#164F3F" />
+  <meta name="theme-color" content="#134f3b" />
   <title>${escape(page.title)}</title>
   <meta name="description" content="${escape(page.description)}" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" />
   <style>
     *,*::before,*::after{box-sizing:border-box}
-    html,body{margin:0;padding:0}
-    body{background:#F5F6F5;color:#111827;font-family:'Inter',-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;-webkit-font-smoothing:antialiased;-moz-osx-font-smoothing:grayscale}
-    a{color:inherit}
-    .hero-wrap{background:#164F3F;color:#FFFFFF;overflow:hidden}
-    .shell{width:min(1120px,calc(100% - 32px));margin:0 auto}
-    .topbar{height:44px;display:flex;align-items:center;justify-content:space-between;gap:18px}
-    .brand{display:inline-flex;align-items:center;justify-content:center;min-width:40px;height:24px;padding:0 10px;border-radius:5px;background:#2B8256;color:#FFFFFF;text-decoration:none;font-weight:800;font-size:13px;letter-spacing:-0.03em;line-height:1}
-    .toplinks{display:flex;align-items:center;gap:16px;color:rgba(255,255,255,.76);font-size:12px;font-weight:600}
-    .toplinks a{text-decoration:none}
-    .hero{display:grid;grid-template-columns:minmax(0,1fr) minmax(280px,380px);align-items:center;gap:52px;padding:14px 0 34px;min-height:360px}
-    .copy{max-width:520px;padding:8px 0 0}
-    h1{margin:0;max-width:10ch;font-size:56px;line-height:0.98;letter-spacing:-0.045em;font-weight:800}
-    .intro{margin:16px 0 0;max-width:430px;color:rgba(255,255,255,0.82);font-size:15px;line-height:1.4}
-    .store-buttons{display:flex;gap:12px;margin-top:28px;flex-wrap:wrap}
-    .store-button{min-width:132px;height:44px;border-radius:9px;background:#FFFFFF;color:#164F3F;text-decoration:none;display:flex;flex-direction:column;justify-content:center;padding:0 14px;box-shadow:0 14px 30px rgba(0,0,0,0.08);transition:transform 0.2s cubic-bezier(0.34,1.56,0.64,1),box-shadow 0.2s ease}
-    .store-button:hover{transform:translateY(-2px) scale(1.02);box-shadow:0 18px 36px rgba(0,0,0,0.15)}
-    .store-button:active{transform:translateY(0) scale(0.98);box-shadow:0 6px 16px rgba(0,0,0,0.1)}
-    .store-button.google{background:#2F885A;color:#FFFFFF;transition:transform 0.2s cubic-bezier(0.34,1.56,0.64,1),box-shadow 0.2s ease,background 0.2s ease}
-    .store-button.google:hover{background:#3A9A68;transform:translateY(-2px) scale(1.02);box-shadow:0 18px 36px rgba(0,0,0,0.15)}
-    .store-button.google:active{transform:translateY(0) scale(0.98)}
-    .store-small{font-size:9px;font-weight:600;opacity:.74}
-    .store-main{font-size:14px;font-weight:800;margin-top:1px}
-    .scan-copy{margin-top:14px;color:rgba(255,255,255,.72);font-size:12px;line-height:1.4}
-    .phone-stage{position:relative;min-height:310px;display:flex;align-items:center;justify-content:center}
-    .phone{width:min(82vw,390px);max-height:400px;object-fit:contain;object-position:center;filter:drop-shadow(0 28px 40px rgba(0,0,0,.32));transition:transform 0.3s ease}
-    .phone:hover{transform:scale(1.02)}
-    .steps-band{background:#FFFFFF;padding:0 0 92px}
-    .steps-head{padding:26px 0 10px;display:flex;align-items:center;justify-content:space-between;gap:16px}
-    .steps-kicker{color:#164F3F;font-size:12px;font-weight:800;letter-spacing:.01em;text-transform:uppercase}
-    .steps-tag{display:inline-flex;align-items:center;min-height:30px;border-radius:999px;background:#EAF6EE;color:#2A8256;padding:0 12px;font-size:12px;font-weight:700;text-decoration:none;transition:background 0.2s ease,transform 0.2s cubic-bezier(0.34,1.56,0.64,1)}
-    .steps-tag:hover{background:#CDECD7;transform:scale(1.04)}
-    .steps-list{border-top:1px solid #E8ECE9;background:#FFFFFF}
-    .step{display:flex;gap:14px;padding:18px 0;border-bottom:1px solid #EEF1EF;align-items:flex-start;transition:background 0.15s ease;border-radius:4px;margin:0 -4px;padding-left:4px;padding-right:4px}
-    .step:hover{background:#FAFCFB}
-    .step-index{width:30px;height:30px;border-radius:999px;background:#EAF6EE;color:#7AA07E;display:grid;place-items:center;font-size:13px;font-weight:800;flex:0 0 auto;transition:background 0.2s ease,color 0.2s ease,transform 0.2s cubic-bezier(0.34,1.56,0.64,1)}
-    .step:hover .step-index{background:#164F3F;color:#FFFFFF;transform:scale(1.1)}
-    .step-title{margin:0;color:#1F2937;font-size:15px;line-height:1.3;font-weight:800;letter-spacing:-0.02em}
-    .step-body{margin:4px 0 0;color:#97A1A8;font-size:12px;line-height:1.35}
-    .sticky-order{position:sticky;bottom:0;background:#FFFFFF;border-top:1px solid #E8ECE9;padding:14px 0 calc(14px + env(safe-area-inset-bottom, 0px));margin-top:-1px}
-    .sticky-order a{width:100%;min-height:42px;border-radius:10px;border:1px solid #D6E2DB;background:#F8FCFA;color:#53616A;display:flex;align-items:center;justify-content:center;gap:6px;text-decoration:none;font-size:13px;font-weight:700;transition:background 0.2s ease,border-color 0.2s ease,transform 0.2s ease}
-    .sticky-order a:hover{background:#EDF7F2;border-color:#164F3F;transform:translateY(-1px)}
-    .sticky-order a:active{transform:translateY(0)}
-    .sticky-order strong{color:#164F3F}
-    .sticky-order span{display:inline-flex;align-items:center;gap:6px}
-    @media (max-width:900px){.hero{grid-template-columns:1fr;gap:8px;padding:12px 0 0}.phone-stage{display:none}h1{font-size:31px;max-width:220px}.intro{max-width:310px;font-size:13px;line-height:1.28}.store-buttons{margin-top:22px}.store-button{flex:1;min-width:0}.steps-band{padding-bottom:86px}.toplinks{display:none}.steps-head{padding:18px 0 8px}}
-    @media (max-width:520px){.shell{width:min(100% - 18px,1120px)}.topbar{height:44px}.hero{padding-top:8px}h1{font-size:30px}.steps-kicker{display:none}.steps-head{padding-top:14px}}
+    html,body{margin:0;padding:0;scroll-behavior:smooth}
+    body{
+      background:#fff;
+      color:#111827;
+      font-family:'Inter',-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+      -webkit-font-smoothing:antialiased;
+      -moz-osx-font-smoothing:grayscale;
+      line-height:1.5;
+    }
+    a{color:inherit;text-decoration:none}
+    img{display:block;max-width:100%}
+
+    .shell{width:min(1200px,calc(100% - 48px));margin:0 auto}
+
+    /* ─── Topbar ─── */
+    .topbar{
+      position:sticky;top:0;z-index:50;
+      background:rgba(255,255,255,.98);
+      backdrop-filter:saturate(180%) blur(16px);
+      border-bottom:1px solid #e8f0eb;
+    }
+    .topbar-inner{
+      display:flex;align-items:center;justify-content:space-between;
+      min-height:64px;gap:20px;
+    }
+    .brand{
+      display:inline-flex;align-items:center;gap:6px;
+      font-weight:800;font-size:18px;color:#134f3b;
+      letter-spacing:-0.02em;
+    }
+    .brand-dot{
+      width:10px;height:10px;border-radius:999px;
+      background:#4ade80;display:inline-block;
+    }
+    .topnav{display:flex;align-items:center;gap:28px}
+    .topnav a{
+      font-size:14px;font-weight:600;color:#374151;
+      transition:color .15s ease;
+    }
+    .topnav a:hover{color:#134f3b}
+    .topnav .nav-cta{
+      display:inline-flex;align-items:center;justify-content:center;
+      min-height:40px;padding:0 20px;border-radius:10px;
+      background:#134f3b;color:#fff;font-weight:700;font-size:14px;
+      transition:transform .2s cubic-bezier(.34,1.56,.64,1),box-shadow .2s ease,background .2s ease;
+    }
+    .topnav .nav-cta:hover{
+      background:#0f4030;
+      transform:translateY(-1px);
+      box-shadow:0 8px 20px rgba(19,79,59,.2);
+    }
+
+    /* ─── Hero ─── */
+    .hero-wrap{
+      background:linear-gradient(135deg,#134f3b 0%,#1a6b4f 50%,#134f3b 100%);
+      color:#fff;overflow:hidden;
+    }
+    .hero{
+      display:grid;
+      grid-template-columns:minmax(0,1fr) minmax(320px,480px);
+      align-items:center;
+      gap:48px;
+      padding:64px 0 80px;
+      min-height:520px;
+    }
+    .hero-copy{max-width:560px}
+    .hero-badge{
+      display:inline-flex;align-items:center;gap:6px;
+      padding:6px 16px;border-radius:999px;
+      background:rgba(255,255,255,.12);
+      color:rgba(255,255,255,.9);
+      font-size:12px;font-weight:700;
+      letter-spacing:0.04em;text-transform:uppercase;
+      margin-bottom:24px;
+      border:1px solid rgba(255,255,255,.15);
+    }
+    .hero-badge-dot{
+      width:6px;height:6px;border-radius:999px;
+      background:#4ade80;display:inline-block;
+    }
+    h1{
+      margin:0;font-size:clamp(36px,5vw,56px);
+      line-height:1.05;letter-spacing:-0.04em;font-weight:800;
+    }
+    .hero-intro{
+      margin:20px 0 0;max-width:460px;
+      color:rgba(255,255,255,.82);
+      font-size:17px;line-height:1.6;
+    }
+    .hero-actions{
+      display:flex;gap:14px;margin-top:32px;flex-wrap:wrap;
+    }
+    .btn-app{
+      display:inline-flex;flex-direction:column;justify-content:center;
+      min-width:160px;height:54px;padding:0 20px;border-radius:12px;
+      background:#fff;color:#134f3b;text-decoration:none;
+      box-shadow:0 16px 36px rgba(0,0,0,.12);
+      transition:transform .25s cubic-bezier(.34,1.56,.64,1),box-shadow .25s ease;
+    }
+    .btn-app:hover{
+      transform:translateY(-3px) scale(1.03);
+      box-shadow:0 22px 44px rgba(0,0,0,.18);
+    }
+    .btn-app:active{transform:translateY(0) scale(.98)}
+    .btn-app.google{
+      background:#2b7a4b;color:#fff;
+      transition:transform .25s cubic-bezier(.34,1.56,.64,1),box-shadow .25s ease,background .25s ease;
+    }
+    .btn-app.google:hover{background:#33995c;transform:translateY(-3px) scale(1.03);box-shadow:0 22px 44px rgba(0,0,0,.18)}
+    .btn-small{font-size:10px;font-weight:600;opacity:.7}
+    .btn-main{font-size:15px;font-weight:800;margin-top:2px}
+    .hero-trust{
+      margin-top:20px;
+      font-size:13px;color:rgba(255,255,255,.6);
+    }
+
+    /* ─── Phone Mockup ─── */
+    .hero-visual{
+      position:relative;display:flex;align-items:center;justify-content:center;
+      min-height:380px;
+    }
+    .phone-mockup{
+      width:280px;
+      background:#1a1a1a;
+      border-radius:36px;
+      padding:10px;
+      box-shadow:0 40px 80px rgba(0,0,0,.35),0 0 0 2px rgba(255,255,255,.08);
+      position:relative;
+    }
+    .phone-notch{
+      position:absolute;top:10px;left:50%;transform:translateX(-50%);
+      width:100px;height:24px;background:#1a1a1a;border-radius:0 0 16px 16px;z-index:2;
+    }
+    .phone-screen{
+      background:#f8f9f7;
+      border-radius:26px;
+      overflow:hidden;
+      min-height:500px;
+      position:relative;
+    }
+    .phone-header{
+      background:#134f3b;
+      color:#fff;
+      padding:36px 16px 16px;
+      display:flex;justify-content:space-between;align-items:center;
+    }
+    .phone-header-title{font-weight:700;font-size:14px}
+    .phone-header-icons{display:flex;gap:10px;font-size:14px}
+    .phone-search{
+      padding:12px 16px;
+      display:flex;gap:8px;align-items:center;
+    }
+    .phone-search-box{
+      flex:1;background:#fff;border-radius:10px;padding:8px 12px;
+      display:flex;align-items:center;gap:6px;
+      font-size:11px;color:#999;
+      box-shadow:0 1px 4px rgba(0,0,0,.06);
+    }
+    .phone-categories{
+      display:flex;gap:8px;padding:0 16px 12px;
+      overflow-x:auto;
+    }
+    .phone-cat{
+      padding:6px 14px;border-radius:20px;
+      font-size:11px;font-weight:600;white-space:nowrap;
+    }
+    .phone-cat.active{background:#134f3b;color:#fff}
+    .phone-cat:not(.active){background:#fff;color:#555;border:1px solid #e5e7eb}
+    .phone-section{
+      padding:0 16px 12px;
+    }
+    .phone-section-title{
+      font-size:13px;font-weight:700;color:#111;margin-bottom:10px;
+    }
+    .phone-grid{
+      display:grid;grid-template-columns:1fr 1fr;gap:10px;
+    }
+    .phone-card{
+      border-radius:14px;padding:12px;
+      position:relative;min-height:110px;
+      display:flex;flex-direction:column;justify-content:space-between;
+    }
+    .phone-card-img{
+      width:44px;height:44px;border-radius:10px;
+      display:flex;align-items:center;justify-content:center;
+      font-size:22px;
+    }
+    .phone-card-tag{
+      position:absolute;top:10px;right:10px;
+      font-size:9px;font-weight:700;padding:3px 8px;border-radius:6px;
+    }
+    .phone-card-name{font-size:12px;font-weight:700;color:#111;margin-top:6px}
+    .phone-card-price{font-size:11px;font-weight:600;color:#555}
+    .phone-card-yellow{background:#fef3c7}
+    .phone-card-yellow .phone-card-img{background:#fde68a}
+    .phone-card-yellow .phone-card-tag{background:#f59e0b;color:#fff}
+    .phone-card-pink{background:#fce7f3}
+    .phone-card-pink .phone-card-img{background:#fbcfe8}
+    .phone-card-pink .phone-card-tag{background:#ec4899;color:#fff}
+    .phone-card-green{background:#d1fae5}
+    .phone-card-green .phone-card-img{background:#a7f3d0}
+    .phone-card-green .phone-card-tag{background:#10b981;color:#fff}
+    .phone-card-blue{background:#dbeafe}
+    .phone-card-blue .phone-card-img{background:#bfdbfe}
+    .phone-card-blue .phone-card-tag{background:#3b82f6;color:#fff}
+    .phone-card-purple{background:#ede9fe}
+    .phone-card-purple .phone-card-img{background:#ddd6fe}
+    .phone-card-purple .phone-card-tag{background:#8b5cf6;color:#fff}
+    .phone-card-orange{background:#ffedd5}
+    .phone-card-orange .phone-card-img{background:#fed7aa}
+    .phone-card-orange .phone-card-tag{background:#f97316;color:#fff}
+    .phone-bottom-nav{
+      position:absolute;bottom:0;left:0;right:0;
+      background:#fff;border-top:1px solid #e5e7eb;
+      display:flex;justify-content:space-around;padding:10px 0;
+    }
+    .phone-nav-item{
+      display:flex;flex-direction:column;align-items:center;gap:2px;
+      font-size:9px;color:#999;
+    }
+    .phone-nav-item.active{color:#134f3b}
+    .phone-nav-icon{font-size:16px}
+    .phone-fab{
+      position:absolute;bottom:60px;right:16px;
+      width:44px;height:44px;border-radius:50%;
+      background:#134f3b;color:#fff;
+      display:flex;align-items:center;justify-content:center;
+      font-size:20px;box-shadow:0 4px 16px rgba(19,79,59,.3);
+    }
+
+    /* ─── Features ─── */
+    .features-band{
+      padding:80px 0 64px;
+      background:#fff;
+    }
+    .features-header{
+      text-align:center;margin-bottom:48px;
+    }
+    .features-header h2{
+      margin:0;
+      font-size:clamp(26px,4vw,36px);
+      font-weight:800;letter-spacing:-.03em;
+      line-height:1.15;
+      color:#111;
+    }
+    .features-header p{
+      margin:12px 0 0;color:#6b7280;font-size:16px;max-width:520px;
+      margin-left:auto;margin-right:auto;
+    }
+    .features-grid{
+      display:grid;
+      grid-template-columns:repeat(4,minmax(0,1fr));
+      gap:20px;
+    }
+    .feature-card{
+      background:#fff;
+      border:1px solid #e5e7eb;
+      border-radius:16px;
+      padding:28px 24px;
+      transition:transform .2s ease,box-shadow .2s ease,border-color .2s ease;
+    }
+    .feature-card:hover{
+      transform:translateY(-3px);
+      box-shadow:0 14px 32px rgba(19,79,59,.08);
+      border-color:#b8d4c3;
+    }
+    .feature-icon{
+      width:48px;height:48px;border-radius:12px;
+      background:#eef8f2;color:#134f3b;
+      display:flex;align-items:center;justify-content:center;
+      font-size:22px;margin-bottom:16px;
+    }
+    .feature-card h3{
+      margin:0 0 8px;font-size:16px;font-weight:800;letter-spacing:-.02em;
+      color:#111;
+    }
+    .feature-card p{
+      margin:0;color:#6b7280;font-size:14px;line-height:1.55;
+    }
+
+    /* ─── Footer ─── */
+    .footer{
+      background:#0d2a20;color:rgba(255,255,255,.72);
+      padding:48px 0 32px;
+    }
+    .footer-grid{
+      display:grid;
+      grid-template-columns:minmax(0,1.2fr) repeat(3,minmax(0,1fr));
+      gap:32px;
+      padding-bottom:32px;
+      border-bottom:1px solid rgba(255,255,255,.08);
+    }
+    .footer-brand{
+      display:inline-flex;align-items:center;gap:8px;margin-bottom:12px;
+      font-weight:800;font-size:16px;color:#fff;
+      letter-spacing:-.03em;
+    }
+    .footer-brand .brand-dot{
+      width:10px;height:10px;border-radius:999px;
+      background:#4ade80;display:inline-block;
+    }
+    .footer p{font-size:13px;line-height:1.55;margin:0;color:rgba(255,255,255,.6)}
+    .footer h4{
+      margin:0 0 12px;font-size:11px;font-weight:700;
+      color:#fff;text-transform:uppercase;letter-spacing:.06em;
+    }
+    .footer-links{display:flex;flex-direction:column;gap:8px}
+    .footer-links a{
+      font-size:13px;color:rgba(255,255,255,.6);
+      transition:color .15s ease;
+    }
+    .footer-links a:hover{color:#fff}
+    .footer-bottom{
+      padding-top:24px;
+      display:flex;justify-content:space-between;align-items:center;
+      flex-wrap:wrap;gap:12px;font-size:12px;
+    }
+    .footer-bottom a{color:rgba(255,255,255,.6);transition:color .15s ease}
+    .footer-bottom a:hover{color:#fff}
+
+    /* ─── Responsive ─── */
+    @media (max-width:1020px){
+      .hero{grid-template-columns:1fr;gap:28px;padding:48px 0 0;min-height:auto}
+      .hero-visual{display:none}
+      h1{font-size:38px}
+      .features-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+      .footer-grid{grid-template-columns:1fr 1fr;gap:24px}
+    }
+    @media (max-width:600px){
+      .shell{width:min(100% - 24px,1200px)}
+      .topnav{gap:16px}
+      .topnav a:not(.nav-cta){display:none}
+      .hero{padding:32px 0 40px}
+      h1{font-size:30px}
+      .hero-intro{font-size:15px;line-height:1.5}
+      .hero-actions{gap:10px}
+      .btn-app{min-width:0;flex:1;height:50px}
+      .features-grid{grid-template-columns:1fr}
+      .features-header h2{font-size:26px}
+      .footer-grid{grid-template-columns:1fr}
+      .footer-bottom{flex-direction:column;text-align:center}
+    }
   </style>
 </head>
 <body>
-  <div class="hero-wrap">
-    <header class="shell topbar">
-      <a class="brand" href="/">eki</a>
-      <nav class="toplinks" aria-label="Main">
-        <a href="/store">Vendors</a>
-        <a href="/find-order">Find order</a>
-      </nav>
-    </header>
-    <main class="shell hero">
-      <section class="copy">
-        <h1>${escape(page.heading)}</h1>
-        <p class="intro">${escape(page.intro)}</p>
-        <div class="store-buttons">
-          <a class="store-button" href="https://apps.apple.com/app/id" aria-label="Download Eki on the App Store">
-            <span class="store-small">Download on the</span>
-            <span class="store-main">App Store</span>
+
+<!-- ─── TOPBAR ─── -->
+<header class="topbar">
+  <div class="shell topbar-inner">
+    <a class="brand" href="/">
+      <span class="brand-dot"></span>eki.
+    </a>
+    <nav class="topnav" aria-label="Main">
+      <a href="/store">Buyers</a>
+      <a href="/store">Vendors</a>
+      <a class="nav-cta" href="/store">Get Started</a>
+    </nav>
+  </div>
+</header>
+
+<!-- ─── HERO ─── -->
+<main>
+  <section class="hero-wrap">
+    <div class="shell hero">
+      <div class="hero-copy">
+        <div class="hero-badge">
+          <span class="hero-badge-dot"></span> Now live in the UK
+        </div>
+        <h1>Your favourite foodstuff vendors. One trusted app.</h1>
+        <p class="hero-intro">All in one place for Africans, Caribbeans, and people who love authentic foodstuff. Buy, sell, and receive your favourites in one app.</p>
+        <div class="hero-actions">
+          <a class="btn-app" href="https://apps.apple.com/app/id" aria-label="Download Eki on the App Store">
+            <span class="btn-small">Download on the</span>
+            <span class="btn-main">App Store</span>
           </a>
-          <a class="store-button google" href="https://play.google.com/store/apps/details?id=com.ekiapp.mobile" aria-label="Get Eki on Google Play">
-            <span class="store-small">Get it on</span>
-            <span class="store-main">Google Play</span>
+          <a class="btn-app google" href="https://play.google.com/store/apps/details?id=com.ekiapp.mobile" aria-label="Get Eki on Google Play">
+            <span class="btn-small">Get it on</span>
+            <span class="btn-main">Google Play</span>
           </a>
         </div>
-        <p class="scan-copy">Scan the QR code in the app to get started instantly.</p>
-      </section>
-      <section class="phone-stage" aria-label="Eki app preview">
-        <img class="phone" src="/assets/public-site/hero-phone-mockup.png" alt="Eki vendor dashboard phone mockup" />
-      </section>
-    </main>
-  </div>
-
-  <section class="steps-band">
-    <div class="shell">
-      <div class="steps-head">
-        <span class="steps-kicker">Why buyers stay on Eki</span>
-        <a class="steps-tag" href="/store">Open vendors</a>
+        <div class="hero-trust">
+          Free app. No spam. No fees. Just great foodstuff and more. Get started today.
+        </div>
       </div>
-      <div class="steps-list">
-        <article class="step">
-          <div class="step-index">1</div>
-          <div>
-            <h2 class="step-title">Shop from verified vendors</h2>
-            <p class="step-body">Every vendor reviewed before listing.</p>
+      <div class="hero-visual" aria-label="Eki app preview">
+        <div class="phone-mockup">
+          <div class="phone-notch"></div>
+          <div class="phone-screen">
+            <div class="phone-header">
+              <span class="phone-header-title">Green Cabbage</span>
+              <div class="phone-header-icons">☰ 🔔</div>
+            </div>
+            <div class="phone-search">
+              <div class="phone-search-box">🔍 Search foodstuff...</div>
+              <div style="font-size:16px">⚡</div>
+            </div>
+            <div class="phone-categories">
+              <span class="phone-cat active">All</span>
+              <span class="phone-cat">Grains</span>
+              <span class="phone-cat">Spices</span>
+              <span class="phone-cat">Oil</span>
+              <span class="phone-cat">Frozen</span>
+            </div>
+            <div class="phone-section">
+              <div class="phone-section-title">Popular now</div>
+              <div class="phone-grid">
+                <div class="phone-card phone-card-yellow">
+                  <span class="phone-card-tag">Hot</span>
+                  <div class="phone-card-img">🛢️</div>
+                  <div class="phone-card-name">Palm Oil</div>
+                  <div class="phone-card-price">£8.50</div>
+                </div>
+                <div class="phone-card phone-card-pink">
+                  <span class="phone-card-tag">New</span>
+                  <div class="phone-card-img">🌶️</div>
+                  <div class="phone-card-name">Pepper Soup</div>
+                  <div class="phone-card-price">£5.00</div>
+                </div>
+                <div class="phone-card phone-card-green">
+                  <span class="phone-card-tag">Fresh</span>
+                  <div class="phone-card-img">🥬</div>
+                  <div class="phone-card-name">Bitter Leaf</div>
+                  <div class="phone-card-price">£3.50</div>
+                </div>
+                <div class="phone-card phone-card-blue">
+                  <span class="phone-card-tag">Best</span>
+                  <div class="phone-card-img">🐟</div>
+                  <div class="phone-card-name">Stockfish</div>
+                  <div class="phone-card-price">£12.00</div>
+                </div>
+              </div>
+            </div>
+            <div class="phone-section" style="padding-top:8px">
+              <div class="phone-section-title">Recommended</div>
+              <div class="phone-grid">
+                <div class="phone-card phone-card-purple">
+                  <span class="phone-card-tag">Sale</span>
+                  <div class="phone-card-img">🍠</div>
+                  <div class="phone-card-name">Yam Tubers</div>
+                  <div class="phone-card-price">£6.99</div>
+                </div>
+                <div class="phone-card phone-card-orange">
+                  <span class="phone-card-tag">Fresh</span>
+                  <div class="phone-card-img">🥜</div>
+                  <div class="phone-card-name">Groundnut</div>
+                  <div class="phone-card-price">£4.50</div>
+                </div>
+              </div>
+            </div>
+            <div class="phone-bottom-nav">
+              <div class="phone-nav-item active">
+                <span class="phone-nav-icon">🏠</span>
+                <span>Home</span>
+              </div>
+              <div class="phone-nav-item">
+                <span class="phone-nav-icon">🏪</span>
+                <span>Store</span>
+              </div>
+              <div class="phone-nav-item">
+                <span class="phone-nav-icon">🛒</span>
+                <span>Cart</span>
+              </div>
+              <div class="phone-nav-item">
+                <span class="phone-nav-icon">👤</span>
+                <span>Profile</span>
+              </div>
+            </div>
+            <div class="phone-fab">+</div>
           </div>
-        </article>
-        <article class="step">
-          <div class="step-index">2</div>
-          <div>
-            <h2 class="step-title">Live order tracking</h2>
-            <p class="step-body">From vendor confirmation to delivery.</p>
-          </div>
-        </article>
-        <article class="step">
-          <div class="step-index">3</div>
-          <div>
-            <h2 class="step-title">Secure Eki checkout</h2>
-            <p class="step-body">Order and payment record protected by Eki.</p>
-          </div>
-        </article>
-        <article class="step">
-          <div class="step-index">4</div>
-          <div>
-            <h2 class="step-title">One-tap reorder</h2>
-            <p class="step-body">Saved vendors reorder in a single tap.</p>
-          </div>
-        </article>
+        </div>
       </div>
     </div>
   </section>
 
-  <div class="sticky-order">
+  <!-- ─── FEATURES ─── -->
+  <section class="features-band">
     <div class="shell">
-      <a href="/find-order"><span>Already have an order? <strong>Find it here</strong></span></a>
+      <div class="features-header">
+        <h2>Everything Buyers need in one app.</h2>
+        <p>Discover, order, track and enjoy your favourite foodstuff from trusted vendors.</p>
+      </div>
+      <div class="features-grid">
+        <article class="feature-card">
+          <div class="feature-icon">🔍</div>
+          <h3>Find your favourite foodstuff</h3>
+          <p>Browse verified African and Caribbean vendors. Search by product, category, or vendor name.</p>
+        </article>
+        <article class="feature-card">
+          <div class="feature-icon">🚚</div>
+          <h3>Live order tracking</h3>
+          <p>Follow your order from checkout to delivery. Get real-time updates at every step.</p>
+        </article>
+        <article class="feature-card">
+          <div class="feature-icon">🛡️</div>
+          <h3>Secure checkout</h3>
+          <p>Pay safely by card or wallet. Every transaction is protected and recorded on Eki.</p>
+        </article>
+        <article class="feature-card">
+          <div class="feature-icon">🔄</div>
+          <h3>One tap reorder</h3>
+          <p>Save your favourites and reorder in seconds from your history. No need to search again.</p>
+        </article>
+      </div>
+    </div>
+  </section>
+</main>
+
+<!-- ─── FOOTER ─── -->
+<footer class="footer">
+  <div class="shell">
+    <div class="footer-grid">
+      <div>
+        <div class="footer-brand">
+          <span class="brand-dot"></span>eki.
+        </div>
+        <p>Your favourite foodstuff vendors, all in one trusted app. Buy, sell, and receive authentic African and Caribbean foodstuff.</p>
+      </div>
+      <div>
+        <h4>Platform</h4>
+        <div class="footer-links">
+          <a href="/store">Browse vendors</a>
+          <a href="/find-order">Find order</a>
+          <a href="#">Features</a>
+        </div>
+      </div>
+      <div>
+        <h4>Support</h4>
+        <div class="footer-links">
+          <a href="/help">Help centre</a>
+          <a href="mailto:adminandy@eki.app">Contact support</a>
+        </div>
+      </div>
+      <div>
+        <h4>Legal</h4>
+        <div class="footer-links">
+          <a href="/privacy">Privacy policy</a>
+          <a href="/terms">Terms of service</a>
+          <a href="/account-deletion">Account deletion</a>
+        </div>
+      </div>
+    </div>
+    <div class="footer-bottom">
+      <span>© ${new Date().getFullYear()} Eki. All rights reserved.</span>
+      <span>Built for your favourite foodstuff vendors.</span>
     </div>
   </div>
+</footer>
+
 </body>
 </html>`;
 }
@@ -1185,5 +1610,6 @@ export async function getPublicBuyerCartPage(_request: Request, response: Respon
   response.setHeader("Cache-Control", "public, max-age=120, s-maxage=300");
   response.status(200).send(renderBuyerCartLayout());
 }
+
 
 

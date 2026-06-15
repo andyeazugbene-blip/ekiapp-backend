@@ -27,6 +27,7 @@ import {
 } from "./modules/public-site/public-site.page";
 import {
   getPublicStoreCheckoutPage,
+  getPublicStoreCartPage,
   getPublicStoreConfirmedPage,
   getPublicStoreDirectoryPage,
   getPublicStorePage,
@@ -165,6 +166,9 @@ app.get("/store/:slug/product/:productId", (req, res, next) => {
 });
 app.get("/store/:slug/checkout", (req, res, next) => {
   Promise.resolve(getPublicStoreCheckoutPage(req, res)).catch(next);
+});
+app.get("/store/:slug/cart", (req, res, next) => {
+  Promise.resolve(getPublicStoreCartPage(req, res)).catch(next);
 });
 app.get("/store/:slug/confirmed", (req, res, next) => {
   Promise.resolve(getPublicStoreConfirmedPage(req, res)).catch(next);
