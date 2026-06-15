@@ -1,6 +1,7 @@
 import { NotificationType, Prisma, UserRole } from "@prisma/client";
 
 import { sendPushToUser } from "../../lib/expo-push";
+import { logger } from "../../lib/logger";
 import { prisma } from "../../lib/prisma";
 import { sendSms } from "../../lib/sms";
 import { AppError } from "../../shared/errors/app-error";
@@ -273,14 +274,23 @@ export const adminCommunicationsService = {
     }
 
     if (shouldPush) {
-      for (const recipient of recipients) {
-        if (recipient.id === actorId) continue;
-        void sendPushToUser(recipient.id, {
-          title: input.subject,
-          body: input.body,
-          data: { type: "admin_broadcast", audience: input.audience },
-        });
-      }
+      await Promise.allSettled(
+        recipients.map(async (recipient) => {
+          if (recipient.id === actorId) return;
+          try {
+            await sendPushToUser(recipient.id, {
+              title: input.subject,
+              body: input.body,
+              data: { type: "admin_broadcast", audience: input.audience },
+            });
+          } catch (error) {
+            logger.warn("Broadcast push send failed (non-blocking)", {
+              userId: recipient.id,
+              errorMessage: error instanceof Error ? error.message : String(error),
+            });
+          }
+        }),
+      );
     }
 
     let smsQueued = 0;
