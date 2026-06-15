@@ -225,19 +225,24 @@ export const ordersService = {
       include: orderInclude,
     });
 
-    // Notify buyer about status change
-    sendOrderStatusNotification(order, newStatus).catch((err) => {
+    // Notify buyer about status change — awaited so Vercel serverless doesn't
+    // terminate the function before the Expo push fetch completes.
+    try {
+      await sendOrderStatusNotification(order, newStatus);
+    } catch (err) {
       logger.error("Failed to send order status notification", { orderId, newStatus, error: String(err) });
-    });
+    }
 
     // When vendor marks order DELIVERED, release pending earnings to available balance
     if (newStatus === "DELIVERED") {
       try {
         const result = await releaseVendorEarnings(orderId);
         logger.info("Vendor earnings released on delivery", { orderId, vendorId: vendor.id, amount: result.amount });
-        sendEarningsReleasedNotification(vendor.id, orderId, result.amount, order.currency).catch((e) => {
+        try {
+          await sendEarningsReleasedNotification(vendor.id, orderId, result.amount, order.currency);
+        } catch (e) {
           logger.error("Failed to send earnings released notification", { orderId, error: String(e) });
-        });
+        }
       } catch (err) {
         logger.error("Failed to release vendor earnings on delivery", { orderId, error: String(err) });
       }
@@ -278,9 +283,11 @@ export const ordersService = {
       const result = await releaseVendorEarnings(orderId);
       if (result.released && order.vendorId) {
         logger.info("Vendor earnings released on buyer completion", { orderId, vendorId: order.vendorId, amount: result.amount });
-        sendEarningsReleasedNotification(order.vendorId, orderId, result.amount, order.currency).catch((e) => {
+        try {
+          await sendEarningsReleasedNotification(order.vendorId, orderId, result.amount, order.currency);
+        } catch (e) {
           logger.error("Failed to send earnings released notification", { orderId, error: String(e) });
-        });
+        }
       }
     } catch (err) {
       logger.error("Failed to release vendor earnings on buyer completion", { orderId, error: String(err) });

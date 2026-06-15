@@ -1,10 +1,10 @@
-import type { Shipment } from "@prisma/client";
+import type { NotificationType, Shipment } from "@prisma/client";
 
 import { prisma } from "../../lib/prisma";
-import { pushNotifications } from "../../lib/push-notifications";
 import { CURSOR_ORDER_BY } from "../../shared/constants";
 import { AppError } from "../../shared/errors/app-error";
 import { releaseVendorEarnings } from "../../shared/utils/wallet-release";
+import { notificationsService } from "../notifications/notifications.service";
 import type { CreateShipmentInput, ListShipmentsQuery, UpdateShipmentInput } from "./shipments.types";
 
 export const shipmentsService = {
@@ -164,7 +164,14 @@ export const shipmentsService = {
         select: { buyerId: true, orderNumber: true },
       });
       if (order) {
-        pushNotifications.orderStatusUpdate(order.buyerId, order.orderNumber, nextOrderStatus);
+        const label = nextOrderStatus.toLowerCase().replace("_", " ");
+        await notificationsService.enqueue({
+          userId: order.buyerId,
+          type: "ORDER_PAID" as NotificationType,
+          title: `Order ${label}`,
+          body: `Your order ${order.orderNumber} is now ${label}.`,
+          data: { orderId: shipment.orderId, status: nextOrderStatus },
+        });
       }
     }
 
