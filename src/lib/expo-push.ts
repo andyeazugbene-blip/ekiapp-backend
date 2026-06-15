@@ -12,6 +12,8 @@ export interface ExpoPushMessage {
   sound?: "default" | null;
   badge?: number;
   channelId?: string;
+  categoryId?: string;
+  priority?: "default" | "normal" | "high";
 }
 
 interface ExpoPushTicket {
@@ -102,7 +104,7 @@ export async function sendPushToUser(
       return;
     }
 
-    // Map notification type to Android channel
+    // Map notification type to channel (Android) and category (iOS)
     const rawType = notification.data?.type;
     const channelId =
       typeof rawType === "string" && rawType.includes("payout") ? "payouts"
@@ -117,6 +119,8 @@ export async function sendPushToUser(
       data: notification.data,
       sound: "default",
       channelId,
+      categoryId: channelId,      // iOS category (same names as channels)
+      priority: "high",           // Deliver immediately, critical for serverless
     }));
 
     await sendExpoPush(messages);

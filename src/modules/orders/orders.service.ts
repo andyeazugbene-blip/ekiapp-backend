@@ -57,7 +57,7 @@ async function sendOrderStatusNotification(order: { id: string; buyerId: string;
     type: "ORDER_PAID" as NotificationType,
     title: `Order ${label}`,
     body: `Your order ${order.orderNumber} is now ${label}.`,
-    data: { orderId: order.id, status: newStatus },
+    data: { type: "order_status", orderId: order.id, orderNumber: order.orderNumber, status: newStatus },
   });
 }
 
@@ -73,7 +73,7 @@ async function sendEarningsReleasedNotification(vendorId: string, orderId: strin
     type: "BALANCE_CREDITED" as NotificationType,
     title: "Earnings Released",
     body: `${amount / 100} ${currency} in earnings have been released to your wallet for order.`,
-    data: { orderId },
+    data: { type: "earnings_released", orderId },
   });
 }
 

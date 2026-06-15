@@ -144,7 +144,7 @@ export const shipmentsService = {
                 type: "ADMIN_BROADCAST",
                 title: "Order status updated",
                 body: `Order ${order.orderNumber} is now ${nextOrderStatus.toLowerCase().replace("_", " ")}.`,
-                data: { orderId: shipment.orderId, status: nextOrderStatus },
+                data: { type: "order_status", orderId: shipment.orderId, status: nextOrderStatus },
               },
             });
           }
@@ -170,7 +170,7 @@ export const shipmentsService = {
           type: "ORDER_PAID" as NotificationType,
           title: `Order ${label}`,
           body: `Your order ${order.orderNumber} is now ${label}.`,
-          data: { orderId: shipment.orderId, status: nextOrderStatus },
+          data: { type: "order_status", orderId: shipment.orderId, orderNumber: order.orderNumber, status: nextOrderStatus },
         });
       }
     }
