@@ -46,6 +46,7 @@ const statusLabels: Record<string, string> = {
   DISPATCHED: "dispatched",
   IN_TRANSIT: "in transit",
   DELIVERED: "delivered",
+  CANCELLED: "cancelled",
 };
 
 async function sendOrderStatusNotification(order: { id: string; buyerId: string; orderNumber: string }, newStatus: OrderStatus): Promise<void> {
@@ -281,7 +282,7 @@ export const ordersService = {
       include: orderInclude,
     });
 
-    // Release pending earnings to available balance (AWAITED — not fire-and-forget)
+    // Release pending earnings to available balance (AWAITED ï¿½ not fire-and-forget)
     try {
       const result = await releaseVendorEarnings(orderId);
       if (result.released && order.vendorId) {

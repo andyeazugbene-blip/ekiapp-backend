@@ -793,7 +793,7 @@ function renderStorePage(store: PublicStore, products: PublicProduct[]): string 
             <p class="product-meta">${escape(formatWeight(product.weightGrams))} · 2-4 days</p>
           </a>
           <div class="product-row">
-            <p class="product-price" data-product-price="${escape(product.id)}" data-base-price="${product.priceInCents}">${escape(formatPrice(product.priceInCents, product.currency))}</p>
+            <p class="product-price" data-product-price="${escape(product.id)}" data-base-price="${product.priceInCents}" data-currency="${escape(product.currency)}">${escape(formatPrice(product.priceInCents, product.currency))}</p>
             <button class="icon-add add-to-cart" type="button" data-product-id="${escape(product.id)}" aria-label="Add ${escape(product.title)}">+</button>
           </div>
         </div>
@@ -948,42 +948,337 @@ function renderStorePage(store: PublicStore, products: PublicProduct[]): string 
 function renderStoreDirectoryPage(stores: PublicStore[]): string {
   const cards = stores.length > 0
     ? stores.map((store) => `
-      <a class="product-card" href="/store/${encodeURIComponent(store.storeSlug)}" style="padding:0">
-        <div class="product-top" style="min-height:140px">
-          ${store.coverImage ? `<img src="${escape(store.coverImage)}" alt="${escape(store.storeName)}" loading="lazy" />` : `<div class="placeholder-pill">${escape(productCode(store.storeName))}</div>`}
+      <a class="store-card" href="/store/${encodeURIComponent(store.storeSlug)}">
+        <div class="store-card-cover">
+          ${store.coverImage
+            ? `<img src="${escape(store.coverImage)}" alt="${escape(store.storeName)}" loading="lazy" />`
+            : `<div class="store-card-placeholder">${escape(productCode(store.storeName))}</div>`}
         </div>
-        <div class="product-body" style="padding:14px">
-          <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
-            <h3 class="product-title" style="font-size:14px">${escape(store.storeName)}</h3>
-            <span class="badge" style="margin-left:0">${escape(store.totalProducts)} items</span>
+        <div class="store-card-body">
+          <div class="store-card-top">
+            <div>
+              <h3>${escape(store.storeName)}</h3>
+              <span class="store-card-location">${escape([store.city, store.country].filter(Boolean).join(", ") || "United Kingdom")}</span>
+            </div>
+            <span class="store-card-count">${escape(store.totalProducts)} items</span>
           </div>
-          <p class="product-meta" style="margin-top:6px">${escape([store.city, store.country].filter(Boolean).join(", ") || "United Kingdom")}</p>
-          <p class="muted" style="margin:8px 0 0;font-size:11px">${escape(store.description || "Open this vendor storefront to browse products, add to cart and checkout securely.")}</p>
+          <p class="store-card-desc">${escape(store.description || "Browse products, add to cart and checkout securely.")}</p>
+          <span class="store-card-cta">Visit store →</span>
         </div>
       </a>
     `).join("")
     : `<div class="empty-state">No vendor stores are live yet.</div>`;
 
-  return `${baseStyles("Vendors | Eki", "Browse Eki vendor storefronts")}
-  <div class="shell">
-    ${renderTopbar(`<span class="top-btn">Vendors</span>`)}
-    <section class="hero">
-      <div class="hero-inner">
-        <div>
-          <h1>Browse verified vendor stores.</h1>
-          <p>Open any Eki vendor storefront, add foodstuff to your cart, pay securely, and track the order on the web or in the app.</p>
-        </div>
-        <div class="device">🏪</div>
-      </div>
-    </section>
-    <div class="container" style="padding-top:20px;padding-bottom:36px">
-      <div class="section-head">
-        <h2>All vendor stores</h2>
-        <span class="muted">${stores.length} stores</span>
-      </div>
-      <div class="products">${cards}</div>
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#134f3b" />
+  <title>Vendors | Eki</title>
+  <meta name="description" content="Browse Eki vendor storefronts" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" />
+  <style>
+    *,*::before,*::after{box-sizing:border-box}
+    html,body{margin:0;padding:0}
+    body{
+      background:#f6faf6;
+      color:#111827;
+      font-family:'Inter',-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;
+      -webkit-font-smoothing:antialiased;
+      -moz-osx-font-smoothing:grayscale;
+      line-height:1.5;
+    }
+    a{color:inherit;text-decoration:none}
+    img{display:block;max-width:100%}
+    .shell{width:min(1200px,calc(100% - 48px));margin:0 auto}
+
+    /* ─── Topbar ─── */
+    .topbar{
+      position:sticky;top:0;z-index:50;
+      background:rgba(255,255,255,.98);
+      backdrop-filter:saturate(180%) blur(16px);
+      border-bottom:1px solid #e8f0eb;
+    }
+    .topbar-inner{
+      display:flex;align-items:center;justify-content:space-between;
+      min-height:64px;gap:20px;
+    }
+    .brand{
+      display:inline-flex;align-items:center;gap:6px;
+      font-weight:800;font-size:18px;color:#134f3b;
+      letter-spacing:-0.02em;
+    }
+    .brand-dot{
+      width:10px;height:10px;border-radius:999px;
+      background:#4ade80;display:inline-block;
+    }
+    .topnav{display:flex;align-items:center;gap:28px}
+    .topnav a{
+      font-size:14px;font-weight:600;color:#374151;
+      transition:color .15s ease;
+    }
+    .topnav a:hover{color:#134f3b}
+    .topnav .nav-cta{
+      display:inline-flex;align-items:center;justify-content:center;
+      min-height:40px;padding:0 20px;border-radius:10px;
+      background:#134f3b;color:#fff;font-weight:700;font-size:14px;
+      transition:transform .2s cubic-bezier(.34,1.56,.64,1),box-shadow .2s ease,background .2s ease;
+    }
+    .topnav .nav-cta:hover{
+      background:#0f4030;
+      transform:translateY(-1px);
+      box-shadow:0 8px 20px rgba(19,79,59,.2);
+    }
+    .topnav .nav-cta.home-link{background:transparent;color:#374151;padding:0}
+    .topnav .nav-cta.home-link:hover{color:#134f3b;background:transparent;transform:none;box-shadow:none}
+
+    /* ─── Hero ─── */
+    .hero-wrap{
+      background:linear-gradient(135deg,#134f3b 0%,#1a6b4f 50%,#134f3b 100%);
+      color:#fff;overflow:hidden;
+    }
+    .hero{
+      padding:56px 0 64px;
+      display:grid;
+      grid-template-columns:minmax(0,1fr) minmax(0,320px);
+      gap:40px;
+      align-items:center;
+    }
+    .hero-badge{
+      display:inline-flex;align-items:center;gap:6px;
+      padding:6px 16px;border-radius:999px;
+      background:rgba(255,255,255,.12);
+      color:rgba(255,255,255,.9);
+      font-size:12px;font-weight:700;
+      letter-spacing:0.04em;text-transform:uppercase;
+      margin-bottom:20px;
+      border:1px solid rgba(255,255,255,.15);
+    }
+    .hero h1{
+      margin:0;font-size:clamp(30px,4vw,46px);
+      line-height:1.08;letter-spacing:-0.04em;font-weight:800;
+    }
+    .hero p{
+      margin:16px 0 24px;max-width:480px;
+      color:rgba(255,255,255,.8);
+      font-size:16px;line-height:1.55;
+    }
+    .hero-trust{
+      display:flex;gap:24px;flex-wrap:wrap;
+    }
+    .hero-trust span{
+      display:flex;align-items:center;gap:6px;
+      font-size:13px;color:rgba(255,255,255,.7);
+    }
+    .hero-trust span::before{content:"✓";color:#4ade80;font-weight:800}
+    .hero-visual{
+      display:flex;align-items:center;justify-content:center;
+    }
+    .hero-icon{
+      font-size:72px;opacity:.9;
+    }
+
+    /* ─── Store Grid ─── */
+    .stores-band{padding:48px 0 64px;background:#fff}
+    .stores-header{
+      display:flex;justify-content:space-between;align-items:center;
+      margin-bottom:28px;
+    }
+    .stores-header h2{
+      margin:0;font-size:20px;font-weight:800;letter-spacing:-.02em;
+    }
+    .stores-header span{font-size:13px;color:#6b7280}
+    .stores-grid{
+      display:grid;
+      grid-template-columns:repeat(3,minmax(0,1fr));
+      gap:20px;
+    }
+    .store-card{
+      display:flex;flex-direction:column;
+      border:1px solid #e5e7eb;border-radius:16px;
+      overflow:hidden;background:#fff;
+      transition:transform .2s ease,box-shadow .2s ease,border-color .2s ease;
+    }
+    .store-card:hover{
+      transform:translateY(-3px);
+      box-shadow:0 14px 32px rgba(19,79,59,.08);
+      border-color:#b8d4c3;
+    }
+    .store-card-cover{
+      height:140px;overflow:hidden;
+      background:linear-gradient(135deg,#eef8f2,#d4eddf);
+      display:flex;align-items:center;justify-content:center;
+    }
+    .store-card-cover img{width:100%;height:100%;object-fit:cover}
+    .store-card-placeholder{
+      font-size:28px;font-weight:800;color:#134f3b;opacity:.5;
+    }
+    .store-card-body{padding:18px;flex:1;display:flex;flex-direction:column}
+    .store-card-top{
+      display:flex;justify-content:space-between;align-items:flex-start;gap:10px;
+    }
+    .store-card-top h3{margin:0;font-size:16px;font-weight:800;color:#111;line-height:1.2}
+    .store-card-location{font-size:12px;color:#6b7280;margin-top:3px;display:block}
+    .store-card-count{
+      flex-shrink:0;padding:3px 10px;border-radius:999px;
+      background:#eef8f2;color:#134f3b;
+      font-size:11px;font-weight:700;
+    }
+    .store-card-desc{
+      margin:10px 0 0;font-size:13px;color:#6b7280;
+      line-height:1.5;flex:1;
+    }
+    .store-card-cta{
+      display:inline-block;margin-top:14px;
+      font-size:13px;font-weight:700;color:#134f3b;
+      transition:gap .2s ease;
+    }
+    .store-card:hover .store-card-cta{text-decoration:underline}
+
+    /* ─── Footer ─── */
+    .footer{
+      background:#0d2a20;color:rgba(255,255,255,.72);
+      padding:48px 0 32px;
+    }
+    .footer-grid{
+      display:grid;
+      grid-template-columns:minmax(0,1.2fr) repeat(3,minmax(0,1fr));
+      gap:32px;
+      padding-bottom:32px;
+      border-bottom:1px solid rgba(255,255,255,.08);
+    }
+    .footer-brand{
+      display:inline-flex;align-items:center;gap:8px;margin-bottom:12px;
+      font-weight:800;font-size:16px;color:#fff;
+      letter-spacing:-.03em;
+    }
+    .footer-brand .brand-dot{
+      width:10px;height:10px;border-radius:999px;
+      background:#4ade80;display:inline-block;
+    }
+    .footer p{font-size:13px;line-height:1.55;margin:0;color:rgba(255,255,255,.6)}
+    .footer h4{
+      margin:0 0 12px;font-size:11px;font-weight:700;
+      color:#fff;text-transform:uppercase;letter-spacing:.06em;
+    }
+    .footer-links{display:flex;flex-direction:column;gap:8px}
+    .footer-links a{
+      font-size:13px;color:rgba(255,255,255,.6);
+      transition:color .15s ease;
+    }
+    .footer-links a:hover{color:#fff}
+    .footer-bottom{
+      padding-top:24px;
+      display:flex;justify-content:space-between;align-items:center;
+      flex-wrap:wrap;gap:12px;font-size:12px;
+    }
+    .footer-bottom a{color:rgba(255,255,255,.6);transition:color .15s ease}
+    .footer-bottom a:hover{color:#fff}
+
+    @media (max-width:1020px){
+      .hero{grid-template-columns:1fr;padding:40px 0 36px}
+      .hero-visual{display:none}
+      .stores-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+      .footer-grid{grid-template-columns:1fr 1fr;gap:24px}
+    }
+    @media (max-width:600px){
+      .shell{width:min(100% - 24px,1200px)}
+      .topnav{gap:16px}
+      .topnav a:not(.nav-cta):not(.always-visible){display:none}
+      .stores-grid{grid-template-columns:1fr}
+      .stores-header{flex-direction:column;align-items:flex-start;gap:6px}
+      .footer-grid{grid-template-columns:1fr}
+      .footer-bottom{flex-direction:column;text-align:center}
+    }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <div class="shell topbar-inner">
+      <a class="brand" href="/">
+        <span class="brand-dot"></span>eki.
+      </a>
+      <nav class="topnav" aria-label="Main">
+        <a class="nav-cta home-link" href="/">Home</a>
+        <a href="/find-order">Find order</a>
+        <a href="/vendor" class="always-visible">Vendor Portal</a>
+        <a class="nav-cta" href="/store">Browse stores</a>
+      </nav>
     </div>
-  </div>
+  </header>
+
+  <section class="hero-wrap">
+    <div class="shell hero">
+      <div>
+        <div class="hero-badge">
+          <span class="hero-badge-dot" style="width:6px;height:6px;border-radius:999px;background:#4ade80;display:inline-block;margin-right:4px"></span> Verified vendors
+        </div>
+        <h1>Browse vendor stores.</h1>
+        <p>Open any Eki vendor storefront, add foodstuff to your cart, pay securely, and track the order on the web or in the app.</p>
+        <div class="hero-trust">
+          <span>Secure checkout</span>
+          <span>Instant confirmation</span>
+          <span>Track in Eki</span>
+        </div>
+      </div>
+      <div class="hero-visual">
+        <div class="hero-icon">🏪</div>
+      </div>
+    </div>
+  </section>
+
+  <section class="stores-band">
+    <div class="shell">
+      <div class="stores-header">
+        <h2>All vendor stores</h2>
+        <span>${stores.length} ${stores.length === 1 ? "store" : "stores"}</span>
+      </div>
+      <div class="stores-grid">
+        ${cards}
+      </div>
+    </div>
+  </section>
+
+  <footer class="footer">
+    <div class="shell">
+      <div class="footer-grid">
+        <div>
+          <div class="footer-brand">
+            <span class="brand-dot"></span>eki.
+          </div>
+          <p>Your favourite foodstuff vendors, all in one trusted app. Buy, sell, and receive authentic African and Caribbean foodstuff.</p>
+        </div>
+        <div>
+          <h4>Platform</h4>
+          <div class="footer-links">
+            <a href="/store">Browse vendors</a>
+            <a href="/find-order">Find order</a>
+          </div>
+        </div>
+        <div>
+          <h4>Support</h4>
+          <div class="footer-links">
+            <a href="/help">Help centre</a>
+            <a href="mailto:adminandy@eki.app">Contact support</a>
+          </div>
+        </div>
+        <div>
+          <h4>Legal</h4>
+          <div class="footer-links">
+            <a href="/privacy">Privacy policy</a>
+            <a href="/terms">Terms of service</a>
+            <a href="/account-deletion">Account deletion</a>
+          </div>
+        </div>
+      </div>
+      <div class="footer-bottom">
+        <span>© ${new Date().getFullYear()} Eki. All rights reserved.</span>
+        <span>Built for your favourite foodstuff vendors.</span>
+      </div>
+    </div>
+  </footer>
 </body>
 </html>`;
 }
@@ -1233,35 +1528,38 @@ function renderCartPage(store: PublicStore, products: PublicProduct[]): string {
         var checkoutHref = '/store/'+encodeURIComponent(storeSlug)+'/checkout';
         if(promoCode) checkoutHref += '?promo='+encodeURIComponent(promoCode);
         if(checkoutBtn) checkoutBtn.href = checkoutHref;
-
-        // Quantity buttons
-        document.querySelectorAll('.qty-btn').forEach(function(btn){
-          btn.addEventListener('click', function(){
-            var idx = parseInt(btn.getAttribute('data-index'), 10);
-            var action = btn.getAttribute('data-action');
-            if(isNaN(idx)) return;
-            var cart = readCart();
-            if(idx < 0 || idx >= cart.length) return;
-            if(action === 'plus') cart[idx].quantity = (cart[idx].quantity || 1) + 1;
-            else if(action === 'minus' && cart[idx].quantity > 1) cart[idx].quantity -= 1;
-            else { cart.splice(idx, 1); }
-            writeCart(cart);
-            renderCart();
-          });
-        });
-
-        // Remove buttons
-        document.querySelectorAll('.remove-btn').forEach(function(btn){
-          btn.addEventListener('click', function(){
-            var idx = parseInt(btn.getAttribute('data-index'), 10);
-            if(isNaN(idx)) return;
-            var cart = readCart();
-            if(idx >= 0 && idx < cart.length) cart.splice(idx, 1);
-            writeCart(cart);
-            renderCart();
-          });
-        });
       }
+
+      // Event delegation on cart items (survives innerHTML replacement)
+      document.getElementById('cart-items-list')?.addEventListener('click', function(evt){
+        var target = evt.target;
+        if(!target) return;
+
+        if(target.classList.contains('qty-btn')){
+          evt.preventDefault();
+          var idx = parseInt(target.getAttribute('data-index'), 10);
+          var action = target.getAttribute('data-action');
+          if(isNaN(idx)) return;
+          var c = readCart();
+          if(idx < 0 || idx >= c.length) return;
+          if(action === 'plus') c[idx].quantity = (c[idx].quantity || 1) + 1;
+          else if(action === 'minus' && c[idx].quantity > 1) c[idx].quantity -= 1;
+          else { c.splice(idx, 1); }
+          writeCart(c);
+          renderCart();
+          return;
+        }
+
+        if(target.classList.contains('remove-btn')){
+          evt.preventDefault();
+          var idx = parseInt(target.getAttribute('data-index'), 10);
+          if(isNaN(idx)) return;
+          var c = readCart();
+          if(idx >= 0 && idx < c.length) c.splice(idx, 1);
+          writeCart(c);
+          renderCart();
+        }
+      });
 
       renderCart();
     })();
@@ -1536,47 +1834,104 @@ function renderTrackPage(store: PublicStore, order: PublicStoreTrackedOrder): st
   `).join("");
 
   const summaryItems = order.items.map((item) => `
-    <div class="summary-item">
-      <div>${escape(item.name)}</div>
-      <strong>${escape(formatMoney(item.price * item.quantity, order.currency))}</strong>
+    <div class="item-row">
+      <span class="item-name">${escape(item.name)}</span>
+      <div class="item-end">
+        <span class="item-qty">×${item.quantity}</span>
+        <strong class="item-price">${escape(formatMoney(item.price * item.quantity, order.currency))}</strong>
+      </div>
     </div>
   `).join("");
 
   return `${baseStyles(`Track your order | ${store.storeName}`, `Track order ${order.orderNumber}`)}
+  <style>
+    .track-wrap{max-width:800px;margin:0 auto;padding:24px 10px 48px}
+    .imported-card{border-radius:20px;overflow:hidden;background:#fff;border:1px solid #dbe7dd;box-shadow:0 4px 20px rgba(0,0,0,.04)}
+    .imported-head{background:#134f3b;color:#fff;padding:32px 28px 28px;text-align:center}
+    .imported-icon{width:56px;height:56px;border-radius:999px;background:rgba(255,255,255,.15);display:flex;align-items:center;justify-content:center;margin:0 auto 14px;font-size:28px}
+    .imported-head h1{margin:0;font-size:22px;font-weight:800;letter-spacing:-.03em;color:#fff}
+    .imported-order-number{display:inline-block;margin-top:8px;padding:4px 12px;border-radius:999px;background:rgba(255,255,255,.12);color:rgba(255,255,255,.82);font-size:12px;font-weight:700;letter-spacing:.03em}
+    .imported-head .store-line{margin-top:10px;font-size:13px;color:rgba(255,255,255,.72)}
+    .imported-body{padding:24px 28px 28px}
+    .section-label{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:#6b7280;margin:0 0 14px}
+    .timeline-simple{display:flex;flex-direction:column;gap:0;margin-bottom:24px}
+    .timeline-step{display:grid;grid-template-columns:24px 1fr;gap:10px;padding:10px 0;align-items:start;position:relative}
+    .timeline-step::before{content:"";position:absolute;left:11px;top:34px;width:2px;height:calc(100% - 24px);background:#e5e7eb}
+    .timeline-step:last-child::before{display:none}
+    .timeline-dot{width:24px;height:24px;border-radius:999px;border:2px solid #d9e5dd;background:#fff;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:800;color:#134f3b;position:relative;z-index:1}
+    .timeline-step.complete .timeline-dot{background:#134f3b;border-color:#134f3b;color:#fff}
+    .timeline-step.active .timeline-dot{border-color:#134f3b;background:#fff}
+    .timeline-step h3{margin:0;font-size:13px;font-weight:700;color:#111}
+    .timeline-step p{margin:2px 0 0;font-size:11px;color:#6b7280;line-height:1.4}
+    .order-summary-box{border:1px solid #e5e7eb;border-radius:12px;padding:16px;margin-top:16px;background:#fafbfa}
+    .order-summary-box h3{margin:0 0 12px;font-size:13px;font-weight:800;color:#111}
+    .item-row{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:6px 0;font-size:12px}
+    .item-row+.item-row{border-top:1px solid #ecf1ed}
+    .item-name{color:#374151;flex:1;min-width:0}
+    .item-end{display:flex;align-items:center;gap:8px;flex-shrink:0}
+    .item-qty{color:#6b7280;font-size:11px}
+    .item-price{font-size:12px;font-weight:700;color:#111}
+    .summary-line{display:flex;justify-content:space-between;font-size:12px;padding:6px 0;color:#6b7280}
+    .summary-line.total{font-size:16px;font-weight:800;color:#111;border-top:1px solid #ecf1ed;padding-top:10px;margin-top:6px}
+    .vendor-info{display:flex;align-items:center;gap:10px;margin-top:16px;padding:12px 14px;border:1px solid #e5e7eb;border-radius:10px}
+    .vendor-avatar{width:36px;height:36px;border-radius:8px;background:#134f3b;color:#fff;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:800;flex-shrink:0}
+    .vendor-details{flex:1;min-width:0}
+    .vendor-details strong{font-size:13px;display:block}
+    .vendor-details span{font-size:11px;color:#6b7280}
+    .download-banner{margin-top:20px;border-radius:14px;background:#0d2a20;color:#fff;padding:24px;text-align:center}
+    .download-banner h3{margin:0;font-size:16px;font-weight:800;color:#fff}
+    .download-banner p{margin:6px 0 16px;font-size:12px;color:rgba(255,255,255,.7);line-height:1.5}
+    .download-buttons{display:flex;gap:10px;justify-content:center;flex-wrap:wrap}
+    .dl-btn{display:inline-flex;flex-direction:column;justify-content:center;min-width:130px;height:44px;padding:0 14px;border-radius:10px;background:#fff;color:#0d2a20;font-weight:700;font-size:11px;text-decoration:none}
+    .dl-btn span:first-child{font-weight:500;font-size:9px;opacity:.7}
+    .dl-btn.alt{background:#2b7a4b;color:#fff}
+    @media(max-width:600px){.imported-head{padding:24px 18px 20px}.imported-body{padding:18px}.track-wrap{padding:16px 0 36px}}
+  </style>
   <div class="shell">
-    ${renderTopbar(`<a class="top-btn" href="/">Sign in</a>`)}
-    <div class="track-shell">
-      <h1>Track your order</h1>
-      <span class="track-chip">Order ID: ${escape(order.orderNumber)}</span>
-      <div class="track-grid">
-        <div>
-          <div class="track-card">
-            <h2>Order Status</h2>
-            <p class="muted">Estimated delivery: ${escape(order.estimatedDeliveryLabel)}</p>
-            <div class="timeline">${steps}</div>
-          </div>
-          <div class="bottom-banner">
-            <div>
-              <strong>Get live updates in the Eki app</strong>
-              <p>Order updates, vendor saving and reorder in 2 taps</p>
-            </div>
-            <button class="open-app" type="button" onclick="window.open('https://play.google.com/store','_blank')">Open in App</button>
-          </div>
+    ${renderTopbar(`<span class="top-btn">Order Details</span>`)}
+    <div class="track-wrap">
+      <div class="imported-card">
+        <div class="imported-head">
+          <div class="imported-icon">✓</div>
+          <h1>Your order has been imported</h1>
+          <span class="imported-order-number">${escape(order.orderNumber)}</span>
+          <div class="store-line">from ${escape(store.storeName)}</div>
         </div>
-        <div>
-          <div class="side-card">
-            <h2>Your Order</h2>
+        <div class="imported-body">
+          <p class="section-label">Order Status</p>
+          <div class="timeline-simple">${steps}</div>
+
+          <p class="section-label">Your Order</p>
+          <div class="order-summary-box">
+            <h3>Items</h3>
             ${summaryItems}
             <div class="summary-line"><span>Subtotal</span><span>${escape(formatMoney(order.subtotal, order.currency))}</span></div>
             <div class="summary-line"><span>Delivery</span><span>${order.delivery === 0 ? "Free" : escape(formatMoney(order.delivery, order.currency))}</span></div>
-            <div class="summary-total"><span>Total</span><span>${escape(formatMoney(order.total, order.currency))}</span></div>
+            <div class="summary-line total"><span>Total</span><span>${escape(formatMoney(order.total, order.currency))}</span></div>
           </div>
-          <div class="side-card" style="margin-top:12px">
-            <h2>Sold by</h2>
-            <strong>${escape(store.storeName)}</strong>
-            <p class="muted">${escape([store.city, store.country].filter(Boolean).join(", "))}</p>
-            <a class="muted" href="/store/${encodeURIComponent(store.storeSlug)}">Contact vendor</a>
+
+          <div class="vendor-info">
+            <div class="vendor-avatar">${escape(store.storeName.slice(0,2).toUpperCase())}</div>
+            <div class="vendor-details">
+              <strong>${escape(store.storeName)}</strong>
+              <span>${escape([store.city, store.country].filter(Boolean).join(", "))}</span>
+            </div>
           </div>
+        </div>
+      </div>
+
+      <div class="download-banner">
+        <h3>Get live updates</h3>
+        <p>Download the Eki app to track your order, save vendors and reorder in seconds.</p>
+        <div class="download-buttons">
+          <a class="dl-btn" href="https://apps.apple.com/app/id">
+            <span>Download on the</span>
+            <span>App Store</span>
+          </a>
+          <a class="dl-btn alt" href="https://play.google.com/store/apps/details?id=com.ekiapp.mobile">
+            <span>Get it on</span>
+            <span>Google Play</span>
+          </a>
         </div>
       </div>
     </div>

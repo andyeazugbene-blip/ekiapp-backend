@@ -56,12 +56,17 @@ export const notificationsService = {
         await notificationsQueue.add(NOTIFICATION_JOB, input, {
           jobId: undefined,
         });
-        // Send Expo push in parallel — worker only creates DB records,
-        // it does not send pushes.
-        sendPushToUser(input.userId, {
+        // Send Expo push — awaited so it doesn't get cancelled by
+        // Vercel's serverless function lifecycle.
+        await sendPushToUser(input.userId, {
           title: input.title,
           body: input.body ?? "",
           data: input.data as Record<string, unknown> | undefined,
+        }).catch((error) => {
+          logger.warn("Push notification send failed (non-blocking)", {
+            userId: input.userId,
+            errorMessage: error instanceof Error ? error.message : String(error),
+          });
         });
         return;
       } catch (error) {
@@ -74,11 +79,16 @@ export const notificationsService = {
 
     try {
       await this.create(input);
-      // Fire Expo push after saving to DB
-      sendPushToUser(input.userId, {
+      // Fire Expo push after saving to DB — awaited for serverless
+      await sendPushToUser(input.userId, {
         title: input.title,
         body: input.body ?? "",
         data: input.data as Record<string, unknown> | undefined,
+      }).catch((error) => {
+        logger.warn("Push notification send failed (non-blocking)", {
+          userId: input.userId,
+          errorMessage: error instanceof Error ? error.message : String(error),
+        });
       });
     } catch (error) {
       logger.error("Notification fallback insert failed", {

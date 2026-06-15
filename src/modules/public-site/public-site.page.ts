@@ -378,13 +378,13 @@ function renderHomeLayout(page: PageDefinition): string {
     }
     .hero{
       display:grid;
-      grid-template-columns:minmax(0,1fr) minmax(320px,480px);
+      grid-template-columns:minmax(0,1fr) minmax(360px,500px);
       align-items:center;
-      gap:48px;
-      padding:64px 0 80px;
-      min-height:520px;
+      gap:32px;
+      padding:64px 0 40px;
+      min-height:auto;
     }
-    .hero-copy{max-width:560px}
+    .hero-copy{max-width:540px}
     .hero-badge{
       display:inline-flex;align-items:center;gap:6px;
       padding:6px 16px;border-radius:999px;
@@ -400,16 +400,16 @@ function renderHomeLayout(page: PageDefinition): string {
       background:#4ade80;display:inline-block;
     }
     h1{
-      margin:0;font-size:clamp(36px,5vw,56px);
-      line-height:1.05;letter-spacing:-0.04em;font-weight:800;
+      margin:0;font-size:clamp(30px,4vw,48px);
+      line-height:1.08;letter-spacing:-0.04em;font-weight:800;
     }
     .hero-intro{
-      margin:20px 0 0;max-width:460px;
+      margin:18px 0 0;max-width:440px;
       color:rgba(255,255,255,.82);
-      font-size:17px;line-height:1.6;
+      font-size:16px;line-height:1.6;
     }
     .hero-actions{
-      display:flex;gap:14px;margin-top:32px;flex-wrap:wrap;
+      display:flex;gap:14px;margin-top:28px;flex-wrap:wrap;
     }
     .btn-app{
       display:inline-flex;flex-direction:column;justify-content:center;
@@ -431,123 +431,60 @@ function renderHomeLayout(page: PageDefinition): string {
     .btn-small{font-size:10px;font-weight:600;opacity:.7}
     .btn-main{font-size:15px;font-weight:800;margin-top:2px}
     .hero-trust{
-      margin-top:20px;
+      margin-top:18px;
       font-size:13px;color:rgba(255,255,255,.6);
     }
 
-    /* ─── Phone Mockup ─── */
-    .hero-visual{
-      position:relative;display:flex;align-items:center;justify-content:center;
-      min-height:380px;
-    }
-    .phone-mockup{
-      width:280px;
-      background:#1a1a1a;
-      border-radius:36px;
-      padding:10px;
-      box-shadow:0 40px 80px rgba(0,0,0,.35),0 0 0 2px rgba(255,255,255,.08);
+    /* ─── Phone + Floating Cards ─── */
+    .hero-showcase{
       position:relative;
+      display:grid;
+      grid-template-columns:1fr auto 1fr;
+      gap:12px;
+      align-items:center;
+      justify-items:center;
+      padding:36px 0 24px;
+      min-height:420px;
     }
-    .phone-notch{
-      position:absolute;top:10px;left:50%;transform:translateX(-50%);
-      width:100px;height:24px;background:#1a1a1a;border-radius:0 0 16px 16px;z-index:2;
+    .showcase-cards{
+      display:flex;
+      flex-direction:column;
+      gap:14px;
+      width:100%;
+      max-width:180px;
     }
-    .phone-screen{
-      background:#f8f9f7;
-      border-radius:26px;
-      overflow:hidden;
-      min-height:500px;
-      position:relative;
+    .showcase-cards.right{
+      align-items:flex-end;
     }
-    .phone-header{
-      background:#134f3b;
-      color:#fff;
-      padding:36px 16px 16px;
-      display:flex;justify-content:space-between;align-items:center;
+    .float-card{
+      display:flex;
+      align-items:center;
+      gap:10px;
+      padding:12px 14px;
+      border-radius:14px;
+      background:#fff;
+      box-shadow:0 8px 28px rgba(0,0,0,.1);
+      border:1px solid rgba(255,255,255,.6);
+      transition:transform .25s ease,box-shadow .25s ease;
+      width:100%;
     }
-    .phone-header-title{font-weight:700;font-size:14px}
-    .phone-header-icons{display:flex;gap:10px;font-size:14px}
-    .phone-search{
-      padding:12px 16px;
-      display:flex;gap:8px;align-items:center;
+    .float-card:hover{
+      transform:translateY(-3px) scale(1.03);
+      box-shadow:0 14px 36px rgba(0,0,0,.15);
     }
-    .phone-search-box{
-      flex:1;background:#fff;border-radius:10px;padding:8px 12px;
-      display:flex;align-items:center;gap:6px;
-      font-size:11px;color:#999;
-      box-shadow:0 1px 4px rgba(0,0,0,.06);
-    }
-    .phone-categories{
-      display:flex;gap:8px;padding:0 16px 12px;
-      overflow-x:auto;
-    }
-    .phone-cat{
-      padding:6px 14px;border-radius:20px;
-      font-size:11px;font-weight:600;white-space:nowrap;
-    }
-    .phone-cat.active{background:#134f3b;color:#fff}
-    .phone-cat:not(.active){background:#fff;color:#555;border:1px solid #e5e7eb}
-    .phone-section{
-      padding:0 16px 12px;
-    }
-    .phone-section-title{
-      font-size:13px;font-weight:700;color:#111;margin-bottom:10px;
-    }
-    .phone-grid{
-      display:grid;grid-template-columns:1fr 1fr;gap:10px;
-    }
-    .phone-card{
-      border-radius:14px;padding:12px;
-      position:relative;min-height:110px;
-      display:flex;flex-direction:column;justify-content:space-between;
-    }
-    .phone-card-img{
-      width:44px;height:44px;border-radius:10px;
+    .float-card-icon{
+      width:40px;height:40px;border-radius:10px;
       display:flex;align-items:center;justify-content:center;
-      font-size:22px;
+      font-size:18px;flex-shrink:0;
     }
-    .phone-card-tag{
-      position:absolute;top:10px;right:10px;
-      font-size:9px;font-weight:700;padding:3px 8px;border-radius:6px;
-    }
-    .phone-card-name{font-size:12px;font-weight:700;color:#111;margin-top:6px}
-    .phone-card-price{font-size:11px;font-weight:600;color:#555}
-    .phone-card-yellow{background:#fef3c7}
-    .phone-card-yellow .phone-card-img{background:#fde68a}
-    .phone-card-yellow .phone-card-tag{background:#f59e0b;color:#fff}
-    .phone-card-pink{background:#fce7f3}
-    .phone-card-pink .phone-card-img{background:#fbcfe8}
-    .phone-card-pink .phone-card-tag{background:#ec4899;color:#fff}
-    .phone-card-green{background:#d1fae5}
-    .phone-card-green .phone-card-img{background:#a7f3d0}
-    .phone-card-green .phone-card-tag{background:#10b981;color:#fff}
-    .phone-card-blue{background:#dbeafe}
-    .phone-card-blue .phone-card-img{background:#bfdbfe}
-    .phone-card-blue .phone-card-tag{background:#3b82f6;color:#fff}
-    .phone-card-purple{background:#ede9fe}
-    .phone-card-purple .phone-card-img{background:#ddd6fe}
-    .phone-card-purple .phone-card-tag{background:#8b5cf6;color:#fff}
-    .phone-card-orange{background:#ffedd5}
-    .phone-card-orange .phone-card-img{background:#fed7aa}
-    .phone-card-orange .phone-card-tag{background:#f97316;color:#fff}
-    .phone-bottom-nav{
-      position:absolute;bottom:0;left:0;right:0;
-      background:#fff;border-top:1px solid #e5e7eb;
-      display:flex;justify-content:space-around;padding:10px 0;
-    }
-    .phone-nav-item{
-      display:flex;flex-direction:column;align-items:center;gap:2px;
-      font-size:9px;color:#999;
-    }
-    .phone-nav-item.active{color:#134f3b}
-    .phone-nav-icon{font-size:16px}
-    .phone-fab{
-      position:absolute;bottom:60px;right:16px;
-      width:44px;height:44px;border-radius:50%;
-      background:#134f3b;color:#fff;
-      display:flex;align-items:center;justify-content:center;
-      font-size:20px;box-shadow:0 4px 16px rgba(19,79,59,.3);
-    }
+    .float-card-icon.c1{background:#fef3c7}
+    .float-card-icon.c2{background:#fce7f3}
+    .float-card-icon.c3{background:#d1fae5}
+    .float-card-icon.c4{background:#dbeafe}
+    .float-card-icon.c5{background:#ede9fe}
+    .float-card-icon.c6{background:#ffedd5}
+    .float-card-text h4{margin:0;font-size:12px;font-weight:800;color:#111;line-height:1.2}
+    .float-card-text p{margin:1px 0 0;font-size:10px;color:#6b7280;line-height:1.2}
 
     /* ─── Features ─── */
     .features-band{
@@ -639,18 +576,145 @@ function renderHomeLayout(page: PageDefinition): string {
     .footer-bottom a{color:rgba(255,255,255,.6);transition:color .15s ease}
     .footer-bottom a:hover{color:#fff}
 
+    /* ─── Phone Mockup ─── */
+    .phone-mockup{
+      width:260px;
+      background:#1a1a1a;
+      border-radius:32px;
+      padding:8px;
+      box-shadow:0 40px 80px rgba(0,0,0,.35),0 0 0 2px rgba(255,255,255,.08);
+      position:relative;z-index:2;
+    }
+    .phone-notch{
+      position:absolute;top:8px;left:50%;transform:translateX(-50%);
+      width:90px;height:22px;background:#1a1a1a;border-radius:0 0 14px 14px;z-index:2;
+    }
+    .phone-screen{
+      background:#f8f9f7;
+      border-radius:24px;
+      overflow:hidden;
+      min-height:460px;
+      position:relative;
+    }
+    .phone-header{
+      background:#134f3b;
+      color:#fff;
+      padding:30px 14px 14px;
+      display:flex;justify-content:space-between;align-items:center;
+    }
+    .phone-header-title{font-weight:700;font-size:13px}
+    .phone-header-icons{display:flex;gap:8px;font-size:13px}
+    .phone-search{
+      padding:10px 14px;
+      display:flex;gap:8px;align-items:center;
+    }
+    .phone-search-box{
+      flex:1;background:#fff;border-radius:8px;padding:6px 10px;
+      display:flex;align-items:center;gap:6px;
+      font-size:10px;color:#999;
+      box-shadow:0 1px 3px rgba(0,0,0,.06);
+    }
+    .phone-categories{
+      display:flex;gap:6px;padding:0 14px 10px;
+      overflow-x:auto;
+    }
+    .phone-cat{
+      padding:5px 12px;border-radius:20px;
+      font-size:10px;font-weight:600;white-space:nowrap;
+    }
+    .phone-cat.active{background:#134f3b;color:#fff}
+    .phone-cat:not(.active){background:#fff;color:#555;border:1px solid #e5e7eb}
+    .phone-section{padding:0 14px 10px}
+    .phone-section-title{font-size:12px;font-weight:700;color:#111;margin-bottom:8px}
+    .phone-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+    .phone-card{
+      border-radius:12px;padding:10px;
+      position:relative;min-height:90px;
+      display:flex;flex-direction:column;justify-content:space-between;
+    }
+    .phone-card-img{
+      width:36px;height:36px;border-radius:8px;
+      display:flex;align-items:center;justify-content:center;
+      font-size:18px;
+    }
+    .phone-card-tag{
+      position:absolute;top:8px;right:8px;
+      font-size:8px;font-weight:700;padding:2px 6px;border-radius:4px;
+    }
+    .phone-card-name{font-size:11px;font-weight:700;color:#111;margin-top:4px}
+    .phone-card-price{font-size:10px;font-weight:600;color:#555}
+    .phone-card-yellow{background:#fef3c7}
+    .phone-card-yellow .phone-card-img{background:#fde68a}
+    .phone-card-yellow .phone-card-tag{background:#f59e0b;color:#fff}
+    .phone-card-pink{background:#fce7f3}
+    .phone-card-pink .phone-card-img{background:#fbcfe8}
+    .phone-card-pink .phone-card-tag{background:#ec4899;color:#fff}
+    .phone-card-green{background:#d1fae5}
+    .phone-card-green .phone-card-img{background:#a7f3d0}
+    .phone-card-green .phone-card-tag{background:#10b981;color:#fff}
+    .phone-card-blue{background:#dbeafe}
+    .phone-card-blue .phone-card-img{background:#bfdbfe}
+    .phone-card-blue .phone-card-tag{background:#3b82f6;color:#fff}
+    .phone-card-purple{background:#ede9fe}
+    .phone-card-purple .phone-card-img{background:#ddd6fe}
+    .phone-card-purple .phone-card-tag{background:#8b5cf6;color:#fff}
+    .phone-card-orange{background:#ffedd5}
+    .phone-card-orange .phone-card-img{background:#fed7aa}
+    .phone-card-orange .phone-card-tag{background:#f97316;color:#fff}
+    .phone-bottom-nav{
+      position:absolute;bottom:0;left:0;right:0;
+      background:#fff;border-top:1px solid #e5e7eb;
+      display:flex;justify-content:space-around;padding:8px 0;
+    }
+    .phone-nav-item{
+      display:flex;flex-direction:column;align-items:center;gap:1px;
+      font-size:8px;color:#999;
+    }
+    .phone-nav-item.active{color:#134f3b}
+    .phone-nav-icon{font-size:14px}
+    .phone-fab{
+      position:absolute;bottom:52px;right:14px;
+      width:38px;height:38px;border-radius:50%;
+      background:#134f3b;color:#fff;
+      display:flex;align-items:center;justify-content:center;
+      font-size:18px;box-shadow:0 4px 12px rgba(19,79,59,.3);
+    }
+
+    /* ─── Sticky bottom bar ─── */
+    .sticky-bar{
+      position:sticky;bottom:0;z-index:40;
+      background:rgba(255,255,255,.98);
+      backdrop-filter:saturate(180%) blur(16px);
+      border-top:1px solid #e8f0eb;
+    }
+    .sticky-bar-inner{
+      display:flex;align-items:center;justify-content:center;gap:20px;
+      padding:14px 0;min-height:56px;
+    }
+    .sticky-bar a{
+      display:inline-flex;align-items:center;gap:8px;
+      font-size:14px;font-weight:700;color:#134f3b;text-decoration:none;
+      padding:10px 22px;border-radius:10px;
+      background:#f0f9f4;
+      transition:background .15s ease,transform .15s ease;
+    }
+    .sticky-bar a:hover{background:#d4eddf;transform:translateY(-1px)}
+    .sticky-bar .sticky-icon{font-size:18px}
+
     /* ─── Responsive ─── */
     @media (max-width:1020px){
-      .hero{grid-template-columns:1fr;gap:28px;padding:48px 0 0;min-height:auto}
-      .hero-visual{display:none}
-      h1{font-size:38px}
+      .hero{grid-template-columns:1fr;gap:24px;padding:36px 0 0}
+      .hero-showcase{min-height:auto;padding:24px 0 0;display:flex;flex-direction:column}
+      .showcase-cards{display:none}
+      .phone-mockup{margin:0 auto}
+      h1{font-size:34px}
       .features-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
       .footer-grid{grid-template-columns:1fr 1fr;gap:24px}
     }
     @media (max-width:600px){
       .shell{width:min(100% - 24px,1200px)}
       .topnav{gap:16px}
-      .topnav a:not(.nav-cta){display:none}
+      .topnav a:not(.nav-cta):not(.always-visible){display:none}
       .hero{padding:32px 0 40px}
       h1{font-size:30px}
       .hero-intro{font-size:15px;line-height:1.5}
@@ -674,6 +738,7 @@ function renderHomeLayout(page: PageDefinition): string {
     <nav class="topnav" aria-label="Main">
       <a href="/store">Buyers</a>
       <a href="/store">Vendors</a>
+      <a href="/vendor" class="always-visible">Vendor Portal</a>
       <a class="nav-cta" href="/store">Get Started</a>
     </nav>
   </div>
@@ -703,17 +768,43 @@ function renderHomeLayout(page: PageDefinition): string {
           Free app. No spam. No fees. Just great foodstuff and more. Get started today.
         </div>
       </div>
-      <div class="hero-visual" aria-label="Eki app preview">
+      <div class="hero-showcase" aria-label="Eki app preview">
+        <!-- Left column - 3 floating cards -->
+        <div class="showcase-cards">
+          <div class="float-card">
+            <div class="float-card-icon c1">🛢️</div>
+            <div class="float-card-text">
+              <h4>Palm Oil</h4>
+              <p>Popular · £8.50</p>
+            </div>
+          </div>
+          <div class="float-card">
+            <div class="float-card-icon c3">🥬</div>
+            <div class="float-card-text">
+              <h4>Bitter Leaf</h4>
+              <p>Fresh · £3.50</p>
+            </div>
+          </div>
+          <div class="float-card">
+            <div class="float-card-icon c5">🍠</div>
+            <div class="float-card-text">
+              <h4>Yam Tubers</h4>
+              <p>Sale · £6.99</p>
+            </div>
+          </div>
+        </div>
+
+        <!-- Center phone mockup -->
         <div class="phone-mockup">
           <div class="phone-notch"></div>
           <div class="phone-screen">
             <div class="phone-header">
-              <span class="phone-header-title">Green Cabbage</span>
+              <span class="phone-header-title">Home</span>
               <div class="phone-header-icons">☰ 🔔</div>
             </div>
             <div class="phone-search">
               <div class="phone-search-box">🔍 Search foodstuff...</div>
-              <div style="font-size:16px">⚡</div>
+              <div style="font-size:14px">⚡</div>
             </div>
             <div class="phone-categories">
               <span class="phone-cat active">All</span>
@@ -723,7 +814,7 @@ function renderHomeLayout(page: PageDefinition): string {
               <span class="phone-cat">Frozen</span>
             </div>
             <div class="phone-section">
-              <div class="phone-section-title">Popular now</div>
+              <div class="phone-section-title">Popular</div>
               <div class="phone-grid">
                 <div class="phone-card phone-card-yellow">
                   <span class="phone-card-tag">Hot</span>
@@ -751,23 +842,6 @@ function renderHomeLayout(page: PageDefinition): string {
                 </div>
               </div>
             </div>
-            <div class="phone-section" style="padding-top:8px">
-              <div class="phone-section-title">Recommended</div>
-              <div class="phone-grid">
-                <div class="phone-card phone-card-purple">
-                  <span class="phone-card-tag">Sale</span>
-                  <div class="phone-card-img">🍠</div>
-                  <div class="phone-card-name">Yam Tubers</div>
-                  <div class="phone-card-price">£6.99</div>
-                </div>
-                <div class="phone-card phone-card-orange">
-                  <span class="phone-card-tag">Fresh</span>
-                  <div class="phone-card-img">🥜</div>
-                  <div class="phone-card-name">Groundnut</div>
-                  <div class="phone-card-price">£4.50</div>
-                </div>
-              </div>
-            </div>
             <div class="phone-bottom-nav">
               <div class="phone-nav-item active">
                 <span class="phone-nav-icon">🏠</span>
@@ -787,6 +861,31 @@ function renderHomeLayout(page: PageDefinition): string {
               </div>
             </div>
             <div class="phone-fab">+</div>
+          </div>
+        </div>
+
+        <!-- Right column - 3 floating cards -->
+        <div class="showcase-cards right">
+          <div class="float-card">
+            <div class="float-card-icon c2">🌶️</div>
+            <div class="float-card-text">
+              <h4>Pepper Soup</h4>
+              <p>New · £5.00</p>
+            </div>
+          </div>
+          <div class="float-card">
+            <div class="float-card-icon c4">🐟</div>
+            <div class="float-card-text">
+              <h4>Stockfish</h4>
+              <p>Best · £12.00</p>
+            </div>
+          </div>
+          <div class="float-card">
+            <div class="float-card-icon c6">🥜</div>
+            <div class="float-card-text">
+              <h4>Groundnut</h4>
+              <p>Fresh · £4.50</p>
+            </div>
           </div>
         </div>
       </div>
@@ -824,7 +923,16 @@ function renderHomeLayout(page: PageDefinition): string {
       </div>
     </div>
   </section>
+
 </main>
+
+<!-- ─── STICKY BAR ─── -->
+<div class="sticky-bar">
+  <div class="shell sticky-bar-inner">
+    <span>Already have an order?</span>
+    <a href="/find-order"><span class="sticky-icon">🔍</span> Find your order</a>
+  </div>
+</div>
 
 <!-- ─── FOOTER ─── -->
 <footer class="footer">
@@ -1422,97 +1530,316 @@ export async function getPublicVendorSubscriptionPage(_request: Request, respons
   response.status(200).send(renderVendorSubscriptionLayout());
 }function renderVendorPortalLayout(): string { return `<!DOCTYPE html>
 <html lang="en"><head>
-<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"><meta name="theme-color" content="#164F3F">
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"><meta name="theme-color" content="#134f3b">
 <title>Vendor Portal | Eki</title>
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" />
 <style>
 *,*::before,*::after{box-sizing:border-box}html,body{margin:0;padding:0}
-body{background:#F5F6F5;color:#111;font-family:'Inter',sans-serif}
-a{color:inherit;text-decoration:none}.shell{width:min(1120px,calc(100% - 24px));margin:0 auto}
-.topbar{height:48px;background:#fff;border-bottom:1px solid #e5e7eb;display:flex;align-items:center;justify-content:space-between;padding:0 max(12px,calc((100vw - 1120px)/2))}
-.brand{font-weight:800;font-size:14px;color:#164F3F;display:flex;align-items:center;gap:6px}.brand-dot{width:8px;height:8px;border-radius:4px;background:#164F3F;display:inline-block}
-.toplinks{display:flex;gap:16px;font-size:12px;font-weight:600;color:#666}
-.card{background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:18px;box-shadow:0 1px 6px rgba(0,0,0,.04)}
-.btn{display:inline-flex;align-items:center;justify-content:center;height:40px;padding:0 16px;border-radius:8px;font-weight:700;font-size:12px;border:0;cursor:pointer}
-.btn-primary{background:#164F3F;color:#fff}.btn-secondary{border:1px solid #dce3e0;background:#fff;color:#164F3F}
-.input{width:100%;height:42px;border:1px solid #dce3e0;border-radius:8px;padding:0 12px;font-size:13px;outline:none}
-.input:focus{border-color:#164F3F;box-shadow:0 0 0 3px rgba(22,79,63,.1)}
+body{background:#f6faf6;color:#111;font-family:'Inter',sans-serif;-webkit-font-smoothing:antialiased}
+a{color:inherit;text-decoration:none}
+.shell{width:min(1200px,calc(100% - 40px));margin:0 auto}
+
+.topbar{background:rgba(255,255,255,.98);backdrop-filter:saturate(180%) blur(16px);border-bottom:1px solid #e8f0eb;position:sticky;top:0;z-index:50}
+.topbar-inner{display:flex;align-items:center;justify-content:space-between;min-height:64px;gap:20px}
+.brand{display:inline-flex;align-items:center;gap:6px;font-weight:800;font-size:18px;color:#134f3b;letter-spacing:-0.02em}
+.brand-dot{width:10px;height:10px;border-radius:999px;background:#4ade80;display:inline-block}
+.topnav{display:flex;align-items:center;gap:20px}
+.topnav a{font-size:13px;font-weight:600;color:#374151;transition:color .15s ease}
+.topnav a:hover{color:#134f3b}
+.topnav .logout{color:#e55353;font-size:12px;font-weight:700}
+.topnav .logout:hover{color:#c03939}
+
+.login-page{min-height:100vh;display:grid;place-items:center;padding:24px;background:linear-gradient(135deg,#134f3b 0%,#1a6b4f 50%,#134f3b 100%)}
+.login-card{width:min(100%,400px);background:#fff;border-radius:20px;padding:36px 32px;box-shadow:0 24px 60px rgba(0,0,0,.2)}
+.login-logo{width:48px;height:48px;border-radius:12px;background:#134f3b;color:#fff;display:flex;align-items:center;justify-content:center;font-weight:800;font-size:18px;margin-bottom:20px}
+.login-title{font-size:24px;font-weight:800;letter-spacing:-.03em}
+.login-sub{color:#6b7280;font-size:13px;margin:6px 0 24px}
+.form-group{margin-bottom:16px}
+.form-group label{display:block;font-size:12px;font-weight:700;margin-bottom:5px;color:#374151}
+.input{width:100%;height:46px;border:1px solid #dbe7dd;border-radius:10px;padding:0 14px;font-size:14px;outline:none;background:#fff;color:#111}
+.input:focus{border-color:#134f3b;box-shadow:0 0 0 3px rgba(19,79,59,.1)}
+.btn{display:inline-flex;align-items:center;justify-content:center;height:46px;padding:0 22px;border-radius:10px;font-weight:700;font-size:14px;border:0;cursor:pointer;transition:transform .15s ease,box-shadow .15s ease}
+.btn-primary{width:100%;background:#134f3b;color:#fff;margin-top:6px}
+.btn-primary:hover{background:#0f4030;transform:translateY(-1px);box-shadow:0 8px 20px rgba(19,79,59,.2)}
+.btn:disabled{opacity:.6;cursor:not-allowed;transform:none}
 .msg{display:none;padding:10px 12px;border-radius:8px;font-size:12px;margin-bottom:12px}
 .msg.err{display:block;background:#fff0f0;border:1px solid #f3caca;color:#a62e2e}
 .hidden{display:none!important}
-.loading{text-align:center;padding:40px;color:#999;font-size:13px}
-.grid-4{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}
-.stat-card{background:#fff;border:1px solid #e5e7eb;border-radius:12px;padding:14px}
-.stat-label{font-size:11px;color:#999;font-weight:600;text-transform:uppercase}
-.stat-value{font-size:24px;font-weight:800;margin-top:3px;color:#111}
-.stat-sub{font-size:11px;color:#aaa;margin-top:2px}
-.login-page{min-height:100vh;display:grid;place-items:center;padding:24px}
-.login-card{width:min(100%,380px);background:#fff;border:1px solid #e5e7eb;border-radius:18px;padding:28px;box-shadow:0 8px 24px rgba(0,0,0,.06)}
-.login-logo{width:40px;height:40px;border-radius:10px;background:#164F3F;color:#fff;display:grid;place-items:center;font-weight:800;margin-bottom:18px}
-.login-title{font-size:22px;font-weight:800}.login-sub{color:#999;font-size:13px;margin:4px 0 18px}
-.form-group{margin-bottom:14px}.form-group label{display:block;font-size:12px;font-weight:700;margin-bottom:5px;color:#444}
-.dash-grid{display:grid;grid-template-columns:1fr 280px;gap:18px;padding:18px 0}
-.phone-frame{width:100%;background:#1C1C1E;border-radius:32px;padding:8px;box-shadow:0 8px 32px rgba(0,0,0,.15)}
-.phone-screen{background:#F7F8F6;border-radius:24px;overflow:hidden}
-.phone-hdr{background:#164F3F;color:#fff;padding:10px 12px;display:flex;justify-content:space-between;align-items:center;font-size:10px}
+.loading{text-align:center;padding:48px;color:#6b7280;font-size:13px}
+
+.dash-layout{display:grid;grid-template-columns:minmax(0,1fr) 320px;gap:24px;padding:28px 0 48px;align-items:start}
+.dash-main{display:flex;flex-direction:column;gap:20px}
+.dash-side{display:flex;flex-direction:column;gap:16px}
+
+.greeting{margin:0;font-size:22px;font-weight:800;letter-spacing:-.03em;color:#111}
+.greeting-store{font-size:13px;color:#6b7280;margin-top:2px}
+
+.alerts-row{display:flex;gap:10px;flex-wrap:wrap}
+.alert-chip{display:inline-flex;align-items:center;gap:6px;padding:7px 14px;border-radius:999px;font-size:12px;font-weight:700;transition:transform .15s ease}
+.alert-chip.order{background:#eef8f2;color:#134f3b}
+.alert-chip.low_stock{background:#fef3c7;color:#92400e}
+.alert-chip.message{background:#dbeafe;color:#1e40af}
+.alert-chip.payout{background:#f3e8ff;color:#6d28d9}
+.alert-chip:hover{transform:scale(1.04)}
+.alert-chip .count{margin-left:4px;min-width:18px;height:18px;border-radius:999px;display:inline-flex;align-items:center;justify-content:center;font-size:10px;background:rgba(0,0,0,.08);padding:0 5px}
+
+.stats-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}
+.stat-card{background:#fff;border:1px solid #e5e7eb;border-radius:14px;padding:18px}
+.stat-label{font-size:11px;color:#6b7280;font-weight:700;text-transform:uppercase;letter-spacing:.04em}
+.stat-value{font-size:22px;font-weight:800;margin-top:6px;color:#111}
+.stat-sub{font-size:11px;color:#6b7280;margin-top:2px}
+
+.card{background:#fff;border:1px solid #e5e7eb;border-radius:14px;overflow:hidden}
+.card-header{display:flex;justify-content:space-between;align-items:center;padding:18px 20px 0}
+.card-header h3{margin:0;font-size:13px;font-weight:800;letter-spacing:-.02em}
+.card-header a{font-size:11px;color:#134f3b;font-weight:700}
+.card-body{padding:18px 20px}
+
+.insight-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.insight-item{border:1px solid #e5e7eb;border-radius:10px;padding:14px;background:#fafbfa}
+.insight-item .icon{font-size:18px;margin-bottom:6px}
+.insight-item h4{margin:0 0 2px;font-size:12px;font-weight:800;color:#111}
+.insight-item p{margin:0;font-size:11px;color:#6b7280;line-height:1.4}
+.insight-item .action{display:inline-block;margin-top:8px;font-size:11px;font-weight:700;color:#134f3b;padding:4px 10px;border-radius:6px;background:#eef8f2}
+
+.funnel-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
+.funnel-step{text-align:center;padding:14px 10px}
+.funnel-num{font-size:20px;font-weight:800;color:#111}
+.funnel-label{font-size:11px;color:#6b7280;margin-top:3px}
+.funnel-bar{height:4px;margin-top:6px;border-radius:2px;background:#e5e7eb;overflow:hidden}
+.funnel-bar-fill{height:100%;border-radius:2px;background:#134f3b}
+
+.products-table{width:100%;border-collapse:collapse;font-size:12px}
+.products-table th{padding:8px 12px;text-align:left;font-size:10px;font-weight:700;text-transform:uppercase;color:#6b7280;border-bottom:1px solid #e5e7eb;letter-spacing:.04em}
+.products-table td{padding:10px 12px;border-bottom:1px solid #ecf1ed;color:#374151}
+.products-table tr:last-child td{border-bottom:0}
+.products-table .prod-name{font-weight:700;color:#111}
+.products-table .prod-revenue{font-weight:700;color:#111;text-align:right}
+
+.phone-preview{background:#1a1a1a;border-radius:28px;padding:7px;box-shadow:0 20px 50px rgba(0,0,0,.12)}
+.phone-screen{background:#f8f9f7;border-radius:21px;overflow:hidden}
+.phone-header{background:#134f3b;color:#fff;padding:24px 12px 10px;display:flex;justify-content:space-between;align-items:center}
+.phone-hl{font-weight:700;font-size:11px}
+.phone-hr{font-size:11px}
 .phone-body{padding:10px}
-.phone-row{display:flex;justify-content:space-between;font-size:10px;padding:6px 0;border-bottom:1px solid #eee}
+.phone-metric{display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid #eee;font-size:10px}
+.phone-metric:last-child{border-bottom:0}
 .phone-lbl{color:#999}.phone-val{font-weight:700;color:#111}
-@media(max-width:768px){.dash-grid{grid-template-columns:1fr}.grid-4{grid-template-columns:1fr 1fr}}
-@media(max-width:480px){.grid-4{grid-template-columns:1fr 1fr;gap:8px}.stat-value{font-size:18px}}
+.phone-store-name{font-weight:800;font-size:12px;margin-bottom:8px;color:#111}
+.phone-orders-item{font-size:10px;padding:6px 0;border-bottom:1px solid #f0f0f0;display:flex;justify-content:space-between}
+.phone-orders-item:last-child{border-bottom:0}
+.phone-side-label{color:#6b7280}
+.phone-side-val{font-weight:700;color:#111}
+.phone-badge{display:inline-block;padding:2px 8px;border-radius:999px;font-size:8px;font-weight:700}
+.phone-badge.green{background:#d1fae5;color:#065f46}
+.phone-badge.yellow{background:#fef3c7;color:#92400e}
+
+@media(max-width:1020px){.dash-layout{grid-template-columns:1fr}.dash-side{display:none}}
+@media(max-width:768px){.stats-grid{grid-template-columns:1fr 1fr}.insight-grid{grid-template-columns:1fr}}
+@media(max-width:600px){.stats-grid{grid-template-columns:1fr 1fr;gap:8px}.stat-card{padding:14px}.stat-value{font-size:18px}.funnel-grid{grid-template-columns:1fr 1fr}}
 </style></head><body>
 <div id="app">
 <div class="login-page" id="loginScreen">
-  <div class="login-card">
+  <form class="login-card" id="loginForm" novalidate>
     <div class="login-logo">eki</div>
     <div class="login-title">Vendor Portal</div>
-    <div class="login-sub">Sign in to view your store analytics.</div>
+    <div class="login-sub">Sign in to view your store analytics and manage your business.</div>
     <div id="loginMsg" class="msg"></div>
-    <form id="loginForm">
-      <div class="form-group"><label>Email</label><input id="email" class="input" type="email" placeholder="vendor@eki.app" /></div>
-      <div class="form-group"><label>Password</label><input id="pass" class="input" type="password" /></div>
-      <button class="btn btn-primary" style="width:100%;margin-top:6px" id="loginBtn">Sign In</button>
-    </form>
-  </div>
+    <div class="form-group">
+      <label for="loginEmail">Email</label>
+      <input id="loginEmail" class="input" type="email" placeholder="vendor@eki.app" autocomplete="email" required />
+    </div>
+    <div class="form-group">
+      <label for="loginPass">Password</label>
+      <input id="loginPass" class="input" type="password" autocomplete="current-password" required />
+    </div>
+    <button class="btn btn-primary" id="loginBtn" type="submit">Sign In</button>
+  </form>
 </div>
+
 <div id="dashScreen" class="hidden">
-  <div class="topbar">
-    <a class="brand" href="/"><span class="brand-dot"></span> Eki Vendor</a>
-    <div class="toplinks"><a href="#" id="logoutBtn" style="color:#e55353">Sign out</a></div>
-  </div>
-  <div class="shell dash-grid" id="dashContent">
-    <div><div id="tabAnalytics"><div class="loading">Sign in to view</div></div></div>
-    <div class="phone-frame"><div class="phone-screen"><div class="phone-hdr"><span>My Store</span></div><div class="phone-body" id="storePreview"><div style="text-align:center;padding:24px;color:#999;font-size:11px">Sign in first</div></div></div></div>
-  </div>
+  <header class="topbar">
+    <div class="shell topbar-inner">
+      <a class="brand" href="/"><span class="brand-dot"></span>eki.</a>
+      <nav class="topnav" aria-label="Vendor navigation">
+        <a href="#" id="tabDashboard" class="active" onclick="switchTab('dashboard')">Dashboard</a>
+        <a href="#" id="tabAnalyticsLink" onclick="switchTab('analytics')">Analytics</a>
+        <a href="javascript:void(0)" onclick="window.open('/store/'+encodeURIComponent(storeSlug),'_blank')">Preview Store</a>
+        <a href="#" id="logoutBtn" class="logout">Sign out</a>
+      </nav>
+    </div>
+  </header>
+
+  <main class="shell dash-layout" id="dashLayout">
+    <div class="dash-main">
+      <div id="tabContentDashboard">
+        <div class="loading">Sign in to view your dashboard.</div>
+      </div>
+      <div id="tabContentAnalytics" class="hidden">
+        <div class="loading">Loading analytics...</div>
+      </div>
+    </div>
+    <aside class="dash-side" id="sidePanel">
+      <div class="card">
+        <div class="card-header"><h3>Store Preview</h3></div>
+        <div class="card-body" style="padding:10px">
+          <div class="phone-preview">
+            <div class="phone-screen">
+              <div class="phone-header">
+                <span class="phone-hl">My Store</span>
+                <span class="phone-hr">•••</span>
+              </div>
+              <div class="phone-body" id="phonePreview">
+                <div style="text-align:center;padding:20px 0;color:#999;font-size:10px">Sign in first</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-header"><h3>Quick Links</h3></div>
+        <div class="card-body" style="padding:14px 18px;display:flex;flex-direction:column;gap:8px">
+          <a href="/" style="font-size:12px;color:#134f3b;font-weight:700">← Eki Homepage</a>
+          <a href="/store" style="font-size:12px;color:#134f3b;font-weight:700">Browse all stores</a>
+          <a href="/find-order" style="font-size:12px;color:#134f3b;font-weight:700">Find an order</a>
+        </div>
+      </div>
+    </aside>
+  </main>
 </div></div>
 <script>
-const API='https://ekiapp-backend.vercel.app';let T='';
+const API='https://ekiapp-backend.vercel.app';let T='',storeSlug='',currency='EUR';
+const weekDays=['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
+
 function $(id){return document.getElementById(id)}
-async function loadDash(){
-  $('tabAnalytics').innerHTML='<div class="loading">Loading...</div>';
-  try{
-    const r=await fetch(API+'/api/vendors/me/earnings',{headers:{'Authorization':'Bearer '+T}});
-    const d=await r.json();const e=d.earnings||d||{};
-    $('tabAnalytics').innerHTML='<div class="grid-4">'+
-      '<div class="stat-card"><div class="stat-label">Sales Today</div><div class="stat-value">'+(e.salesToday?fmt(e.salesToday,e.currency):'â‚¬0')+'</div><div class="stat-sub">Live</div></div>'+
-      '<div class="stat-card"><div class="stat-label">This Week</div><div class="stat-value">'+(e.salesThisWeek?fmt(e.salesThisWeek,e.currency):'â‚¬0')+'</div><div class="stat-sub">7 days</div></div>'+
-      '<div class="stat-card"><div class="stat-label">This Month</div><div class="stat-value">'+(e.salesThisMonth?fmt(e.salesThisMonth,e.currency):'â‚¬0')+'</div><div class="stat-sub">Monthly</div></div>'+
-      '<div class="stat-card"><div class="stat-label">Available</div><div class="stat-value">'+(e.availableBalance?fmt(e.availableBalance,e.currency):'â‚¬0')+'</div><div class="stat-sub">For payout</div></div></div>';
-    $('storePreview').innerHTML='<div style="font-weight:800;font-size:13px;margin-bottom:6px">'+($('email').value)+'</div>'+
-      '<div class="phone-row"><span class="phone-lbl">Revenue</span><span class="phone-val">'+(e.salesThisMonth?fmt(e.salesThisMonth,e.currency):'â‚¬0')+'</span></div>'+
-      '<div class="phone-row"><span class="phone-lbl">Balance</span><span class="phone-val">'+(e.availableBalance?fmt(e.availableBalance,e.currency):'â‚¬0')+'</span></div>'+
-      '<div class="phone-row" style="border-bottom:0"><span class="phone-lbl">Pending</span><span class="phone-val">'+(e.pendingPayout?fmt(e.pendingPayout,e.currency):'â‚¬0')+'</span></div>';
-  }catch(e){$('tabAnalytics').innerHTML='<div class="msg err" style="display:block">'+e.message+'</div>';console.error(e)}
+function esc(v){return String(v||'').replace(/[&<>"']/g,function(c){return({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c]})}
+function fmt(n,c){c=c||currency||'EUR';try{return new Intl.NumberFormat('en-GB',{style:'currency',currency:c,maximumFractionDigits:0}).format((n||0)/100)}catch(e){return c+' '+(n/100).toFixed(2)}}
+function pct(v){return (Math.round((v||0)*10)/10)+'%'}
+
+function switchTab(name){
+  document.querySelectorAll('[id^=tabContent]').forEach(function(el){el.classList.add('hidden')});
+  document.querySelectorAll('[id^=tab]').forEach(function(el){el.classList.remove('active')});
+  $('tabContent' + name.charAt(0).toUpperCase() + name.slice(1)).classList.remove('hidden');
+  $('tab' + name.charAt(0).toUpperCase() + name.slice(1) + 'Link').classList.add('active');
 }
-function fmt(n,c){return new Intl.NumberFormat('en-GB',{style:'currency',currency:c||'EUR',maximumFractionDigits:0}).format((n||0)/100)}
-$('loginForm').addEventListener('submit',async e=>{e.preventDefault();
-  $('loginBtn').disabled=true;const r=await fetch(API+'/api/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:$('email').value.trim(),password:$('pass').value})});
-  const d=await r.json();$('loginBtn').disabled=false;
-  if(!r.ok||!d.token){$('loginMsg').textContent=d.message||'Invalid';$('loginMsg').className='msg err';return}
-  T=d.token;$('loginScreen').className='hidden';$('dashScreen').className='';loadDash();
+
+function renderAlerts(alerts){
+  if(!alerts||!alerts.length)return '';
+  return '<div class="alerts-row">'+alerts.map(function(a){
+    var color=a.type==='order_action'?'order':a.type==='low_stock'?'low_stock':a.type==='message'?'message':'payout';
+    return '<span class="alert-chip '+color+'">'+
+      (a.type==='order_action'?'📦':a.type==='low_stock'?'⚠️':a.type==='message'?'💬':'💰')+' '+
+      esc(a.label||'')+
+      (a.count>0?'<span class="count">'+a.count+'</span>':'')+
+    '</span>';
+  }).join('')+'</div>';
+}
+
+async function loadDashboard(){
+  $('tabContentDashboard').innerHTML='<div class="loading">Loading...</div>';
+  try{
+    const r=await fetch(API+'/api/vendors/me/dashboard',{headers:{'Authorization':'Bearer '+T}});
+    if(r.status===401||r.status===403){$('loginMsg').textContent='Session expired. Sign in again.';$('loginMsg').className='msg err';T='';$('dashScreen').className='hidden';$('loginScreen').className='';return}
+    const d=await r.json();const data=d.dashboard||d||{};storeSlug=data.storeSlug||'';
+    const e=data.earnings||{};currency=e.currency||'EUR';
+    $('tabContentDashboard').innerHTML=
+      '<h2 class="greeting">'+(data.greeting||'Welcome back')+'</h2>'+
+      '<p class="greeting-store">'+(data.storeName||'Your store')+'</p>'+
+      renderAlerts(data.alerts)+
+      '<div class="stats-grid">'+
+        '<div class="stat-card"><div class="stat-label">Sales Today</div><div class="stat-value">'+(e.salesToday?fmt(e.salesToday,e.currency):'—')+'</div><div class="stat-sub">Live</div></div>'+
+        '<div class="stat-card"><div class="stat-label">This Week</div><div class="stat-value">'+(e.salesThisWeek?fmt(e.salesThisWeek,e.currency):'—')+'</div><div class="stat-sub">7 days</div></div>'+
+        '<div class="stat-card"><div class="stat-label">This Month</div><div class="stat-value">'+(e.salesThisMonth?fmt(e.salesThisMonth,e.currency):'—')+'</div><div class="stat-sub">Monthly</div></div>'+
+        '<div class="stat-card"><div class="stat-label">Available</div><div class="stat-value">'+(e.availableBalance?fmt(e.availableBalance,e.currency):'—')+'</div><div class="stat-sub">For payout</div></div>'+
+      '</div>'+
+      (data.insights?'<div class="card"><div class="card-header"><h3>Insights</h3></div><div class="card-body"><div class="insight-grid">'+
+        (data.insights.bestSellingProduct?'<div class="insight-item"><div class="icon">🏆</div><h4>Best Seller</h4><p>'+esc(data.insights.bestSellingProduct)+'</p></div>':'')+
+        '<div class="insight-item"><div class="icon">📦</div><h4>'+data.insights.totalOrders+' Orders</h4><p>'+data.insights.totalProducts+' active products</p></div>'+
+      '</div></div></div>':'');
+    updatePhonePreview(data);
+  }catch(e){$('tabContentDashboard').innerHTML='<div class="msg err" style="display:block">'+e.message+'</div>'}
+}
+function updatePhonePreview(data){
+  var name=data.storeName||'Your Store';var e=data.earnings||{};
+  var html='<div class="phone-store-name">'+esc(name)+'</div>'+
+    '<div class="phone-metric"><span class="phone-lbl">Monthly Revenue</span><span class="phone-val">'+fmt(e.salesThisMonth,e.currency)+'</span></div>'+
+    '<div class="phone-metric"><span class="phone-lbl">Balance</span><span class="phone-val">'+fmt(e.availableBalance,e.currency)+'</span></div>'+
+    '<div class="phone-metric"><span class="phone-lbl">Pending</span><span class="phone-val">'+fmt(e.pendingPayout,e.currency)+'</span></div>'+
+    '<div class="phone-metric"><span class="phone-lbl">Today</span><span class="phone-val">'+fmt(e.salesToday,e.currency)+'</span></div>';
+  $('phonePreview').innerHTML=html;
+}
+
+async function loadAnalytics(){
+  $('tabContentAnalytics').innerHTML='<div class="loading">Loading...</div>';
+  try{
+    const r=await fetch(API+'/api/vendors/me/analytics?range=month',{headers:{'Authorization':'Bearer '+T}});
+    if(!r.ok)throw new Error('Failed to load analytics');
+    const d=await r.json();const a=d.analytics||{};const s=a.summary||{};const f=a.salesFunnel||{};const c=a.customerInsights||{};const tp=a.topProducts||[];const ins=a.insights||[];
+    currency=s.currency||'EUR';
+    var funnelMax=Math.max(f.storeVisits||1,f.checkoutStarted||1,f.ordersCompleted||1);
+    $('tabContentAnalytics').innerHTML=
+      '<h2 class="greeting">Analytics</h2><p class="greeting-store">Last 30 days</p>'+
+      '<div class="stats-grid">'+
+        '<div class="stat-card"><div class="stat-label">Total Revenue</div><div class="stat-value">'+fmt(s.totalRevenue,s.currency)+'</div></div>'+
+        '<div class="stat-card"><div class="stat-label">Available</div><div class="stat-value">'+fmt(s.availableForPayout,s.currency)+'</div></div>'+
+        '<div class="stat-card"><div class="stat-label">Pending</div><div class="stat-value">'+fmt(s.pendingBalance,s.currency)+'</div></div>'+
+        '<div class="stat-card"><div class="stat-label">Conversion</div><div class="stat-value">'+pct(f.conversionRate)+'</div><div class="stat-sub">'+f.ordersCompleted+' orders</div></div>'+
+      '</div>'+
+      '<div class="card"><div class="card-header"><h3>Sales Funnel</h3></div><div class="card-body"><div class="funnel-grid">'+
+        funnelStep('👀','Visits',f.storeVisits,funnelMax)+
+        funnelStep('📋','Checkout',f.checkoutStarted,funnelMax)+
+        funnelStep('✅','Completed',f.ordersCompleted,funnelMax)+
+        funnelStep('🔁','Repeat',f.repeatOrders,funnelMax)+
+      '</div></div></div>'+
+      (c?'<div class="card"><div class="card-header"><h3>Customers</h3></div><div class="card-body"><div class="insight-grid">'+
+        '<div class="insight-item"><div class="icon">🆕</div><h4>'+c.newBuyers+' New</h4><p>First-time buyers</p></div>'+
+        '<div class="insight-item"><div class="icon">🔄</div><h4>'+c.repeatBuyers+' Returning</h4><p>Previous customers</p></div>'+
+      '</div></div></div>':'')+
+      (tp.length?'<div class="card"><div class="card-header"><h3>Top Products</h3></div><div class="card-body" style="padding:0"><table class="products-table"><thead><tr><th>Product</th><th>Sold</th><th style="text-align:right">Revenue</th></tr></thead><tbody>'+
+        tp.slice(0,6).map(function(p){return '<tr><td class="prod-name">'+esc(p.name)+'</td><td>'+p.unitsSold+' units</td><td class="prod-revenue">'+fmt(p.revenue,currency)+'</td></tr>'}).join('')+
+      '</tbody></table></div></div>':'')+
+      (ins.length?'<div class="card"><div class="card-header"><h3>Suggestions</h3></div><div class="card-body"><div class="insight-grid">'+
+        ins.slice(0,4).map(function(i){
+          return '<div class="insight-item"><div class="icon">'+(i.severity==='warning'?'⚠️':i.severity==='success'?'✅':'💡')+'</div><h4>'+esc(i.title)+'</h4><p>'+esc(i.body)+'</p><span class="action">'+esc(i.actionLabel)+'</span></div>'
+        }).join('')+
+      '</div></div></div>':'')+
+      '<div style="text-align:center;padding:12px;color:#6b7280;font-size:11px">Data updates in real time as orders come in.</div>';
+    updatePhoneAnalytics(s,f,c,tp);
+  }catch(e){$('tabContentAnalytics').innerHTML='<div class="msg err" style="display:block">'+e.message+'</div>'}
+}
+
+function funnelStep(icon,label,value,max){
+  var p=max>0?(value/max)*100:0;
+  return '<div class="funnel-step"><div style="font-size:18px;margin-bottom:4px">'+icon+'</div><div class="funnel-num">'+(value||0)+'</div><div class="funnel-label">'+label+'</div><div class="funnel-bar"><div class="funnel-bar-fill" style="width:'+Math.max(p,5)+'%"></div></div></div>';
+}
+
+function updatePhoneAnalytics(summary,funnel,customers,products){
+  var html='<div class="phone-store-name">📊 Analytics Snapshot</div>'+
+    '<div class="phone-metric"><span class="phone-lbl">Revenue</span><span class="phone-val">'+fmt(summary.totalRevenue,summary.currency)+'</span></div>'+
+    '<div class="phone-metric"><span class="phone-lbl">Conversion</span><span class="phone-val">'+(funnel?pct(funnel.conversionRate):'—')+'</span></div>'+
+    '<div class="phone-metric"><span class="phone-lbl">Customers</span><span class="phone-val">'+(customers?((customers.newBuyers||0)+(customers.repeatBuyers||0)):'—')+'</span></div>'+
+    (products&&products.length?'<div style="margin-top:8px;font-size:10px;font-weight:700;color:#999;border-top:1px solid #eee;padding-top:8px">Top Products</div>'+
+      products.slice(0,3).map(function(p){return '<div class="phone-orders-item"><span class="phone-side-label">'+esc(p.name)+'</span><span class="phone-side-val">'+fmt(p.revenue,currency)+'</span></div>'}).join('')
+    :'')+
+    '<div style="margin-top:8px;padding-top:6px;border-top:1px solid #eee;font-size:8px;color:#999;text-align:center">Eki Vendor Dashboard</div>';
+  $('phonePreview').innerHTML=html;
+}
+
+$('loginForm').addEventListener('submit',async function(e){e.preventDefault();
+  var btn=$('loginBtn');btn.disabled=true;
+  try{
+    var r=await fetch(API+'/api/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:$('loginEmail').value.trim(),password:$('loginPass').value})});
+    var d=await r.json();
+    if(!r.ok||!d.token){$('loginMsg').textContent=d.message||'Invalid email or password';$('loginMsg').className='msg err';btn.disabled=false;return}
+    T=d.token;$('loginScreen').className='hidden';$('dashScreen').className='';loadDashboard();
+  }catch(e){$('loginMsg').textContent='Connection error. Please try again.';$('loginMsg').className='msg err';btn.disabled=false}
 });
-$('logoutBtn').addEventListener('click',e=>{e.preventDefault();T='';$('dashScreen').className='hidden';$('loginScreen').className=''});
+
+$('logoutBtn').addEventListener('click',function(e){e.preventDefault();T='';$('dashScreen').className='hidden';$('loginScreen').className='';$('loginEmail').value='';$('loginPass').value=''});
+
+var tabs=['dashboard','analytics'];
+tabs.forEach(function(t){var el=$('tab' + t.charAt(0).toUpperCase() + t.slice(1) + 'Link');if(el)el.addEventListener('click',function(e){e.preventDefault();if(t==='analytics'&&!T)return;if(t==='analytics')loadAnalytics();switchTab(t)})});
 </script></body></html>`; }
 
 function renderBuyerCartLayout(): string { return `<!DOCTYPE html>
