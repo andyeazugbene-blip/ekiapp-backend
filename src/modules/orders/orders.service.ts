@@ -5,7 +5,6 @@ import { logger } from "../../lib/logger";
 import { CURSOR_ORDER_BY } from "../../shared/constants";
 import { AppError } from "../../shared/errors/app-error";
 import { releaseVendorEarnings } from "../../shared/utils/wallet-release";
-import { pushNotifications } from "../../lib/push-notifications";
 import { notificationsService } from "../notifications/notifications.service";
 import type { ListBuyerOrdersQuery, ListVendorOrdersQuery } from "./orders.types";
 import { VENDOR_STATUS_TRANSITIONS, BUYER_STATUS_TRANSITIONS } from "./orders.types";
@@ -60,12 +59,6 @@ async function sendOrderStatusNotification(order: { id: string; buyerId: string;
     body: `Your order ${order.orderNumber} is now ${label}.`,
     data: { orderId: order.id, status: newStatus },
   });
-
-  pushNotifications.orderStatusUpdate(order.buyerId, order.orderNumber, label);
-
-  if (newStatus === "DELIVERED") {
-    pushNotifications.orderDelivered(order.buyerId, order.orderNumber);
-  }
 }
 
 async function sendEarningsReleasedNotification(vendorId: string, orderId: string, amount: number, currency: string): Promise<void> {
@@ -82,8 +75,6 @@ async function sendEarningsReleasedNotification(vendorId: string, orderId: strin
     body: `${amount / 100} ${currency} in earnings have been released to your wallet for order.`,
     data: { orderId },
   });
-
-  pushNotifications.earningsReleased(vendor.userId, amount, currency);
 }
 
 export const ordersService = {
