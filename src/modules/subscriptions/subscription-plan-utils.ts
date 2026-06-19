@@ -23,6 +23,7 @@ export interface VendorCommissionResolution {
   commissionTierLabel: string | null;
   platformFeeBps: number;
   withdrawalFeeBps: number;
+  canReceiveOrders: boolean;
 }
 
 const STARTER_FALLBACK = DEFAULT_SELLER_PLAN_CONFIGS.find((plan) => plan.slug === "starter") ?? DEFAULT_SELLER_PLAN_CONFIGS[0];
@@ -47,6 +48,7 @@ function fallbackCommission(plan?: SubscriptionPlan | null): VendorCommissionRes
     commissionTierLabel: tier?.label ?? null,
     platformFeeBps: tier?.platformFeeBps ?? fallback.defaultPlatformFeeBps ?? env.platformFeeBps,
     withdrawalFeeBps: fallback.withdrawalFeeBps,
+    canReceiveOrders: fallback.canReceiveOrders ?? true,
   };
 }
 
@@ -109,6 +111,7 @@ export async function resolveVendorCommission(
     commissionTierLabel: tier?.label ?? null,
     platformFeeBps: tier?.platformFeeBps ?? plan.defaultPlatformFeeBps,
     withdrawalFeeBps: plan.withdrawalFeeBps,
+    canReceiveOrders: plan.canReceiveOrders,
   };
 }
 

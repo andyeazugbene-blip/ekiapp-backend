@@ -149,6 +149,9 @@ class PaymentsService {
 
       const deliveryFee = effectiveZone.baseFeeAmount + Math.ceil(totalWeight / 1000) * effectiveZone.feePerKgAmount;
       const commission = await resolveVendorCommission(vendorId, subtotal);
+      if (!commission.canReceiveOrders) {
+        throw new AppError("This vendor's plan does not allow receiving orders", 403);
+      }
       const platformFee = calcPlatformFee(subtotal, commission.platformFeeBps);
       const totalAmount = subtotal + deliveryFee;
       const vendorEarnings = totalAmount - platformFee;

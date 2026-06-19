@@ -105,6 +105,9 @@ export const paystackService = {
     });
     const deliveryFee = zone?.baseFeeAmount ?? 0;
     const commission = await resolveVendorCommission(vendorId, subtotal);
+    if (!commission.canReceiveOrders) {
+      throw new AppError("This vendor's plan does not allow receiving orders", 403);
+    }
     const platformFee = calculatePlatformFee(subtotal, commission.platformFeeBps);
     const grandTotal = subtotal + deliveryFee;
     const vendorEarnings = grandTotal - platformFee;
