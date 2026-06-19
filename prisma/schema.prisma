@@ -994,6 +994,7 @@ model SellerPlan {
   marketingTools       Boolean              @default(false)
   canReceiveOrders     Boolean              @default(true)
   isActive             Boolean              @default(true)
+  isDefault            Boolean              @default(false)
   displayOrder         Int                  @default(0)
   deletedAt            DateTime?
   subscriptions        VendorSubscription[]
@@ -1005,6 +1006,7 @@ model SellerPlan {
 
   @@index([isActive, deletedAt, displayOrder])
   @@index([legacyPlan])
+  @@index([isDefault])
 }
 
 model CommissionTier {

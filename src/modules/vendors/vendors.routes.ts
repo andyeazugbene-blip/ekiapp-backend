@@ -1,6 +1,7 @@
 import { Router } from "express";
 
 import { authenticate, requireRole } from "../../middlewares/authenticate";
+import { requireSellerPlanFeature } from "../../middlewares/require-seller-plan-feature";
 import { asyncHandler } from "../../shared/utils/async-handler";
 import {
   getVendorOrder,
@@ -56,12 +57,27 @@ vendorsRouter.get("/me", requireRole("VENDOR", "ADMIN"), asyncHandler(getOwnVend
 vendorsRouter.patch("/me", requireRole("VENDOR", "ADMIN"), asyncHandler(updateOwnVendor));
 vendorsRouter.get("/me/dashboard", requireRole("VENDOR", "ADMIN"), asyncHandler(getVendorDashboard));
 vendorsRouter.get("/me/earnings", requireRole("VENDOR", "ADMIN"), asyncHandler(getVendorEarnings));
-vendorsRouter.get("/me/analytics", requireRole("VENDOR", "ADMIN"), asyncHandler(getVendorAnalytics));
+vendorsRouter.get(
+  "/me/analytics",
+  requireRole("VENDOR", "ADMIN"),
+  asyncHandler(requireSellerPlanFeature("analytics")),
+  asyncHandler(getVendorAnalytics),
+);
 // Revenue chart for the mobile vendor dashboard.
 // Canonical path is /me/analytics/revenue. /me/revenue is kept as an alias
 // for the previous round of frontend code that already shipped that path.
-vendorsRouter.get("/me/analytics/revenue", requireRole("VENDOR", "ADMIN"), asyncHandler(getVendorRevenue));
-vendorsRouter.get("/me/revenue", requireRole("VENDOR", "ADMIN"), asyncHandler(getVendorRevenue));
+vendorsRouter.get(
+  "/me/analytics/revenue",
+  requireRole("VENDOR", "ADMIN"),
+  asyncHandler(requireSellerPlanFeature("analytics")),
+  asyncHandler(getVendorRevenue),
+);
+vendorsRouter.get(
+  "/me/revenue",
+  requireRole("VENDOR", "ADMIN"),
+  asyncHandler(requireSellerPlanFeature("analytics")),
+  asyncHandler(getVendorRevenue),
+);
 vendorsRouter.get("/me/public-store-analytics", requireRole("VENDOR", "ADMIN"), asyncHandler(getVendorPublicStoreAnalytics));
 vendorsRouter.get("/me/buyers", requireRole("VENDOR", "ADMIN"), asyncHandler(listVendorBuyers));
 vendorsRouter.get("/me/buyers/:id", requireRole("VENDOR", "ADMIN"), asyncHandler(getVendorBuyer));

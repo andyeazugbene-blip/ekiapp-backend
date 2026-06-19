@@ -64,6 +64,11 @@ function selectTier(plan: SellerPlanWithTiers, subtotalAmount: number): Commissi
 
 async function findStarterPlan(client: SellerPlanLookupClient): Promise<SellerPlanWithTiers | null> {
   if (!client.sellerPlan?.findFirst) return null;
+  const defaultPlan = await client.sellerPlan.findFirst({
+    where: { isDefault: true, deletedAt: null, isActive: true },
+    include: { commissionTiers: true },
+  });
+  if (defaultPlan) return defaultPlan;
   return client.sellerPlan.findFirst({
     where: { slug: "starter", deletedAt: null },
     include: { commissionTiers: true },

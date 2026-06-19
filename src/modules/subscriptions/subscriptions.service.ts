@@ -55,6 +55,7 @@ function stripLegacyConfig(plan: (typeof DEFAULT_PLAN_CONFIGS)[SubscriptionPlan]
     marketingTools: plan.marketingTools,
     canReceiveOrders: plan.canReceiveOrders,
     isActive: plan.isActive,
+    isDefault: plan.isDefault,
     displayOrder: plan.displayOrder,
   };
 }
@@ -82,6 +83,7 @@ function sellerPlanData(input: SubscriptionPlanConfigInput) {
     marketingTools: input.marketingTools,
     canReceiveOrders: input.canReceiveOrders,
     isActive: input.isActive,
+    isDefault: input.isDefault,
     displayOrder: input.displayOrder,
     deletedAt: input.isActive ? null : undefined,
   };
@@ -137,6 +139,7 @@ function formatPlanResponse(plan: SellerPlanWithTiers) {
     marketingTools: plan.marketingTools,
     canReceiveOrders: plan.canReceiveOrders,
     isActive: plan.isActive,
+    isDefault: plan.isDefault,
     deletedAt: plan.deletedAt,
     displayOrder: plan.displayOrder,
     commissionTiers: sortTiers(plan.commissionTiers).map(formatTier),
@@ -231,12 +234,23 @@ async function ensureDefaultPlanConfigs(): Promise<void> {
 
 async function getStarterPlan(): Promise<SellerPlanWithTiers> {
   await ensureDefaultPlanConfigs();
-  const starter = await prisma.sellerPlan.findFirst({
-    where: { slug: "starter", deletedAt: null },
+  const defaultPlan = await prisma.sellerPlan.findFirst({
+    where: { isDefault: true, deletedAt: null, isActive: true },
     include: { commissionTiers: true },
   });
+  const starter =
+    defaultPlan ??
+    (await prisma.sellerPlan.findFirst({
+      where: { slug: "starter", deletedAt: null },
+      include: { commissionTiers: true },
+    })) ??
+    (await prisma.sellerPlan.findFirst({
+      where: { deletedAt: null, isActive: true },
+      orderBy: { displayOrder: "asc" },
+      include: { commissionTiers: true },
+    }));
   if (!starter) {
-    throw new AppError("Starter seller plan is not configured", 503);
+    throw new AppError("Default seller plan is not configured", 503);
   }
   return starter;
 }
@@ -288,6 +302,7 @@ async function findSellerPlan(identifier: string, includeInactive = false): Prom
       marketingTools: slugMatch.marketingTools,
       canReceiveOrders: slugMatch.canReceiveOrders,
       isActive: slugMatch.isActive,
+      isDefault: slugMatch.isDefault,
       displayOrder: slugMatch.displayOrder,
       deletedAt: null,
       commissionTiers: slugMatch.commissionTiers.map((t, i) => ({
@@ -331,6 +346,7 @@ async function findSellerPlan(identifier: string, includeInactive = false): Prom
       marketingTools: legacyMatch.marketingTools,
       canReceiveOrders: legacyMatch.canReceiveOrders,
       isActive: legacyMatch.isActive,
+      isDefault: legacyMatch.isDefault,
       displayOrder: legacyMatch.displayOrder,
       deletedAt: null,
       commissionTiers: legacyMatch.commissionTiers.map((t, i) => ({
@@ -463,6 +479,13 @@ export const subscriptionsService = {
           data: sellerPlanData(input),
         })
       : await prisma.sellerPlan.create({ data: sellerPlanData(input) });
+
+    if (input.isDefault) {
+      await prisma.sellerPlan.updateMany({
+        where: { NOT: { id: plan.id } },
+        data: { isDefault: false },
+      });
+    }
 
     await syncCommissionTiers(plan.id, input.commissionTiers);
 

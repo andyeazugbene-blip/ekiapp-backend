@@ -171,6 +171,7 @@ export function validateSubscriptionPlanConfigInput(input: unknown): Subscriptio
     marketingTools: requireBoolean(raw.marketingTools, "marketingTools"),
     canReceiveOrders: requireBoolean(raw.canReceiveOrders, "canReceiveOrders"),
     isActive: requireBoolean(raw.isActive, "isActive"),
+    isDefault: Boolean(raw.isDefault),
     displayOrder: requireInteger(raw.displayOrder, "displayOrder", { min: 0 }),
     commissionTiers,
   };

@@ -47,6 +47,7 @@ export interface SubscriptionPlanConfigInput {
   marketingTools: boolean;
   canReceiveOrders: boolean;
   isActive: boolean;
+  isDefault: boolean;
   displayOrder: number;
   commissionTiers: CommissionTierInput[];
 }
@@ -92,6 +93,7 @@ export const DEFAULT_PLAN_CONFIGS: Record<SubscriptionPlan, SubscriptionPlanConf
     marketingTools: false,
     canReceiveOrders: true,
     isActive: true,
+    isDefault: true,
     displayOrder: 0,
     commissionTiers: [
       {
@@ -125,6 +127,7 @@ export const DEFAULT_PLAN_CONFIGS: Record<SubscriptionPlan, SubscriptionPlanConf
     marketingTools: true,
     canReceiveOrders: true,
     isActive: false,
+    isDefault: false,
     displayOrder: 10,
     commissionTiers: [
       {
@@ -158,6 +161,7 @@ export const DEFAULT_PLAN_CONFIGS: Record<SubscriptionPlan, SubscriptionPlanConf
     marketingTools: true,
     canReceiveOrders: true,
     isActive: true,
+    isDefault: false,
     displayOrder: 20,
     commissionTiers: [
       {
@@ -191,6 +195,7 @@ export const DEFAULT_PLAN_CONFIGS: Record<SubscriptionPlan, SubscriptionPlanConf
     marketingTools: true,
     canReceiveOrders: true,
     isActive: false,
+    isDefault: false,
     displayOrder: 30,
     commissionTiers: [
       {
@@ -224,6 +229,7 @@ export const DEFAULT_PLAN_CONFIGS: Record<SubscriptionPlan, SubscriptionPlanConf
     marketingTools: true,
     canReceiveOrders: true,
     isActive: true,
+    isDefault: false,
     displayOrder: 30,
     commissionTiers: [
       {
@@ -264,6 +270,7 @@ export const DEFAULT_SELLER_PLAN_CONFIGS: SubscriptionPlanConfigInput[] = [
     marketingTools: false,
     canReceiveOrders: true,
     isActive: true,
+    isDefault: true,
     displayOrder: 0,
     commissionTiers: [
       {
@@ -297,6 +304,7 @@ export const DEFAULT_SELLER_PLAN_CONFIGS: SubscriptionPlanConfigInput[] = [
     marketingTools: true,
     canReceiveOrders: true,
     isActive: true,
+    isDefault: false,
     displayOrder: 10,
     commissionTiers: [
       {
@@ -330,6 +338,7 @@ export const DEFAULT_SELLER_PLAN_CONFIGS: SubscriptionPlanConfigInput[] = [
     marketingTools: true,
     canReceiveOrders: true,
     isActive: true,
+    isDefault: false,
     displayOrder: 20,
     commissionTiers: [
       {
