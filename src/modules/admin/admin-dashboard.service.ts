@@ -143,11 +143,13 @@ export const adminDashboardService = {
       totalRevenue: v._sum.totalAmount ?? 0,
     }));
 
-    // Growth
-    const [newUsersThisWeek, newVendorsThisWeek, newOrdersThisWeek] = await Promise.all([
+    // Growth + active counts
+    const [newUsersThisWeek, newVendorsThisWeek, newOrdersThisWeek, activeVendors, totalBuyers] = await Promise.all([
       prisma.user.count({ where: { createdAt: { gte: weekStart } } }),
       prisma.vendor.count({ where: { createdAt: { gte: weekStart } } }),
       prisma.order.count({ where: { createdAt: { gte: weekStart } } }),
+      prisma.vendor.count({ where: { isSuspended: false } }),
+      prisma.user.count({ where: { role: UserRole.BUYER } }),
     ]);
 
     return {
@@ -171,6 +173,8 @@ export const adminDashboardService = {
         newVendorsThisWeek,
         newOrdersThisWeek,
       },
+      vendors: { active: activeVendors },
+      buyers: { active: totalBuyers },
     };
   },
 

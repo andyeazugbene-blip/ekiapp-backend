@@ -159,9 +159,12 @@ export const verificationService = {
     return updated;
   },
 
-  async adminListPendingDocuments(): Promise<Array<VerificationDocument & { frontReadUrl?: string; backReadUrl?: string }>> {
+  async adminListPendingDocuments(status?: string): Promise<Array<VerificationDocument & { frontReadUrl?: string; backReadUrl?: string }>> {
+    const validStatuses = new Set(["PENDING", "APPROVED", "REJECTED"]);
+    const normalizedStatus = status ? status.toUpperCase() : "PENDING";
+    const whereStatus = validStatuses.has(normalizedStatus) ? normalizedStatus : "PENDING";
     const docs = await prisma.verificationDocument.findMany({
-      where: { status: "PENDING" },
+      where: { status: whereStatus as "PENDING" | "APPROVED" | "REJECTED" },
       orderBy: { createdAt: "asc" },
     });
     return Promise.all(docs.map(withSignedDocumentUrls));

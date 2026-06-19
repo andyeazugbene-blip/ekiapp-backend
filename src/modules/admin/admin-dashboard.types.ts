@@ -38,6 +38,8 @@ export interface AdminAnalyticsData {
     newVendorsThisWeek: number;
     newOrdersThisWeek: number;
   };
+  vendors: { active: number };
+  buyers: { active: number };
 }
 
 export interface ListAuditLogsQuery {

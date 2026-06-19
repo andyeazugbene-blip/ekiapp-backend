@@ -106,12 +106,23 @@ export const vendorsService = {
 
     const orderCountMap = new Map(orderCounts.map((entry) => [entry.vendorId ?? "", entry._count._all]));
 
+    const ratingAggs = vendorIds.length
+      ? await prisma.review.groupBy({
+          by: ["vendorId"],
+          where: { vendorId: { in: vendorIds }, status: "APPROVED" },
+          _avg: { rating: true },
+          _count: { _all: true },
+        })
+      : [];
+    const ratingMap = new Map(ratingAggs.map((r) => [r.vendorId, { avg: r._avg.rating ?? 0, count: r._count._all }]));
+
     const serialized = vendors.map((vendor) => ({
       ...vendor,
       ownerName: vendor.user?.name ?? "",
       totalProducts: vendor._count.products,
       totalOrders: orderCountMap.get(vendor.id) ?? 0,
-      rating: 0,
+      rating: ratingMap.get(vendor.id)?.avg ?? 0,
+      totalReviews: ratingMap.get(vendor.id)?.count ?? 0,
     }));
 
     if (sort === "popular") {
@@ -148,12 +159,19 @@ export const vendorsService = {
       },
     });
 
+    const reviewAgg = await prisma.review.aggregate({
+      where: { vendorId: vendor.id, status: "APPROVED" },
+      _avg: { rating: true },
+      _count: { _all: true },
+    });
+
     return {
       ...vendor,
       ownerName: vendor.user?.name ?? "",
       totalProducts: vendor._count.products,
       totalOrders,
-      rating: 0,
+      rating: reviewAgg._avg.rating ?? 0,
+      totalReviews: reviewAgg._count._all,
     };
   },
 

@@ -44,10 +44,11 @@ export async function getOwnVerification(
 // ─── Admin Endpoints ─────────────────────────────────────────────────────────
 
 export async function adminListPendingDocuments(
-  _request: Request,
+  request: Request,
   response: Response,
 ): Promise<void> {
-  const documents = await verificationService.adminListPendingDocuments();
+  const status = typeof request.query.status === "string" ? request.query.status : undefined;
+  const documents = await verificationService.adminListPendingDocuments(status);
   response.status(200).json({ documents });
 }
 
