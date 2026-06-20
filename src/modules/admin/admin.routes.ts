@@ -105,6 +105,7 @@ import {
 } from "../uploads/uploads.controller";
 import { adminRewardsRouter } from "../rewards/rewards.routes";
 import { adminGiftCardsRouter } from "../gift-cards/gift-cards.routes";
+import { adminCampaignsRouter } from "../campaigns/campaigns.routes";
 import { adminResetUsers } from "./admin-reset.controller";
 
 export const adminRouter = Router();
@@ -217,6 +218,7 @@ adminRouter.use("/rewards", adminRewardsRouter);
 
 // Gift Cards management
 adminRouter.use("/gift-cards", adminGiftCardsRouter);
+adminRouter.use("/campaigns", adminCampaignsRouter);
 
 // Dev utilities
 

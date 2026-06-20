@@ -3,6 +3,7 @@ import { Router } from "express";
 import { swaggerSpec } from "../lib/swagger";
 import { addressesRouter } from "../modules/addresses/addresses.routes";
 import { adminRouter } from "../modules/admin/admin.routes";
+import { campaignsRouter } from "../modules/campaigns/campaigns.routes";
 import { authRouter } from "../modules/auth/auth.routes";
 import { gdprRouter } from "../modules/auth/gdpr.routes";
 import { buyerWalletRouter } from "../modules/buyer-wallet/buyer-wallet.routes";
@@ -101,5 +102,6 @@ apiRouter.use("/paystack", paystackRouter);
 apiRouter.use("/reviews", reviewsRouter);
 apiRouter.use("/rewards", rewardsRouter_);
 apiRouter.use("/gift-cards", giftCardsRouter_);
+apiRouter.use("/campaigns", campaignsRouter);
 apiRouter.use("/stripe", stripeRouter);
 

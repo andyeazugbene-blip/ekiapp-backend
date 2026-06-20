@@ -115,34 +115,34 @@ enum ReviewStatus {
 }
 
 model User {
-  id            String         @id @default(cuid())
-  email               String         @unique
-  name                String
-  password            String
-  phone               String?        @unique
-  avatar              String?
-  country             String?
-  referralCode        String?        @unique
-  referredBy          String?
-  tokenVersion        Int            @default(0)
-  failedLoginAttempts Int            @default(0)
-  lockedUntil         DateTime?
-  isSuspended         Boolean        @default(false)
-  suspendedReason     String?
-  emailVerifiedAt     DateTime?
-  trustScore          Int            @default(50)
-  smsMarketingConsentAt DateTime?
-  smsTransactionalEnabled Boolean    @default(true)
-  role                UserRole       @default(BUYER)
-  vendor              Vendor?
-  orders              Order[]        @relation("BuyerOrders")
-  cart                Cart?
-  notifications       Notification[]
-  purchasedGiftCards  PurchasedGiftCard[]
-  adminTwoFactor      AdminTwoFactor?
-  adminRoleAssignments AdminRoleAssignment[]
-  createdAt           DateTime       @default(now())
-  updatedAt           DateTime       @updatedAt
+  id                      String                @id @default(cuid())
+  email                   String                @unique
+  name                    String
+  password                String
+  phone                   String?               @unique
+  avatar                  String?
+  country                 String?
+  referralCode            String?               @unique
+  referredBy              String?
+  tokenVersion            Int                   @default(0)
+  failedLoginAttempts     Int                   @default(0)
+  lockedUntil             DateTime?
+  isSuspended             Boolean               @default(false)
+  suspendedReason         String?
+  emailVerifiedAt         DateTime?
+  trustScore              Int                   @default(50)
+  smsMarketingConsentAt   DateTime?
+  smsTransactionalEnabled Boolean               @default(true)
+  role                    UserRole              @default(BUYER)
+  vendor                  Vendor?
+  orders                  Order[]               @relation("BuyerOrders")
+  cart                    Cart?
+  notifications           Notification[]
+  purchasedGiftCards      PurchasedGiftCard[]
+  adminTwoFactor          AdminTwoFactor?
+  adminRoleAssignments    AdminRoleAssignment[]
+  createdAt               DateTime              @default(now())
+  updatedAt               DateTime              @updatedAt
 
   @@index([role, createdAt])
   @@index([createdAt])
@@ -150,39 +150,39 @@ model User {
 }
 
 model Vendor {
-  id                    String                   @id @default(cuid())
-  userId                String                   @unique
-  storeName             String                   @unique
-  storeSlug             String                   @unique
-  description           String?
-  contactEmail          String?
-  contactPhone          String?
-  country               String?
-  city                  String?
-  businessType          String?
-  sellerRegion          String?
-  currency              String                   @default("EUR")
-  avatar                String?
-  coverImage            String?
-  isSuspended           Boolean                  @default(false)
-  suspendedReason       String?
-  stripeAccountId       String?                  @unique
-  stripeAccountStatus   String?
-  stripePayoutsEnabled  Boolean                  @default(false)
-  stripeChargesEnabled  Boolean                  @default(false)
-  stripeOnboardedAt     DateTime?
-  verificationStatus    VendorVerificationStatus @default(PENDING)
-  user                  User                     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  wallet                Wallet?
-  products              Product[]
-  orderItems            OrderItem[]
-  walletTransactions    WalletTransaction[]
-  payoutMethods         PayoutMethod[]
-  payoutRequests        PayoutRequest[]
-  bankAccounts          VendorBankAccount[]
-  promoCodes            PromoCode[]
-  createdAt             DateTime                 @default(now())
-  updatedAt             DateTime                 @updatedAt
+  id                   String                   @id @default(cuid())
+  userId               String                   @unique
+  storeName            String                   @unique
+  storeSlug            String                   @unique
+  description          String?
+  contactEmail         String?
+  contactPhone         String?
+  country              String?
+  city                 String?
+  businessType         String?
+  sellerRegion         String?
+  currency             String                   @default("EUR")
+  avatar               String?
+  coverImage           String?
+  isSuspended          Boolean                  @default(false)
+  suspendedReason      String?
+  stripeAccountId      String?                  @unique
+  stripeAccountStatus  String?
+  stripePayoutsEnabled Boolean                  @default(false)
+  stripeChargesEnabled Boolean                  @default(false)
+  stripeOnboardedAt    DateTime?
+  verificationStatus   VendorVerificationStatus @default(PENDING)
+  user                 User                     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  wallet               Wallet?
+  products             Product[]
+  orderItems           OrderItem[]
+  walletTransactions   WalletTransaction[]
+  payoutMethods        PayoutMethod[]
+  payoutRequests       PayoutRequest[]
+  bankAccounts         VendorBankAccount[]
+  promoCodes           PromoCode[]
+  createdAt            DateTime                 @default(now())
+  updatedAt            DateTime                 @updatedAt
 
   @@index([verificationStatus, createdAt])
   @@index([createdAt])
@@ -205,26 +205,26 @@ model PayoutMethod {
 }
 
 model PayoutRequest {
-  id                 String              @id @default(cuid())
-  vendorId           String
-  payoutMethodId     String
-  amount             Int
-  withdrawalFeeAmount Int                @default(0)
-  withdrawalFeeBps    Int                @default(0)
+  id                  String              @id @default(cuid())
+  vendorId            String
+  payoutMethodId      String
+  amount              Int
+  withdrawalFeeAmount Int                 @default(0)
+  withdrawalFeeBps    Int                 @default(0)
   netAmount           Int?
-  currency           String              @default("EUR")
-  status             PayoutRequestStatus @default(PENDING)
-  notes              String?
-  rejectionReason    String?
-  approvedById       String?
-  approvedAt         DateTime?
-  paidById           String?
-  paidAt             DateTime?
-  vendor             Vendor              @relation(fields: [vendorId], references: [id], onDelete: Restrict)
-  payoutMethod       PayoutMethod        @relation(fields: [payoutMethodId], references: [id], onDelete: Restrict)
-  walletTransactions WalletTransaction[]
-  createdAt          DateTime            @default(now())
-  updatedAt          DateTime            @updatedAt
+  currency            String              @default("EUR")
+  status              PayoutRequestStatus @default(PENDING)
+  notes               String?
+  rejectionReason     String?
+  approvedById        String?
+  approvedAt          DateTime?
+  paidById            String?
+  paidAt              DateTime?
+  vendor              Vendor              @relation(fields: [vendorId], references: [id], onDelete: Restrict)
+  payoutMethod        PayoutMethod        @relation(fields: [payoutMethodId], references: [id], onDelete: Restrict)
+  walletTransactions  WalletTransaction[]
+  createdAt           DateTime            @default(now())
+  updatedAt           DateTime            @updatedAt
 
   @@index([vendorId, status])
   @@index([status, createdAt])
@@ -280,45 +280,45 @@ model CartItem {
 }
 
 model Order {
-  id                 String              @id @default(cuid())
-  orderNumber        String              @unique @default(cuid())
-  checkoutId         String?
-  buyerId            String
-  vendorId           String?
-  status             OrderStatus         @default(PENDING)
-  escrowType         EscrowType          @default(NONE)
-  escrowExpiresAt    DateTime?
-  vendorConfirmedAt  DateTime?
-  disputedAt         DateTime?
-  autoReleasedAt     DateTime?
-  subtotalAmount     Int                 @default(0)
-  deliveryFeeAmount  Int                 @default(0)
-  platformFeeAmount  Int                 @default(0)
-  vendorEarnings     Int                 @default(0)
-  sellerPlanId       String?
-  sellerPlanSlug     String?
-  commissionTierId   String?
-  commissionBps      Int?
-  withdrawalFeeBps   Int?
-  totalAmount        Int
-  currency           String              @default("EUR")
-  deliveryZoneId     String?
-  deliveryAddress    String?
-  notes              String?
-  deliveredAt        DateTime?
-  checkout           Checkout?           @relation(fields: [checkoutId], references: [id], onDelete: SetNull)
-  buyer              User                @relation("BuyerOrders", fields: [buyerId], references: [id], onDelete: Restrict)
-  deliveryZone       DeliveryZone?       @relation(fields: [deliveryZoneId], references: [id], onDelete: SetNull)
-  sellerPlan         SellerPlan?         @relation(fields: [sellerPlanId], references: [id], onDelete: SetNull)
-  commissionTier     CommissionTier?     @relation(fields: [commissionTierId], references: [id], onDelete: SetNull)
-  items              OrderItem[]
-  payment            Payment?
+  id                  String               @id @default(cuid())
+  orderNumber         String               @unique @default(cuid())
+  checkoutId          String?
+  buyerId             String
+  vendorId            String?
+  status              OrderStatus          @default(PENDING)
+  escrowType          EscrowType           @default(NONE)
+  escrowExpiresAt     DateTime?
+  vendorConfirmedAt   DateTime?
+  disputedAt          DateTime?
+  autoReleasedAt      DateTime?
+  subtotalAmount      Int                  @default(0)
+  deliveryFeeAmount   Int                  @default(0)
+  platformFeeAmount   Int                  @default(0)
+  vendorEarnings      Int                  @default(0)
+  sellerPlanId        String?
+  sellerPlanSlug      String?
+  commissionTierId    String?
+  commissionBps       Int?
+  withdrawalFeeBps    Int?
+  totalAmount         Int
+  currency            String               @default("EUR")
+  deliveryZoneId      String?
+  deliveryAddress     String?
+  notes               String?
+  deliveredAt         DateTime?
+  checkout            Checkout?            @relation(fields: [checkoutId], references: [id], onDelete: SetNull)
+  buyer               User                 @relation("BuyerOrders", fields: [buyerId], references: [id], onDelete: Restrict)
+  deliveryZone        DeliveryZone?        @relation(fields: [deliveryZoneId], references: [id], onDelete: SetNull)
+  sellerPlan          SellerPlan?          @relation(fields: [sellerPlanId], references: [id], onDelete: SetNull)
+  commissionTier      CommissionTier?      @relation(fields: [commissionTierId], references: [id], onDelete: SetNull)
+  items               OrderItem[]
+  payment             Payment?
   paystackTransaction PaystackTransaction?
-  deliveryOtp        DeliveryOtp?
-  dispute            Dispute?
-  walletTransactions WalletTransaction[]
-  createdAt          DateTime            @default(now())
-  updatedAt          DateTime            @updatedAt
+  deliveryOtp         DeliveryOtp?
+  dispute             Dispute?
+  walletTransactions  WalletTransaction[]
+  createdAt           DateTime             @default(now())
+  updatedAt           DateTime             @updatedAt
 
   @@index([checkoutId])
   @@index([buyerId, status])
@@ -442,18 +442,18 @@ model WalletTransaction {
 // ─── Reviews ────────────────────────────────────────────────────────────────
 
 model Review {
-  id         String       @id @default(cuid())
-  buyerId    String
-  vendorId   String
-  productId  String?
-  orderId    String
-  rating     Int          // 1-5
-  comment    String?
-  status     ReviewStatus @default(PENDING)
+  id          String       @id @default(cuid())
+  buyerId     String
+  vendorId    String
+  productId   String?
+  orderId     String
+  rating      Int // 1-5
+  comment     String?
+  status      ReviewStatus @default(PENDING)
   moderatedBy String?
   moderatedAt DateTime?
-  createdAt  DateTime     @default(now())
-  updatedAt  DateTime     @updatedAt
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
 
   @@unique([buyerId, orderId, productId])
   @@index([vendorId, status])
@@ -506,17 +506,17 @@ enum ShipmentStatus {
 }
 
 model Shipment {
-  id                   String         @id @default(cuid())
-  orderId              String         @unique
-  vendorId             String
-  trackingNumber       String?
-  carrier              String?
-  status               ShipmentStatus @default(PROCESSING)
-  estimatedDeliveryAt  DateTime?
-  dispatchedAt         DateTime?
-  deliveredAt          DateTime?
-  createdAt            DateTime       @default(now())
-  updatedAt            DateTime       @updatedAt
+  id                  String         @id @default(cuid())
+  orderId             String         @unique
+  vendorId            String
+  trackingNumber      String?
+  carrier             String?
+  status              ShipmentStatus @default(PROCESSING)
+  estimatedDeliveryAt DateTime?
+  dispatchedAt        DateTime?
+  deliveredAt         DateTime?
+  createdAt           DateTime       @default(now())
+  updatedAt           DateTime       @updatedAt
 
   @@index([vendorId, status])
   @@index([status])
@@ -713,27 +713,27 @@ enum BuyerWalletTxType {
 }
 
 model BuyerWallet {
-  id           String                 @id @default(cuid())
-  buyerId      String                 @unique
-  balance      Int                    @default(0)
-  currency     String                 @default("EUR")
+  id           String                   @id @default(cuid())
+  buyerId      String                   @unique
+  balance      Int                      @default(0)
+  currency     String                   @default("EUR")
   transactions BuyerWalletTransaction[]
-  createdAt    DateTime               @default(now())
-  updatedAt    DateTime               @updatedAt
+  createdAt    DateTime                 @default(now())
+  updatedAt    DateTime                 @updatedAt
 }
 
 model BuyerWalletTransaction {
-  id               String           @id @default(cuid())
-  walletId         String
-  buyerId          String
-  type             BuyerWalletTxType
-  amount           Int
-  currency         String           @default("EUR")
-  description      String?
-  orderId          String?
-  paymentIntentId  String?
-  wallet           BuyerWallet      @relation(fields: [walletId], references: [id], onDelete: Restrict)
-  createdAt        DateTime         @default(now())
+  id              String            @id @default(cuid())
+  walletId        String
+  buyerId         String
+  type            BuyerWalletTxType
+  amount          Int
+  currency        String            @default("EUR")
+  description     String?
+  orderId         String?
+  paymentIntentId String?
+  wallet          BuyerWallet       @relation(fields: [walletId], references: [id], onDelete: Restrict)
+  createdAt       DateTime          @default(now())
 
   @@unique([paymentIntentId, type])
   @@index([walletId, createdAt])
@@ -786,13 +786,13 @@ model PromoRedemption {
 // ─── Phase 5: Referrals ─────────────────────────────────────────────────────
 
 model Referral {
-  id           String   @id @default(cuid())
-  referrerId   String
-  referredId   String   @unique
-  bonusAmount  Int
-  currency     String   @default("EUR")
-  creditedAt   DateTime?
-  createdAt    DateTime @default(now())
+  id          String    @id @default(cuid())
+  referrerId  String
+  referredId  String    @unique
+  bonusAmount Int
+  currency    String    @default("EUR")
+  creditedAt  DateTime?
+  createdAt   DateTime  @default(now())
 
   @@index([referrerId])
 }
@@ -826,14 +826,14 @@ model Reward {
 }
 
 model UserReward {
-  id         String      @id @default(cuid())
-  userId     String
-  rewardId   String
-  claimedAt  DateTime    @default(now())
-  usedAt     DateTime?
-  expiresAt  DateTime?
-  orderId    String?
-  metadata   Json?
+  id        String    @id @default(cuid())
+  userId    String
+  rewardId  String
+  claimedAt DateTime  @default(now())
+  usedAt    DateTime?
+  expiresAt DateTime?
+  orderId   String?
+  metadata  Json?
 
   reward Reward @relation(fields: [rewardId], references: [id])
 
@@ -844,36 +844,36 @@ model UserReward {
 // ─── Gift Cards ───────────────────────────────────────────────────────────────
 
 model GiftCard {
-  id          String    @id @default(cuid())
+  id          String              @id @default(cuid())
   title       String
   description String?
   priceAmount Int
-  currency    String    @default("EUR")
+  currency    String              @default("EUR")
   imageUrl    String?
-  isActive    Boolean   @default(true)
+  isActive    Boolean             @default(true)
   purchases   PurchasedGiftCard[]
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
+  createdAt   DateTime            @default(now())
+  updatedAt   DateTime            @updatedAt
 
   @@index([isActive])
 }
 
 model PurchasedGiftCard {
-  id              String    @id @default(cuid())
-  buyerId         String
-  giftCardId      String
-  recipientEmail  String?
-  recipientName   String?
-  message         String?
-  amount          Int
-  currency        String    @default("EUR")
+  id                    String    @id @default(cuid())
+  buyerId               String
+  giftCardId            String
+  recipientEmail        String?
+  recipientName         String?
+  message               String?
+  amount                Int
+  currency              String    @default("EUR")
   stripePaymentIntentId String?
-  isRedeemed      Boolean   @default(false)
-  redeemedAt      DateTime?
-  createdAt       DateTime  @default(now())
+  isRedeemed            Boolean   @default(false)
+  redeemedAt            DateTime?
+  createdAt             DateTime  @default(now())
 
-  buyer     User     @relation(fields: [buyerId], references: [id], onDelete: Restrict)
-  giftCard  GiftCard @relation(fields: [giftCardId], references: [id], onDelete: Restrict)
+  buyer    User     @relation(fields: [buyerId], references: [id], onDelete: Restrict)
+  giftCard GiftCard @relation(fields: [giftCardId], references: [id], onDelete: Restrict)
 
   @@index([buyerId])
   @@index([isRedeemed])
@@ -945,64 +945,64 @@ model AdminRoleAssignment {
 }
 
 model SubscriptionPlanConfig {
-  id                 String           @id @default(cuid())
-  plan               SubscriptionPlan @unique
-  slug               String           @unique
-  name               String
-  description        String?
-  monthlyPriceCents  Int              @default(0)
-  platformFeeBps     Int              @default(1000)
-  currency           String           @default("GBP")
-  maxProducts        Int              @default(10)
-  maxImagesPerProduct Int             @default(3)
-  maxOrders          Int?
-  analytics          Boolean          @default(false)
-  prioritySupport    Boolean          @default(false)
-  flashSales         Boolean          @default(false)
-  bundles            Boolean          @default(false)
-  discounts          Boolean          @default(false)
-  marketingTools     Boolean          @default(false)
-  canReceiveOrders   Boolean          @default(true)
-  isActive           Boolean          @default(true)
-  displayOrder       Int              @default(0)
-  createdAt          DateTime         @default(now())
-  updatedAt          DateTime         @updatedAt
+  id                  String           @id @default(cuid())
+  plan                SubscriptionPlan @unique
+  slug                String           @unique
+  name                String
+  description         String?
+  monthlyPriceCents   Int              @default(0)
+  platformFeeBps      Int              @default(1000)
+  currency            String           @default("GBP")
+  maxProducts         Int              @default(10)
+  maxImagesPerProduct Int              @default(3)
+  maxOrders           Int?
+  analytics           Boolean          @default(false)
+  prioritySupport     Boolean          @default(false)
+  flashSales          Boolean          @default(false)
+  bundles             Boolean          @default(false)
+  discounts           Boolean          @default(false)
+  marketingTools      Boolean          @default(false)
+  canReceiveOrders    Boolean          @default(true)
+  isActive            Boolean          @default(true)
+  displayOrder        Int              @default(0)
+  createdAt           DateTime         @default(now())
+  updatedAt           DateTime         @updatedAt
 
   @@index([isActive, displayOrder])
 }
 
 model SellerPlan {
-  id                   String               @id @default(cuid())
-  slug                 String               @unique
-  name                 String
-  description          String?
-  legacyPlan           SubscriptionPlan?    @unique
-  monthlyPriceCents    Int                  @default(0)
-  currency             String               @default("GBP")
-  stripePriceId        String?
-  stripeProductId      String?
-  defaultPlatformFeeBps Int                 @default(1500)
-  withdrawalFeeBps     Int                  @default(250)
-  maxProducts          Int                  @default(10)
-  maxImagesPerProduct  Int                  @default(3)
-  maxOrders            Int?
-  analytics            Boolean              @default(false)
-  prioritySupport      Boolean              @default(false)
-  flashSales           Boolean              @default(false)
-  bundles              Boolean              @default(false)
-  discounts            Boolean              @default(false)
-  marketingTools       Boolean              @default(false)
-  canReceiveOrders     Boolean              @default(true)
-  isActive             Boolean              @default(true)
-  isDefault            Boolean              @default(false)
-  displayOrder         Int                  @default(0)
-  deletedAt            DateTime?
-  subscriptions        VendorSubscription[]
-  commissionTiers      CommissionTier[]
-  orders               Order[]
-  payments             Payment[]
-  createdAt            DateTime             @default(now())
-  updatedAt            DateTime             @updatedAt
+  id                    String               @id @default(cuid())
+  slug                  String               @unique
+  name                  String
+  description           String?
+  legacyPlan            SubscriptionPlan?    @unique
+  monthlyPriceCents     Int                  @default(0)
+  currency              String               @default("GBP")
+  stripePriceId         String?
+  stripeProductId       String?
+  defaultPlatformFeeBps Int                  @default(1500)
+  withdrawalFeeBps      Int                  @default(250)
+  maxProducts           Int                  @default(10)
+  maxImagesPerProduct   Int                  @default(3)
+  maxOrders             Int?
+  analytics             Boolean              @default(false)
+  prioritySupport       Boolean              @default(false)
+  flashSales            Boolean              @default(false)
+  bundles               Boolean              @default(false)
+  discounts             Boolean              @default(false)
+  marketingTools        Boolean              @default(false)
+  canReceiveOrders      Boolean              @default(true)
+  isActive              Boolean              @default(true)
+  isDefault             Boolean              @default(false)
+  displayOrder          Int                  @default(0)
+  deletedAt             DateTime?
+  subscriptions         VendorSubscription[]
+  commissionTiers       CommissionTier[]
+  orders                Order[]
+  payments              Payment[]
+  createdAt             DateTime             @default(now())
+  updatedAt             DateTime             @updatedAt
 
   @@index([isActive, deletedAt, displayOrder])
   @@index([legacyPlan])
@@ -1010,35 +1010,35 @@ model SellerPlan {
 }
 
 model CommissionTier {
-  id                String      @id @default(cuid())
-  sellerPlanId      String
-  label             String?
-  minSubtotalCents  Int         @default(0)
-  maxSubtotalCents  Int?
-  platformFeeBps    Int
-  isActive          Boolean     @default(true)
-  displayOrder      Int         @default(0)
-  sellerPlan        SellerPlan  @relation(fields: [sellerPlanId], references: [id], onDelete: Cascade)
-  orders            Order[]
-  payments          Payment[]
-  createdAt         DateTime    @default(now())
-  updatedAt         DateTime    @updatedAt
+  id               String     @id @default(cuid())
+  sellerPlanId     String
+  label            String?
+  minSubtotalCents Int        @default(0)
+  maxSubtotalCents Int?
+  platformFeeBps   Int
+  isActive         Boolean    @default(true)
+  displayOrder     Int        @default(0)
+  sellerPlan       SellerPlan @relation(fields: [sellerPlanId], references: [id], onDelete: Cascade)
+  orders           Order[]
+  payments         Payment[]
+  createdAt        DateTime   @default(now())
+  updatedAt        DateTime   @updatedAt
 
   @@index([sellerPlanId, isActive, minSubtotalCents])
 }
 
 model UploadAsset {
-  id           String            @id @default(cuid())
-  ownerId      String
-  category     String
-  key          String            @unique
-  publicUrl    String?
-  contentType  String
-  sizeBytes    Int?
-  status       UploadAssetStatus @default(REQUESTED)
-  completedAt  DateTime?
-  createdAt    DateTime          @default(now())
-  updatedAt    DateTime          @updatedAt
+  id          String            @id @default(cuid())
+  ownerId     String
+  category    String
+  key         String            @unique
+  publicUrl   String?
+  contentType String
+  sizeBytes   Int?
+  status      UploadAssetStatus @default(REQUESTED)
+  completedAt DateTime?
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
 
   @@index([ownerId, category, status])
   @@index([status, createdAt])
@@ -1093,16 +1093,16 @@ model PushToken {
 // ─── Domestic Africa Escrow ─────────────────────────────────────────────────
 
 model PaystackTransaction {
-  id               String          @id @default(cuid())
-  orderId          String          @unique
-  reference        String          @unique
+  id               String           @id @default(cuid())
+  orderId          String           @unique
+  reference        String           @unique
   amount           Int
-  currency         String          @default("NGN")
+  currency         String           @default("NGN")
   status           PaystackTxStatus @default(PENDING)
   paystackResponse Json?
-  order            Order           @relation(fields: [orderId], references: [id], onDelete: Restrict)
-  createdAt        DateTime        @default(now())
-  updatedAt        DateTime        @updatedAt
+  order            Order            @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
 
   @@index([reference])
   @@index([orderId])
@@ -1110,18 +1110,18 @@ model PaystackTransaction {
 }
 
 model VendorBankAccount {
-  id                   String   @id @default(cuid())
-  vendorId             String
-  bankName             String
-  bankCode             String
-  accountNumber        String
-  accountName          String
-  currency             String   @default("NGN")
-  isDefault            Boolean  @default(false)
+  id                    String   @id @default(cuid())
+  vendorId              String
+  bankName              String
+  bankCode              String
+  accountNumber         String
+  accountName           String
+  currency              String   @default("NGN")
+  isDefault             Boolean  @default(false)
   paystackRecipientCode String?
-  vendor               Vendor   @relation(fields: [vendorId], references: [id], onDelete: Cascade)
-  createdAt            DateTime @default(now())
-  updatedAt            DateTime @updatedAt
+  vendor                Vendor   @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
 
   @@index([vendorId])
 }
@@ -1179,4 +1179,38 @@ model AdminTwoFactor {
   user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
+}
+
+// ─── Admin-Controlled Campaigns (Hot Deals / Gift Cards) ───────────────────
+
+enum CampaignType {
+  HOT_DEAL
+  GIFT_CARD
+}
+
+model Campaign {
+  id         String       @id @default(cuid())
+  name       String
+  type       CampaignType
+  active     Boolean      @default(true)
+  priority   Int          @default(0)
+  colorTheme String?
+  title      String
+  subtitle   String?
+  image      String?
+  startDate  DateTime?
+  endDate    DateTime?
+
+  // Eligibility rules — all optional, all enforced server-side
+  minimumCartAmountCents Int?
+  requiredProductIds     String[] @default([])
+  requiredCategoryIds    String[] @default([])
+  minimumOrders          Int?
+  minimumSpendCents      Int?
+  newCustomerOnly        Boolean  @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([type, active, priority])
 }

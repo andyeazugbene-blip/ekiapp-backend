@@ -31,6 +31,8 @@ export const ADMIN_PERMISSIONS = [
   "communications.send",
   "promos.read",
   "promos.mutate",
+  "campaigns.read",
+  "campaigns.mutate",
   "subscriptions.read",
   "subscriptions.mutate",
   "settings.read",
