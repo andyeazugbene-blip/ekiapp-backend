@@ -1188,6 +1188,11 @@ enum CampaignType {
   GIFT_CARD
 }
 
+enum CampaignDiscountType {
+  PERCENTAGE
+  FIXED_AMOUNT
+}
+
 model Campaign {
   id         String       @id @default(cuid())
   name       String
@@ -1208,6 +1213,10 @@ model Campaign {
   minimumOrders          Int?
   minimumSpendCents      Int?
   newCustomerOnly        Boolean  @default(false)
+
+  // Discount applied at checkout when buyer is eligible (platform-funded, vendor payout unaffected)
+  discountType  CampaignDiscountType?
+  discountValue Int?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

@@ -1,4 +1,4 @@
-import type { CampaignType } from "@prisma/client";
+import type { CampaignDiscountType, CampaignType } from "@prisma/client";
 
 export interface CampaignInput {
   name: string;
@@ -17,6 +17,8 @@ export interface CampaignInput {
   minimumOrders?: number | null;
   minimumSpendCents?: number | null;
   newCustomerOnly?: boolean;
+  discountType?: CampaignDiscountType | null;
+  discountValue?: number | null;
 }
 
 export interface CampaignView {
@@ -37,6 +39,8 @@ export interface CampaignView {
   minimumOrders: number | null;
   minimumSpendCents: number | null;
   newCustomerOnly: boolean;
+  discountType: CampaignDiscountType | null;
+  discountValue: number | null;
   createdAt: string;
   updatedAt: string;
 }

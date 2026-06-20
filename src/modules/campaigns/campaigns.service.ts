@@ -5,6 +5,7 @@ import { prisma } from "../../lib/prisma";
 import { AppError } from "../../shared/errors/app-error";
 import {
   optionalDate,
+  optionalDiscountType,
   optionalInt,
   optionalString,
   optionalStringArray,
@@ -44,6 +45,8 @@ function toView(campaign: Campaign): CampaignView {
     minimumOrders: campaign.minimumOrders,
     minimumSpendCents: campaign.minimumSpendCents,
     newCustomerOnly: campaign.newCustomerOnly,
+    discountType: campaign.discountType,
+    discountValue: campaign.discountValue,
     createdAt: campaign.createdAt.toISOString(),
     updatedAt: campaign.updatedAt.toISOString(),
   };
@@ -78,6 +81,8 @@ export const campaignsService = {
         minimumOrders: input.minimumOrders ?? null,
         minimumSpendCents: input.minimumSpendCents ?? null,
         newCustomerOnly: input.newCustomerOnly ?? false,
+        discountType: input.discountType ?? null,
+        discountValue: input.discountValue ?? null,
       },
     });
     return toView(campaign);
@@ -119,6 +124,8 @@ export const campaignsService = {
     if (raw.minimumOrders !== undefined) data.minimumOrders = optionalInt(raw.minimumOrders, "minimumOrders");
     if (raw.minimumSpendCents !== undefined) data.minimumSpendCents = optionalInt(raw.minimumSpendCents, "minimumSpendCents");
     if (raw.newCustomerOnly !== undefined) data.newCustomerOnly = Boolean(raw.newCustomerOnly);
+    if (raw.discountType !== undefined) data.discountType = optionalDiscountType(raw.discountType);
+    if (raw.discountValue !== undefined) data.discountValue = optionalInt(raw.discountValue, "discountValue");
 
     const updated = await prisma.campaign.update({ where: { id: campaignId }, data });
     return toView(updated);

@@ -1,7 +1,16 @@
-import { CampaignType } from "@prisma/client";
+import { CampaignDiscountType, CampaignType } from "@prisma/client";
 
 import { AppError } from "../../shared/errors/app-error";
 import type { CampaignInput } from "./campaigns.types";
+
+export function optionalDiscountType(value: unknown): CampaignDiscountType | null {
+  if (value === undefined || value === null || value === "") return null;
+  const type = String(value).toUpperCase();
+  if (!Object.values(CampaignDiscountType).includes(type as CampaignDiscountType)) {
+    throw new AppError(`discountType must be one of: ${Object.values(CampaignDiscountType).join(", ")}`, 400);
+  }
+  return type as CampaignDiscountType;
+}
 
 export function requiredString(value: unknown, field: string): string {
   if (typeof value !== "string" || !value.trim()) throw new AppError(`${field} is required`, 400);
@@ -48,6 +57,15 @@ export function validateCampaignInput(raw: Record<string, unknown>): CampaignInp
     throw new AppError("startDate must be before endDate", 400);
   }
 
+  const discountType = optionalDiscountType(raw.discountType);
+  const discountValue = optionalInt(raw.discountValue, "discountValue");
+  if (discountType && discountValue == null) {
+    throw new AppError("discountValue is required when discountType is set", 400);
+  }
+  if (discountType === "PERCENTAGE" && discountValue != null && discountValue > 100) {
+    throw new AppError("discountValue must be 1-100 for a PERCENTAGE discount", 400);
+  }
+
   return {
     name: requiredString(raw.name, "name"),
     type: type as CampaignType,
@@ -65,5 +83,7 @@ export function validateCampaignInput(raw: Record<string, unknown>): CampaignInp
     minimumOrders: optionalInt(raw.minimumOrders, "minimumOrders"),
     minimumSpendCents: optionalInt(raw.minimumSpendCents, "minimumSpendCents"),
     newCustomerOnly: Boolean(raw.newCustomerOnly),
+    discountType,
+    discountValue,
   };
 }

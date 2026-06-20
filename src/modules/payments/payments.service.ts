@@ -10,6 +10,7 @@ import { calculatePlatformFee as calcPlatformFee } from "../../shared/pricing";
 import { referralsService } from "../referrals/referrals.service";
 import { resolveVendorCommission } from "../subscriptions/subscription-plan-utils";
 import { promosService } from "../promos/promos.service";
+import { campaignsService } from "../campaigns/campaigns.service";
 import { validateCreatePaymentIntentFromCartInput } from "./payments.validation";
 import type { CreatePaymentIntentResponse, PricedOrderItem } from "./payments.types";
 
@@ -206,6 +207,28 @@ class PaymentsService {
       grandTotal = vendorGroups.reduce((sum, group) => sum + group.totalAmount, 0);
     }
 
+    // ─── Step 2e2: Hot Deal campaign auto-apply (platform-funded, vendor payout unaffected) ──
+    // Skips if a promo code was already applied — campaign and promo discounts do not stack.
+
+    let campaignDiscountAmount = 0;
+    let appliedCampaignId: string | undefined;
+    let appliedCampaignTitle: string | undefined;
+    if (!promoCodeApplied) {
+      const eligibleCampaigns = await campaignsService.listEligibleForUser(buyerId);
+      const best = eligibleCampaigns.find(
+        (c) => c.type === "HOT_DEAL" && c.discountType && c.discountValue != null && c.discountValue > 0,
+      );
+      if (best && best.discountValue != null) {
+        campaignDiscountAmount =
+          best.discountType === "PERCENTAGE"
+            ? Math.round((grandTotal * best.discountValue) / 100)
+            : Math.min(best.discountValue, grandTotal);
+        grandTotal = Math.max(0, grandTotal - campaignDiscountAmount);
+        appliedCampaignId = best.id;
+        appliedCampaignTitle = best.title;
+      }
+    }
+
     // ─── Step 2d: Wallet deduction validation ──────────────────────────────
 
     let walletDeduction = 0;
@@ -297,6 +320,8 @@ class PaymentsService {
             stripeCurrency,
             promoCode: promoCodeApplied ?? null,
             promoDiscount: promoDiscount,
+            campaignId: appliedCampaignId ?? null,
+            campaignDiscount: campaignDiscountAmount,
           } as unknown as Prisma.InputJsonValue,
         },
         select: { id: true },
@@ -479,8 +504,11 @@ class PaymentsService {
         orderIds,
         amount: grandTotal,
         currency,
-        discountAmount: promoDiscount,
+        discountAmount: promoDiscount + campaignDiscountAmount,
         promoCode: promoCodeApplied,
+        campaignId: appliedCampaignId,
+        campaignTitle: appliedCampaignTitle,
+        campaignDiscount: campaignDiscountAmount || undefined,
       };
     }
 
@@ -543,8 +571,11 @@ class PaymentsService {
       orderIds,
       amount: grandTotal,
       currency,
-      discountAmount: promoDiscount,
+      discountAmount: promoDiscount + campaignDiscountAmount,
       promoCode: promoCodeApplied,
+      campaignId: appliedCampaignId,
+      campaignTitle: appliedCampaignTitle,
+      campaignDiscount: campaignDiscountAmount || undefined,
     };
   }
 

@@ -44,4 +44,7 @@ export type CreatePaymentIntentResponse = {
   currency: string;
   discountAmount?: number;
   promoCode?: string;
+  campaignId?: string;
+  campaignTitle?: string;
+  campaignDiscount?: number;
 };
