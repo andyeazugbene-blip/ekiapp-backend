@@ -94,7 +94,7 @@ export const vendorDashboardService = {
     });
 
     const totalOrders = await prisma.orderItem.findMany({
-      where: { vendorId: vendor.id },
+      where: { vendorId: vendor.id, order: { status: { notIn: ["PENDING", "FAILED"] } } },
       select: { orderId: true },
       distinct: ["orderId"],
     });
