@@ -10,6 +10,7 @@ import {
 } from "../orders/orders.controller";
 import {
   getOwnVerification,
+  resetVerification,
   submitVerificationDocument,
 } from "../verification/verification.controller";
 import {
@@ -95,6 +96,7 @@ vendorsRouter.post("/me/stripe-connect/refresh", requireRole("VENDOR", "ADMIN"),
 // Vendor verification (KYC)
 vendorsRouter.post("/me/verification", requireRole("VENDOR", "ADMIN"), asyncHandler(submitVerificationDocument));
 vendorsRouter.get("/me/verification", requireRole("VENDOR", "ADMIN"), asyncHandler(getOwnVerification));
+vendorsRouter.delete("/me/verification", requireRole("VENDOR", "ADMIN"), asyncHandler(resetVerification));
 
 // Vendor order management
 vendorsRouter.get("/me/orders", requireRole("VENDOR", "ADMIN"), asyncHandler(listVendorOrders));

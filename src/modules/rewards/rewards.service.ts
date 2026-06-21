@@ -207,4 +207,114 @@ export const rewardsService = {
       });
     }
   },
+
+  // ─── Auto-grant gift card rewards from eligible campaigns ─────────────
+  async grantCampaignGiftCards(buyerId: string): Promise<void> {
+    try {
+      const now = new Date();
+      const PAID_STATUSES = ["PAID", "CONFIRMED", "PROCESSING", "DISPATCHED", "IN_TRANSIT", "DELIVERED", "COMPLETED"] as const;
+
+      const campaigns = await prisma.campaign.findMany({
+        where: {
+          active: true,
+          type: "GIFT_CARD",
+          OR: [{ startDate: null }, { startDate: { lte: now } }],
+        },
+      });
+
+      const live = campaigns.filter((c) => !c.endDate || c.endDate >= now);
+      if (live.length === 0) return;
+
+      const orderStats = await prisma.order.findMany({
+        where: { buyerId, status: { in: [...PAID_STATUSES] } },
+        select: { subtotalAmount: true },
+      });
+
+      const paidOrderCount = orderStats.length;
+      const totalSpendCents = orderStats.reduce((sum, o) => sum + o.subtotalAmount, 0);
+      const isNewCustomer = paidOrderCount <= 1;
+
+      const alreadyGranted = await prisma.userReward.findMany({
+        where: { userId: buyerId },
+        select: { metadata: true },
+      });
+      const grantedCampaignIds = new Set(
+        alreadyGranted
+          .map((ur) => (ur.metadata as any)?.campaignId)
+          .filter(Boolean),
+      );
+
+      for (const campaign of live) {
+        if (grantedCampaignIds.has(campaign.id)) continue;
+
+        if (campaign.minimumOrders != null && paidOrderCount < campaign.minimumOrders) continue;
+        if (campaign.minimumSpendCents != null && totalSpendCents < campaign.minimumSpendCents) continue;
+        if (campaign.newCustomerOnly && !isNewCustomer) continue;
+
+        const linkedGiftCard = await prisma.giftCard.findFirst({
+          where: { isActive: true },
+          orderBy: { createdAt: "desc" },
+        });
+
+        await prisma.$transaction(async (tx) => {
+          const reward = await tx.reward.create({
+            data: {
+              name: campaign.title,
+              description: campaign.subtitle ?? `Gift card reward from campaign`,
+              type: "WALLET_BONUS",
+              value: campaign.discountValue ?? 0,
+              currency: "GBP",
+              isActive: true,
+              maxClaims: 1,
+              claimedCount: 1,
+            },
+          });
+
+          await tx.userReward.create({
+            data: {
+              userId: buyerId,
+              rewardId: reward.id,
+              metadata: {
+                isGiftCard: true,
+                campaignId: campaign.id,
+                campaignTitle: campaign.title,
+                giftCardId: linkedGiftCard?.id ?? null,
+              },
+            },
+          });
+
+          if (campaign.discountValue && campaign.discountValue > 0) {
+            const wallet = await tx.buyerWallet.upsert({
+              where: { buyerId },
+              create: { buyerId, currency: "GBP", balance: 0 },
+              update: {},
+            });
+
+            await tx.buyerWallet.update({
+              where: { id: wallet.id },
+              data: { balance: { increment: campaign.discountValue } },
+            });
+
+            await tx.buyerWalletTransaction.create({
+              data: {
+                walletId: wallet.id,
+                buyerId,
+                type: "REFERRAL_BONUS",
+                amount: campaign.discountValue,
+                currency: "GBP",
+                description: `Gift card reward: ${campaign.title}`,
+              },
+            });
+          }
+        });
+
+        logger.info("Campaign gift card reward granted", { buyerId, campaignId: campaign.id, value: campaign.discountValue });
+      }
+    } catch (error) {
+      logger.error("grantCampaignGiftCards failed", {
+        buyerId,
+        errorMessage: error instanceof Error ? error.message : String(error),
+      });
+    }
+  },
 };

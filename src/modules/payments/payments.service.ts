@@ -8,6 +8,7 @@ import { stripe } from "../../lib/stripe";
 import { AppError } from "../../shared/errors/app-error";
 import { calculatePlatformFee as calcPlatformFee } from "../../shared/pricing";
 import { referralsService } from "../referrals/referrals.service";
+import { rewardsService } from "../rewards/rewards.service";
 import { resolveVendorCommission } from "../subscriptions/subscription-plan-utils";
 import { promosService } from "../promos/promos.service";
 import { campaignsService } from "../campaigns/campaigns.service";
@@ -481,6 +482,13 @@ class PaymentsService {
         });
       });
 
+      rewardsService.grantCampaignGiftCards(buyerId).catch((error) => {
+        logger.error("Campaign gift card grant failed for wallet-paid checkout", {
+          buyerId,
+          errorMessage: error instanceof Error ? error.message : String(error),
+        });
+      });
+
       // ─── Send buyer confirmation email for wallet-paid orders ─────────
       this.sendBuyerConfirmationEmails(buyerId, orderIds, vendorGroups, currency).catch((error) => {
         logger.error("Failed to send buyer confirmation emails for wallet-paid checkout", {
@@ -653,7 +661,10 @@ class PaymentsService {
           where: { id: group.vendorId },
           select: { userId: true, storeName: true },
         });
-        if (!vendor?.userId) continue;
+        if (!vendor?.userId) {
+          logger.warn("Vendor missing userId — vendor will NOT be notified for wallet order", { orderId, vendorId: group.vendorId });
+          continue;
+        }
 
         await notificationsService.enqueue({
           userId: vendor.userId,

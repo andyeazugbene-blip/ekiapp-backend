@@ -24,3 +24,5 @@ OTP_SEED_REPORT.json
 
 .vercel
 .env.vercel.production
+
+.env*

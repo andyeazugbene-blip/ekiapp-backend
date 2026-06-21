@@ -8,6 +8,7 @@ import { pushNotifications } from "../../lib/push-notifications";
 import { stripe } from "../../lib/stripe";
 import { notificationsService } from "../notifications/notifications.service";
 import { referralsService } from "../referrals/referrals.service";
+import { rewardsService } from "../rewards/rewards.service";
 import { enqueueEmail } from "../../lib/email-queue";
 import { emailTemplates } from "../../lib/email-templates";
 import { AppError } from "../../shared/errors/app-error";
@@ -205,6 +206,10 @@ class StripeWebhookService {
     }
     referralsService.creditReferralBonusOnFirstOrder(buyerId).catch((err) => {
       logger.error("Referral bonus credit failed", { buyerId, error: String(err) });
+    });
+
+    rewardsService.grantCampaignGiftCards(buyerId).catch((err) => {
+      logger.error("Campaign gift card grant failed", { buyerId, error: String(err) });
     });
 
     return { received: true, eventId: event.id, type: event.type };
@@ -662,7 +667,10 @@ class StripeWebhookService {
 
     for (const order of orders) {
       const vendorId = order.vendorId ?? order.items[0]?.vendorId;
-      if (!vendorId) continue;
+      if (!vendorId) {
+        logger.warn("Order missing vendorId — vendor will NOT be notified", { orderId: order.id });
+        continue;
+      }
 
       // Load vendor and buyer info for email (separate queries to avoid Prisma include issues)
       const vendorInfo = await prisma.vendor.findUnique({
