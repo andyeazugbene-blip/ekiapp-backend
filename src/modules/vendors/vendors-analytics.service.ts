@@ -3,6 +3,7 @@ import { OrderStatus, type Prisma } from "@prisma/client";
 import { prisma } from "../../lib/prisma";
 import { AppError } from "../../shared/errors/app-error";
 import { publicStoresService } from "../public-stores/public-stores.service";
+import { subscriptionsService } from "../subscriptions/subscriptions.service";
 import type {
   VendorAnalyticsData,
   VendorAnalyticsInsight,
@@ -179,6 +180,10 @@ export const vendorAnalyticsService = {
     const range = parseRange(rawRange);
     const since = rangeStart(range);
     const vendor = await getVendor(userId);
+
+    if (!(await subscriptionsService.checkFeatureAccess(vendor.id, "analytics"))) {
+      throw new AppError("Analytics is not available on your current seller plan. Upgrade to unlock.", 403);
+    }
 
     const orderWhere: Prisma.OrderWhereInput = {
       vendorId: vendor.id,

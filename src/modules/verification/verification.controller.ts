@@ -41,6 +41,14 @@ export async function getOwnVerification(
   response.status(200).json(result);
 }
 
+export async function resetVerification(
+  request: Request,
+  response: Response,
+): Promise<void> {
+  await verificationService.resetPendingDocuments(requireUserId(request));
+  response.status(200).json({ message: "Pending documents cleared" });
+}
+
 // ─── Admin Endpoints ─────────────────────────────────────────────────────────
 
 export async function adminListPendingDocuments(

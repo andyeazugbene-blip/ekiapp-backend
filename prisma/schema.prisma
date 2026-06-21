@@ -640,6 +640,7 @@ model Message {
 enum VerificationDocType {
   GOVERNMENT_ID
   BUSINESS_REGISTRATION
+  SELFIE
 }
 
 enum VerificationDocStatus {

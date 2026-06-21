@@ -43,6 +43,11 @@ export async function listVendorPromoCodes(request: Request, response: Response)
   response.status(200).json({ promoCodes });
 }
 
+export async function deleteVendorPromoCode(request: Request, response: Response): Promise<void> {
+  await promosService.deleteVendorPromoCode(requireUserId(request), requireIdParam(request));
+  response.status(200).json({ message: "Promo code deleted" });
+}
+
 // ─── Admin ───────────────────────────────────────────────────────────────────
 
 export async function createPromoCode(request: Request, response: Response): Promise<void> {

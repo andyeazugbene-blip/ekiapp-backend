@@ -42,6 +42,26 @@ async function withSignedDocumentUrls<T extends VerificationDocument>(doc: T): P
 }
 
 export const verificationService = {
+  async resetPendingDocuments(userId: string): Promise<void> {
+    const vendor = await prisma.vendor.findUnique({
+      where: { userId },
+      select: { id: true, verificationStatus: true },
+    });
+    if (!vendor) {
+      throw new AppError("Vendor profile required", 403);
+    }
+    if (vendor.verificationStatus === "VERIFIED") {
+      throw new AppError("Cannot reset verification for an already verified vendor", 409);
+    }
+    await prisma.verificationDocument.deleteMany({
+      where: { vendorId: vendor.id, status: "PENDING" },
+    });
+    await prisma.vendor.update({
+      where: { id: vendor.id },
+      data: { verificationStatus: "PENDING" },
+    });
+  },
+
   async submitDocument(
     userId: string,
     input: SubmitVerificationInput,

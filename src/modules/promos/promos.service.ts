@@ -316,6 +316,20 @@ export const promosService = {
     );
   },
 
+  async deleteVendorPromoCode(userId: string, promoId: string): Promise<void> {
+    const vendor = await requireVendorByUserId(userId);
+    const promo = await prisma.promoCode.findFirst({
+      where: { id: promoId, vendorId: vendor.id },
+    });
+    if (!promo) {
+      throw new AppError("Promo code not found", 404);
+    }
+    if (promo.usedCount > 0) {
+      throw new AppError("Cannot delete a promo code that has been used", 409);
+    }
+    await prisma.promoCode.delete({ where: { id: promoId } });
+  },
+
   async validatePromo(
     buyerId: string,
     input: ValidatePromoInput,

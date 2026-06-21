@@ -225,7 +225,7 @@ export const vendorsService = {
     throw new AppError("Unable to create a unique store slug. Please try again.", 409);
   },
 
-  async getOwnVendor(userId: string): Promise<Vendor> {
+  async getOwnVendor(userId: string): Promise<Vendor & { rating?: number; totalReviews?: number }> {
     const vendor = await prisma.vendor.findUnique({
       where: { userId },
       include: { wallet: true, user: true },
@@ -233,7 +233,16 @@ export const vendorsService = {
     if (!vendor) {
       throw new AppError("Vendor profile not found", 404);
     }
-    return vendor;
+    const ratingAgg = await prisma.review.aggregate({
+      where: { vendorId: vendor.id, status: "APPROVED" },
+      _avg: { rating: true },
+      _count: { _all: true },
+    });
+    return {
+      ...vendor,
+      rating: ratingAgg._avg.rating ?? 0,
+      totalReviews: ratingAgg._count._all,
+    };
   },
 
   async updateOwnVendor(userId: string, input: UpdateVendorInput): Promise<Vendor> {
