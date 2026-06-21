@@ -721,6 +721,57 @@ async function main() {
     ],
   });
 
+  await prisma.campaign.createMany({
+    data: [
+      {
+        name: "Welcome Discount",
+        type: "HOT_DEAL",
+        active: true,
+        priority: 1,
+        colorTheme: "yellow",
+        title: "10% Off Your First Order",
+        subtitle: "New customers get 10% off any purchase",
+        discountType: "PERCENTAGE",
+        discountValue: 10,
+        newCustomerOnly: true,
+      },
+      {
+        name: "Spend & Save",
+        type: "HOT_DEAL",
+        active: true,
+        priority: 2,
+        colorTheme: "red",
+        title: "$5 Off Orders Over $30",
+        subtitle: "Save more when you buy more",
+        discountType: "FIXED_AMOUNT",
+        discountValue: usd(5),
+        minimumCartAmountCents: usd(30),
+      },
+      {
+        name: "Loyal Customer Reward",
+        type: "HOT_DEAL",
+        active: true,
+        priority: 3,
+        title: "15% Off for Returning Customers",
+        subtitle: "Thank you for being a loyal customer",
+        discountType: "PERCENTAGE",
+        discountValue: 15,
+        minimumOrders: 2,
+      },
+      {
+        name: "Gift Card Bonus",
+        type: "GIFT_CARD",
+        active: true,
+        priority: 1,
+        colorTheme: "yellow",
+        title: "Gift Card Bonus",
+        subtitle: "Buy a gift card and get 5% extra value",
+        discountType: "PERCENTAGE",
+        discountValue: 5,
+      },
+    ],
+  });
+
   await prisma.notification.createMany({
     data: [
       {
