@@ -48,6 +48,13 @@ export async function deleteVendorPromoCode(request: Request, response: Response
   response.status(200).json({ message: "Promo code deleted" });
 }
 
+// ─── Public ─────────────────────────────────────────────────────────────────
+
+export async function listPublicDeals(_request: Request, response: Response): Promise<void> {
+  const deals = await promosService.listPublicDeals();
+  response.status(200).json(deals);
+}
+
 // ─── Admin ───────────────────────────────────────────────────────────────────
 
 export async function createPromoCode(request: Request, response: Response): Promise<void> {

@@ -330,6 +330,68 @@ export const promosService = {
     await prisma.promoCode.delete({ where: { id: promoId } });
   },
 
+  async listPublicDeals(): Promise<{
+    bundles: Array<{ id: string; vendorId: string; code: string; value: number; type: string; storeName: string; productIds: string[] }>;
+    flashSales: Array<{ id: string; vendorId: string; code: string; value: number; type: string; storeName: string; productId: string; endsAt: string | null }>;
+  }> {
+    const now = new Date();
+    const promos = await prisma.promoCode.findMany({
+      where: {
+        isActive: true,
+        validFrom: { lte: now },
+        OR: [{ validUntil: null }, { validUntil: { gte: now } }],
+        code: { startsWith: "BUNDLE" },
+      },
+      include: { vendor: { select: { storeName: true } } },
+      orderBy: CURSOR_ORDER_BY,
+    });
+
+    const flashPromos = await prisma.promoCode.findMany({
+      where: {
+        isActive: true,
+        validFrom: { lte: now },
+        OR: [{ validUntil: null }, { validUntil: { gte: now } }],
+        code: { startsWith: "FLASH" },
+      },
+      include: { vendor: { select: { storeName: true } } },
+      orderBy: CURSOR_ORDER_BY,
+    });
+
+    const auditLogs = await prisma.auditLog.findMany({
+      where: {
+        entityType: "PROMO_CODE",
+        action: "vendor.promo.created",
+        entityId: { in: [...promos, ...flashPromos].map((p) => p.id) },
+      },
+      select: { entityId: true, metadata: true },
+    });
+    const metaMap = new Map(
+      auditLogs.filter((l) => l.entityId).map((l) => [l.entityId!, parseVendorPromoMetadata(l.metadata)]),
+    );
+
+    return {
+      bundles: promos.map((p) => ({
+        id: p.id,
+        vendorId: p.vendorId,
+        code: p.code,
+        value: p.value,
+        type: p.type,
+        storeName: p.vendor.storeName,
+        productIds: metaMap.get(p.id)?.productIds ?? [],
+      })),
+      flashSales: flashPromos.map((p) => ({
+        id: p.id,
+        vendorId: p.vendorId,
+        code: p.code,
+        value: p.value,
+        type: p.type,
+        storeName: p.vendor.storeName,
+        productId: (metaMap.get(p.id)?.productIds ?? [])[0] ?? "",
+        endsAt: p.validUntil?.toISOString() ?? null,
+      })),
+    };
+  },
+
   async validatePromo(
     buyerId: string,
     input: ValidatePromoInput,
