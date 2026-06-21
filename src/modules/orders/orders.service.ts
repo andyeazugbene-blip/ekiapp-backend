@@ -85,7 +85,7 @@ export const ordersService = {
     const items = await prisma.order.findMany({
       where: {
         buyerId,
-        ...(query.status ? { status: query.status } : {}),
+        ...(query.status ? { status: query.status } : { status: { notIn: ["PENDING", "FAILED"] } }),
       },
       include: orderInclude,
       orderBy: CURSOR_ORDER_BY,
