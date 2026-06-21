@@ -122,7 +122,7 @@ export async function getVendorBuyer(request: Request, response: Response): Prom
 
   const buyer = await prisma.user.findUnique({
     where: { id: buyerId },
-    select: { id: true, name: true, country: true },
+    select: { id: true, name: true, country: true, avatar: true },
   });
 
   if (!buyer) throw new AppError("Buyer not found", 404);
@@ -150,6 +150,7 @@ export async function getVendorBuyer(request: Request, response: Response): Prom
       id: buyer.id,
       name: buyer.name,
       country: buyer.country,
+      avatar: buyer.avatar,
       totalOrders,
       totalSpent: totalSpentAgg._sum?.totalAmount ?? 0,
       lastOrder: buyerOrders[0]?.createdAt ?? null,
