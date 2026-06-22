@@ -259,11 +259,12 @@ class PaymentsService {
         throw new AppError("Insufficient wallet balance", 400);
       }
       // If wallet amount covers grand total (or is within rounding tolerance from
-      // frontend units→cents conversion), use full grand total as deduction.
+      // frontend units→cents conversion + delivery fee variance), use full grand
+      // total as deduction.
       const walletShortfall = grandTotal - payload.walletAmount;
       if (walletShortfall <= 0) {
         walletDeduction = grandTotal;
-      } else if (walletShortfall <= 50 && buyerWallet.balance >= grandTotal) {
+      } else if (walletShortfall <= 200 && buyerWallet.balance >= grandTotal) {
         walletDeduction = grandTotal;
       } else {
         walletDeduction = payload.walletAmount;
