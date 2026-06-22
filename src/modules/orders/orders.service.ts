@@ -138,7 +138,7 @@ export const ordersService = {
       include: {
         ...orderInclude,
         buyer: {
-          select: { id: true, name: true, email: true },
+          select: { id: true, name: true, email: true, avatar: true },
         },
       },
       orderBy: CURSOR_ORDER_BY,
@@ -169,7 +169,7 @@ export const ordersService = {
       include: {
         ...orderInclude,
         buyer: {
-          select: { id: true, name: true, email: true },
+          select: { id: true, name: true, email: true, avatar: true },
         },
       },
     });

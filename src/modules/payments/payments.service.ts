@@ -183,8 +183,20 @@ class PaymentsService {
 
     let promoDiscount = 0;
     let promoCodeApplied: string | undefined;
-    if (payload.promoCode && payload.promoVendorId) {
-      const targetGroup = vendorGroups.find((g) => g.vendorId === payload.promoVendorId);
+    if (payload.promoCode) {
+      // Auto-resolve vendor from promo code if promoVendorId not provided
+      let promoVendorId = payload.promoVendorId;
+      if (!promoVendorId) {
+        const promoRecord = await prisma.promoCode.findFirst({
+          where: { code: payload.promoCode, isActive: true },
+          select: { vendorId: true },
+        });
+        promoVendorId = promoRecord?.vendorId;
+      }
+      if (!promoVendorId) {
+        throw new AppError("Invalid promo code", 400);
+      }
+      const targetGroup = vendorGroups.find((g) => g.vendorId === promoVendorId);
       if (!targetGroup) {
         throw new AppError("Promo code vendor is not in this cart", 400);
       }
@@ -192,7 +204,7 @@ class PaymentsService {
       const validation = await promosService.validatePromo(buyerId, {
         code: payload.promoCode,
         orderAmount: orderAmountCents,
-        vendorId: payload.promoVendorId,
+        vendorId: promoVendorId,
       });
       promoDiscount = validation.discountAmount;
       promoCodeApplied = payload.promoCode;
@@ -246,8 +258,16 @@ class PaymentsService {
       if (payload.walletAmount > buyerWallet.balance) {
         throw new AppError("Insufficient wallet balance", 400);
       }
-      // Cannot exceed grand total
-      walletDeduction = Math.min(payload.walletAmount, grandTotal);
+      // If wallet amount covers grand total (or is within rounding tolerance from
+      // frontend units→cents conversion), use full grand total as deduction.
+      const walletShortfall = grandTotal - payload.walletAmount;
+      if (walletShortfall <= 0) {
+        walletDeduction = grandTotal;
+      } else if (walletShortfall <= 50 && buyerWallet.balance >= grandTotal) {
+        walletDeduction = grandTotal;
+      } else {
+        walletDeduction = payload.walletAmount;
+      }
     }
 
     const stripeAmount = grandTotal - walletDeduction;
