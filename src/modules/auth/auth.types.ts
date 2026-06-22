@@ -41,6 +41,8 @@ export interface AuthUser {
   sellerRegion?: string | null;
   city?: string | null;
   coverImage?: string | null;
+  verificationStatus?: string | null;
+  shareUrl?: string | null;
 }
 
 export interface UpdateProfileInput {

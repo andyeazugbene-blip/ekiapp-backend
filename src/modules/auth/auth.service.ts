@@ -11,6 +11,7 @@ import { logger } from "../../lib/logger";
 import { prisma } from "../../lib/prisma";
 import { AppError } from "../../shared/errors/app-error";
 import { referralsService } from "../referrals/referrals.service";
+import { buildVendorShareUrl } from "../vendors/vendors.service";
 import type {
   AuthUser,
   ForgotPasswordInput,
@@ -124,6 +125,8 @@ function toAuthUser(user: AuthUserRecord): AuthUser {
     authUser.city = user.vendor.city;
     authUser.avatar = user.vendor.avatar ?? user.avatar;
     authUser.coverImage = user.vendor.coverImage;
+    authUser.verificationStatus = user.vendor.verificationStatus;
+    authUser.shareUrl = buildVendorShareUrl(user.vendor.storeSlug);
   }
 
   return authUser;
