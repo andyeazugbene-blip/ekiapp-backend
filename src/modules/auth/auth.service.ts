@@ -125,7 +125,8 @@ function toAuthUser(user: AuthUserRecord): AuthUser {
     authUser.city = user.vendor.city;
     authUser.avatar = user.vendor.avatar ?? user.avatar;
     authUser.coverImage = user.vendor.coverImage;
-    authUser.verificationStatus = user.vendor.verificationStatus;
+    const rawVS = (user.vendor.verificationStatus ?? "PENDING").toLowerCase();
+    authUser.verificationStatus = rawVS === "pending" ? "pending_docs" : rawVS;
     authUser.shareUrl = buildVendorShareUrl(user.vendor.storeSlug);
   }
 
