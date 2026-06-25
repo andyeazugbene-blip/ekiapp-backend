@@ -10,6 +10,7 @@ import { buyerWalletRouter } from "../modules/buyer-wallet/buyer-wallet.routes";
 import { cartRouter } from "../modules/cart/cart.routes";
 import { deliveryRouter } from "../modules/delivery/delivery.routes";
 import { healthRouter } from "../modules/health/health.routes";
+import { internalRouter } from "../modules/internal/internal.routes";
 import { messagesRouter } from "../modules/messages/messages.routes";
 import { notificationsRouter } from "../modules/notifications/notifications.routes";
 import { ordersRouter } from "../modules/orders/orders.routes";
@@ -104,4 +105,5 @@ apiRouter.use("/rewards", rewardsRouter_);
 apiRouter.use("/gift-cards", giftCardsRouter_);
 apiRouter.use("/campaigns", campaignsRouter);
 apiRouter.use("/stripe", stripeRouter);
+apiRouter.use("/internal", internalRouter);
 

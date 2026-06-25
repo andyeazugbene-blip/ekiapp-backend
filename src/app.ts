@@ -91,7 +91,7 @@ app.use(
     origin: allowedOrigins ?? true,
     credentials: true,
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization", "X-Request-ID"],
+    allowedHeaders: ["Content-Type", "Authorization", "X-Request-ID", "x-job-secret"],
   }),
 );
 

@@ -3,7 +3,6 @@ import type { NotificationType, Shipment } from "@prisma/client";
 import { prisma } from "../../lib/prisma";
 import { CURSOR_ORDER_BY } from "../../shared/constants";
 import { AppError } from "../../shared/errors/app-error";
-import { releaseVendorEarnings } from "../../shared/utils/wallet-release";
 import { notificationsService } from "../notifications/notifications.service";
 import type { CreateShipmentInput, ListShipmentsQuery, UpdateShipmentInput } from "./shipments.types";
 
@@ -154,9 +153,7 @@ export const shipmentsService = {
       return nextShipment;
     });
 
-    if (nextOrderStatus === "DELIVERED") {
-      releaseVendorEarnings(shipment.orderId).catch(() => {});
-    }
+    // Earnings already released on DISPATCHED — no release here
 
     if (nextOrderStatus) {
       const order = await prisma.order.findUnique({

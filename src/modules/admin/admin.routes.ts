@@ -39,7 +39,12 @@ import {
 import { adminAdjustTrustScore } from "../paystack/trust-score.controller";
 import { getEscrowHealth, updateEscrowProvider } from "../paystack/escrow-health.controller";
 import {
+  adminApproveVerificationReview,
+  adminDeleteVerificationFiles,
+  adminGetVerificationReview,
+  adminListVerificationQueue,
   adminListPendingDocuments,
+  adminRejectVerificationReview,
   adminReviewDocument,
 } from "../verification/verification.controller";
 import { asyncHandler } from "../../shared/utils/async-handler";
@@ -171,6 +176,11 @@ adminRouter.patch("/payout-requests/:id/approve", asyncHandler(requireAdminPermi
 adminRouter.patch("/payout-requests/:id/reject", asyncHandler(requireAdminPermission("payouts.mutate")), asyncHandler(adminRejectPayoutRequest));
 
 // Verification document review
+adminRouter.get("/verifications", asyncHandler(requireAdminPermission("verification.read")), asyncHandler(adminListVerificationQueue));
+adminRouter.get("/verifications/:id", asyncHandler(requireAdminPermission("verification.read")), asyncHandler(adminGetVerificationReview));
+adminRouter.patch("/verifications/:id/approve", asyncHandler(requireAdminPermission("verification.mutate")), asyncHandler(adminApproveVerificationReview));
+adminRouter.patch("/verifications/:id/reject", asyncHandler(requireAdminPermission("verification.mutate")), asyncHandler(adminRejectVerificationReview));
+adminRouter.delete("/verifications/:id/files", asyncHandler(requireAdminPermission("verification.mutate")), asyncHandler(adminDeleteVerificationFiles));
 adminRouter.get("/verification-documents", asyncHandler(requireAdminPermission("verification.read")), asyncHandler(adminListPendingDocuments));
 adminRouter.patch("/verification-documents/:id/review", asyncHandler(requireAdminPermission("verification.mutate")), asyncHandler(adminReviewDocument));
 adminRouter.get("/uploads", asyncHandler(requireAdminPermission("verification.read")), asyncHandler(adminListUploads));

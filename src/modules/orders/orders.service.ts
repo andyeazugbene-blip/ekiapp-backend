@@ -233,18 +233,18 @@ export const ordersService = {
       logger.error("Failed to send order status notification", { orderId, newStatus, error: String(err) });
     }
 
-    // When vendor marks order DELIVERED, release pending earnings to available balance
-    if (newStatus === "DELIVERED") {
+    // Release pending → available when vendor dispatches (ships) the order
+    if (newStatus === "DISPATCHED") {
       try {
         const result = await releaseVendorEarnings(orderId);
-        logger.info("Vendor earnings released on delivery", { orderId, vendorId: vendor.id, amount: result.amount });
+        logger.info("Vendor earnings released on dispatch", { orderId, vendorId: vendor.id, amount: result.amount });
         try {
           await sendEarningsReleasedNotification(vendor.id, orderId, result.amount, order.currency);
         } catch (e) {
           logger.error("Failed to send earnings released notification", { orderId, error: String(e) });
         }
       } catch (err) {
-        logger.error("Failed to release vendor earnings on delivery", { orderId, error: String(err) });
+        logger.error("Failed to release vendor earnings on dispatch", { orderId, error: String(err) });
       }
     }
 
@@ -278,20 +278,7 @@ export const ordersService = {
       include: orderInclude,
     });
 
-    // Release pending earnings to available balance (AWAITED � not fire-and-forget)
-    try {
-      const result = await releaseVendorEarnings(orderId);
-      if (result.released && order.vendorId) {
-        logger.info("Vendor earnings released on buyer completion", { orderId, vendorId: order.vendorId, amount: result.amount });
-        try {
-          await sendEarningsReleasedNotification(order.vendorId, orderId, result.amount, order.currency);
-        } catch (e) {
-          logger.error("Failed to send earnings released notification", { orderId, error: String(e) });
-        }
-      }
-    } catch (err) {
-      logger.error("Failed to release vendor earnings on buyer completion", { orderId, error: String(err) });
-    }
+    // Earnings already released on dispatch — no double-release here
 
     return updated;
   },

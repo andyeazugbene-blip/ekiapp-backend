@@ -1,6 +1,7 @@
 import type { Request, Response } from "express";
 
 import { AppError } from "../../shared/errors/app-error";
+import { recordAudit } from "../../shared/utils/audit";
 import { verificationService } from "./verification.service";
 import {
   validateReviewVerificationInput,
@@ -58,6 +59,82 @@ export async function adminListPendingDocuments(
   const status = typeof request.query.status === "string" ? request.query.status : undefined;
   const documents = await verificationService.adminListPendingDocuments(status);
   response.status(200).json({ documents });
+}
+
+export async function adminListVerificationQueue(
+  request: Request,
+  response: Response,
+): Promise<void> {
+  const result = await verificationService.adminListReviewQueue(request.query as Record<string, unknown>);
+  response.status(200).json(result);
+}
+
+export async function adminGetVerificationReview(
+  request: Request,
+  response: Response,
+): Promise<void> {
+  const result = await verificationService.adminGetReviewDetails(requireIdParam(request));
+  response.status(200).json(result);
+}
+
+export async function adminApproveVerificationReview(
+  request: Request,
+  response: Response,
+): Promise<void> {
+  const vendorId = requireIdParam(request);
+  const result = await verificationService.adminApproveVendorVerification(
+    requireUserId(request),
+    vendorId,
+  );
+  await recordAudit({
+    actorId: requireUserId(request),
+    action: "verification.approve",
+    entityType: "Vendor",
+    entityId: vendorId,
+  });
+  response.status(200).json(result);
+}
+
+export async function adminRejectVerificationReview(
+  request: Request,
+  response: Response,
+): Promise<void> {
+  const vendorId = requireIdParam(request);
+  const reason =
+    typeof request.body?.rejectionReason === "string"
+      ? request.body.rejectionReason
+      : typeof request.body?.reason === "string"
+        ? request.body.reason
+        : "";
+  const result = await verificationService.adminRejectVendorVerification(
+    requireUserId(request),
+    vendorId,
+    reason,
+  );
+  await recordAudit({
+    actorId: requireUserId(request),
+    action: "verification.reject",
+    entityType: "Vendor",
+    entityId: vendorId,
+    metadata: { rejectionReason: reason },
+  });
+  response.status(200).json(result);
+}
+
+export async function adminDeleteVerificationFiles(
+  request: Request,
+  response: Response,
+): Promise<void> {
+  const vendorId = requireIdParam(request);
+  const result = await verificationService.adminDeleteVendorVerificationFiles(vendorId);
+  await recordAudit({
+    actorId: requireUserId(request),
+    action: "verification.files.delete",
+    entityType: "Vendor",
+    entityId: vendorId,
+    metadata: { deletedDocuments: result.deletedDocuments, failedDocuments: result.failedDocuments },
+  });
+  response.status(200).json(result);
 }
 
 export async function adminReviewDocument(

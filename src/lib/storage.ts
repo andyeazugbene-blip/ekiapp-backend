@@ -1,4 +1,4 @@
-import { GetObjectCommand, HeadObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
+import { DeleteObjectCommand, GetObjectCommand, HeadObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3";
 import { getSignedUrl } from "@aws-sdk/s3-request-presigner";
 
 import { logger } from "./logger";
@@ -172,6 +172,12 @@ export async function generatePresignedRead(key: string, expiresIn = 300): Promi
     return `${mockBaseUrl}/api/uploads/mock-download?key=${encodeURIComponent(key)}`;
   }
   return getSignedUrl(s3, new GetObjectCommand({ Bucket: BUCKET, Key: key }), { expiresIn });
+}
+
+export async function deleteStoredObject(key: string): Promise<void> {
+  if (!key) return;
+  if (!s3 || !BUCKET) return;
+  await s3.send(new DeleteObjectCommand({ Bucket: BUCKET, Key: key }));
 }
 
 export function isStorageConfigured(): boolean {

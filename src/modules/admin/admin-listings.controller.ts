@@ -121,7 +121,7 @@ export async function listWalletTransactions(
 
 export async function approveVendor(request: Request, response: Response): Promise<void> {
   const vendorId = requireIdParam(request);
-  const vendor = await adminListingsService.approveVendor(vendorId);
+  const vendor = await adminListingsService.approveVendor(vendorId, requireUserId(request));
   await recordAudit({
     actorId: requireUserId(request),
     action: "vendor.approve",
@@ -133,7 +133,13 @@ export async function approveVendor(request: Request, response: Response): Promi
 
 export async function rejectVendor(request: Request, response: Response): Promise<void> {
   const vendorId = requireIdParam(request);
-  const vendor = await adminListingsService.rejectVendor(vendorId);
+  const reason =
+    typeof request.body?.rejectionReason === "string"
+      ? request.body.rejectionReason.trim()
+      : typeof request.body?.reason === "string"
+        ? request.body.reason.trim()
+        : undefined;
+  const vendor = await adminListingsService.rejectVendor(vendorId, requireUserId(request), reason);
   await recordAudit({
     actorId: requireUserId(request),
     action: "vendor.reject",

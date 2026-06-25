@@ -150,6 +150,39 @@ export const adminListingsService = {
     };
   },
 
+  async updateVendor(vendorId: string, input: Record<string, unknown>) {
+    const vendor = await prisma.vendor.findUnique({ where: { id: vendorId } });
+    if (!vendor) throw new AppError("Vendor not found", 404);
+    const fields = ["storeName", "description", "contactEmail", "contactPhone", "country", "city", "businessType", "sellerRegion", "currency"] as const;
+    const data: Record<string, string | null> = {};
+    for (const field of fields) {
+      if (input[field] !== undefined) {
+        if (input[field] !== null && typeof input[field] !== "string") throw new AppError(`Invalid ${field}`, 400);
+        data[field] = typeof input[field] === "string" ? input[field].trim() : null;
+      }
+    }
+    if (Object.keys(data).length === 0) throw new AppError("No vendor fields to update", 400);
+    return prisma.vendor.update({ where: { id: vendorId }, data });
+  },
+
+  async deleteVendor(vendorId: string) {
+    const vendor = await prisma.vendor.findUnique({
+      where: { id: vendorId },
+      include: { _count: { select: { orderItems: true, payoutRequests: true } } },
+    });
+    if (!vendor) throw new AppError("Vendor not found", 404);
+    if (vendor._count.orderItems > 0 || vendor._count.payoutRequests > 0) {
+      throw new AppError("Vendor has order or payout history and cannot be deleted; suspend instead", 409);
+    }
+    await prisma.$transaction([
+      prisma.product.deleteMany({ where: { vendorId } }),
+      prisma.verificationDocument.deleteMany({ where: { vendorId } }),
+      prisma.wallet.deleteMany({ where: { vendorId } }),
+      prisma.vendor.delete({ where: { id: vendorId } }),
+    ]);
+    return { id: vendorId, deleted: true };
+  },
+
   async getOrder(orderId: string) {
     const order = await prisma.order.findUnique({
       where: { id: orderId },
@@ -339,22 +372,50 @@ export const adminListingsService = {
     );
   },
 
-  async approveVendor(vendorId: string) {
+  async approveVendor(vendorId: string, adminId?: string) {
     const vendor = await prisma.vendor.findUnique({ where: { id: vendorId } });
     if (!vendor) throw new AppError("Vendor not found", 404);
-    return prisma.vendor.update({
-      where: { id: vendorId },
-      data: { verificationStatus: VendorVerificationStatus.VERIFIED },
-    });
+    const now = new Date();
+    const [updated] = await prisma.$transaction([
+      prisma.vendor.update({
+        where: { id: vendorId },
+        data: { verificationStatus: VendorVerificationStatus.VERIFIED },
+      }),
+      prisma.verificationDocument.updateMany({
+        where: { vendorId, deletedAt: null },
+        data: {
+          status: "APPROVED",
+          reviewedAt: now,
+          reviewedById: adminId,
+          rejectionReason: null,
+          deleteAfterAt: new Date(now.getTime() + 3 * 24 * 60 * 60 * 1000),
+        },
+      }),
+    ]);
+    return updated;
   },
 
-  async rejectVendor(vendorId: string) {
+  async rejectVendor(vendorId: string, adminId?: string, reason?: string) {
     const vendor = await prisma.vendor.findUnique({ where: { id: vendorId } });
     if (!vendor) throw new AppError("Vendor not found", 404);
-    return prisma.vendor.update({
-      where: { id: vendorId },
-      data: { verificationStatus: VendorVerificationStatus.REJECTED },
-    });
+    const now = new Date();
+    const [updated] = await prisma.$transaction([
+      prisma.vendor.update({
+        where: { id: vendorId },
+        data: { verificationStatus: VendorVerificationStatus.REJECTED },
+      }),
+      prisma.verificationDocument.updateMany({
+        where: { vendorId, deletedAt: null },
+        data: {
+          status: "REJECTED",
+          reviewedAt: now,
+          reviewedById: adminId,
+          rejectionReason: reason,
+          deleteAfterAt: new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000),
+        },
+      }),
+    ]);
+    return updated;
   },
 
   async approveProduct(productId: string) {
@@ -537,4 +598,3 @@ export const adminListingsService = {
     });
   },
 };
-

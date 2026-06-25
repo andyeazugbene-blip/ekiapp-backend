@@ -232,6 +232,7 @@ model PayoutRequest {
 
 model Product {
   id           String      @id @default(cuid())
+  productCode  String?     @unique
   vendorId     String
   title        String
   description  String?
@@ -251,6 +252,7 @@ model Product {
   updatedAt    DateTime    @updatedAt
 
   @@unique([vendorId, title])
+  @@index([productCode])
   @@index([vendorId, isActive])
   @@index([isActive, category])
   @@index([createdAt])
@@ -660,11 +662,15 @@ model VerificationDocument {
   reviewedById    String?
   reviewedAt      DateTime?
   rejectionReason String?
+  deleteAfterAt   DateTime?
+  deletedAt       DateTime?
   createdAt       DateTime              @default(now())
   updatedAt       DateTime              @updatedAt
 
   @@index([vendorId, type])
   @@index([status])
+  @@index([deleteAfterAt, deletedAt])
+  @@index([status, createdAt])
 }
 
 // ─── Phase 2: Buyer Addresses ───────────────────────────────────────────────

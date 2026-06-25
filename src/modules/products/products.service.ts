@@ -38,6 +38,16 @@ async function getVendorIdForUser(userId: string): Promise<string> {
   return vendor.id;
 }
 
+async function nextProductCode(): Promise<string> {
+  const last = await prisma.product.findFirst({
+    where: { productCode: { not: null } },
+    orderBy: { productCode: "desc" },
+    select: { productCode: true },
+  });
+  const lastNumber = Number((last?.productCode ?? "EKI-010100").replace("EKI-", ""));
+  return `EKI-${String((Number.isFinite(lastNumber) ? lastNumber : 10100) + 1).padStart(6, "0")}`;
+}
+
 export const productsService = {
   async createProduct(userId: string, input: CreateProductInput): Promise<Product> {
     const vendor = await getVerifiedVendorIdForUser(userId);
@@ -46,21 +56,29 @@ export const productsService = {
     await subscriptionsService.enforceProductLimit(vendor.id);
 
     // Product currency ALWAYS inherits from vendor — input.currency is ignored
-    return prisma.product.create({
-      data: {
-        vendorId: vendor.id,
-        title: input.title,
-        description: input.description,
-        priceInCents: input.priceAmount,
-        costAmount: input.costAmount,
-        costCurrency: input.costAmount === undefined ? undefined : input.costCurrency ?? vendor.currency,
-        currency: vendor.currency,
-        images: input.images ?? [],
-        category: input.category,
-        stock: input.stock ?? 0,
-        weightGrams: input.weightGrams,
-      },
-    });
+    for (let attempt = 0; attempt < 5; attempt++) {
+      try {
+        return await prisma.product.create({
+          data: {
+            productCode: await nextProductCode(),
+            vendorId: vendor.id,
+            title: input.title,
+            description: input.description,
+            priceInCents: input.priceAmount,
+            costAmount: input.costAmount,
+            costCurrency: input.costAmount === undefined ? undefined : input.costCurrency ?? vendor.currency,
+            currency: vendor.currency,
+            images: input.images ?? [],
+            category: input.category,
+            stock: input.stock ?? 0,
+            weightGrams: input.weightGrams,
+          },
+        });
+      } catch (error: any) {
+        if (error?.code !== "P2002" || !String(error?.meta?.target ?? "").includes("productCode")) throw error;
+      }
+    }
+    throw new AppError("Could not allocate product code", 409);
   },
 
   async updateProduct(

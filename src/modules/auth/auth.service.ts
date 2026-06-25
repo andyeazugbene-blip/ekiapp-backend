@@ -51,6 +51,7 @@ type AuthUserRecord = {
     city: string | null;
     avatar: string | null;
     coverImage: string | null;
+    verificationStatus: string;
   } | null;
 };
 
