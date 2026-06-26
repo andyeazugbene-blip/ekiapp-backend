@@ -962,8 +962,15 @@ class StripeWebhookService {
   private constructEvent(input: StripeWebhookInput): Stripe.Event {
     try {
       return stripe.webhooks.constructEvent(input.rawBody, input.signature, env.stripeWebhookSecret);
-    } catch (error) {
-      logger.warn("Stripe webhook signature verification failed", serializeError(error));
+    } catch (primaryError) {
+      if (env.stripeIdentityWebhookSecret) {
+        try {
+          return stripe.webhooks.constructEvent(input.rawBody, input.signature, env.stripeIdentityWebhookSecret);
+        } catch {
+          // both secrets failed — fall through
+        }
+      }
+      logger.warn("Stripe webhook signature verification failed", serializeError(primaryError));
       throw new AppError("Invalid signature", 400);
     }
   }
