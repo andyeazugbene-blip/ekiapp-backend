@@ -21,6 +21,11 @@ import {
   getPublicInvitePage,
   getPublicPrivacyPage,
   getPublicTermsPage,
+  getPublicRefundPolicyPage,
+  getPublicCookiePolicyPage,
+  getPublicSubscriptionPolicyPage,
+  getPublicAcceptableUsePage,
+  getPublicVendorAgreementPage,
   getPublicVendorSubscriptionPage,
   getPublicVendorPortalPage,
   getPublicBuyerCartPage,
@@ -144,6 +149,21 @@ app.get("/terms", (req, res, next) => {
 });
 app.get("/account-deletion", (req, res, next) => {
   Promise.resolve(getPublicAccountDeletionPage(req, res)).catch(next);
+});
+app.get("/refund-policy", (req, res, next) => {
+  Promise.resolve(getPublicRefundPolicyPage(req, res)).catch(next);
+});
+app.get("/cookie-policy", (req, res, next) => {
+  Promise.resolve(getPublicCookiePolicyPage(req, res)).catch(next);
+});
+app.get("/subscription-policy", (req, res, next) => {
+  Promise.resolve(getPublicSubscriptionPolicyPage(req, res)).catch(next);
+});
+app.get("/acceptable-use", (req, res, next) => {
+  Promise.resolve(getPublicAcceptableUsePage(req, res)).catch(next);
+});
+app.get("/vendor-agreement", (req, res, next) => {
+  Promise.resolve(getPublicVendorAgreementPage(req, res)).catch(next);
 });
 app.get("/invite/:code", (req, res, next) => {
   Promise.resolve(getPublicInvitePage(req, res)).catch(next);

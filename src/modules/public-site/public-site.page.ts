@@ -930,111 +930,220 @@ const helpPage: PageDefinition = {
 };
 
 const privacyPage: PageDefinition = {
-  title: "Privacy policy | Eki",
-  description: "How Eki handles account, order, payment, support, and operational data.",
+  title: "Privacy Policy | Eki",
+  description: "How Eki collects, protects, and uses your personal information.",
   eyebrow: "Privacy",
-  heading: "How Eki handles your data.",
+  heading: "Privacy Policy",
   intro:
-    "This page summarizes the operational privacy posture of Eki based on the current product and backend implementation. It explains what data we process, why we process it, and the user controls currently available in the product.",
+    "Ehimare Co respects your privacy and is committed to protecting your personal information. This Privacy Policy explains how we collect, use, store, and protect your information when you use the Eki platform.",
   actions: [
-    { href: "mailto:adminandy@eki.app", label: "Privacy questions" },
-    { href: "/help", label: "Support", variant: "secondary" },
+    { href: "mailto:info@culinarytales.app", label: "Privacy questions" },
+    { href: "/terms", label: "Terms & Conditions", variant: "secondary" },
   ],
   sections: [
     {
-      title: "Data we process",
+      title: "1. Who We Are",
+      body: ["Eki is a technology platform that helps African foodstuff and ingredient vendors manage products, customers, orders, payments, and business operations. This Privacy Policy applies to all users of the Eki platform, including buyers and vendors."],
+      bullets: ["Ehimare Co, 5 Marriott Street, Coundon, Coventry, CV6 1BB, United Kingdom"],
+    },
+    {
+      title: "2. Information We Collect",
       bullets: [
-        "Account details such as name, email address, phone number, role, and authentication state",
-        "Order and delivery details such as products ordered, totals, delivery address, and order status",
-        "Payment-related metadata needed to verify and reconcile transactions through Stripe or Paystack",
-        "Vendor storefront content such as product listings, descriptions, pricing, and uploaded images",
-        "Operational records such as notifications, audit logs, and support messages",
+        "Account Information: full name, email address, phone number, country of residence, account credentials",
+        "Vendor Information: business name, business address, product information, bank or payout information, identity verification information, verification status",
+        "Order Information: products purchased, order history, delivery information, transaction records",
+        "Communications: messages sent through the Eki platform, customer support enquiries, feedback and reviews",
+        "Device Information: device type, operating system, IP address, browser information, app usage data",
       ],
     },
     {
-      title: "Why we process it",
+      title: "3. Identity Verification",
+      body: ["Where verification is required, Eki may collect and process government-issued identification, selfie or facial verification data, and verification results from third-party verification providers. Verification data may be processed by trusted third-party identity verification providers."],
+    },
+    {
+      title: "4. How We Use Your Information",
       bullets: [
-        "To authenticate users and secure access to buyer, vendor, and admin functions",
-        "To process orders, order tracking, escrow states, disputes, refunds, and payouts",
-        "To detect abuse, enforce security controls, and investigate platform incidents",
-        "To deliver transactional emails, OTP codes, notifications, and operational support",
+        "Create and manage accounts",
+        "Verify user identities",
+        "Process orders and transactions",
+        "Provide customer support",
+        "Improve platform functionality",
+        "Detect fraud and suspicious activity",
+        "Send service notifications",
+        "Manage subscriptions",
+        "Enforce our Terms and Conditions",
+        "Comply with legal obligations",
       ],
     },
     {
-      title: "Infrastructure and subprocessors",
+      title: "5. Vendor Marketing Features",
+      body: ["Eki provides vendors with tools that may allow them to contact customers who have previously interacted with their business, including promotional offers, product announcements, and customer re-engagement campaigns. Vendors are responsible for using these features lawfully and responsibly."],
+    },
+    {
+      title: "6. Legal Basis For Processing",
       bullets: [
-        "Vercel for hosting and server execution",
-        "Neon for PostgreSQL database storage",
-        "Stripe for international payments",
-        "Paystack for supported domestic payments and payout rails",
-        "Cloudflare R2 for file storage",
-        "Sentry for error monitoring",
-        "Resend for transactional email delivery",
+        "Performance of a contract",
+        "Compliance with legal obligations",
+        "Legitimate business interests",
+        "User consent where required",
       ],
     },
     {
-      title: "Your controls",
+      title: "7. Sharing Information",
+      body: ["We do not sell personal information."],
       bullets: [
-        "Authenticated users can export account data through the data-export endpoint",
-        "Authenticated users can request account deletion, with financial records retained where legally required",
-        "Order and payment records may be retained for compliance, fraud prevention, and accounting obligations",
-        "For privacy requests or correction requests, contact adminandy@eki.app",
+        "Service Providers: cloud hosting, analytics, customer support providers",
+        "Payment Providers: to facilitate payments and subscriptions",
+        "Identity Verification Providers: to verify user identities",
+        "Legal Authorities: where required by law or to protect our rights, users, or platform",
       ],
+    },
+    {
+      title: "8. Data Retention",
+      body: ["We retain information only as long as reasonably necessary to operate the platform, fulfil contractual obligations, resolve disputes, and meet legal and regulatory requirements. When information is no longer required, it will be securely deleted or anonymised."],
+    },
+    {
+      title: "9. Security",
+      body: ["We use reasonable technical and organisational measures to protect information against unauthorised access, loss, misuse, alteration, and disclosure. However, no online service can guarantee absolute security."],
+    },
+    {
+      title: "10. International Transfers",
+      body: ["Your information may be processed in countries outside the United Kingdom. Where international transfers occur, Eki will take reasonable steps to ensure appropriate safeguards are in place."],
+    },
+    {
+      title: "11. Your Rights",
+      bullets: [
+        "Access your information",
+        "Correct inaccurate information",
+        "Request deletion of information",
+        "Restrict processing",
+        "Object to processing",
+        "Withdraw consent where applicable",
+        "Request data portability",
+      ],
+    },
+    {
+      title: "12. Cookies And Analytics",
+      body: ["Eki may use cookies and similar technologies to improve user experience, understand platform usage, measure performance, and enhance security. Users may control cookies through browser settings where applicable."],
+    },
+    {
+      title: "13. Children's Privacy",
+      body: ["Eki is intended for users aged 18 years and older. We do not knowingly collect information from individuals under the age of 18."],
+    },
+    {
+      title: "14. Changes To This Policy",
+      body: ["We may update this Privacy Policy from time to time. Updated versions will be published within the platform and will become effective when posted."],
+    },
+    {
+      title: "15. UK GDPR Rights",
+      body: ["If you are located in the United Kingdom, you may also have the right to lodge a complaint with the Information Commissioner's Office (ICO): https://www.ico.org.uk. We encourage users to contact us first so we can attempt to resolve concerns directly."],
+    },
+    {
+      title: "16. Contact Us",
+      body: ["Ehimare Co, United Kingdom. Email: info@culinarytales.app"],
     },
   ],
 };
 
 const termsPage: PageDefinition = {
-  title: "Terms of service | Eki",
-  description: "Platform rules for buyers, vendors, payments, disputes, and support on Eki.",
+  title: "Terms & Conditions | Eki",
+  description: "Terms and Conditions governing the use of the Eki platform.",
   eyebrow: "Terms",
-  heading: "Platform rules for buyers and vendors.",
+  heading: "Terms & Conditions",
   intro:
-    "These terms summarize how Eki operates as a marketplace platform for vendor storefronts, secure checkout, order tracking, escrow-sensitive flows, and support. By using the platform, buyers and vendors agree to follow these platform rules.",
+    "These Terms and Conditions govern the use of the Eki platform, operated by Ehimare Co of 5 Marriott Street, Coundon, Coventry, CV6 1BB, England. By creating an account, accessing, or using Eki, you agree to be bound by these Terms.",
   actions: [
-    { href: "/privacy", label: "Read privacy policy", variant: "secondary" },
-    { href: "mailto:adminandy@eki.app", label: "Contact support" },
+    { href: "/privacy", label: "Privacy Policy", variant: "secondary" },
+    { href: "mailto:info@culinarytales.app", label: "Contact support" },
   ],
   sections: [
     {
-      title: "Marketplace role",
-      bullets: [
-        "Eki provides the software platform, storefront links, checkout flows, messaging, notifications, and support tooling used by buyers and vendors.",
-        "Product availability, pricing, fulfillment timing, and listing accuracy remain the vendor's responsibility.",
-      ],
+      title: "1. About Eki",
+      body: ["Eki is a technology platform that helps African foodstuff and ingredient vendors manage products, orders, customers, marketing campaigns, and business operations. Eki is not the seller of products listed on the platform. Transactions are conducted between buyers and vendors."],
     },
     {
-      title: "Buyer rules",
+      title: "2. Eligibility",
       bullets: [
-        "Buyers must provide accurate delivery and contact details at checkout.",
-        "A guest order lookup requires access to the checkout email address used when the order was placed.",
-        "If an OTP-confirmed escrow delivery is completed, the transaction may become final under the platform's escrow rules.",
+        "Be at least 18 years old",
+        "Provide accurate registration information",
+        "Comply with all applicable laws and regulations",
+        "Complete identity verification where required",
       ],
+      body: ["We reserve the right to suspend or terminate accounts that fail verification requirements."],
     },
     {
-      title: "Vendor rules",
-      bullets: [
-        "Vendors must publish accurate product information, pricing, and stock availability.",
-        "Vendors must ship and manage orders through the platform in line with delivery, escrow, and dispute states.",
-        "Eki may suspend storefronts or accounts for fraud, prohibited listings, abuse, or repeated operational failures.",
-      ],
+      title: "3. Vendor Accounts",
+      body: ["Vendors may list products, receive orders, manage customers, send promotional offers to previous customers, and access analytics and business tools. Vendors are solely responsible for product quality, descriptions, pricing, packaging, delivery arrangements, and compliance with food safety and import/export laws."],
     },
     {
-      title: "Payments, refunds, and disputes",
-      bullets: [
-        "Payments are processed by connected payment providers such as Stripe and Paystack.",
-        "Refund requests are reviewed within 24 hours, and approved refunds are processed within 3 business days.",
-        "Disputes may freeze order funds until review is complete.",
-        "Partial refunds may require additional admin approval.",
-      ],
+      title: "4. Buyer Accounts",
+      body: ["Buyers may browse products, place orders, make payments, and communicate with vendors through Eki. Buyers must provide accurate information when placing orders."],
     },
     {
-      title: "Support and policy changes",
+      title: "5. Subscription",
+      body: ["Eki may provide a limited free usage period. After the free usage period ends, continued access to vendor features may require an active subscription. Subscription fees are non-refundable except where required by law."],
+    },
+    {
+      title: "6. Payments",
+      body: ["Eki uses third-party payment providers. Eki does not store payment card details. Payment processing is subject to the terms of the applicable payment provider."],
+    },
+    {
+      title: "7. Africa-Based Vendor Payment Protection",
       bullets: [
-        "Support is available at adminandy@eki.app.",
-        "Operational policies may change as the platform matures, including payout, support, and fraud-prevention controls.",
-        "If you do not agree with a platform change, stop using the service and contact support for account assistance.",
+        "Funds may be released after delivery confirmation",
+        "Funds may be released following successful OTP verification",
+        "Funds may be released automatically after the applicable review period",
       ],
+      body: ["Eki is not a bank, financial institution, or regulated escrow provider. Any payment protection process is a platform feature intended to facilitate trust between buyers and vendors."],
+    },
+    {
+      title: "8. OTP Delivery Verification",
+      bullets: [
+        "An OTP may be generated for an order",
+        "The OTP may be used to verify successful delivery",
+        "Entering the correct OTP may constitute confirmation that goods have been received",
+      ],
+      body: ["Fraudulent use of OTP verification may result in account suspension."],
+    },
+    {
+      title: "9. Vendor Marketing Features",
+      body: ["Vendors may use Eki to send offers and promotional campaigns to customers who have previously interacted with their business. Vendors must use these features responsibly, comply with applicable privacy and marketing laws, and avoid misleading or deceptive communications. Eki may suspend access to marketing features where abuse is detected."],
+    },
+    {
+      title: "10. Messaging",
+      body: ["Eki currently supports text-based messaging. Users must not harass others, send abusive content, attempt fraud, distribute illegal material, or circumvent platform restrictions. Eki may monitor platform activity to protect users and enforce these Terms."],
+    },
+    {
+      title: "11. Prohibited Products",
+      body: ["The following may not be sold through Eki: illegal products, counterfeit goods, dangerous goods, restricted substances, and products prohibited by applicable laws. Eki may remove listings without notice."],
+    },
+    {
+      title: "12. Account Suspension",
+      body: ["We may suspend or terminate accounts where false information is provided, fraud is suspected, verification requirements are not met, or these Terms are violated."],
+    },
+    {
+      title: "13. Intellectual Property",
+      body: ["The Eki platform, branding, software, design, and content are owned by Ehimare Co and protected by intellectual property laws. Users may not copy, modify, distribute, or reverse engineer any part of the platform without permission."],
+    },
+    {
+      title: "14. Limitation of Liability",
+      body: ["Eki provides a technology platform only. To the maximum extent permitted by law, Eki shall not be liable for vendor conduct, buyer conduct, product quality, delivery delays, loss of profits, or indirect or consequential losses. Users transact at their own risk."],
+    },
+    {
+      title: "15. Indemnity",
+      body: ["Users agree to indemnify and hold harmless Ehimare Co from claims arising from their use of the platform, their products, their business activities, or breach of these Terms."],
+    },
+    {
+      title: "16. Privacy",
+      body: ["Use of Eki is subject to the Eki Privacy Policy."],
+    },
+    {
+      title: "17. Changes to Terms",
+      body: ["We may update these Terms from time to time. Continued use of Eki after updates constitutes acceptance of the revised Terms."],
+    },
+    {
+      title: "18. Governing Law",
+      body: ["These Terms shall be governed by and interpreted in accordance with the laws of England and Wales. Any disputes shall be subject to the exclusive jurisdiction of the courts of England and Wales.", "Contact: Ehimare Co, United Kingdom. Email: info@culinarytales.app"],
     },
   ],
 };
@@ -1080,6 +1189,148 @@ const accountDeletionPage: PageDefinition = {
         "If you cannot access your account, email adminandy@eki.app from the registered email address and include the account role, buyer or vendor.",
       ],
     },
+  ],
+};
+
+const refundPolicyPage: PageDefinition = {
+  title: "Refund & Cancellation Policy | Eki",
+  description: "How refunds, cancellations, and disputes are handled on the Eki platform.",
+  eyebrow: "Refunds",
+  heading: "Refund & Cancellation Policy",
+  intro: "This Refund & Cancellation Policy explains how refunds, cancellations, subscriptions, disputes, and payment-related matters are handled on the Eki platform. By using Eki, you agree to this Policy.",
+  actions: [
+    { href: "/terms", label: "Terms & Conditions", variant: "secondary" },
+    { href: "mailto:info@culinarytales.app", label: "Contact support" },
+  ],
+  sections: [
+    { title: "1. About Eki", body: ["Eki is a technology platform operated by Ehimare Co, 5 Marriott Street, Coundon, Coventry, CV6 1BB, United Kingdom. Eki helps African foodstuff and ingredient vendors manage products, customers, orders, and business operations. Eki is not the seller of products listed on the platform. Transactions occur between buyers and vendors."] },
+    { title: "2. Subscription Cancellation", body: ["Vendors may cancel their subscription at any time through their Eki account."], bullets: ["The subscription remains active until the end of the current billing period", "No further subscription charges will be made", "Access to premium features may end when the billing period expires", "Cancelling a subscription does not automatically generate a refund"] },
+    { title: "3. Subscription Refunds", body: ["Subscription fees are generally non-refundable."], bullets: ["Refunds may be issued where required by law, in cases of duplicate billing, in cases of proven billing errors, or at Eki's sole discretion", "No refunds for unused subscription periods, partial months, failure to use the platform, business performance expectations, or lack of sales"] },
+    { title: "4. Vendor Product Refunds", body: ["Vendors are responsible for determining their own product refund policies, subject to applicable consumer protection laws. Buyers should review vendor policies before purchasing. Eki does not guarantee that refunds will be granted by vendors."] },
+    { title: "5. Buyer Order Cancellations", body: ["Buyers may request cancellation before an order has been marked as dispatched by the vendor. If the vendor approves the cancellation, the order will be cancelled and eligible payments may be refunded. Once an order has been marked as dispatched, cancellation may not be possible."] },
+    { title: "6. Africa-Based Vendor Transactions", bullets: ["Buyer funds may be temporarily held", "Funds may remain pending until delivery confirmation", "Funds may remain pending until successful OTP verification", "Funds may be released automatically according to platform rules"] },
+    { title: "7. OTP Delivery Confirmation", body: ["Once a valid OTP has been entered, the order may be treated as successfully delivered, funds may be released to the vendor, and refund requests may be denied unless fraud or exceptional circumstances are proven."] },
+    { title: "8. Non-Delivery Claims", body: ["Where a buyer claims an order was not received, Eki may review delivery status information, OTP verification records, order activity logs, communication history, and supporting evidence provided by both parties."] },
+    { title: "9. Fraudulent Claims", body: ["Users must not submit false refund requests, false non-delivery claims, manipulate OTP verification, or misrepresent transaction facts. Fraudulent activity may result in account suspension, termination, restriction of platform access, or referral to relevant authorities."] },
+    { title: "10. Failed Deliveries", body: ["Where delivery fails due to incorrect address information, buyer unavailability, or failure to provide necessary delivery information, the vendor may be entitled to payment for reasonable costs incurred."] },
+    { title: "11. Platform Service Fees", body: ["Platform fees, transaction fees, and payment processing fees may not be refundable once services have been provided. Where refunds are issued, applicable processing costs may be deducted where permitted by law."] },
+    { title: "12. Chargebacks", body: ["Buyers must contact Eki support before initiating a payment chargeback. Repeated abusive chargebacks may result in account suspension."] },
+    { title: "13. Dispute Resolution", body: ["Where disputes arise between buyers and vendors, Eki may request evidence from both parties, review platform records, messaging history, and OTP records. Eki may facilitate communication but does not guarantee a particular outcome."] },
+    { title: "14. Time Limits", body: ["Refund and dispute requests should be submitted as soon as possible. Eki may decline requests submitted after unreasonable delays where evidence can no longer be reliably verified."] },
+    { title: "15. Limitation Of Liability", body: ["To the maximum extent permitted by law, Eki shall not be liable for product quality issues, shipping delays, delivery failures caused by third parties, vendor conduct, buyer conduct, loss of profits, or indirect or consequential losses."] },
+    { title: "16. Governing Law", body: ["This Policy shall be governed by the laws of England and Wales. Any disputes shall be subject to the exclusive jurisdiction of the courts of England and Wales.", "Contact: Ehimare Co. Email: info@culinarytales.app"] },
+  ],
+};
+
+const cookiePolicyPage: PageDefinition = {
+  title: "Cookie Policy | Eki",
+  description: "How Eki uses cookies and similar technologies.",
+  eyebrow: "Cookies",
+  heading: "Cookie Policy",
+  intro: "This Cookie Policy explains how Ehimare Co uses cookies and similar technologies when you access or use the Eki website, mobile application, and related services.",
+  actions: [
+    { href: "/privacy", label: "Privacy Policy", variant: "secondary" },
+  ],
+  sections: [
+    { title: "1. About Us", body: ["Ehimare Co, 5 Marriott Street, Coundon, Coventry, CV6 1BB, United Kingdom. Email: info@culinarytales.app"] },
+    { title: "2. What Are Cookies?", body: ["Cookies are small text files stored on your device when you visit a website or use an application. Cookies help websites and applications function properly, remember user preferences, improve security, understand how users interact with services, and deliver a better user experience."] },
+    { title: "3. How Eki Uses Cookies", bullets: ["Keep users signed in", "Remember user preferences", "Improve platform performance", "Measure usage and engagement", "Detect suspicious or fraudulent activity", "Improve security", "Support customer experience"] },
+    { title: "4. Types Of Cookies We Use", bullets: ["Essential Cookies: necessary for authentication, secure sessions, fraud protection, and platform functionality", "Performance And Analytics Cookies: help understand how users interact with Eki, including pages visited, features used, and error reports", "Functionality Cookies: remember language preferences, device preferences, user settings, and personalisation options", "Security Cookies: detect suspicious activity, prevent unauthorised access, and support fraud prevention"] },
+    { title: "5. Third-Party Cookies", body: ["Eki may use trusted third-party services that place cookies on your device, including analytics, authentication, payment processing, security, and customer support providers such as Google Analytics, Firebase Analytics, and Stripe."] },
+    { title: "6. Mobile Application Technologies", body: ["Where Eki is used through a mobile application, similar technologies may be used instead of browser cookies, including device identifiers, SDKs, analytics technologies, and security technologies."] },
+    { title: "7. Managing Cookies", body: ["Most web browsers allow users to view, delete, block, and control cookie preferences. Disabling certain cookies may affect the functionality of Eki."] },
+    { title: "8. Do Not Track", body: ["Because there is currently no universally accepted standard for Do Not Track signals, Eki may not respond to Do Not Track requests."] },
+    { title: "9. Data Protection", body: ["Information collected through cookies may be processed in accordance with the Eki Privacy Policy."] },
+    { title: "10. Governing Law", body: ["This Cookie Policy shall be governed by the laws of England and Wales. Any disputes shall be subject to the exclusive jurisdiction of the courts of England and Wales.", "Contact: Ehimare Co. Email: info@culinarytales.app"] },
+  ],
+};
+
+const subscriptionPolicyPage: PageDefinition = {
+  title: "Subscription, Billing & Refund Policy | Eki",
+  description: "Subscription, billing, fees, payments, and refunds on the Eki platform.",
+  eyebrow: "Subscription",
+  heading: "Subscription, Billing & Refund Policy",
+  intro: "This Policy governs subscriptions, billing, fees, payments, and refunds relating to the Eki platform. By subscribing to Eki or using any paid features, you agree to this Policy.",
+  actions: [
+    { href: "/refund-policy", label: "Refund Policy", variant: "secondary" },
+    { href: "mailto:info@culinarytales.app", label: "Contact support" },
+  ],
+  sections: [
+    { title: "1. About Eki", body: ["Eki is a business operating platform designed for African foodstuff and ingredient vendors, providing tools for product management, customer management, order management, marketing, analytics, business automation, and payment facilitation."] },
+    { title: "2. Free Vendor Access", body: ["New vendors may receive a limited free access period. Vendors may complete up to three (3) successful orders free of charge. After the free usage limit, a subscription may be required. Eki reserves the right to modify or withdraw free access programmes at any time."] },
+    { title: "3. Subscription Plans", body: ["Subscription pricing will be displayed within the Eki platform. Plans may vary by country, vendor type, business category, and promotional offers. All subscription fees are shown before purchase."] },
+    { title: "4. Subscription Billing", body: ["Subscriptions are billed in advance. Billing may occur monthly, quarterly, or annually. The subscription renews automatically unless cancelled before the next billing date."] },
+    { title: "5. Automatic Renewal", body: ["By purchasing a subscription, you authorise Eki and its payment providers to charge your chosen payment method automatically at each renewal date. You may cancel automatic renewal at any time through your account settings."] },
+    { title: "6. Transaction Fees", bullets: ["Payment processing fees", "Platform service fees", "Marketplace fees", "International transaction fees"], body: ["Applicable fees will be displayed before completion of the transaction."] },
+    { title: "7. Payment Providers", body: ["Payments may be processed by Stripe and other approved payment processors. Use of payment services may also be subject to the provider's own terms. Eki does not store full payment card details."] },
+    { title: "8. Failed Payments", bullets: ["Eki may retry the payment", "Access to premium features may be restricted", "The subscription may be suspended until payment is successfully completed"], body: ["Eki reserves the right to terminate subscriptions for repeated failed payments."] },
+    { title: "9. Refund Policy", body: ["Subscription fees are generally non-refundable once charged. Refunds will only be provided where required by applicable law, at Eki's sole discretion, in cases of duplicate billing, or in cases of verified billing errors. No partial refunds for unused subscription periods, partial months, reduced usage, or failure to use subscribed features."] },
+    { title: "10. Vendor Earnings", body: ["Vendor earnings are separate from subscription payments. Subscription fees do not guarantee sales, customers, revenue, or business growth. Eki provides tools and technology only. Business performance remains the responsibility of the vendor."] },
+    { title: "11. Africa-Based Vendor Payment Protection", bullets: ["Buyer payments may be temporarily held", "Funds may be released upon successful delivery confirmation", "Funds may be released following OTP verification", "Funds may be released automatically after applicable review periods"] },
+    { title: "12. Pricing Changes", body: ["Eki reserves the right to change subscription pricing, introduce new plans, modify plan features, and discontinue plans. Reasonable notice will be provided before material pricing changes."] },
+    { title: "13. Cancellation", body: ["Vendors may cancel their subscription at any time. Access continues until end of current billing period. No further charges will be applied. No refund for unused portion unless required by law."] },
+    { title: "14. Suspension And Termination", body: ["Eki may suspend or terminate subscriptions where payments fail repeatedly, fraud is suspected, platform policies are violated, or vendor verification requirements are not met. Suspension or termination does not automatically create entitlement to a refund."] },
+    { title: "15. Governing Law", body: ["This Policy shall be governed by the laws of England and Wales. Any disputes shall be subject to the exclusive jurisdiction of the courts of England and Wales.", "Contact: Ehimare Co, United Kingdom. Email: info@culinarytales.app"] },
+  ],
+};
+
+const acceptableUsePage: PageDefinition = {
+  title: "Acceptable Use Policy | Eki",
+  description: "Rules and standards for using the Eki platform.",
+  eyebrow: "Acceptable Use",
+  heading: "Acceptable Use Policy",
+  intro: "This Acceptable Use Policy explains the rules and standards that apply when using the Eki platform. Failure to comply may result in suspension, restriction, or termination of your account.",
+  actions: [
+    { href: "/terms", label: "Terms & Conditions", variant: "secondary" },
+  ],
+  sections: [
+    { title: "1. Purpose", body: ["Eki is designed to help African foodstuff and ingredient vendors manage products, customers, orders, and business operations. Users must use the platform lawfully, honestly, and respectfully."] },
+    { title: "2. Prohibited Activities", bullets: ["Commit fraud", "Mislead buyers or vendors", "Impersonate another person or business", "Circumvent platform security measures", "Engage in unlawful activities", "Interfere with the operation of the platform"] },
+    { title: "3. Fraud And Deceptive Conduct", bullets: ["Submit false information", "Use stolen identities", "Create fake accounts", "Misrepresent products", "Manipulate transactions", "Attempt to bypass verification requirements"], body: ["Any suspected fraud may result in immediate account suspension."] },
+    { title: "4. Prohibited Products", bullets: ["Illegal products", "Counterfeit goods", "Stolen goods", "Dangerous or hazardous materials", "Controlled substances", "Weapons or weapon components", "Products prohibited by applicable law"], body: ["Eki reserves the right to remove listings without notice."] },
+    { title: "5. Messaging Rules", body: ["Users must not send abusive messages, threats, harassment, hate speech, discriminatory content, fraudulent messages, or misleading information. Users must communicate respectfully at all times."] },
+    { title: "6. Customer Marketing", body: ["Vendors may use Eki marketing tools to contact previous customers. Vendors must not spam customers, send excessive messages, send misleading promotions, use deceptive advertising, or harass customers. Repeated misuse may result in permanent removal of marketing privileges."] },
+    { title: "7. Circumvention Of The Platform", body: ["Users may not attempt to manipulate platform fees, interfere with payment processes, exploit platform vulnerabilities, or use automated systems to abuse platform functionality."] },
+    { title: "8. Account Security", body: ["Users are responsible for maintaining account security, protecting passwords, and preventing unauthorised access. Users must notify Eki immediately if they suspect unauthorised use of their account."] },
+    { title: "9. Intellectual Property", body: ["Users may not copy Eki software, reverse engineer the platform, reproduce Eki branding without permission, or use Eki intellectual property in a misleading manner."] },
+    { title: "10. Data Misuse", body: ["Users must not harvest customer data, scrape platform information, collect user information without permission, or use platform data for unlawful purposes."] },
+    { title: "11. False Reviews And Manipulation", body: ["Users must not post fake reviews, manipulate ratings, create artificial engagement, or encourage fraudulent reviews."] },
+    { title: "12. Enforcement", bullets: ["Content removal", "Listing removal", "Feature restrictions", "Temporary suspension", "Permanent account termination"], body: ["Action may be taken with or without prior notice where necessary to protect users or the platform."] },
+    { title: "13. Contact", body: ["Users may report suspected violations through Eki support channels. Eki reserves the right to investigate any report and take appropriate action.", "Contact: Ehimare Co, United Kingdom. Email: info@culinarytales.app"] },
+  ],
+};
+
+const vendorAgreementPage: PageDefinition = {
+  title: "Vendor Agreement | Eki",
+  description: "Agreement between Ehimare Co and vendors using the Eki platform.",
+  eyebrow: "Vendor Agreement",
+  heading: "Vendor Agreement",
+  intro: "This Vendor Agreement is entered into between Ehimare Co and the vendor using the Eki platform. By creating a Vendor Account or listing products on Eki, you agree to be bound by this Agreement.",
+  actions: [
+    { href: "/terms", label: "Terms & Conditions", variant: "secondary" },
+    { href: "/subscription-policy", label: "Subscription Policy", variant: "secondary" },
+  ],
+  sections: [
+    { title: "1. Purpose", body: ["Eki provides software and business tools that enable vendors to list products, receive orders, manage customers, send promotional offers, track sales and analytics, and operate their business more efficiently. Eki is a technology platform and is not the seller of products listed by vendors."] },
+    { title: "2. Vendor Eligibility", bullets: ["Be at least 18 years old", "Provide accurate information", "Complete identity verification when requested", "Have the legal right to sell the products you list", "Comply with all applicable laws"], body: ["Eki may refuse, suspend, or terminate vendor access at its discretion."] },
+    { title: "3. Vendor Verification", body: ["Vendor verification may include government-issued identification, business information, address verification, and additional checks. Verification must be completed before access to certain platform features is granted. Providing false information may result in immediate account suspension."] },
+    { title: "4. Vendor Responsibilities", bullets: ["Product quality", "Product descriptions", "Product pricing", "Inventory accuracy", "Packaging", "Shipping", "Customer service", "Compliance with food safety laws", "Compliance with import and export regulations"], body: ["Eki does not inspect or guarantee products listed by vendors."] },
+    { title: "5. Product Listings", body: ["Vendors must ensure all listings are accurate, lawful, do not mislead buyers, and contain correct pricing and product information. Eki reserves the right to remove any listing at any time."] },
+    { title: "6. Prohibited Products", body: ["Vendors may not sell illegal products, counterfeit products, restricted or controlled substances, dangerous goods prohibited by law, or any item prohibited by Eki policies. Violation may result in immediate removal and account termination."] },
+    { title: "7. Orders", body: ["When a buyer places an order, the vendor is responsible for fulfilling the order, shipping or delivering within a reasonable timeframe, and keeping order status updated. Failure to fulfil orders may result in account restrictions."] },
+    { title: "8. Africa-Based Vendor Payment Protection", bullets: ["Buyer funds may be temporarily held", "Funds may be released after successful delivery confirmation", "Funds may be released after successful OTP verification", "Funds may be released automatically after the applicable review period"], body: ["The vendor agrees that Eki may delay release of funds while delivery status is being verified."] },
+    { title: "9. OTP Delivery Verification", body: ["For transactions using OTP verification, an OTP may be generated by Eki, used to confirm delivery, and successful confirmation may trigger release of funds. Fraudulent attempts to manipulate the OTP process may result in permanent suspension."] },
+    { title: "10. Customer Marketing Features", body: ["Eki may provide tools allowing vendors to contact previous buyers, send offers, promote products, and re-engage inactive customers. Vendors agree not to send misleading messages, not to harass customers, not to abuse marketing tools, and to comply with applicable marketing laws."] },
+    { title: "11. Vendor Subscription", body: ["Vendors may receive a limited free usage period. Following the free period, continued access may require an active subscription. Subscription fees are billed in advance, are non-refundable except where required by law, and may be changed with reasonable notice."] },
+    { title: "12. Platform Fees", body: ["Eki may charge subscription fees, transaction fees, and service fees. Applicable fees will be disclosed within the platform. The Vendor authorises Eki to deduct applicable fees where permitted."] },
+    { title: "13. Customer Relationships", body: ["Customers acquired through Eki remain customers of the Vendor. However, Eki retains ownership of the platform, technology and infrastructure. Vendors may not copy, scrape, or misuse platform data."] },
+    { title: "14. Vendor Conduct", body: ["Vendors must not engage in fraud, manipulate reviews, mislead buyers, circumvent platform processes, abuse other users, or use Eki for unlawful activities. Violations may result in suspension or termination."] },
+    { title: "15. Suspension And Termination", body: ["Eki may suspend or terminate vendor accounts for fraud, verification failures, policy violations, abuse of customers, repeated customer complaints, or non-payment of subscription fees. Termination may result in removal of listings and restricted platform access."] },
+    { title: "16. Intellectual Property", body: ["All Eki branding, software, systems, content, and technology remain the property of Ehimare Co. Nothing in this Agreement transfers ownership of Eki intellectual property to vendors."] },
+    { title: "17. Limitation Of Liability", body: ["To the maximum extent permitted by law, Eki shall not be liable for lost profits, product defects, shipping delays, customer disputes, business interruption, or indirect or consequential damages. Eki provides software and technology services only."] },
+    { title: "18. Indemnity", body: ["The Vendor agrees to indemnify and hold harmless Ehimare Co from claims arising from products sold, vendor conduct, regulatory violations, customer disputes, or breach of this Agreement."] },
+    { title: "19. Changes To This Agreement", body: ["Eki may update this Agreement from time to time. Continued use of the platform constitutes acceptance of updated terms."] },
+    { title: "20. Governing Law", body: ["This Agreement shall be governed by the laws of England and Wales. Any disputes shall be subject to the exclusive jurisdiction of the courts of England and Wales.", "Contact: Ehimare Co, United Kingdom. Email: info@culinarytales.app"] },
   ],
 };
 
@@ -1227,6 +1478,26 @@ export async function getPublicTermsPage(_request: Request, response: Response):
 
 export async function getPublicAccountDeletionPage(_request: Request, response: Response): Promise<void> {
   sendPage(response, accountDeletionPage);
+}
+
+export async function getPublicRefundPolicyPage(_request: Request, response: Response): Promise<void> {
+  sendPage(response, refundPolicyPage);
+}
+
+export async function getPublicCookiePolicyPage(_request: Request, response: Response): Promise<void> {
+  sendPage(response, cookiePolicyPage);
+}
+
+export async function getPublicSubscriptionPolicyPage(_request: Request, response: Response): Promise<void> {
+  sendPage(response, subscriptionPolicyPage);
+}
+
+export async function getPublicAcceptableUsePage(_request: Request, response: Response): Promise<void> {
+  sendPage(response, acceptableUsePage);
+}
+
+export async function getPublicVendorAgreementPage(_request: Request, response: Response): Promise<void> {
+  sendPage(response, vendorAgreementPage);
 }
 
 export async function getPublicInvitePage(request: Request, response: Response): Promise<void> {
