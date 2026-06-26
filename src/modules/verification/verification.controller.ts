@@ -2,6 +2,7 @@ import type { Request, Response } from "express";
 
 import { AppError } from "../../shared/errors/app-error";
 import { recordAudit } from "../../shared/utils/audit";
+import { stripeIdentityService } from "./stripe-identity.service";
 import { verificationService } from "./verification.service";
 import {
   validateReviewVerificationInput,
@@ -48,6 +49,22 @@ export async function resetVerification(
 ): Promise<void> {
   await verificationService.resetPendingDocuments(requireUserId(request));
   response.status(200).json({ message: "Pending documents cleared" });
+}
+
+export async function createStripeVerificationSession(
+  request: Request,
+  response: Response,
+): Promise<void> {
+  const result = await stripeIdentityService.createVerificationSession(requireUserId(request));
+  response.status(200).json(result);
+}
+
+export async function getStripeVerificationStatus(
+  request: Request,
+  response: Response,
+): Promise<void> {
+  const result = await stripeIdentityService.getVerificationStatus(requireUserId(request));
+  response.status(200).json(result);
 }
 
 // ─── Admin Endpoints ─────────────────────────────────────────────────────────

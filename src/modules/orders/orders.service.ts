@@ -6,6 +6,7 @@ import { CURSOR_ORDER_BY } from "../../shared/constants";
 import { AppError } from "../../shared/errors/app-error";
 import { releaseVendorEarnings } from "../../shared/utils/wallet-release";
 import { notificationsService } from "../notifications/notifications.service";
+import { communicationService } from "../communications/communication.service";
 import type { ListBuyerOrdersQuery, ListVendorOrdersQuery } from "./orders.types";
 import { VENDOR_STATUS_TRANSITIONS, BUYER_STATUS_TRANSITIONS } from "./orders.types";
 
@@ -231,6 +232,23 @@ export const ordersService = {
       await sendOrderStatusNotification(order, newStatus);
     } catch (err) {
       logger.error("Failed to send order status notification", { orderId, newStatus, error: String(err) });
+    }
+
+    // Communication module: shipped / delivered emails
+    if (newStatus === "DISPATCHED" || newStatus === "DELIVERED") {
+      const buyer = await prisma.user.findUnique({
+        where: { id: order.buyerId },
+        select: { name: true, email: true },
+      });
+      if (buyer) {
+        const eventKey = newStatus === "DISPATCHED" ? "buyer_order_shipped" : "buyer_order_delivered";
+        communicationService.send({
+          eventKey,
+          recipientId: order.buyerId,
+          recipientEmail: buyer.email,
+          variables: { name: buyer.name, order_number: order.orderNumber },
+        }).catch((err) => logger.warn("Order communication failed", { orderId, eventKey, error: String(err) }));
+      }
     }
 
     // Release pending → available when vendor dispatches (ships) the order

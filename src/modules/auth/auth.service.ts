@@ -10,6 +10,7 @@ import { emailTemplates } from "../../lib/email-templates";
 import { logger } from "../../lib/logger";
 import { prisma } from "../../lib/prisma";
 import { AppError } from "../../shared/errors/app-error";
+import { communicationService } from "../communications/communication.service";
 import { referralsService } from "../referrals/referrals.service";
 import { buildVendorShareUrl } from "../vendors/vendors.service";
 import type {
@@ -185,6 +186,17 @@ export const authService = {
       ? emailTemplates.welcomeVendor({ name: user.name })
       : emailTemplates.welcomeBuyer({ name: user.name });
     enqueueEmail({ to: user.email, subject: welcome.subject, html: welcome.html });
+
+    // Log welcome communication
+    const welcomeEventKey = user.role === UserRole.VENDOR ? "welcome_vendor" : "welcome_buyer";
+    communicationService.logOnly({
+      recipientId: user.id,
+      recipientType: user.role === UserRole.VENDOR ? "VENDOR" : "BUYER",
+      eventKey: welcomeEventKey,
+      channel: "email",
+      title: welcome.subject,
+      body: `Welcome email sent to ${user.email}`,
+    }).catch(() => {});
 
     // Send email verification token (non-blocking)
     const verificationToken = crypto.randomBytes(32).toString("hex");

@@ -182,3 +182,73 @@ export async function getWalletTransaction(request: Request, response: Response)
   const transaction = await adminListingsService.getWalletTransaction(requireIdParam(request));
   response.status(200).json({ transaction });
 }
+
+export async function updateVendor(request: Request, response: Response): Promise<void> {
+  const vendorId = requireIdParam(request);
+  const vendor = await adminListingsService.updateVendor(vendorId, request.body ?? {});
+  await recordAudit({
+    actorId: requireUserId(request),
+    action: "vendor.update",
+    entityType: "Vendor",
+    entityId: vendorId,
+  });
+  response.status(200).json({ vendor });
+}
+
+export async function deleteVendor(request: Request, response: Response): Promise<void> {
+  const vendorId = requireIdParam(request);
+  const result = await adminListingsService.deleteVendor(vendorId);
+  await recordAudit({
+    actorId: requireUserId(request),
+    action: "vendor.delete",
+    entityType: "Vendor",
+    entityId: vendorId,
+  });
+  response.status(200).json(result);
+}
+
+export async function getVendorStats(_request: Request, response: Response): Promise<void> {
+  const stats = await adminListingsService.getVendorStats();
+  response.status(200).json(stats);
+}
+
+export async function bulkApproveVendors(request: Request, response: Response): Promise<void> {
+  const ids = request.body?.vendorIds;
+  if (!Array.isArray(ids) || ids.length === 0) throw new AppError("vendorIds array required", 400);
+  const result = await adminListingsService.bulkApproveVendors(ids, requireUserId(request));
+  await recordAudit({
+    actorId: requireUserId(request),
+    action: "vendor.bulk_approve",
+    entityType: "Vendor",
+    metadata: { count: result.affected },
+  });
+  response.status(200).json(result);
+}
+
+export async function bulkRejectVendors(request: Request, response: Response): Promise<void> {
+  const ids = request.body?.vendorIds;
+  if (!Array.isArray(ids) || ids.length === 0) throw new AppError("vendorIds array required", 400);
+  const reason = typeof request.body?.reason === "string" ? request.body.reason.trim() : undefined;
+  const result = await adminListingsService.bulkRejectVendors(ids, requireUserId(request), reason);
+  await recordAudit({
+    actorId: requireUserId(request),
+    action: "vendor.bulk_reject",
+    entityType: "Vendor",
+    metadata: { count: result.affected },
+  });
+  response.status(200).json(result);
+}
+
+export async function bulkSuspendVendors(request: Request, response: Response): Promise<void> {
+  const ids = request.body?.vendorIds;
+  if (!Array.isArray(ids) || ids.length === 0) throw new AppError("vendorIds array required", 400);
+  const reason = typeof request.body?.reason === "string" ? request.body.reason.trim() : undefined;
+  const result = await adminListingsService.bulkSuspendVendors(ids, reason);
+  await recordAudit({
+    actorId: requireUserId(request),
+    action: "vendor.bulk_suspend",
+    entityType: "Vendor",
+    metadata: { count: result.affected },
+  });
+  response.status(200).json(result);
+}

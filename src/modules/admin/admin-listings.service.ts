@@ -213,11 +213,16 @@ export const adminListingsService = {
       "status",
     );
     const pagination = parsePagination(query);
+    const isSuspended = query.suspended === "true" ? true : query.suspended === "false" ? false : undefined;
 
-    return paginate(
+    const where: Record<string, unknown> = {};
+    if (verificationStatus) where.verificationStatus = verificationStatus;
+    if (isSuspended !== undefined) where.isSuspended = isSuspended;
+
+    const { items, nextCursor } = await paginate(
       ({ take, cursor, skip }) =>
         prisma.vendor.findMany({
-          where: verificationStatus ? { verificationStatus } : {},
+          where,
           include: {
             user: { select: { id: true, email: true, name: true, role: true } },
           },
@@ -228,6 +233,40 @@ export const adminListingsService = {
         }),
       pagination,
     );
+
+    const vendorIds = items.map((v) => v.id);
+    if (vendorIds.length === 0) return { items: [], nextCursor };
+
+    const [orderCounts, revenueSums, subscriptions] = await Promise.all([
+      prisma.order.groupBy({
+        by: ["vendorId"],
+        where: { vendorId: { in: vendorIds }, status: { notIn: ["PENDING", "FAILED", "CANCELLED"] } },
+        _count: { id: true },
+      }),
+      prisma.orderItem.groupBy({
+        by: ["vendorId"],
+        where: { vendorId: { in: vendorIds }, order: { status: { notIn: ["PENDING", "FAILED", "CANCELLED"] } } },
+        _sum: { totalAmount: true },
+      }),
+      prisma.vendorSubscription.findMany({
+        where: { vendorId: { in: vendorIds } },
+        select: { vendorId: true, plan: true, status: true },
+      }),
+    ]);
+
+    const orderMap = new Map(orderCounts.map((o) => [o.vendorId, o._count.id]));
+    const revenueMap = new Map(revenueSums.map((r) => [r.vendorId, r._sum.totalAmount ?? 0]));
+    const subMap = new Map(subscriptions.map((s) => [s.vendorId, { plan: s.plan, status: s.status }]));
+
+    const enriched = items.map((v) => ({
+      ...v,
+      orderCount: orderMap.get(v.id) ?? 0,
+      totalRevenue: revenueMap.get(v.id) ?? 0,
+      subscriptionPlan: subMap.get(v.id)?.plan ?? "FREE",
+      subscriptionStatus: subMap.get(v.id)?.status ?? "ACTIVE",
+    }));
+
+    return { items: enriched, nextCursor };
   },
 
   async listProducts(query: Record<string, unknown>) {
@@ -472,6 +511,115 @@ export const adminListingsService = {
     });
     if (!tx) throw new AppError("Wallet transaction not found", 404);
     return tx;
+  },
+
+  async getVendorStats() {
+    const [
+      total,
+      verified,
+      pending,
+      rejected,
+      suspended,
+      withOrders,
+      totalGmv,
+    ] = await Promise.all([
+      prisma.vendor.count(),
+      prisma.vendor.count({ where: { verificationStatus: VendorVerificationStatus.VERIFIED, isSuspended: false } }),
+      prisma.vendor.count({ where: { verificationStatus: VendorVerificationStatus.PENDING } }),
+      prisma.vendor.count({ where: { verificationStatus: VendorVerificationStatus.REJECTED } }),
+      prisma.vendor.count({ where: { isSuspended: true } }),
+      prisma.vendor.count({
+        where: {
+          orderItems: { some: { order: { status: { notIn: ["PENDING", "FAILED", "CANCELLED"] } } } },
+        },
+      }),
+      prisma.orderItem.aggregate({
+        where: { order: { status: { notIn: ["PENDING", "FAILED", "CANCELLED"] } } },
+        _sum: { totalAmount: true },
+      }),
+    ]);
+
+    const active = verified;
+    const unverified = total - verified;
+    const withoutOrders = total - withOrders;
+    const gmv = totalGmv._sum.totalAmount ?? 0;
+    const avgRevenue = withOrders > 0 ? Math.round(gmv / withOrders) : 0;
+
+    return {
+      total,
+      active,
+      pending,
+      rejected,
+      suspended,
+      verified,
+      unverified,
+      withOrders,
+      withoutOrders,
+      avgRevenue,
+      gmv,
+    };
+  },
+
+  async bulkApproveVendors(vendorIds: string[], adminId: string) {
+    const vendors = await prisma.vendor.findMany({
+      where: { id: { in: vendorIds }, verificationStatus: { not: VendorVerificationStatus.VERIFIED } },
+      select: { id: true },
+    });
+    if (vendors.length === 0) return { affected: 0 };
+    const ids = vendors.map((v) => v.id);
+    const now = new Date();
+    await prisma.$transaction([
+      prisma.vendor.updateMany({
+        where: { id: { in: ids } },
+        data: { verificationStatus: VendorVerificationStatus.VERIFIED },
+      }),
+      prisma.verificationDocument.updateMany({
+        where: { vendorId: { in: ids }, deletedAt: null },
+        data: { status: "APPROVED", reviewedAt: now, reviewedById: adminId, rejectionReason: null },
+      }),
+    ]);
+    return { affected: ids.length };
+  },
+
+  async bulkRejectVendors(vendorIds: string[], adminId: string, reason?: string) {
+    const vendors = await prisma.vendor.findMany({
+      where: { id: { in: vendorIds }, verificationStatus: { not: VendorVerificationStatus.REJECTED } },
+      select: { id: true },
+    });
+    if (vendors.length === 0) return { affected: 0 };
+    const ids = vendors.map((v) => v.id);
+    const now = new Date();
+    await prisma.$transaction([
+      prisma.vendor.updateMany({
+        where: { id: { in: ids } },
+        data: { verificationStatus: VendorVerificationStatus.REJECTED },
+      }),
+      prisma.verificationDocument.updateMany({
+        where: { vendorId: { in: ids }, deletedAt: null },
+        data: { status: "REJECTED", reviewedAt: now, reviewedById: adminId, rejectionReason: reason },
+      }),
+    ]);
+    return { affected: ids.length };
+  },
+
+  async bulkSuspendVendors(vendorIds: string[], reason?: string) {
+    const vendors = await prisma.vendor.findMany({
+      where: { id: { in: vendorIds }, isSuspended: false },
+      select: { id: true },
+    });
+    if (vendors.length === 0) return { affected: 0 };
+    const ids = vendors.map((v) => v.id);
+    await prisma.$transaction([
+      prisma.vendor.updateMany({
+        where: { id: { in: ids } },
+        data: { isSuspended: true, suspendedReason: reason ?? "Bulk suspended by admin" },
+      }),
+      prisma.product.updateMany({
+        where: { vendorId: { in: ids }, isActive: true },
+        data: { isActive: false },
+      }),
+    ]);
+    return { affected: ids.length };
   },
   async suspendUser(userId: string, reason?: string) {
     const user = await prisma.user.findUnique({ where: { id: userId } });

@@ -5,6 +5,7 @@ import { prisma } from "../../lib/prisma";
 import { deleteStoredObject, generatePresignedRead } from "../../lib/storage";
 import { CURSOR_ORDER_BY } from "../../shared/constants";
 import { AppError } from "../../shared/errors/app-error";
+import { communicationService } from "../communications/communication.service";
 import type { ReviewVerificationInput, SubmitVerificationInput } from "./verification.types";
 
 const APPROVED_RETENTION_DAYS = 3;
@@ -440,7 +441,10 @@ export const verificationService = {
 
   async adminApproveVendorVerification(adminId: string, vendorId: string) {
     const now = new Date();
-    const vendor = await prisma.vendor.findUnique({ where: { id: vendorId }, select: { id: true } });
+    const vendor = await prisma.vendor.findUnique({
+      where: { id: vendorId },
+      select: { id: true, userId: true, storeName: true, user: { select: { email: true } } },
+    });
     if (!vendor) throw new AppError("Vendor not found", 404);
 
     await prisma.$transaction([
@@ -460,6 +464,13 @@ export const verificationService = {
       }),
     ]);
 
+    communicationService.send({
+      eventKey: "vendor_verification_approved",
+      recipientId: vendor.userId,
+      recipientEmail: vendor.user.email,
+      variables: { store_name: vendor.storeName },
+    }).catch((err) => logger.warn("Verification approved communication failed", { vendorId, error: String(err) }));
+
     return this.adminGetReviewDetails(vendorId);
   },
 
@@ -467,7 +478,10 @@ export const verificationService = {
     const reason = rejectionReason.trim();
     if (!reason) throw new AppError("rejectionReason is required", 400);
     const now = new Date();
-    const vendor = await prisma.vendor.findUnique({ where: { id: vendorId }, select: { id: true } });
+    const vendor = await prisma.vendor.findUnique({
+      where: { id: vendorId },
+      select: { id: true, userId: true, storeName: true, user: { select: { email: true } } },
+    });
     if (!vendor) throw new AppError("Vendor not found", 404);
 
     await prisma.$transaction([
@@ -486,6 +500,13 @@ export const verificationService = {
         },
       }),
     ]);
+
+    communicationService.send({
+      eventKey: "vendor_verification_rejected",
+      recipientId: vendor.userId,
+      recipientEmail: vendor.user.email,
+      variables: { store_name: vendor.storeName, reason },
+    }).catch((err) => logger.warn("Verification rejected communication failed", { vendorId, error: String(err) }));
 
     return this.adminGetReviewDetails(vendorId);
   },

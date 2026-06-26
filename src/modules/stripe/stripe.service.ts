@@ -11,6 +11,8 @@ import { referralsService } from "../referrals/referrals.service";
 import { rewardsService } from "../rewards/rewards.service";
 import { enqueueEmail } from "../../lib/email-queue";
 import { emailTemplates } from "../../lib/email-templates";
+import { stripeIdentityService } from "../verification/stripe-identity.service";
+import { communicationService } from "../communications/communication.service";
 import { AppError } from "../../shared/errors/app-error";
 import type { StripeWebhookInput, StripeWebhookResult } from "./stripe.types";
 
@@ -52,6 +54,13 @@ class StripeWebhookService {
 
     if (event.type === "checkout.session.completed") {
       return this.handleCheckoutSessionCompleted(event);
+    }
+
+    if (
+      event.type === "identity.verification_session.verified" ||
+      event.type === "identity.verification_session.requires_input"
+    ) {
+      return this.handleIdentityVerification(event);
     }
 
     if (event.type !== "payment_intent.succeeded") {
@@ -590,6 +599,29 @@ class StripeWebhookService {
     }
   }
 
+  // ─── Stripe Identity Verification ─────────────────────────────────────────
+
+  private async handleIdentityVerification(event: Stripe.Event): Promise<StripeWebhookResult> {
+    const session = event.data.object as any;
+
+    try {
+      await stripeIdentityService.handleVerificationCompleted({
+        id: session.id,
+        status: session.status,
+        last_error: session.last_error ?? null,
+        metadata: session.metadata ?? null,
+      });
+    } catch (error) {
+      logger.error("Stripe Identity webhook handler failed", {
+        eventId: event.id,
+        sessionId: session.id,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+
+    return { received: true, eventId: event.id, type: event.type };
+  }
+
   // ─── Helpers ─────────────────────────────────────────────────────────────
 
   private async restoreWalletDeduction(
@@ -728,6 +760,34 @@ class StripeWebhookService {
           data: { orderId: order.id },
         }).catch(() => {});
         pushNotifications.vendorNewOrder(vendorInfo.userId, order.id);
+
+        // Check vendor first order
+        const vendorOrderCount = await prisma.order.count({
+          where: { vendorId: order.vendorId, status: { notIn: ["PENDING", "FAILED"] } },
+        }).catch(() => 0);
+        if (vendorOrderCount === 1) {
+          communicationService.send({
+            eventKey: "vendor_first_order",
+            recipientId: vendorInfo.userId,
+            recipientEmail: vendorInfo.contactEmail ?? undefined,
+            variables: {
+              store_name: vendorInfo.storeName ?? "Your store",
+              order_number: order.id,
+            },
+          }).catch(() => {});
+        }
+      }
+
+      // Log buyer order confirmed communication
+      if (buyer) {
+        communicationService.logOnly({
+          recipientId: buyerId,
+          recipientType: "BUYER",
+          eventKey: "buyer_order_confirmed",
+          channel: "email",
+          title: `Order confirmed: ${order.id}`,
+          body: `Payment confirmation email sent to ${buyer.email}`,
+        }).catch(() => {});
       }
     }
   }

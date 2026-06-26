@@ -54,6 +54,9 @@ import {
   getAdminDashboard,
   listAuditLogs,
 } from "./admin-dashboard.controller";
+import { getAnalyticsGrowth, getAnalyticsOverview } from "./admin-analytics.controller";
+import { getAnalyticsBuyers, getAnalyticsOrders, getAnalyticsVendors } from "./admin-analytics-phase2.controller";
+import { getAnalyticsGeography, getAnalyticsPayments } from "./admin-analytics-phase3.controller";
 import { getAdminRevenue } from "./admin-revenue.controller";
 import {
   createDeliveryZone,
@@ -64,23 +67,35 @@ import {
 import {
   approveProduct,
   approveVendor,
+  bulkApproveVendors,
+  bulkRejectVendors,
+  bulkSuspendVendors,
   deleteUser,
+  deleteVendor,
   disableProduct,
   getOrder,
   getProduct,
   getUser,
   getVendor,
+  getVendorStats,
   listOrders,
   listPayments,
   listProducts,
   listUsers,
   suspendUser,
   unsuspendUser,
+  updateVendor,
   listVendors,
   listWalletTransactions, getPayment, getWalletTransaction,
   rejectVendor,
 } from "./admin-listings.controller";
 import { sendAdminBroadcast } from "./admin-communications.controller";
+import {
+  getCommunicationStats, listCommunicationLogs, listCommunicationTemplates,
+  seedCommunicationTemplates, updateCommunicationTemplate,
+  createScheduledCommunication, listScheduledCommunications,
+  cancelScheduledCommunication, runScheduledCommunications,
+} from "../communications/communication.controller";
 import {
   assignAdminRole,
   createAdminRole,
@@ -128,14 +143,27 @@ adminRouter.get("/dashboard", asyncHandler(requireAdminPermission("dashboard.rea
 adminRouter.get("/analytics", asyncHandler(requireAdminPermission("analytics.read")), asyncHandler(getAdminAnalytics));
 // Canonical revenue chart endpoint. /revenue is kept as an alias.
 adminRouter.get("/analytics/revenue", asyncHandler(requireAdminPermission("analytics.read")), asyncHandler(getAdminRevenue));
+adminRouter.get("/analytics/overview", asyncHandler(requireAdminPermission("analytics.read")), asyncHandler(getAnalyticsOverview));
+adminRouter.get("/analytics/growth", asyncHandler(requireAdminPermission("analytics.read")), asyncHandler(getAnalyticsGrowth));
+adminRouter.get("/analytics/buyers", asyncHandler(requireAdminPermission("analytics.read")), asyncHandler(getAnalyticsBuyers));
+adminRouter.get("/analytics/vendors", asyncHandler(requireAdminPermission("analytics.read")), asyncHandler(getAnalyticsVendors));
+adminRouter.get("/analytics/orders", asyncHandler(requireAdminPermission("analytics.read")), asyncHandler(getAnalyticsOrders));
+adminRouter.get("/analytics/payments", asyncHandler(requireAdminPermission("analytics.read")), asyncHandler(getAnalyticsPayments));
+adminRouter.get("/analytics/geography", asyncHandler(requireAdminPermission("analytics.read")), asyncHandler(getAnalyticsGeography));
 adminRouter.get("/revenue", asyncHandler(requireAdminPermission("analytics.read")), asyncHandler(getAdminRevenue));
 adminRouter.get("/audit-logs", asyncHandler(requireAdminPermission("audit.read")), asyncHandler(listAuditLogs));
 
 // Listings
 adminRouter.get("/users", asyncHandler(requireAdminPermission("users.read")), asyncHandler(listUsers));
 adminRouter.get("/users/:id", asyncHandler(requireAdminPermission("users.read")), asyncHandler(getUser));
+adminRouter.get("/vendors/stats", asyncHandler(requireAdminPermission("vendors.read")), asyncHandler(getVendorStats));
 adminRouter.get("/vendors", asyncHandler(requireAdminPermission("vendors.read")), asyncHandler(listVendors));
 adminRouter.get("/vendors/:id", asyncHandler(requireAdminPermission("vendors.read")), asyncHandler(getVendor));
+adminRouter.patch("/vendors/:id", asyncHandler(requireAdminPermission("vendors.mutate")), asyncHandler(updateVendor));
+adminRouter.delete("/vendors/:id", asyncHandler(requireAdminPermission("vendors.mutate")), asyncHandler(require2fa), asyncHandler(deleteVendor));
+adminRouter.post("/vendors/bulk-approve", asyncHandler(requireAdminPermission("vendors.mutate")), asyncHandler(bulkApproveVendors));
+adminRouter.post("/vendors/bulk-reject", asyncHandler(requireAdminPermission("vendors.mutate")), asyncHandler(bulkRejectVendors));
+adminRouter.post("/vendors/bulk-suspend", asyncHandler(requireAdminPermission("vendors.mutate")), asyncHandler(require2fa), asyncHandler(bulkSuspendVendors));
 adminRouter.get("/products", asyncHandler(requireAdminPermission("products.read")), asyncHandler(listProducts));
 adminRouter.get("/products/:id", asyncHandler(requireAdminPermission("products.read")), asyncHandler(getProduct));
 adminRouter.get("/orders", asyncHandler(requireAdminPermission("orders.read")), asyncHandler(listOrders));
@@ -148,6 +176,16 @@ adminRouter.get("/wallet-transactions", asyncHandler(requireAdminPermission("ord
 
 // Communications
 adminRouter.post("/broadcasts", asyncHandler(requireAdminPermission("communications.send")), asyncHandler(sendAdminBroadcast));
+adminRouter.get("/communications/stats", asyncHandler(requireAdminPermission("communications.send")), asyncHandler(getCommunicationStats));
+adminRouter.get("/communications", asyncHandler(requireAdminPermission("communications.send")), asyncHandler(listCommunicationLogs));
+adminRouter.get("/communications/templates", asyncHandler(requireAdminPermission("communications.send")), asyncHandler(listCommunicationTemplates));
+adminRouter.post("/communications/templates/seed", asyncHandler(requireAdminPermission("communications.send")), asyncHandler(seedCommunicationTemplates));
+adminRouter.patch("/communications/templates/:key", asyncHandler(requireAdminPermission("communications.send")), asyncHandler(updateCommunicationTemplate));
+// Scheduled communications
+adminRouter.post("/communications/scheduled", asyncHandler(requireAdminPermission("communications.send")), asyncHandler(createScheduledCommunication));
+adminRouter.get("/communications/scheduled", asyncHandler(requireAdminPermission("communications.send")), asyncHandler(listScheduledCommunications));
+adminRouter.patch("/communications/scheduled/:id/cancel", asyncHandler(requireAdminPermission("communications.send")), asyncHandler(cancelScheduledCommunication));
+adminRouter.post("/communications/run-scheduled", asyncHandler(requireAdminPermission("communications.send")), asyncHandler(runScheduledCommunications));
 
 // Admin role management
 adminRouter.get("/roles", asyncHandler(requireAdminPermission("roles.read")), asyncHandler(listAdminRoles));

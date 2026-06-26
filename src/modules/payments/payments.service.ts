@@ -21,6 +21,7 @@ import { enqueueEmail } from "../../lib/email-queue";
 import { emailTemplates } from "../../lib/email-templates";
 import { notificationsService } from "../notifications/notifications.service";
 import { pushNotifications } from "../../lib/push-notifications";
+import { communicationService } from "../communications/communication.service";
 
 interface VendorGroup {
   vendorId: string;
@@ -695,6 +696,17 @@ class PaymentsService {
           data: { orderId },
         });
         pushNotifications.vendorNewOrder(vendor.userId, orderId);
+
+        const vendorOrderCount = await prisma.order.count({
+          where: { vendorId: group.vendorId, status: { notIn: ["PENDING", "FAILED"] } },
+        }).catch(() => 0);
+        if (vendorOrderCount === 1) {
+          communicationService.send({
+            eventKey: "vendor_first_order",
+            recipientId: vendor.userId,
+            variables: { store_name: vendor.storeName ?? "Your store", order_number: orderId },
+          }).catch(() => {});
+        }
       } catch (error) {
         logger.error("notifyVendorsWalletPaid failed", {
           orderId,
