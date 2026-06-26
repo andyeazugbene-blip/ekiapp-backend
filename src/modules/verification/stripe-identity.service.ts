@@ -18,10 +18,6 @@ export const stripeIdentityService = {
       throw new AppError("Vendor profile required", 403);
     }
 
-    if (vendor.verificationStatus === "VERIFIED") {
-      throw new AppError("Vendor is already verified", 409);
-    }
-
     const session = await stripe.identity.verificationSessions.create({
       type: "document",
       metadata: {
