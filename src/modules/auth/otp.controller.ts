@@ -3,7 +3,7 @@ import type { Request, Response } from "express";
 import { AppError } from "../../shared/errors/app-error";
 import { otpService } from "./otp.service";
 
-const VALID_PURPOSES = ["vendor_onboarding_email", "guest_order_lookup"] as const;
+const VALID_PURPOSES = ["vendor_onboarding_email", "buyer_signup_email", "guest_order_lookup"] as const;
 
 function validateSendOtpInput(body: unknown): { contact: string; purpose: string } {
   if (!body || typeof body !== "object") {
