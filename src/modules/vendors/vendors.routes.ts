@@ -9,7 +9,9 @@ import {
   updateVendorOrderStatus,
 } from "../orders/orders.controller";
 import {
+  createStripeVerificationSession,
   getOwnVerification,
+  getStripeVerificationStatus,
   resetVerification,
   submitVerificationDocument,
 } from "../verification/verification.controller";
@@ -97,6 +99,10 @@ vendorsRouter.post("/me/stripe-connect/refresh", requireRole("VENDOR", "ADMIN"),
 vendorsRouter.post("/me/verification", requireRole("VENDOR", "ADMIN"), asyncHandler(submitVerificationDocument));
 vendorsRouter.get("/me/verification", requireRole("VENDOR", "ADMIN"), asyncHandler(getOwnVerification));
 vendorsRouter.delete("/me/verification", requireRole("VENDOR", "ADMIN"), asyncHandler(resetVerification));
+
+// Stripe Identity verification
+vendorsRouter.post("/me/verification/stripe-session", requireRole("VENDOR", "ADMIN"), asyncHandler(createStripeVerificationSession));
+vendorsRouter.get("/me/verification/stripe-status", requireRole("VENDOR", "ADMIN"), asyncHandler(getStripeVerificationStatus));
 
 // Vendor order management
 vendorsRouter.get("/me/orders", requireRole("VENDOR", "ADMIN"), asyncHandler(listVendorOrders));

@@ -11,7 +11,7 @@ import type {
   UpdateProductInput,
 } from "./products.types";
 
-async function getVerifiedVendorIdForUser(userId: string): Promise<{ id: string; currency: string }> {
+async function getVendorWithVerification(userId: string): Promise<{ id: string; currency: string; isVerified: boolean }> {
   const vendor = await prisma.vendor.findUnique({
     where: { userId },
     select: { id: true, verificationStatus: true, currency: true, country: true },
@@ -19,12 +19,8 @@ async function getVerifiedVendorIdForUser(userId: string): Promise<{ id: string;
   if (!vendor) {
     throw new AppError("Vendor profile required", 403);
   }
-  if (vendor.verificationStatus !== "VERIFIED") {
-    throw new AppError("Vendor must be verified to create products", 403);
-  }
-  // Use vendor.currency; if missing, derive from country
   const currency = vendor.currency || currencyFromCountry(vendor.country);
-  return { id: vendor.id, currency };
+  return { id: vendor.id, currency, isVerified: vendor.verificationStatus === "VERIFIED" };
 }
 
 async function getVendorIdForUser(userId: string): Promise<string> {
@@ -50,7 +46,10 @@ async function nextProductCode(): Promise<string> {
 
 export const productsService = {
   async createProduct(userId: string, input: CreateProductInput): Promise<Product> {
-    const vendor = await getVerifiedVendorIdForUser(userId);
+    const vendor = await getVendorWithVerification(userId);
+
+    // Unverified vendors can only create draft (inactive) products
+    const forceDraft = !vendor.isVerified;
 
     // Enforce subscription product limit
     await subscriptionsService.enforceProductLimit(vendor.id);
@@ -72,6 +71,7 @@ export const productsService = {
             category: input.category,
             stock: input.stock ?? 0,
             weightGrams: input.weightGrams,
+            ...(forceDraft ? { isActive: false } : {}),
           },
         });
       } catch (error: any) {

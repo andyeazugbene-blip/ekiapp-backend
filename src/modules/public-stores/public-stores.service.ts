@@ -1073,7 +1073,7 @@ export const publicStoresService = {
         select: { id: true },
       });
 
-      const orderNumber = `EKI-${new Date().getFullYear()}-${crypto.randomBytes(4).toString("hex").toUpperCase()}`;
+      const orderNumber = `Eki-${crypto.randomBytes(3).toString("hex").slice(0, 5).toUpperCase()}`;
       const order = await tx.order.create({
         data: {
           checkoutId: checkout.id,

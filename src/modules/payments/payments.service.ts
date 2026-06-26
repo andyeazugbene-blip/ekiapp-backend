@@ -353,7 +353,7 @@ class PaymentsService {
       // Create one Order per vendor
       const orderIds: string[] = [];
       for (const group of vendorGroups) {
-        const orderNumber = `EKI-${new Date().getFullYear()}-${crypto.randomBytes(4).toString("hex").toUpperCase()}-${orderIds.length}`;
+        const orderNumber = `Eki-${crypto.randomBytes(3).toString("hex").slice(0, 5).toUpperCase()}`;
 
         const order = await tx.order.create({
           data: {

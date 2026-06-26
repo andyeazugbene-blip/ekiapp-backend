@@ -41,6 +41,7 @@ export interface AuthUser {
   sellerRegion?: string | null;
   city?: string | null;
   coverImage?: string | null;
+  currency?: string | null;
   verificationStatus?: string | null;
   shareUrl?: string | null;
 }
