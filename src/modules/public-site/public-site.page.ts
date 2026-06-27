@@ -415,6 +415,29 @@ function renderHomeLayout(page: PageDefinition): string {
     .feature-card h3{margin:0 0 8px;font-size:16px;font-weight:800;letter-spacing:-.02em;color:#111}
     .feature-card p{margin:0;color:#6b7280;font-size:14px;line-height:1.55}
 
+    /* ── Pricing ── */
+    .pricing-band{padding:80px 0 72px;background:#fff}
+    .pricing-header{text-align:center;margin-bottom:48px}
+    .pricing-header h2{margin:0;font-size:clamp(26px,4vw,38px);font-weight:800;letter-spacing:-.03em;line-height:1.12;color:#111}
+    .pricing-header p{margin:14px auto 0;color:#6b7280;font-size:16px;max-width:560px}
+    .pricing-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:20px;max-width:960px;margin:0 auto}
+    .pricing-card{background:#fff;border:1px solid #e5e7eb;border-radius:20px;padding:32px 28px;display:flex;flex-direction:column;transition:transform .2s ease,box-shadow .2s ease}
+    .pricing-card:hover{transform:translateY(-4px);box-shadow:0 16px 36px rgba(19,79,59,.1)}
+    .pricing-card.popular{border-color:#076b51;box-shadow:0 0 0 2px #076b51}
+    .pricing-badge{display:inline-block;background:#eef8f2;color:#076b51;font-size:11px;font-weight:700;border-radius:999px;padding:4px 14px;margin-bottom:16px;align-self:flex-start;text-transform:uppercase;letter-spacing:.04em}
+    .pricing-name{font-size:22px;font-weight:800;color:#111;margin:0 0 6px}
+    .pricing-desc{font-size:13px;color:#6b7280;line-height:1.5;margin:0 0 20px}
+    .pricing-price{font-size:36px;font-weight:800;color:#111;margin:0 0 4px}.pricing-price small{font-size:14px;font-weight:400;color:#6b7280}
+    .pricing-fee{font-size:12px;color:#6b7280;margin:0 0 20px}
+    .pricing-list{list-style:none;padding:0;margin:0 0 24px;flex:1}
+    .pricing-list li{padding:7px 0;font-size:13px;color:#374151;display:flex;align-items:center;gap:8px}
+    .pricing-list li::before{content:"✓";color:#076b51;font-weight:800;font-size:14px}
+    .pricing-cta{display:block;width:100%;height:48px;border:0;border-radius:12px;background:#134f3b;color:#fff;font-weight:700;font-size:14px;cursor:pointer;text-align:center;line-height:48px;text-decoration:none;transition:background .15s ease}
+    .pricing-cta:hover{background:#0f4030}
+    .pricing-cta.outline{background:transparent;border:1px solid #d1d5db;color:#374151}
+    .pricing-cta.outline:hover{border-color:#134f3b;color:#134f3b}
+    .pricing-note{text-align:center;margin-top:24px;color:#6b7280;font-size:13px}
+
     /* ── Order lookup ── */
     .order-band{padding:56px 0;background:#fff;border-top:1px solid #e5e7eb}
     .order-inner{max-width:600px;margin:0 auto;text-align:center}
@@ -448,6 +471,8 @@ function renderHomeLayout(page: PageDefinition): string {
       .phone-mockup{margin:0 auto}
       h1{font-size:36px}
       .features-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+      .pricing-grid{grid-template-columns:1fr}
+      .pricing-card.popular{order:-1}
       .footer-grid{grid-template-columns:1fr 1fr;gap:24px}
     }
     @media(max-width:600px){
@@ -479,6 +504,7 @@ function renderHomeLayout(page: PageDefinition): string {
     <nav class="topnav" aria-label="Main">
       <a href="/store">Buyers</a>
       <a href="/vendor">Vendors</a>
+      <a href="#pricing">Pricing</a>
       <a class="nav-cta" href="/store">Sign In</a>
     </nav>
   </div>
@@ -630,6 +656,64 @@ function renderHomeLayout(page: PageDefinition): string {
     </div>
   </section>
 
+  <!-- ── PRICING ── -->
+  <section class="pricing-band" id="pricing">
+    <div class="shell">
+      <div class="pricing-header">
+        <h2>Vendor services built for growth.</h2>
+        <p>Eki provides the tools and infrastructure to help food vendors manage and grow their businesses.</p>
+      </div>
+      <div class="pricing-grid">
+        <div class="pricing-card">
+          <div class="pricing-name">Starter</div>
+          <p class="pricing-desc">Get started selling on Eki with essential commerce tools.</p>
+          <div class="pricing-price">Free</div>
+          <p class="pricing-fee">10% platform fee per order</p>
+          <ul class="pricing-list">
+            <li>Up to 5 active products</li>
+            <li>Up to 3 orders</li>
+            <li>Store page</li>
+            <li>Order management</li>
+            <li>Standard support</li>
+          </ul>
+          <a class="pricing-cta outline" href="/business-portal">Get started</a>
+        </div>
+        <div class="pricing-card popular">
+          <span class="pricing-badge">Most popular</span>
+          <div class="pricing-name">Growth</div>
+          <p class="pricing-desc">Scale your store with more products, analytics, and marketing tools.</p>
+          <div class="pricing-price">£30 <small>/ month</small></div>
+          <p class="pricing-fee">7% platform fee per order</p>
+          <ul class="pricing-list">
+            <li>Up to 50 active products</li>
+            <li>Unlimited orders</li>
+            <li>Analytics dashboard</li>
+            <li>Discount campaigns</li>
+            <li>Marketing tools</li>
+            <li>Priority support</li>
+          </ul>
+          <a class="pricing-cta" href="/business-portal">Activate Growth</a>
+        </div>
+        <div class="pricing-card">
+          <div class="pricing-name">Pro</div>
+          <p class="pricing-desc">Full commerce infrastructure for high-volume vendors.</p>
+          <div class="pricing-price">£80 <small>/ month</small></div>
+          <p class="pricing-fee">4% platform fee per order</p>
+          <ul class="pricing-list">
+            <li>Unlimited active products</li>
+            <li>Unlimited orders</li>
+            <li>Advanced analytics</li>
+            <li>Flash sales &amp; bundles</li>
+            <li>Full marketing suite</li>
+            <li>Dedicated support</li>
+          </ul>
+          <a class="pricing-cta" href="/business-portal">Activate Pro</a>
+        </div>
+      </div>
+      <p class="pricing-note">All vendor services are managed securely through the Eki Business Portal.</p>
+    </div>
+  </section>
+
   <!-- ── Order Lookup ── -->
   <section class="order-band">
     <div class="shell">
@@ -661,6 +745,7 @@ function renderHomeLayout(page: PageDefinition): string {
           <a href="/store">Browse vendors</a>
           <a href="/find-order">Find order</a>
           <a href="/vendor">Vendor portal</a>
+          <a href="/#pricing">Pricing</a>
         </div>
       </div>
       <div>
@@ -1081,7 +1166,7 @@ const termsPage: PageDefinition = {
     },
     {
       title: "5. Subscription",
-      body: ["Eki may provide a limited free usage period. After the free usage period ends, continued access to vendor features may require an active subscription. Subscription fees are non-refundable except where required by law."],
+      body: ["Eki may provide a limited free usage period. After the free usage period ends, continued access to vendor services may require an active subscription. Subscription fees are non-refundable except where required by law."],
     },
     {
       title: "6. Payments",
@@ -1204,7 +1289,7 @@ const refundPolicyPage: PageDefinition = {
   ],
   sections: [
     { title: "1. About Eki", body: ["Eki is a technology platform operated by Ehimare Co, 5 Marriott Street, Coundon, Coventry, CV6 1BB, United Kingdom. Eki helps African foodstuff and ingredient vendors manage products, customers, orders, and business operations. Eki is not the seller of products listed on the platform. Transactions occur between buyers and vendors."] },
-    { title: "2. Subscription Cancellation", body: ["Vendors may cancel their subscription at any time through their Eki account."], bullets: ["The subscription remains active until the end of the current billing period", "No further subscription charges will be made", "Access to premium features may end when the billing period expires", "Cancelling a subscription does not automatically generate a refund"] },
+    { title: "2. Subscription Cancellation", body: ["Vendors may cancel their subscription at any time through their Eki account."], bullets: ["The subscription remains active until the end of the current billing period", "No further subscription charges will be made", "Access to vendor services may end when the billing period expires", "Cancelling a subscription does not automatically generate a refund"] },
     { title: "3. Subscription Refunds", body: ["Subscription fees are generally non-refundable."], bullets: ["Refunds may be issued where required by law, in cases of duplicate billing, in cases of proven billing errors, or at Eki's sole discretion", "No refunds for unused subscription periods, partial months, failure to use the platform, business performance expectations, or lack of sales"] },
     { title: "4. Vendor Product Refunds", body: ["Vendors are responsible for determining their own product refund policies, subject to applicable consumer protection laws. Buyers should review vendor policies before purchasing. Eki does not guarantee that refunds will be granted by vendors."] },
     { title: "5. Buyer Order Cancellations", body: ["Buyers may request cancellation before an order has been marked as dispatched by the vendor. If the vendor approves the cancellation, the order will be cancelled and eligible payments may be refunded. Once an order has been marked as dispatched, cancellation may not be possible."] },
@@ -1250,7 +1335,7 @@ const subscriptionPolicyPage: PageDefinition = {
   description: "Subscription, billing, fees, payments, and refunds on the Eki platform.",
   eyebrow: "Subscription",
   heading: "Subscription, Billing & Refund Policy",
-  intro: "This Policy governs subscriptions, billing, fees, payments, and refunds relating to the Eki platform. By subscribing to Eki or using any paid features, you agree to this Policy.",
+  intro: "This Policy governs subscriptions, billing, fees, payments, and refunds relating to the Eki platform. By subscribing to Eki or using any paid services, you agree to this Policy.",
   actions: [
     { href: "/refund-policy", label: "Refund Policy", variant: "secondary" },
     { href: "mailto:info@culinarytales.app", label: "Contact support" },
@@ -1263,11 +1348,11 @@ const subscriptionPolicyPage: PageDefinition = {
     { title: "5. Automatic Renewal", body: ["By purchasing a subscription, you authorise Eki and its payment providers to charge your chosen payment method automatically at each renewal date. You may cancel automatic renewal at any time through your account settings."] },
     { title: "6. Transaction Fees", bullets: ["Payment processing fees", "Platform service fees", "Marketplace fees", "International transaction fees"], body: ["Applicable fees will be displayed before completion of the transaction."] },
     { title: "7. Payment Providers", body: ["Payments may be processed by Stripe and other approved payment processors. Use of payment services may also be subject to the provider's own terms. Eki does not store full payment card details."] },
-    { title: "8. Failed Payments", bullets: ["Eki may retry the payment", "Access to premium features may be restricted", "The subscription may be suspended until payment is successfully completed"], body: ["Eki reserves the right to terminate subscriptions for repeated failed payments."] },
-    { title: "9. Refund Policy", body: ["Subscription fees are generally non-refundable once charged. Refunds will only be provided where required by applicable law, at Eki's sole discretion, in cases of duplicate billing, or in cases of verified billing errors. No partial refunds for unused subscription periods, partial months, reduced usage, or failure to use subscribed features."] },
+    { title: "8. Failed Payments", bullets: ["Eki may retry the payment", "Access to vendor services may be restricted", "The subscription may be suspended until payment is successfully completed"], body: ["Eki reserves the right to terminate subscriptions for repeated failed payments."] },
+    { title: "9. Refund Policy", body: ["Subscription fees are generally non-refundable once charged. Refunds will only be provided where required by applicable law, at Eki's sole discretion, in cases of duplicate billing, or in cases of verified billing errors. No partial refunds for unused subscription periods, partial months, reduced usage, or failure to use subscribed services."] },
     { title: "10. Vendor Earnings", body: ["Vendor earnings are separate from subscription payments. Subscription fees do not guarantee sales, customers, revenue, or business growth. Eki provides tools and technology only. Business performance remains the responsibility of the vendor."] },
     { title: "11. Africa-Based Vendor Payment Protection", bullets: ["Buyer payments may be temporarily held", "Funds may be released upon successful delivery confirmation", "Funds may be released following OTP verification", "Funds may be released automatically after applicable review periods"] },
-    { title: "12. Pricing Changes", body: ["Eki reserves the right to change subscription pricing, introduce new plans, modify plan features, and discontinue plans. Reasonable notice will be provided before material pricing changes."] },
+    { title: "12. Pricing Changes", body: ["Eki reserves the right to change subscription pricing, introduce new plans, modify plan terms, and discontinue plans. Reasonable notice will be provided before material pricing changes."] },
     { title: "13. Cancellation", body: ["Vendors may cancel their subscription at any time. Access continues until end of current billing period. No further charges will be applied. No refund for unused portion unless required by law."] },
     { title: "14. Suspension And Termination", body: ["Eki may suspend or terminate subscriptions where payments fail repeatedly, fraud is suspected, platform policies are violated, or vendor verification requirements are not met. Suspension or termination does not automatically create entitlement to a refund."] },
     { title: "15. Governing Law", body: ["This Policy shall be governed by the laws of England and Wales. Any disputes shall be subject to the exclusive jurisdiction of the courts of England and Wales.", "Contact: Ehimare Co, United Kingdom. Email: info@culinarytales.app"] },
@@ -1313,7 +1398,7 @@ const vendorAgreementPage: PageDefinition = {
   sections: [
     { title: "1. Purpose", body: ["Eki provides software and business tools that enable vendors to list products, receive orders, manage customers, send promotional offers, track sales and analytics, and operate their business more efficiently. Eki is a technology platform and is not the seller of products listed by vendors."] },
     { title: "2. Vendor Eligibility", bullets: ["Be at least 18 years old", "Provide accurate information", "Complete identity verification when requested", "Have the legal right to sell the products you list", "Comply with all applicable laws"], body: ["Eki may refuse, suspend, or terminate vendor access at its discretion."] },
-    { title: "3. Vendor Verification", body: ["Vendor verification may include government-issued identification, business information, address verification, and additional checks. Verification must be completed before access to certain platform features is granted. Providing false information may result in immediate account suspension."] },
+    { title: "3. Vendor Verification", body: ["Vendor verification may include government-issued identification, business information, address verification, and additional checks. Verification must be completed before access to certain platform services is granted. Providing false information may result in immediate account suspension."] },
     { title: "4. Vendor Responsibilities", bullets: ["Product quality", "Product descriptions", "Product pricing", "Inventory accuracy", "Packaging", "Shipping", "Customer service", "Compliance with food safety laws", "Compliance with import and export regulations"], body: ["Eki does not inspect or guarantee products listed by vendors."] },
     { title: "5. Product Listings", body: ["Vendors must ensure all listings are accurate, lawful, do not mislead buyers, and contain correct pricing and product information. Eki reserves the right to remove any listing at any time."] },
     { title: "6. Prohibited Products", body: ["Vendors may not sell illegal products, counterfeit products, restricted or controlled substances, dangerous goods prohibited by law, or any item prohibited by Eki policies. Violation may result in immediate removal and account termination."] },
@@ -1373,8 +1458,8 @@ function renderVendorSubscriptionLayout(): string {
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Vendor subscriptions | Eki</title>
-  <meta name="description" content="Choose and pay for an Eki vendor subscription on the web." />
+  <title>Business Portal | Eki</title>
+  <meta name="description" content="Manage your Eki vendor account, billing, and services." />
   <style>
     *{box-sizing:border-box}
     body{margin:0;background:#f7faf8;color:#0d1b16;font-family:Arial,sans-serif}
@@ -1401,7 +1486,8 @@ function renderVendorSubscriptionLayout(): string {
     .radio{width:23px;height:23px;border:1px solid #b7c6bf;border-radius:50%;display:grid;place-items:center;color:#fff}.active .radio{background:#076b51;border-color:#076b51}
     .status{display:none;margin:16px 0 0;padding:12px;border-radius:12px;font-size:13px;line-height:1.4}.status.ok{display:block;background:#eaf8ef;border:1px solid #cbeed9;color:#076b51}.status.warn{display:block;background:#fff7e8;border:1px solid #f2d399;color:#8d5100}.status.error{display:block;background:#fff0f0;border:1px solid #f3caca;color:#a62e2e}
     .summary{margin-top:18px;padding:14px;border-radius:13px;background:#f6f8f7;font-size:13px;color:#66736d}.summary strong{display:block;margin-top:4px;color:#0d1b16;font-size:15px}
-    .checkout{width:100%;height:56px;margin-top:18px;border:0;border-radius:15px;background:#076b51;color:#fff;font-weight:800;cursor:pointer}.checkout:disabled{opacity:.6;cursor:not-allowed}
+    .terms-row{display:flex;align-items:flex-start;gap:10px;margin-top:18px;font-size:13px;color:#66736d;line-height:1.45}.terms-row input[type=checkbox]{width:18px;height:18px;margin-top:2px;accent-color:#076b51;flex-shrink:0;cursor:pointer}.terms-row a{color:#076b51;text-decoration:underline}
+    .checkout{width:100%;height:56px;margin-top:14px;border:0;border-radius:15px;background:#076b51;color:#fff;font-weight:800;cursor:pointer}.checkout:disabled{opacity:.6;cursor:not-allowed}
     @media(max-width:820px){.layout{grid-template-columns:1fr;margin-top:12px}.intro{min-height:auto;padding:30px}h1{font-size:38px}.panel{max-width:none}}
     @media(max-width:520px){.nav,.layout{padding-left:14px;padding-right:14px}.intro,.panel{border-radius:18px}.intro{padding:24px}h1{font-size:32px}.panel{padding:18px}}
   </style>
@@ -1410,14 +1496,14 @@ function renderVendorSubscriptionLayout(): string {
   <nav class="nav"><a class="logo" href="/">eki</a><a class="home" href="/">Home â†’</a></nav>
   <main class="layout">
     <section class="intro">
-      <span class="eyebrow">Vendor subscriptions</span>
-      <h1>Upgrade your store on the web.</h1>
-      <p>Enter the same email used for your Eki vendor account. After Stripe confirms payment, your plan changes from Free to Growth or Pro automatically.</p>
-      <div class="trust">Secure website checkout. Subscription payments are not processed inside the Eki mobile app.</div>
+      <span class="eyebrow">Business Portal</span>
+      <h1>Manage your vendor account.</h1>
+      <p>Enter the same email used for your Eki vendor account. After payment is confirmed, your vendor services update automatically in the app.</p>
+      <div class="trust">Secure billing portal. Vendor account payments are processed through Stripe, not inside the Eki mobile app.</div>
     </section>
     <section class="panel">
-      <h2>Choose your plan</h2>
-      <p class="sub">Billing starts on Stripe after you confirm checkout.</p>
+      <h2>Choose vendor services</h2>
+      <p class="sub">Billing starts on Stripe after you confirm. Your vendor account updates automatically.</p>
       <div id="notice" class="status"></div>
       <form id="checkout-form">
         <label for="email">Vendor account email</label>
@@ -1425,24 +1511,26 @@ function renderVendorSubscriptionLayout(): string {
         <div id="plans" class="plans"><div class="sub">Loading plans...</div></div>
         <div id="summary" class="summary" hidden>Selected<strong></strong></div>
         <div id="error" class="status"></div>
+        <label class="terms-row"><input type="checkbox" id="terms-check" /><span>I agree to the <a href="/terms" target="_blank">Terms &amp; Conditions</a>, <a href="/subscription-policy" target="_blank">Billing Policy</a>, and <a href="/privacy" target="_blank">Privacy Policy</a>.</span></label>
         <button id="checkout-button" class="checkout" type="submit" disabled>Continue to Stripe</button>
       </form>
     </section>
   </main>
   <script>
-    const plansNode=document.getElementById('plans'),notice=document.getElementById('notice'),errorNode=document.getElementById('error'),summary=document.getElementById('summary'),summaryValue=summary.querySelector('strong'),emailInput=document.getElementById('email'),checkoutButton=document.getElementById('checkout-button'),form=document.getElementById('checkout-form');
+    const plansNode=document.getElementById('plans'),notice=document.getElementById('notice'),errorNode=document.getElementById('error'),summary=document.getElementById('summary'),summaryValue=summary.querySelector('strong'),emailInput=document.getElementById('email'),checkoutButton=document.getElementById('checkout-button'),form=document.getElementById('checkout-form'),termsCheck=document.getElementById('terms-check');
     let plans=[],selected='GROWTH';
     const params=new URLSearchParams(location.search);emailInput.value=params.get('email')||'';
-    if(params.get('success')==='true')show(notice,'Payment received. Open the Eki app and refresh your plan status.','ok');
-    else if(params.get('cancelled')==='true')show(notice,'Checkout was cancelled. You can start again when ready.','warn');
+    if(params.get('success')==='true')show(notice,'Payment received. Open the Eki app and refresh your vendor account.','ok');
+    else if(params.get('cancelled')==='true')show(notice,'Payment was cancelled. You can start again when ready.','warn');
     function show(node,text,type){node.textContent=text;node.className='status '+type}
     function clear(node){node.textContent='';node.className='status'}
     function esc(value){return String(value||'').replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[char])}
     function money(plan){return new Intl.NumberFormat('en-GB',{style:'currency',currency:plan.currency||'GBP',maximumFractionDigits:0}).format(Number(plan.monthlyPriceCents||0)/100)}
     function planId(plan){const value=String(plan.plan||plan.id||'').toUpperCase();return value==='GROWTH'||value==='PRO'?value:null}
-    function render(){plansNode.innerHTML=plans.map(plan=>{const id=planId(plan),active=id===selected,features=[plan.maxProducts===-1?'Unlimited active products':plan.maxProducts+' active products',plan.analytics?'Analytics access':'Basic dashboard',plan.discounts?'Discount campaigns':'Standard listings',plan.prioritySupport?'Priority support':'Standard support'];return '<button type="button" class="plan '+(active?'active':'')+'" data-plan="'+id+'"><div class="plan-head"><div><div class="plan-name">'+esc(plan.name||id)+'</div><div class="fee">'+esc(((Number(plan.platformFeeBps||0)/100).toFixed(2).replace(/\\.00$/,'')+'%'))+' platform fee per order</div></div><span class="radio">'+(active?'âœ“':'')+'</span></div><div class="price">'+esc(money(plan))+' <small>/ month</small></div><ul class="features">'+features.map(item=>'<li>'+esc(item)+'</li>').join('')+'</ul></button>'}).join('');plansNode.querySelectorAll('[data-plan]').forEach(button=>button.addEventListener('click',()=>{selected=button.dataset.plan;render()}));const active=plans.find(plan=>planId(plan)===selected);summary.hidden=!active;if(active)summaryValue.textContent=(active.name||selected)+' - '+money(active)+'/month';checkoutButton.disabled=!active}
+    function render(){plansNode.innerHTML=plans.map(plan=>{const id=planId(plan),active=id===selected,features=[plan.maxProducts===-1?'Unlimited active products':plan.maxProducts+' active products',plan.analytics?'Analytics access':'Basic dashboard',plan.discounts?'Discount campaigns':'Standard listings',plan.prioritySupport?'Priority support':'Standard support'];return '<button type="button" class="plan '+(active?'active':'')+'" data-plan="'+id+'"><div class="plan-head"><div><div class="plan-name">'+esc(plan.name||id)+'</div><div class="fee">'+esc(((Number(plan.platformFeeBps||0)/100).toFixed(2).replace(/\\.00$/,'')+'%'))+' platform fee per order</div></div><span class="radio">'+(active?'âœ“':'')+'</span></div><div class="price">'+esc(money(plan))+' <small>/ month</small></div><ul class="features">'+features.map(item=>'<li>'+esc(item)+'</li>').join('')+'</ul></button>'}).join('');plansNode.querySelectorAll('[data-plan]').forEach(button=>button.addEventListener('click',()=>{selected=button.dataset.plan;render()}));const active=plans.find(plan=>planId(plan)===selected);summary.hidden=!active;if(active)summaryValue.textContent=(active.name||selected)+' - '+money(active)+'/month';checkoutButton.disabled=!active||!termsCheck.checked}
+    termsCheck.addEventListener('change',render)
     fetch('/api/subscriptions/plans').then(response=>response.json().then(data=>({response,data}))).then(({response,data})=>{if(!response.ok)throw new Error(data.message||'Unable to load plans.');plans=(Array.isArray(data.plans)?data.plans:[]).filter(plan=>planId(plan));if(!plans.some(plan=>planId(plan)===selected)&&plans[0])selected=planId(plans[0]);render();if(!plans.length)show(errorNode,'No paid plans are currently available.','error')}).catch(error=>{plansNode.innerHTML='';show(errorNode,error.message||'Unable to load plans.','error')});
-    form.addEventListener('submit',async event=>{event.preventDefault();clear(errorNode);const email=emailInput.value.trim().toLowerCase();if(!email){show(errorNode,'Enter the email used by your Eki vendor account.','error');return}checkoutButton.disabled=true;checkoutButton.textContent='Opening secure checkout...';try{const response=await fetch('/api/subscriptions/web-checkout',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email,plan:selected})});const data=await response.json().catch(()=>({}));if(!response.ok)throw new Error(data.message||'Could not start checkout.');if(!data.checkoutUrl)throw new Error('Checkout URL was not returned.');location.assign(data.checkoutUrl)}catch(error){show(errorNode,error.message||'Could not start checkout.','error');checkoutButton.disabled=false;checkoutButton.textContent='Continue to Stripe'}});
+    form.addEventListener('submit',async event=>{event.preventDefault();clear(errorNode);if(!termsCheck.checked){show(errorNode,'You must agree to the Terms & Conditions and Billing Policy to continue.','error');return}const email=emailInput.value.trim().toLowerCase();if(!email){show(errorNode,'Enter the email used by your Eki vendor account.','error');return}checkoutButton.disabled=true;checkoutButton.textContent='Opening secure billing...';try{const response=await fetch('/api/subscriptions/web-checkout',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email,plan:selected})});const data=await response.json().catch(()=>({}));if(!response.ok)throw new Error(data.message||'Could not start checkout.');if(!data.checkoutUrl)throw new Error('Checkout URL was not returned.');location.assign(data.checkoutUrl)}catch(error){show(errorNode,error.message||'Could not start checkout.','error');checkoutButton.disabled=false;checkoutButton.textContent='Continue to Stripe'}});
   </script>
 </body>
 </html>`;

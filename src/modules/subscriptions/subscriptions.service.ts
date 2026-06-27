@@ -892,4 +892,82 @@ export const subscriptionsService = {
       },
     };
   },
+
+  async getVendorAccount(userId: string) {
+    const vendor = await prisma.vendor.findUnique({
+      where: { userId },
+      include: { user: { select: { email: true, name: true } } },
+    });
+    if (!vendor) {
+      throw new AppError("Vendor profile required", 403);
+    }
+
+    const sub = await prisma.vendorSubscription.findUnique({
+      where: { vendorId: vendor.id },
+      include: { sellerPlan: { include: { commissionTiers: true } } },
+    });
+    const plan = await getPlanForSubscription(sub);
+
+    const [currentProducts, currentOrders, currentCoupons] = await Promise.all([
+      prisma.product.count({ where: { vendorId: vendor.id, isActive: true } }),
+      prisma.order.count({ where: { vendorId: vendor.id } }),
+      prisma.promoCode.count({ where: { vendorId: vendor.id } }),
+    ]);
+
+    const ordersRemaining =
+      plan.maxOrders == null || plan.maxOrders === -1
+        ? null
+        : Math.max(plan.maxOrders - currentOrders, 0);
+
+    const suspended = (vendor as any).isSuspended === true || (vendor as any).adminStatus === "suspended";
+    const rawVerification = ((vendor as any).verificationStatus ?? "PENDING_DOCS").toString();
+    const verificationStatus = rawVerification.toLowerCase().replace(/_/g, "_");
+
+    const vendorStatus = suspended
+      ? "suspended"
+      : verificationStatus === "verified"
+        ? "active"
+        : verificationStatus === "rejected"
+          ? "rejected"
+          : "pending";
+
+    const storeStatus = suspended
+      ? "closed"
+      : (vendor as any).isActive === false
+        ? "closed"
+        : currentProducts > 0
+          ? "open"
+          : "setup";
+
+    return {
+      vendorStatus,
+      storeStatus,
+      verificationStatus,
+      accountStatus: sub?.status === "ACTIVE" ? "active" : "inactive",
+      serviceLevel: plan.slug,
+      serviceName: plan.name,
+      renewalDate: sub?.currentPeriodEnd?.toISOString() ?? null,
+      limits: {
+        maxProducts: plan.maxProducts,
+        currentProducts,
+        maxOrders: plan.maxOrders,
+        currentOrders,
+        ordersRemaining,
+        maxCoupons: plan.discounts ? -1 : 0,
+        currentCoupons,
+        canReceiveOrders: plan.canReceiveOrders,
+        canSendOffers: plan.marketingTools || plan.flashSales || plan.bundles || plan.discounts,
+        canAccessAnalytics: plan.analytics,
+        bundles: plan.bundles,
+        flashSales: plan.flashSales,
+        discounts: plan.discounts,
+      },
+      usage: {
+        products: currentProducts,
+        orders: currentOrders,
+        coupons: currentCoupons,
+      },
+      lastSync: new Date().toISOString(),
+    };
+  },
 };

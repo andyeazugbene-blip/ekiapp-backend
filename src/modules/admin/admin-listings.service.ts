@@ -215,14 +215,26 @@ export const adminListingsService = {
     const pagination = parsePagination(query);
     const isSuspended = query.suspended === "true" ? true : query.suspended === "false" ? false : undefined;
 
+    const searchTerm = typeof query.search === "string" && query.search.trim().length > 0 ? query.search.trim() : undefined;
+
     const where: Record<string, unknown> = {};
     if (verificationStatus) where.verificationStatus = verificationStatus;
     if (isSuspended !== undefined) where.isSuspended = isSuspended;
+    if (searchTerm) {
+      where.OR = [
+        { storeName: { contains: searchTerm, mode: "insensitive" } },
+        { contactEmail: { contains: searchTerm, mode: "insensitive" } },
+        { city: { contains: searchTerm, mode: "insensitive" } },
+        { country: { contains: searchTerm, mode: "insensitive" } },
+        { user: { name: { contains: searchTerm, mode: "insensitive" } } },
+        { user: { email: { contains: searchTerm, mode: "insensitive" } } },
+      ];
+    }
 
     const { items, nextCursor } = await paginate(
       ({ take, cursor, skip }) =>
         prisma.vendor.findMany({
-          where,
+          where: where as any,
           include: {
             user: { select: { id: true, email: true, name: true, role: true } },
           },

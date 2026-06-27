@@ -54,7 +54,7 @@ app.disable("x-powered-by");
 
 // Security headers. CSP must be relaxed on /api/docs and server-rendered
 // public HTML pages that use inline scripts.
-const publicHtmlPaths = new Set(["/", "/find-order", "/help", "/support", "/privacy", "/terms", "/account-deletion", "/refund-policy", "/cookie-policy", "/subscription-policy", "/acceptable-use", "/vendor-agreement", "/vendor/subscription", "/vendor", "/cart", "/checkout"]);
+const publicHtmlPaths = new Set(["/", "/find-order", "/help", "/support", "/privacy", "/terms", "/account-deletion", "/refund-policy", "/cookie-policy", "/subscription-policy", "/acceptable-use", "/vendor-agreement", "/vendor/subscription", "/vendor", "/cart", "/checkout", "/business-portal"]);
 const swaggerAndPublicPagePaths = (req: { path: string }) =>
   req.path === "/api/docs" || req.path.startsWith("/store") || req.path.startsWith("/invite/") || publicHtmlPaths.has(req.path);
 
@@ -169,6 +169,9 @@ app.get("/invite/:code", (req, res, next) => {
   Promise.resolve(getPublicInvitePage(req, res)).catch(next);
 });
 app.get("/vendor/subscription", (req, res, next) => {
+  Promise.resolve(getPublicVendorSubscriptionPage(req, res)).catch(next);
+});
+app.get("/business-portal", (req, res, next) => {
   Promise.resolve(getPublicVendorSubscriptionPage(req, res)).catch(next);
 });
 app.get("/vendor", (req, res, next) => {

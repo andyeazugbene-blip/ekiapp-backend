@@ -98,3 +98,8 @@ export async function getPlanLimits(request: Request, response: Response): Promi
   const result = await subscriptionsService.getPlanLimits(requireUserId(request));
   response.status(200).json(result);
 }
+
+export async function getVendorAccount(request: Request, response: Response): Promise<void> {
+  const account = await subscriptionsService.getVendorAccount(requireUserId(request));
+  response.status(200).json({ account });
+}

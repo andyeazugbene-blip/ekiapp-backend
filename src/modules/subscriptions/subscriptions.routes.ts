@@ -10,6 +10,7 @@ import {
   getPlanLimits,
   getPlans,
   getSubscription,
+  getVendorAccount,
 } from "./subscriptions.controller";
 
 export const subscriptionsRouter = Router();
@@ -25,3 +26,7 @@ subscriptionsRouter.get("/me/limits", asyncHandler(getPlanLimits));
 subscriptionsRouter.post("/activate", requireRole("VENDOR", "ADMIN"), asyncHandler(activateSubscription));
 subscriptionsRouter.post("/checkout", asyncHandler(createCheckoutSession));
 subscriptionsRouter.post("/cancel", asyncHandler(cancelSubscription));
+
+export const vendorAccountRouter = Router();
+vendorAccountRouter.use(authenticate);
+vendorAccountRouter.get("/account", asyncHandler(getVendorAccount));

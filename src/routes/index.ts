@@ -29,6 +29,7 @@ import { giftCardsRouter as giftCardsRouter_ } from "../modules/gift-cards/gift-
 import { shipmentsRouter } from "../modules/shipments/shipments.routes";
 import { stripeRouter } from "../modules/stripe/stripe.routes";
 import { subscriptionsRouter } from "../modules/subscriptions/subscriptions.routes";
+import { vendorAccountRouter } from "../modules/subscriptions/subscriptions.routes";
 import { uploadsRouter } from "../modules/uploads/uploads.routes";
 import { vendorsRouter } from "../modules/vendors/vendors.routes";
 
@@ -99,6 +100,7 @@ apiRouter.use("/promo-codes", promosRouter);
 apiRouter.use("/promos", promosRouter);
 apiRouter.use("/referrals", referralsRouter);
 apiRouter.use("/subscriptions", subscriptionsRouter);
+apiRouter.use("/vendor", vendorAccountRouter);
 apiRouter.use("/push-tokens", pushTokensRouter);
 apiRouter.use("/paystack", paystackRouter);
 apiRouter.use("/reports", reportsRouter);
