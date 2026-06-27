@@ -22,6 +22,7 @@ import { publicStoresRouter } from "../modules/public-stores/public-stores.route
 import { paystackRouter } from "../modules/paystack/paystack.routes";
 import { pushTokensRouter } from "../modules/push-tokens/push-tokens.routes";
 import { referralsRouter } from "../modules/referrals/referrals.routes";
+import { reportsRouter } from "../modules/reports/reports.routes";
 import { reviewsRouter } from "../modules/reviews/reviews.routes";
 import { adminRewardsRouter, rewardsRouter as rewardsRouter_ } from "../modules/rewards/rewards.routes";
 import { giftCardsRouter as giftCardsRouter_ } from "../modules/gift-cards/gift-cards.routes";
@@ -100,6 +101,7 @@ apiRouter.use("/referrals", referralsRouter);
 apiRouter.use("/subscriptions", subscriptionsRouter);
 apiRouter.use("/push-tokens", pushTokensRouter);
 apiRouter.use("/paystack", paystackRouter);
+apiRouter.use("/reports", reportsRouter);
 apiRouter.use("/reviews", reviewsRouter);
 apiRouter.use("/rewards", rewardsRouter_);
 apiRouter.use("/gift-cards", giftCardsRouter_);

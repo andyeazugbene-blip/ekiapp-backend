@@ -32,6 +32,10 @@ import {
   adminModerateReview,
 } from "../reviews/reviews.controller";
 import {
+  adminListReports,
+  adminReviewReport,
+} from "../reports/reports.controller";
+import {
   adminGetDispute,
   adminListDisputes,
   adminResolveDispute,
@@ -245,6 +249,10 @@ adminRouter.patch("/vendors/:id/seller-plan", asyncHandler(requireAdminPermissio
 // Review moderation
 adminRouter.get("/reviews", asyncHandler(requireAdminPermission("reviews.read")), asyncHandler(adminListReviews));
 adminRouter.patch("/reviews/:id/moderate", asyncHandler(requireAdminPermission("reviews.mutate")), asyncHandler(adminModerateReview));
+
+// Content reports
+adminRouter.get("/reports", asyncHandler(requireAdminPermission("reports.read")), asyncHandler(adminListReports));
+adminRouter.patch("/reports/:id", asyncHandler(requireAdminPermission("reports.mutate")), asyncHandler(adminReviewReport));
 
 // Escrow disputes
 adminRouter.get("/disputes", asyncHandler(requireAdminPermission("disputes.read")), asyncHandler(adminListDisputes));

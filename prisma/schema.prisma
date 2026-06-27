@@ -1285,3 +1285,34 @@ model ScheduledCommunication {
   @@index([status, scheduledFor])
   @@index([createdBy])
 }
+
+// ─── Content Reports & User Blocks ─────────────────────────────────────────
+
+model ContentReport {
+  id          String   @id @default(cuid())
+  reporterId  String
+  targetType  String   // "review" | "message" | "product" | "store"
+  targetId    String
+  reason      String   // "inappropriate" | "spam" | "harassment" | "fraud" | "other"
+  details     String?
+  status      String   @default("PENDING") // PENDING | REVIEWED | DISMISSED
+  reviewedBy  String?
+  reviewedAt  DateTime?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([reporterId])
+  @@index([targetType, targetId])
+  @@index([status])
+}
+
+model UserBlock {
+  id          String   @id @default(cuid())
+  blockerId   String
+  blockedId   String
+  createdAt   DateTime @default(now())
+
+  @@unique([blockerId, blockedId])
+  @@index([blockerId])
+  @@index([blockedId])
+}
