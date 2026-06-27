@@ -663,7 +663,7 @@ function renderHomeLayout(page: PageDefinition): string {
         <h2>Vendor services built for growth.</h2>
         <p>Eki provides the tools and infrastructure to help food vendors manage and grow their businesses.</p>
       </div>
-      <div class="pricing-grid">
+      <div id="pricing-grid" class="pricing-grid">
         <div class="pricing-card">
           <div class="pricing-name">Starter</div>
           <p class="pricing-desc">Get started selling on Eki with essential commerce tools.</p>
@@ -678,41 +678,37 @@ function renderHomeLayout(page: PageDefinition): string {
           </ul>
           <a class="pricing-cta outline" href="/business-portal">Get started</a>
         </div>
-        <div class="pricing-card popular">
-          <span class="pricing-badge">Most popular</span>
-          <div class="pricing-name">Growth</div>
-          <p class="pricing-desc">Scale your store with more products, analytics, and marketing tools.</p>
-          <div class="pricing-price">£30 <small>/ month</small></div>
-          <p class="pricing-fee">7% platform fee per order</p>
-          <ul class="pricing-list">
-            <li>Up to 50 active products</li>
-            <li>Unlimited orders</li>
-            <li>Analytics dashboard</li>
-            <li>Discount campaigns</li>
-            <li>Marketing tools</li>
-            <li>Priority support</li>
-          </ul>
-          <a class="pricing-cta" href="/business-portal">Activate Growth</a>
-        </div>
-        <div class="pricing-card">
-          <div class="pricing-name">Pro</div>
-          <p class="pricing-desc">Full commerce infrastructure for high-volume vendors.</p>
-          <div class="pricing-price">£80 <small>/ month</small></div>
-          <p class="pricing-fee">4% platform fee per order</p>
-          <ul class="pricing-list">
-            <li>Unlimited active products</li>
-            <li>Unlimited orders</li>
-            <li>Advanced analytics</li>
-            <li>Flash sales &amp; bundles</li>
-            <li>Full marketing suite</li>
-            <li>Dedicated support</li>
-          </ul>
-          <a class="pricing-cta" href="/business-portal">Activate Pro</a>
-        </div>
       </div>
       <p class="pricing-note">All vendor services are managed securely through the Eki Business Portal.</p>
     </div>
   </section>
+  <script>
+  (function(){
+    var grid=document.getElementById('pricing-grid');
+    function esc(v){return String(v||'').replace(/[&<>"']/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]})}
+    function money(cents,cur){return new Intl.NumberFormat('en-GB',{style:'currency',currency:cur||'GBP',maximumFractionDigits:0}).format(Number(cents||0)/100)}
+    function fee(bps){return ((Number(bps||0)/100).toFixed(2).replace(/\\.00$/,''))+'%'}
+    function items(p){var a=[];a.push(p.maxProducts===-1?'Unlimited active products':p.maxProducts+' active products');a.push(p.maxOrders==null||p.maxOrders===-1?'Unlimited orders':p.maxOrders+' orders');if(p.analytics)a.push('Analytics dashboard');if(p.discounts)a.push('Discount campaigns');if(p.flashSales)a.push('Flash sales & bundles');if(p.marketingTools)a.push('Marketing tools');a.push(p.prioritySupport?'Priority support':'Standard support');return a}
+    fetch('/api/subscriptions/plans').then(function(r){return r.json()}).then(function(d){
+      var plans=(Array.isArray(d.plans)?d.plans:[]).filter(function(p){var k=String(p.plan||p.id||'').toUpperCase();return k==='GROWTH'||k==='PRO'});
+      plans.sort(function(a,b){return(a.displayOrder||0)-(b.displayOrder||0)});
+      plans.forEach(function(p){
+        var k=String(p.plan||p.id||'').toUpperCase();
+        var popular=k==='GROWTH';
+        var card=document.createElement('div');
+        card.className='pricing-card'+(popular?' popular':'');
+        card.innerHTML=(popular?'<span class="pricing-badge">Most popular</span>':'')+
+          '<div class="pricing-name">'+esc(p.name||k)+'</div>'+
+          '<p class="pricing-desc">'+(k==='GROWTH'?'Scale your store with more products, analytics, and marketing tools.':'Full commerce infrastructure for high-volume vendors.')+'</p>'+
+          '<div class="pricing-price">'+esc(money(p.monthlyPriceCents,p.currency))+' <small>/ month</small></div>'+
+          '<p class="pricing-fee">'+esc(fee(p.platformFeeBps||p.defaultPlatformFeeBps))+' platform fee per order</p>'+
+          '<ul class="pricing-list">'+items(p).map(function(i){return'<li>'+esc(i)+'</li>'}).join('')+'</ul>'+
+          '<a class="pricing-cta" href="/business-portal">Activate '+esc(p.name||k)+'</a>';
+        grid.appendChild(card);
+      });
+    }).catch(function(){});
+  })();
+  </script>
 
   <!-- ── Order Lookup ── -->
   <section class="order-band">
