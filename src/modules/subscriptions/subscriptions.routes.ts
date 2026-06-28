@@ -5,6 +5,7 @@ import { asyncHandler } from "../../shared/utils/async-handler";
 import {
   activateSubscription,
   cancelSubscription,
+  createBillingPortalSession,
   createCheckoutSession,
   createWebCheckoutSession,
   getPlanLimits,
@@ -18,6 +19,7 @@ export const subscriptionsRouter = Router();
 // Public: list available plans
 subscriptionsRouter.get("/plans", asyncHandler(getPlans));
 subscriptionsRouter.post("/web-checkout", asyncHandler(createWebCheckoutSession));
+subscriptionsRouter.post("/billing-portal", asyncHandler(createBillingPortalSession));
 
 // Authenticated (vendor)
 subscriptionsRouter.use(authenticate);

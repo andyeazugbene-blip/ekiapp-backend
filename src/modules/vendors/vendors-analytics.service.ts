@@ -182,7 +182,7 @@ export const vendorAnalyticsService = {
     const vendor = await getVendor(userId);
 
     if (!(await subscriptionsService.checkFeatureAccess(vendor.id, "analytics"))) {
-      throw new AppError("Analytics is not available on your current seller plan. Upgrade to unlock.", 403);
+      throw new AppError("Analytics is not included in your current vendor services. Visit the Business Portal to adjust your account.", 403);
     }
 
     const orderWhere: Prisma.OrderWhereInput = {

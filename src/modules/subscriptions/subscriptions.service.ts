@@ -595,7 +595,7 @@ export const subscriptionsService = {
     // or when the seller plan is explicitly the 'starter' slug. Otherwise require web checkout.
     if (!sellerPlan || (sellerPlan.monthlyPriceCents > 0 && sellerPlan.slug !== "starter")) {
       throw new AppError(
-        "Paid seller plans require website checkout. Complete the purchase on the website and the app will unlock features after Stripe confirms payment.",
+        "Paid vendor services require checkout through the Business Portal. Visit the Business Portal to manage your vendor account.",
         409,
         null,
         "SUBSCRIPTIONS_NOT_AVAILABLE",
@@ -643,7 +643,7 @@ export const subscriptionsService = {
 
     if (currentCount >= limits.maxProducts) {
       throw new AppError(
-        `Your ${limits.name} seller plan allows a maximum of ${limits.maxProducts} active products.`,
+        `Your ${limits.name} vendor services allow a maximum of ${limits.maxProducts} active products.`,
         403,
       );
     }
@@ -709,7 +709,7 @@ export const subscriptionsService = {
       throw new AppError("This seller plan is currently unavailable", 409);
     }
     if (planConfig.monthlyPriceCents <= 0) {
-      throw new AppError("This seller plan does not require paid checkout", 409);
+      throw new AppError("This service level does not require paid checkout", 409);
     }
 
     const frontendUrl = process.env.FRONTEND_URL ?? "https://culinarytales.app";
@@ -762,8 +762,8 @@ export const subscriptionsService = {
           price_data: {
             currency: planConfig.currency.toLowerCase(),
             product_data: {
-              name: `${planConfig.name} Seller Plan`,
-              description: planConfig.description ?? `${planConfig.name} seller plan`,
+              name: `Eki ${planConfig.name} Vendor Services`,
+              description: planConfig.description ?? `Eki ${planConfig.name} vendor services`,
             },
             unit_amount: planConfig.monthlyPriceCents,
             recurring: { interval: "month" as const },
@@ -775,8 +775,8 @@ export const subscriptionsService = {
       customer: customerId,
       mode: "subscription",
       line_items: [lineItem],
-      success_url: `${frontendUrl}/vendor/subscription?success=true&email=${encodeURIComponent(input.email)}`,
-      cancel_url: `${frontendUrl}/vendor/subscription?cancelled=true&email=${encodeURIComponent(input.email)}`,
+      success_url: `${frontendUrl}/business-portal?success=true&email=${encodeURIComponent(input.email)}`,
+      cancel_url: `${frontendUrl}/business-portal?cancelled=true&email=${encodeURIComponent(input.email)}`,
       metadata,
       subscription_data: { metadata },
     });
@@ -801,10 +801,10 @@ export const subscriptionsService = {
       where: { vendorId: vendor.id },
     });
     if (!subscription) {
-      throw new AppError("No seller plan found", 404);
+      throw new AppError("No active vendor services found", 404);
     }
     if (subscription.status === "CANCELLED") {
-      throw new AppError("Seller plan already cancelled", 409);
+      throw new AppError("Vendor services already cancelled", 409);
     }
 
     if (subscription.stripeSubscriptionId) {
@@ -822,6 +822,45 @@ export const subscriptionsService = {
       include: { sellerPlan: { include: { commissionTiers: true } } },
     });
     return formatSubscriptionResponse(updated);
+  },
+
+  async createBillingPortalSession(email: string): Promise<{ portalUrl: string }> {
+    const normalizedEmail = email.trim().toLowerCase();
+    if (!normalizedEmail) {
+      throw new AppError("Email is required", 400);
+    }
+
+    const user = await prisma.user.findFirst({
+      where: { email: { equals: normalizedEmail, mode: "insensitive" } },
+      select: { id: true },
+    });
+    if (!user) {
+      throw new AppError("No account found with this email", 404);
+    }
+
+    const vendor = await prisma.vendor.findUnique({
+      where: { userId: user.id },
+      select: { id: true },
+    });
+    if (!vendor) {
+      throw new AppError("Vendor account not found", 404);
+    }
+
+    const subscription = await prisma.vendorSubscription.findUnique({
+      where: { vendorId: vendor.id },
+      select: { stripeCustomerId: true },
+    });
+    if (!subscription?.stripeCustomerId) {
+      throw new AppError("No billing account found. Complete your first checkout to set up billing.", 404);
+    }
+
+    const frontendUrl = process.env.FRONTEND_URL ?? "https://culinarytales.app";
+    const portalSession = await stripe.billingPortal.sessions.create({
+      customer: subscription.stripeCustomerId,
+      return_url: `${frontendUrl}/business-portal`,
+    });
+
+    return { portalUrl: portalSession.url };
   },
 
   async handleSubscriptionWebhook(

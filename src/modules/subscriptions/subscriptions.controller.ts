@@ -103,3 +103,12 @@ export async function getVendorAccount(request: Request, response: Response): Pr
   const account = await subscriptionsService.getVendorAccount(requireUserId(request));
   response.status(200).json({ account });
 }
+
+export async function createBillingPortalSession(request: Request, response: Response): Promise<void> {
+  const email = request.body?.email;
+  if (!email || typeof email !== "string") {
+    throw new AppError("Email is required", 400);
+  }
+  const result = await subscriptionsService.createBillingPortalSession(email);
+  response.status(200).json(result);
+}
