@@ -4,6 +4,7 @@ import { prisma } from "../../lib/prisma";
 import { CURSOR_ORDER_BY } from "../../shared/constants";
 import { AppError } from "../../shared/errors/app-error";
 import { buildVendorShareUrl } from "../vendors/vendors.service";
+import { subscriptionsService } from "../subscriptions/subscriptions.service";
 import type {
   CreatePromoCodeInput,
   CreateVendorPromoCodeInput,
@@ -159,6 +160,7 @@ async function resolvePromoVendorForRedemption(
 export const promosService = {
   async createPromoCode(input: CreatePromoCodeInput): Promise<PromoCode> {
     const vendor = await requirePromoVendor(input);
+    await subscriptionsService.enforceCouponLimit(vendor.id);
     const existing = await prisma.promoCode.findFirst({
       where: { vendorId: vendor.id, code: input.code },
       select: { id: true },
@@ -205,6 +207,11 @@ export const promosService = {
 
   async createVendorPromoCode(userId: string, input: CreateVendorPromoCodeInput): Promise<VendorPromoCodeView> {
     const vendor = await requireVendorByUserId(userId);
+    if (input.code?.startsWith("BUNDLE")) {
+      await subscriptionsService.enforceBundleLimit(vendor.id);
+    } else {
+      await subscriptionsService.enforceCouponLimit(vendor.id);
+    }
     const existing = await prisma.promoCode.findFirst({
       where: { vendorId: vendor.id, code: input.code },
       select: { id: true },

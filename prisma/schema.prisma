@@ -996,12 +996,19 @@ model SellerPlan {
   maxProducts           Int                  @default(10)
   maxImagesPerProduct   Int                  @default(3)
   maxOrders             Int?
+  maxCoupons            Int?
+  maxBundles            Int?
   analytics             Boolean              @default(false)
   prioritySupport       Boolean              @default(false)
   flashSales            Boolean              @default(false)
   bundles               Boolean              @default(false)
   discounts             Boolean              @default(false)
   marketingTools        Boolean              @default(false)
+  customerDatabase      Boolean              @default(false)
+  repeatBuyerMarketing  Boolean              @default(false)
+  professionalStorefront Boolean             @default(false)
+  orderManagement       Boolean              @default(true)
+  storeLinkSharing      Boolean              @default(false)
   canReceiveOrders      Boolean              @default(true)
   isActive              Boolean              @default(true)
   isDefault             Boolean              @default(false)

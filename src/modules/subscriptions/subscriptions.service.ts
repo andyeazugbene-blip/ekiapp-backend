@@ -47,12 +47,19 @@ function stripLegacyConfig(plan: (typeof DEFAULT_PLAN_CONFIGS)[SubscriptionPlan]
     maxProducts: plan.maxProducts,
     maxImagesPerProduct: plan.maxImagesPerProduct,
     maxOrders: plan.maxOrders,
+    maxCoupons: plan.maxCoupons,
+    maxBundles: plan.maxBundles,
     analytics: plan.analytics,
     prioritySupport: plan.prioritySupport,
     flashSales: plan.flashSales,
     bundles: plan.bundles,
     discounts: plan.discounts,
     marketingTools: plan.marketingTools,
+    customerDatabase: plan.customerDatabase,
+    repeatBuyerMarketing: plan.repeatBuyerMarketing,
+    professionalStorefront: plan.professionalStorefront,
+    orderManagement: plan.orderManagement,
+    storeLinkSharing: plan.storeLinkSharing,
     canReceiveOrders: plan.canReceiveOrders,
     isActive: plan.isActive,
     isDefault: plan.isDefault,
@@ -75,12 +82,19 @@ function sellerPlanData(input: SubscriptionPlanConfigInput) {
     maxProducts: input.maxProducts,
     maxImagesPerProduct: input.maxImagesPerProduct,
     maxOrders: input.maxOrders ?? null,
+    maxCoupons: input.maxCoupons ?? null,
+    maxBundles: input.maxBundles ?? null,
     analytics: input.analytics,
     prioritySupport: input.prioritySupport,
     flashSales: input.flashSales,
     bundles: input.bundles,
     discounts: input.discounts,
     marketingTools: input.marketingTools,
+    customerDatabase: input.customerDatabase ?? false,
+    repeatBuyerMarketing: input.repeatBuyerMarketing ?? false,
+    professionalStorefront: input.professionalStorefront ?? false,
+    orderManagement: input.orderManagement ?? true,
+    storeLinkSharing: input.storeLinkSharing ?? false,
     canReceiveOrders: input.canReceiveOrders,
     isActive: input.isActive,
     isDefault: input.isDefault,
@@ -131,12 +145,19 @@ function formatPlanResponse(plan: SellerPlanWithTiers) {
     maxProducts: plan.maxProducts,
     maxImagesPerProduct: plan.maxImagesPerProduct,
     maxOrders: plan.maxOrders,
+    maxCoupons: (plan as any).maxCoupons ?? null,
+    maxBundles: (plan as any).maxBundles ?? null,
     analytics: plan.analytics,
     prioritySupport: plan.prioritySupport,
     flashSales: plan.flashSales,
     bundles: plan.bundles,
     discounts: plan.discounts,
     marketingTools: plan.marketingTools,
+    customerDatabase: (plan as any).customerDatabase ?? false,
+    repeatBuyerMarketing: (plan as any).repeatBuyerMarketing ?? false,
+    professionalStorefront: (plan as any).professionalStorefront ?? false,
+    orderManagement: (plan as any).orderManagement ?? true,
+    storeLinkSharing: (plan as any).storeLinkSharing ?? false,
     canReceiveOrders: plan.canReceiveOrders,
     isActive: plan.isActive,
     isDefault: plan.isDefault,
@@ -651,11 +672,53 @@ export const subscriptionsService = {
 
   async checkFeatureAccess(
     vendorId: string,
-    feature: "analytics" | "flashSales" | "bundles" | "discounts",
+    feature: "analytics" | "flashSales" | "bundles" | "discounts" | "customerDatabase" | "repeatBuyerMarketing" | "professionalStorefront" | "orderManagement" | "storeLinkSharing" | "marketingTools" | "prioritySupport",
   ): Promise<boolean> {
     const subscription = await prisma.vendorSubscription.findUnique({ where: { vendorId } });
     const limits = await getPlanForSubscription(subscription);
-    return Boolean(limits[feature]);
+    return Boolean((limits as any)[feature]);
+  },
+
+  async enforceCouponLimit(vendorId: string): Promise<void> {
+    const subscription = await prisma.vendorSubscription.findUnique({ where: { vendorId } });
+    const limits = await getPlanForSubscription(subscription);
+    const maxCoupons = (limits as any).maxCoupons;
+    if (maxCoupons === null || maxCoupons === undefined || maxCoupons === -1) return;
+    if (maxCoupons === 0) {
+      throw new AppError(
+        `Coupons are not included in your ${limits.name} vendor services. Visit the Business Portal to adjust your account.`,
+        403,
+      );
+    }
+    const currentCount = await prisma.promoCode.count({ where: { vendorId } });
+    if (currentCount >= maxCoupons) {
+      throw new AppError(
+        `Your ${limits.name} vendor services allow a maximum of ${maxCoupons} coupons.`,
+        403,
+      );
+    }
+  },
+
+  async enforceBundleLimit(vendorId: string): Promise<void> {
+    const subscription = await prisma.vendorSubscription.findUnique({ where: { vendorId } });
+    const limits = await getPlanForSubscription(subscription);
+    const maxBundles = (limits as any).maxBundles;
+    if (maxBundles === null || maxBundles === undefined || maxBundles === -1) return;
+    if (maxBundles === 0) {
+      throw new AppError(
+        `Bundles are not included in your ${limits.name} vendor services. Visit the Business Portal to adjust your account.`,
+        403,
+      );
+    }
+    const currentCount = await prisma.promoCode.count({
+      where: { vendorId, code: { startsWith: "BUNDLE" } },
+    });
+    if (currentCount >= maxBundles) {
+      throw new AppError(
+        `Your ${limits.name} vendor services allow a maximum of ${maxBundles} bundles.`,
+        403,
+      );
+    }
   },
 
   async createCheckoutSession(userId: string, plan: string): Promise<{ checkoutUrl: string }> {
@@ -978,6 +1041,9 @@ export const subscriptionsService = {
           ? "open"
           : "setup";
 
+    const maxCoupons = (plan as any).maxCoupons;
+    const maxBundles = (plan as any).maxBundles;
+
     return {
       vendorStatus,
       storeStatus,
@@ -985,6 +1051,9 @@ export const subscriptionsService = {
       accountStatus: sub?.status === "ACTIVE" ? "active" : "inactive",
       serviceLevel: plan.slug,
       serviceName: plan.name,
+      monthlyPriceCents: plan.monthlyPriceCents,
+      platformFeeBps: plan.defaultPlatformFeeBps,
+      platformFeePercent: percentFromBps(plan.defaultPlatformFeeBps),
       renewalDate: sub?.currentPeriodEnd?.toISOString() ?? null,
       limits: {
         maxProducts: plan.maxProducts,
@@ -992,14 +1061,29 @@ export const subscriptionsService = {
         maxOrders: plan.maxOrders,
         currentOrders,
         ordersRemaining,
-        maxCoupons: plan.discounts ? -1 : 0,
+        maxCoupons: maxCoupons ?? (plan.discounts ? -1 : 0),
         currentCoupons,
+        maxBundles: maxBundles ?? (plan.bundles ? -1 : 0),
         canReceiveOrders: plan.canReceiveOrders,
         canSendOffers: plan.marketingTools || plan.flashSales || plan.bundles || plan.discounts,
         canAccessAnalytics: plan.analytics,
         bundles: plan.bundles,
         flashSales: plan.flashSales,
         discounts: plan.discounts,
+      },
+      features: {
+        analytics: plan.analytics,
+        prioritySupport: plan.prioritySupport,
+        flashSales: plan.flashSales,
+        bundles: plan.bundles,
+        discounts: plan.discounts,
+        marketingTools: plan.marketingTools,
+        customerDatabase: (plan as any).customerDatabase ?? false,
+        repeatBuyerMarketing: (plan as any).repeatBuyerMarketing ?? false,
+        professionalStorefront: (plan as any).professionalStorefront ?? false,
+        orderManagement: (plan as any).orderManagement ?? true,
+        storeLinkSharing: (plan as any).storeLinkSharing ?? false,
+        canReceiveOrders: plan.canReceiveOrders,
       },
       usage: {
         products: currentProducts,
