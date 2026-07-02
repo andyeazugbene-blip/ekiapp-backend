@@ -31,6 +31,6 @@ export async function adminDeleteCampaign(req: Request, res: Response): Promise<
 
 export async function listMyCampaigns(req: Request, res: Response): Promise<void> {
   const buyerId = req.user?.id ?? null;
-  const campaigns = await campaignsService.listEligibleForUser(buyerId);
+  const campaigns = await campaignsService.listForDisplay(buyerId);
   res.json({ campaigns });
 }

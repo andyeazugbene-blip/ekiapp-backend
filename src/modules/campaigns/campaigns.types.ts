@@ -43,4 +43,6 @@ export interface CampaignView {
   discountValue: number | null;
   createdAt: string;
   updatedAt: string;
+  /** Present on buyer-facing listings: whether this buyer currently meets the eligibility rules. */
+  eligible?: boolean;
 }

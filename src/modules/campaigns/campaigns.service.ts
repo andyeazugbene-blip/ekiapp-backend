@@ -138,8 +138,11 @@ export const campaignsService = {
     await prisma.campaign.delete({ where: { id: campaignId } });
   },
 
-  // ─── Buyer: campaigns this user currently qualifies for ──────────────────
-  async listEligibleForUser(buyerId: string | null): Promise<CampaignView[]> {
+  // ─── Buyer: all live campaigns with per-buyer eligibility flag ────────────
+  // Display listing — every live campaign is returned so marketing banners
+  // always show; `eligible` says whether THIS buyer currently meets the rules.
+  // Discount application stays server-enforced (payments uses listEligibleForUser).
+  async listForDisplay(buyerId: string | null): Promise<CampaignView[]> {
     const now = new Date();
 
     const campaigns = await prisma.campaign.findMany({
@@ -155,7 +158,7 @@ export const campaignsService = {
 
     // Anonymous buyers only qualify for campaigns with no eligibility rules at all.
     if (!buyerId) {
-      return live.filter((c) => isRuleFree(c)).map(toView);
+      return live.map((c) => ({ ...toView(c), eligible: isRuleFree(c) }));
     }
 
     const [cart, orderStats] = await Promise.all([
@@ -180,7 +183,7 @@ export const campaignsService = {
     const totalSpendCents = orderStats.reduce((sum, o) => sum + o.subtotalAmount, 0);
     const isNewCustomer = paidOrderCount === 0;
 
-    const eligible = live.filter((campaign) => {
+    const meetsRules = (campaign: Campaign): boolean => {
       if (campaign.minimumCartAmountCents != null && cartTotalCents < campaign.minimumCartAmountCents) return false;
       if (campaign.requiredProductIds.length > 0 && !campaign.requiredProductIds.some((id) => cartProductIds.has(id))) return false;
       if (campaign.requiredCategoryIds.length > 0 && !campaign.requiredCategoryIds.some((id) => cartCategoryIds.has(id))) return false;
@@ -188,9 +191,15 @@ export const campaignsService = {
       if (campaign.minimumSpendCents != null && totalSpendCents < campaign.minimumSpendCents) return false;
       if (campaign.newCustomerOnly && !isNewCustomer) return false;
       return true;
-    });
+    };
 
-    return eligible.map(toView);
+    return live.map((c) => ({ ...toView(c), eligible: meetsRules(c) }));
+  },
+
+  // ─── Buyer: campaigns this user currently qualifies for (discount engine) ─
+  async listEligibleForUser(buyerId: string | null): Promise<CampaignView[]> {
+    const all = await this.listForDisplay(buyerId);
+    return all.filter((c) => c.eligible === true);
   },
 };
 

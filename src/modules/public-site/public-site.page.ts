@@ -664,19 +664,8 @@ function renderHomeLayout(page: PageDefinition): string {
         <p>Eki provides the tools and infrastructure to help food vendors manage and grow their businesses.</p>
       </div>
       <div id="pricing-grid" class="pricing-grid">
-        <div class="pricing-card">
-          <div class="pricing-name">Starter</div>
-          <p class="pricing-desc">Get started selling on Eki with essential commerce tools.</p>
-          <div class="pricing-price">Free</div>
-          <p class="pricing-fee">10% platform fee per order</p>
-          <ul class="pricing-list">
-            <li>Up to 5 active products</li>
-            <li>Up to 3 orders</li>
-            <li>Store page</li>
-            <li>Order management</li>
-            <li>Standard support</li>
-          </ul>
-          <a class="pricing-cta outline" href="/business-portal">Get started</a>
+        <div class="pricing-card" id="pricing-loading" style="grid-column:1/-1;text-align:center;border-style:dashed">
+          <p class="pricing-desc" style="margin:24px 0">Loading vendor services&hellip;</p>
         </div>
       </div>
       <p class="pricing-note">All vendor services are managed securely through the Eki Business Portal.</p>
@@ -686,27 +675,48 @@ function renderHomeLayout(page: PageDefinition): string {
   (function(){
     var grid=document.getElementById('pricing-grid');
     function esc(v){return String(v||'').replace(/[&<>"']/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]})}
-    function money(cents,cur){return new Intl.NumberFormat('en-GB',{style:'currency',currency:cur||'GBP',maximumFractionDigits:0}).format(Number(cents||0)/100)}
+    function money(cents,cur){return new Intl.NumberFormat('en-GB',{style:'currency',currency:cur||'GBP',maximumFractionDigits:2}).format(Number(cents||0)/100).replace(/\\.00$/,'')}
     function fee(bps){return ((Number(bps||0)/100).toFixed(2).replace(/\\.00$/,''))+'%'}
-    function items(p){var a=[];a.push(p.maxProducts===-1?'Unlimited active products':p.maxProducts+' active products');a.push(p.maxOrders==null||p.maxOrders===-1?'Unlimited orders':p.maxOrders+' orders');if(p.analytics)a.push('Analytics dashboard');if(p.discounts)a.push('Discount campaigns');if(p.flashSales)a.push('Flash sales & bundles');if(p.marketingTools)a.push('Marketing tools');a.push(p.prioritySupport?'Priority support':'Standard support');return a}
+    function items(p){
+      var a=[];
+      if(p.maxProducts===-1)a.push('Unlimited active products');else if(p.maxProducts>0)a.push('Up to '+p.maxProducts+' active products');
+      if(p.maxOrders==null||p.maxOrders===-1)a.push('Unlimited orders');else a.push('Up to '+p.maxOrders+' orders');
+      if(p.analytics)a.push('Analytics dashboard');
+      if(p.discounts)a.push('Discount campaigns');
+      if(p.flashSales)a.push('Flash sales');
+      if(p.bundles)a.push('Product bundles');
+      if(p.marketingTools)a.push('Marketing tools');
+      if(p.customerDatabase)a.push('Customer database');
+      if(p.professionalStorefront)a.push('Professional storefront');
+      if(p.orderManagement)a.push('Order management');
+      a.push(p.prioritySupport?'Priority support':'Standard support');
+      return a.slice(0,8)
+    }
+    function fallback(){
+      grid.innerHTML='<div class="pricing-card"><div class="pricing-name">Starter</div><p class="pricing-desc">Get started selling on Eki with essential commerce tools.</p><div class="pricing-price">Free</div><ul class="pricing-list"><li>Store page</li><li>Order management</li><li>Standard support</li></ul><a class="pricing-cta outline" href="/business-portal">Get started</a></div>'
+    }
     fetch('/api/subscriptions/plans').then(function(r){return r.json()}).then(function(d){
-      var plans=(Array.isArray(d.plans)?d.plans:[]).filter(function(p){var k=String(p.plan||p.id||'').toUpperCase();return k==='GROWTH'||k==='PRO'});
+      var plans=(Array.isArray(d.plans)?d.plans:[]).filter(function(p){return p.isActive!==false});
       plans.sort(function(a,b){return(a.displayOrder||0)-(b.displayOrder||0)});
+      if(!plans.length){fallback();return}
+      grid.innerHTML='';
+      grid.style.gridTemplateColumns='repeat('+Math.min(plans.length,3)+',minmax(0,1fr))';
       plans.forEach(function(p){
         var k=String(p.plan||p.id||'').toUpperCase();
-        var popular=k==='GROWTH';
+        var isFree=!p.monthlyPriceCents;
+        var popular=p.isDefault===true||k==='GROWTH';
         var card=document.createElement('div');
         card.className='pricing-card'+(popular?' popular':'');
         card.innerHTML=(popular?'<span class="pricing-badge">Most popular</span>':'')+
           '<div class="pricing-name">'+esc(p.name||k)+'</div>'+
-          '<p class="pricing-desc">'+(k==='GROWTH'?'Scale your store with more products, analytics, and marketing tools.':'Full commerce infrastructure for high-volume vendors.')+'</p>'+
-          '<div class="pricing-price">'+esc(money(p.monthlyPriceCents,p.currency))+' <small>/ month</small></div>'+
+          '<p class="pricing-desc">'+esc(p.description||'Grow your food business on Eki.')+'</p>'+
+          '<div class="pricing-price">'+(isFree?'Free':esc(money(p.monthlyPriceCents,p.currency))+' <small>/ month</small>')+'</div>'+
           '<p class="pricing-fee">'+esc(fee(p.platformFeeBps||p.defaultPlatformFeeBps))+' platform fee per order</p>'+
           '<ul class="pricing-list">'+items(p).map(function(i){return'<li>'+esc(i)+'</li>'}).join('')+'</ul>'+
-          '<a class="pricing-cta" href="/business-portal">Activate '+esc(p.name||k)+'</a>';
+          '<a class="pricing-cta'+(isFree?' outline':'')+'" href="/business-portal">'+(isFree?'Get started':'Activate '+esc(p.name||k))+'</a>';
         grid.appendChild(card);
       });
-    }).catch(function(){});
+    }).catch(fallback);
   })();
   </script>
 
@@ -1448,6 +1458,7 @@ function renderReferralInviteLayout(code: string): string {
 </html>`;
 }
 
+
 function renderVendorSubscriptionLayout(): string {
   return `<!doctype html>
 <html lang="en">
@@ -1456,86 +1467,437 @@ function renderVendorSubscriptionLayout(): string {
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Business Portal | Eki</title>
   <meta name="description" content="Manage your Eki vendor account, billing, and services." />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" />
   <style>
-    *{box-sizing:border-box}
-    body{margin:0;background:#f7faf8;color:#0d1b16;font-family:Arial,sans-serif}
-    button,input{font:inherit}
-    a{color:inherit;text-decoration:none}
-    .nav{height:64px;padding:0 24px;display:flex;align-items:center;justify-content:space-between;max-width:1180px;margin:auto}
-    .logo{background:#076b51;color:#fff;border-radius:7px;padding:8px 18px;font-weight:800}
-    .home{font-size:14px;font-weight:700;color:#076b51}
-    .layout{max-width:1180px;margin:32px auto 56px;padding:0 24px;display:grid;grid-template-columns:minmax(0,1fr) 430px;gap:28px}
-    .intro{min-height:560px;padding:42px;border-radius:24px;background:#0d1b16;color:#fff;display:flex;flex-direction:column;justify-content:center}
-    .eyebrow{color:#9be0bc;font-size:13px;font-weight:700}
-    h1{margin:14px 0 0;font-size:48px;line-height:1.08;max-width:560px}
-    .intro p{margin:18px 0 0;color:rgba(255,255,255,.78);font-size:17px;line-height:1.55;max-width:600px}
-    .trust{margin-top:28px;padding:14px;border:1px solid rgba(255,255,255,.16);border-radius:14px;background:rgba(255,255,255,.08);font-size:14px;color:rgba(255,255,255,.82)}
-    .panel{padding:24px;border:1px solid #dde7e2;border-radius:24px;background:#fff;box-shadow:0 14px 32px rgba(10,43,33,.08)}
-    h2{margin:0;font-size:26px}.sub{margin:7px 0 20px;color:#66736d;font-size:14px;line-height:1.45}
-    label{display:block;margin:18px 0 8px;font-size:13px;font-weight:700}
-    input{width:100%;height:52px;padding:0 14px;border:1px solid #dde7e2;border-radius:13px;color:#0d1b16;outline:none}
-    input:focus{border-color:#076b51;box-shadow:0 0 0 3px rgba(7,107,81,.1)}
-    .plans{display:grid;gap:12px;margin-top:16px}.plan{width:100%;padding:16px;text-align:left;border:1px solid #dde7e2;border-radius:16px;background:#fff;cursor:pointer}
-    .plan.active{border-color:#076b51;background:#f1faf5}.plan-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
-    .plan-name{font-size:18px;font-weight:800}.fee{margin-top:5px;color:#66736d;font-size:12px}.price{margin-top:14px;color:#076b51;font-size:28px;font-weight:800}.price small{color:#66736d;font-size:13px;font-weight:400}
-    .features{margin:12px 0 0;padding:0;list-style:none;color:#34423c;font-size:13px;line-height:1.6}.features li:before{content:"âœ“";color:#076b51;font-weight:800;margin-right:8px}
-    .radio{width:23px;height:23px;border:1px solid #b7c6bf;border-radius:50%;display:grid;place-items:center;color:#fff}.active .radio{background:#076b51;border-color:#076b51}
-    .status{display:none;margin:16px 0 0;padding:12px;border-radius:12px;font-size:13px;line-height:1.4}.status.ok{display:block;background:#eaf8ef;border:1px solid #cbeed9;color:#076b51}.status.warn{display:block;background:#fff7e8;border:1px solid #f2d399;color:#8d5100}.status.error{display:block;background:#fff0f0;border:1px solid #f3caca;color:#a62e2e}
-    .summary{margin-top:18px;padding:14px;border-radius:13px;background:#f6f8f7;font-size:13px;color:#66736d}.summary strong{display:block;margin-top:4px;color:#0d1b16;font-size:15px}
-    .terms-row{display:flex;align-items:flex-start;gap:10px;margin-top:18px;font-size:13px;color:#66736d;line-height:1.45}.terms-row input[type=checkbox]{width:18px;height:18px;margin-top:2px;accent-color:#076b51;flex-shrink:0;cursor:pointer}.terms-row a{color:#076b51;text-decoration:underline}
-    .checkout{width:100%;height:56px;margin-top:14px;border:0;border-radius:15px;background:#076b51;color:#fff;font-weight:800;cursor:pointer}.checkout:disabled{opacity:.6;cursor:not-allowed}
-    @media(max-width:820px){.layout{grid-template-columns:1fr;margin-top:12px}.intro{min-height:auto;padding:30px}h1{font-size:38px}.panel{max-width:none}}
-    @media(max-width:520px){.nav,.layout{padding-left:14px;padding-right:14px}.intro,.panel{border-radius:18px}.intro{padding:24px}h1{font-size:32px}.panel{padding:18px}}
+    *{box-sizing:border-box;margin:0;padding:0}
+    body{background:#f7faf8;color:#0d1b16;font-family:'Inter',Arial,sans-serif;-webkit-font-smoothing:antialiased}
+    button,input{font:inherit}a{color:inherit;text-decoration:none}
+
+    /* Login */
+    .login-page{min-height:100vh;display:grid;place-items:center;padding:24px;background:linear-gradient(135deg,#076b51 0%,#0a8a68 50%,#076b51 100%)}
+    .login-card{width:min(100%,400px);background:#fff;border-radius:20px;padding:36px 32px;box-shadow:0 24px 60px rgba(0,0,0,.2)}
+    .login-logo{background:#076b51;color:#fff;border-radius:10px;padding:8px 18px;font-weight:800;font-size:16px;display:inline-block;margin-bottom:20px}
+    .login-title{font-size:24px;font-weight:800;letter-spacing:-.03em;color:#0d1b16}
+    .login-sub{color:#66736d;font-size:13px;margin:6px 0 24px;line-height:1.5}
+    .form-group{margin-bottom:16px}
+    .form-group label{display:block;font-size:12px;font-weight:700;margin-bottom:5px;color:#374151}
+    .login-input{width:100%;height:46px;border:1px solid #dde7e2;border-radius:10px;padding:0 14px;font-size:14px;outline:none;background:#fff;color:#0d1b16}
+    .login-input:focus{border-color:#076b51;box-shadow:0 0 0 3px rgba(7,107,81,.1)}
+    .login-btn{width:100%;height:46px;border:0;border-radius:10px;background:#076b51;color:#fff;font-weight:700;font-size:14px;cursor:pointer;margin-top:6px}
+    .login-btn:hover{background:#065a44}
+    .login-btn:disabled{opacity:.6;cursor:not-allowed}
+    .login-msg{display:none;padding:10px 12px;border-radius:8px;font-size:12px;margin-bottom:12px}
+    .login-msg.err{display:block;background:#fff0f0;border:1px solid #f3caca;color:#a62e2e}
+
+    /* Sidebar */
+    .sidebar{width:260px;position:fixed;top:0;left:0;bottom:0;background:#fff;border-right:1px solid #dde7e2;z-index:100;display:flex;flex-direction:column}
+    .sidebar-header{padding:28px 22px 18px;border-bottom:1px solid #dde7e2}
+    .logo-btn{background:#076b51;color:#fff;border:0;border-radius:8px;padding:7px 16px;font-weight:800;font-size:15px;cursor:pointer}
+    .portal-label{margin-top:12px;color:#0d1b16;font-size:13px;font-weight:700;letter-spacing:-0.2px}
+    .sidebar-nav{flex:1;overflow-y:auto;padding-top:8px}
+    .nav-section{padding:0 14px;margin-bottom:4px}
+    .nav-section-label{color:#66736d;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.8px;padding:14px 10px 6px}
+    .nav-item{display:flex;align-items:center;gap:10px;padding:9px 10px;border-radius:10px;margin-bottom:2px;cursor:pointer;border:0;background:none;width:100%;text-align:left;font-size:13px;font-weight:500;color:#66736d}
+    .nav-item:hover{background:#f0f5f2}
+    .nav-item.active{background:#eff8f3;color:#076b51;font-weight:600}
+    .nav-item .icon{font-size:16px;width:20px;text-align:center}
+    .sidebar-footer{padding:18px 22px;border-top:1px solid #dde7e2}
+    .status-row{display:flex;align-items:center;gap:8px}
+    .status-dot{width:8px;height:8px;border-radius:4px}
+    .status-text{color:#66736d;font-size:12px;font-weight:500}
+    .home-link{display:flex;align-items:center;gap:6px;margin-top:12px;font-size:12px;color:#66736d;font-weight:500;text-decoration:none}
+    .logout-link{display:flex;align-items:center;gap:6px;margin-top:8px;font-size:12px;color:#e55353;font-weight:600;cursor:pointer;border:0;background:none;padding:0}
+
+    /* Mobile */
+    .topbar-mobile{display:none;align-items:center;justify-content:space-between;padding:12px 16px;border-bottom:1px solid #dde7e2;background:#fff}
+    .menu-btn{width:36px;height:36px;border-radius:10px;border:1px solid #dde7e2;display:flex;align-items:center;justify-content:center;background:none;cursor:pointer;font-size:18px}
+    .topbar-title{color:#0d1b16;font-size:15px;font-weight:700}
+    .overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,0.3);z-index:90}
+
+    /* Main */
+    .main{margin-left:260px;min-height:100vh}
+    .content{padding:28px;max-width:1100px;margin:0 auto}
+    .view-title{font-size:28px;font-weight:800;letter-spacing:-0.5px;color:#0d1b16;margin:0}
+    .view-sub{color:#66736d;font-size:15px;line-height:22px;margin-top:4px}
+    .breadcrumb{display:flex;align-items:center;gap:6px;margin-bottom:4px;font-size:12px;color:#66736d}
+    .breadcrumb .bc-active{color:#0d1b16;font-weight:600}
+    .card-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:20px}
+    .section-card{background:#fff;border:1px solid #dde7e2;border-radius:16px;padding:20px;overflow:hidden}
+    .section-header{display:flex;align-items:center;gap:8px;margin-bottom:14px}
+    .section-title{font-size:15px;font-weight:800;color:#0d1b16;letter-spacing:-0.3px}
+    .section-icon{font-size:18px}
+    .info-row{display:flex;justify-content:space-between;align-items:center;padding:8px 0;border-bottom:1px solid #f0f3f1}
+    .info-row:last-child{border-bottom:0}
+    .info-label{font-size:13px;color:#66736d;font-weight:500}
+    .info-value{font-size:13px;color:#0d1b16;font-weight:600}
+    .info-value.accent{color:#076b51}
+    .note-box{padding:12px;background:#f6f8f7;border-radius:10px;margin-top:6px}
+    .note-box-text{font-size:12px;color:#66736d;line-height:1.5}
+    .empty-state{text-align:center;padding:20px 10px}
+    .empty-icon{font-size:32px;color:#c8d5ce;margin-bottom:4px}
+    .empty-title{font-size:13px;font-weight:700;color:#0d1b16;margin-top:8px}
+    .empty-text{font-size:12px;color:#66736d;margin-top:4px;line-height:1.5}
+    .plan-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:16px}
+    .plan{padding:18px;text-align:left;border:1px solid #dde7e2;border-radius:16px;background:#fff;cursor:pointer}
+    .plan.active{border-color:#076b51;background:#f1faf5}
+    .plan-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
+    .plan-name{font-size:18px;font-weight:800}.plan-fee{margin-top:5px;color:#66736d;font-size:12px}
+    .plan-price{margin-top:14px;color:#076b51;font-size:28px;font-weight:800}
+    .plan-price small{color:#66736d;font-size:13px;font-weight:400}
+    .features{margin:12px 0 0;padding:0;list-style:none;color:#34423c;font-size:13px;line-height:1.6}
+    .features li::before{content:"\\2713";color:#076b51;font-weight:800;margin-right:8px}
+    .radio{width:23px;height:23px;border:1px solid #b7c6bf;border-radius:50%;display:grid;place-items:center;color:#fff;font-size:12px}
+    .plan.active .radio{background:#076b51;border-color:#076b51}
+    .summary-box{margin-top:18px;padding:14px;border-radius:13px;background:#f6f8f7}
+    .summary-label{font-size:13px;color:#66736d}
+    .summary-value{display:block;margin-top:4px;color:#0d1b16;font-size:15px;font-weight:700}
+    .field-label{display:block;margin-bottom:6px;font-size:13px;font-weight:700;color:#0d1b16}
+    .input{width:100%;height:52px;padding:0 14px;border:1px solid #dde7e2;border-radius:13px;color:#0d1b16;outline:none;font-size:14px}
+    .input:focus{border-color:#076b51;box-shadow:0 0 0 3px rgba(7,107,81,.1)}
+    .email-section{margin-top:16px}
+    .terms-row{display:flex;align-items:flex-start;gap:10px;margin-top:18px;font-size:13px;color:#66736d;line-height:1.45}
+    .terms-row input[type=checkbox]{width:18px;height:18px;margin-top:2px;accent-color:#076b51;flex-shrink:0;cursor:pointer}
+    .terms-row a{color:#076b51;text-decoration:underline}
+    .cta-btn{width:100%;height:56px;margin-top:14px;border:0;border-radius:15px;background:#076b51;color:#fff;font-weight:800;font-size:15px;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:8px}
+    .cta-btn:disabled{opacity:.6;cursor:not-allowed}
+    .cta-btn:hover:not(:disabled){background:#065a44}
+    .security-note{display:flex;align-items:center;gap:8px;margin-top:14px;font-size:12px;color:#66736d}
+    .status{display:none;padding:12px;border-radius:12px;font-size:13px;line-height:1.4;margin-top:12px}
+    .status.ok{display:block;background:#eaf8ef;border:1px solid #cbeed9;color:#076b51}
+    .status.warn{display:block;background:#fff7e8;border:1px solid #f2d399;color:#8d5100}
+    .status.error{display:block;background:#fff0f0;border:1px solid #f3caca;color:#a62e2e}
+    .faq-item{padding:14px 0;border-bottom:1px solid #f0f3f1}
+    .faq-item:last-child{border-bottom:0}
+    .faq-q{font-size:13px;font-weight:700;color:#0d1b16;margin-bottom:4px}
+    .faq-a{font-size:12px;color:#66736d;line-height:1.5}
+    .billing-section{margin-top:24px;padding:24px;border:1px solid #dde7e2;border-radius:16px;background:#fff}
+    .billing-section h3{font-size:18px;font-weight:800;margin:0 0 6px}
+    .billing-sub{color:#66736d;font-size:14px;margin-bottom:16px}
+    .outline-btn{width:100%;height:52px;border-radius:14px;border:1px solid #076b51;background:#fff;color:#076b51;font-weight:700;font-size:15px;cursor:pointer;margin-top:10px}
+    .outline-btn:hover{background:#f1faf5}
+    .outline-btn:disabled{opacity:.6;cursor:not-allowed}
+    .loading-wrap{text-align:center;padding:60px 20px;color:#66736d;font-size:14px}
+    .hidden{display:none!important}
+    @media(max-width:860px){
+      .sidebar{transform:translateX(-280px);transition:transform .25s ease}
+      .sidebar.open{transform:translateX(0)}
+      .overlay.show{display:block}
+      .main{margin-left:0}
+      .topbar-mobile{display:flex}
+      .card-grid,.plan-grid{grid-template-columns:1fr}
+      .content{padding:20px 16px}
+    }
   </style>
 </head>
 <body>
-  <nav class="nav"><a class="logo" href="/">eki</a><a class="home" href="/">Home â†’</a></nav>
-  <main class="layout">
-    <section class="intro">
-      <span class="eyebrow">Business Portal</span>
-      <h1>Manage your vendor account.</h1>
-      <p>Enter the same email used for your Eki vendor account. After payment is confirmed, your vendor services update automatically in the app.</p>
-      <div class="trust">Secure billing portal. Vendor account payments are processed through Stripe, not inside the Eki mobile app.</div>
-    </section>
-    <section class="panel">
-      <h2>Choose vendor services</h2>
-      <p class="sub">Billing starts on Stripe after you confirm. Your vendor account updates automatically.</p>
-      <div id="notice" class="status"></div>
-      <form id="checkout-form">
-        <label for="email">Vendor account email</label>
-        <input id="email" name="email" type="email" autocomplete="email" placeholder="vendor@eki.app" required />
-        <div id="plans" class="plans"><div class="sub">Loading plans...</div></div>
-        <div id="summary" class="summary" hidden>Selected<strong></strong></div>
-        <div id="error" class="status"></div>
-        <label class="terms-row"><input type="checkbox" id="terms-check" /><span>I agree to the <a href="/terms" target="_blank">Terms &amp; Conditions</a>, <a href="/subscription-policy" target="_blank">Billing Policy</a>, and <a href="/privacy" target="_blank">Privacy Policy</a>.</span></label>
-        <button id="checkout-button" class="checkout" type="submit" disabled>Continue to Stripe</button>
-      </form>
-    </section>
-    <section class="panel" style="margin-top:24px;border-top:1px solid #dde7e2;padding-top:28px">
-      <h2 style="font-size:18px">Already have an account?</h2>
-      <p class="sub">Manage invoices, payment methods, and billing history.</p>
-      <div id="billing-error" class="status"></div>
-      <label for="billing-email" style="display:block;margin-top:12px;font-weight:600;font-size:13px;color:#0d1b16">Account email</label>
-      <input id="billing-email" type="email" autocomplete="email" placeholder="vendor@eki.app" style="width:100%;margin-top:6px;height:48px;border-radius:12px;border:1px solid #dde7e2;padding:0 14px;font-size:15px" />
-      <button id="billing-button" type="button" style="margin-top:14px;width:100%;height:52px;border-radius:14px;border:1px solid #076b51;background:#fff;color:#076b51;font-weight:700;font-size:15px;cursor:pointer">Manage Billing</button>
-    </section>
-  </main>
+  <!-- LOGIN SCREEN -->
+  <div id="loginScreen" class="login-page">
+    <form class="login-card" id="loginForm" novalidate>
+      <span class="login-logo">eki</span>
+      <div class="login-title">Business Portal</div>
+      <div class="login-sub">Sign in with your vendor account to manage your business, services, and billing.</div>
+      <div id="loginMsg" class="login-msg"></div>
+      <div class="form-group">
+        <label for="loginEmail">Email</label>
+        <input id="loginEmail" class="login-input" type="email" placeholder="vendor@eki.app" autocomplete="email" required />
+      </div>
+      <div class="form-group">
+        <label for="loginPass">Password</label>
+        <input id="loginPass" class="login-input" type="password" autocomplete="current-password" required />
+      </div>
+      <button class="login-btn" id="loginBtn" type="submit">Sign In</button>
+    </form>
+  </div>
+
+  <!-- PORTAL (hidden until login) -->
+  <div id="portalScreen" class="hidden">
+    <div class="overlay" id="overlay" onclick="closeSidebar()"></div>
+    <aside class="sidebar" id="sidebar">
+      <div class="sidebar-header">
+        <button class="logo-btn" onclick="switchView('dashboard')">eki</button>
+        <div class="portal-label">Business Portal</div>
+      </div>
+      <nav class="sidebar-nav">
+        <div class="nav-section">
+          <div class="nav-section-label">Vendor Account</div>
+          <button class="nav-item active" data-view="dashboard" onclick="switchView('dashboard')">
+            <span class="icon">&#9638;</span> Dashboard
+          </button>
+        </div>
+        <div class="nav-section">
+          <div class="nav-section-label">Billing &amp; Services</div>
+          <button class="nav-item" data-view="manage-service" onclick="switchView('manage-service')">
+            <span class="icon">&#8644;</span> Manage Service
+          </button>
+          <button class="nav-item" data-view="billing" onclick="switchView('billing')">
+            <span class="icon">&#128203;</span> Billing &amp; Invoices
+          </button>
+        </div>
+        <div class="nav-section">
+          <div class="nav-section-label">General</div>
+          <button class="nav-item" data-view="help" onclick="switchView('help')">
+            <span class="icon">&#10067;</span> Help &amp; Support
+          </button>
+        </div>
+      </nav>
+      <div class="sidebar-footer">
+        <div class="status-row">
+          <span class="status-dot" id="statusDot" style="background:#fcd34d"></span>
+          <span class="status-text" id="statusText">No Active Service</span>
+        </div>
+        <a class="home-link" href="/">&#8592; Back to Eki</a>
+        <button class="logout-link" onclick="doLogout()">Sign out</button>
+      </div>
+    </aside>
+    <div class="main">
+      <div class="topbar-mobile">
+        <button class="menu-btn" onclick="openSidebar()">&#9776;</button>
+        <span class="topbar-title">Business Portal</span>
+        <div style="width:36px"></div>
+      </div>
+      <div class="content">
+        <!-- DASHBOARD -->
+        <div id="view-dashboard">
+          <h1 class="view-title">Vendor Account</h1>
+          <p class="view-sub">Overview of your business account and current service.</p>
+          <div class="card-grid">
+            <div class="section-card"><div class="section-header"><span class="section-icon">&#128100;</span><span class="section-title">Vendor Account Status</span></div>
+              <div class="info-row"><span class="info-label">Account Email</span><span class="info-value" id="d-email">&#8212;</span></div>
+              <div class="info-row"><span class="info-label">Account Status</span><span class="info-value" id="d-status">&#8212;</span></div>
+              <div class="info-row"><span class="info-label">Verification</span><span class="info-value">Managed in App</span></div></div>
+            <div class="section-card"><div class="section-header"><span class="section-icon">&#127978;</span><span class="section-title">Store Status</span></div>
+              <div class="info-row"><span class="info-label">Store Name</span><span class="info-value" id="d-storename">&#8212;</span></div>
+              <div class="info-row"><span class="info-label">Visibility</span><span class="info-value" id="d-visibility">&#8212;</span></div>
+              <div class="info-row"><span class="info-label">Product Listings</span><span class="info-value" id="d-products">&#8212;</span></div>
+              <div class="info-row"><span class="info-label">Orders Processed</span><span class="info-value" id="d-orders">&#8212;</span></div></div>
+            <div class="section-card"><div class="section-header"><span class="section-icon">&#128209;</span><span class="section-title">Current Vendor Service</span></div>
+              <div class="info-row"><span class="info-label">Service</span><span class="info-value accent" id="d-plan">&#8212;</span></div>
+              <div class="info-row"><span class="info-label">Platform Fee</span><span class="info-value" id="d-platformfee">&#8212;</span></div>
+              <div class="info-row"><span class="info-label">Renewal Date</span><span class="info-value" id="d-renewal">&#8212;</span></div></div>
+            <div class="section-card"><div class="section-header"><span class="section-icon">&#128179;</span><span class="section-title">Billing Status</span></div>
+              <div class="info-row"><span class="info-label">Billing</span><span class="info-value" id="d-billing">&#8212;</span></div>
+              <div class="info-row"><span class="info-label">Next Renewal</span><span class="info-value" id="d-nextrenewal">&#8212;</span></div>
+              <div class="info-row"><span class="info-label">Cancellation</span><span class="info-value" id="d-cancel">None</span></div></div>
+            <div class="section-card"><div class="section-header"><span class="section-icon">&#128176;</span><span class="section-title">Earnings</span></div>
+              <div class="info-row"><span class="info-label">Sales Today</span><span class="info-value accent" id="d-salesToday">&#8212;</span></div>
+              <div class="info-row"><span class="info-label">This Week</span><span class="info-value" id="d-salesWeek">&#8212;</span></div>
+              <div class="info-row"><span class="info-label">This Month</span><span class="info-value" id="d-salesMonth">&#8212;</span></div>
+              <div class="info-row"><span class="info-label">Available Balance</span><span class="info-value accent" id="d-balance">&#8212;</span></div></div>
+            <div class="section-card"><div class="section-header"><span class="section-icon">&#9889;</span><span class="section-title">Service Limits</span></div>
+              <div class="info-row"><span class="info-label">Products</span><span class="info-value" id="d-prodlimit">&#8212;</span></div>
+              <div class="info-row"><span class="info-label">Orders</span><span class="info-value" id="d-orderlimit">&#8212;</span></div>
+              <div class="info-row"><span class="info-label">Can Receive Orders</span><span class="info-value" id="d-canreceive">&#8212;</span></div></div>
+            <div class="section-card"><div class="section-header"><span class="section-icon">&#128200;</span><span class="section-title">Usage &amp; Features</span></div>
+              <div class="info-row"><span class="info-label">Analytics</span><span class="info-value" id="d-analytics">&#8212;</span></div>
+              <div class="info-row"><span class="info-label">Discount Campaigns</span><span class="info-value" id="d-discounts">&#8212;</span></div>
+              <div class="info-row"><span class="info-label">Flash Sales</span><span class="info-value" id="d-flash">&#8212;</span></div>
+              <div class="info-row"><span class="info-label">Marketing Tools</span><span class="info-value" id="d-marketing">&#8212;</span></div>
+              <div class="info-row"><span class="info-label">Bundle Deals</span><span class="info-value" id="d-bundles">&#8212;</span></div></div>
+            <div class="section-card"><div class="section-header"><span class="section-icon">&#128221;</span><span class="section-title">Tax Information</span></div>
+              <div class="note-box"><span class="note-box-text">Tax documentation and business details are managed through your vendor account. Contact support for VAT or tax-related queries.</span></div></div>
+          </div>
+        </div>
+        <!-- MANAGE SERVICE -->
+        <div id="view-manage-service" style="display:none">
+          <div class="breadcrumb"><span>Billing &amp; Services</span><span>&#8250;</span><span class="bc-active">Manage Service</span></div>
+          <h1 class="view-title">Select Your Service</h1>
+          <p class="view-sub">Select the service that best matches your business.</p>
+          <div id="notice" class="status"></div>
+          <div class="email-section">
+            <label class="field-label" for="email">Vendor account email</label>
+            <input class="input" id="email" name="email" type="email" autocomplete="email" placeholder="vendor@business.com" readonly style="background:#f6f8f7;cursor:default" />
+          </div>
+          <div id="plans" class="plan-grid"><div style="color:#66736d;font-size:14px;padding:16px">Loading plans...</div></div>
+          <div id="summary" class="summary-box" hidden><span class="summary-label">Selected Vendor Service</span><strong class="summary-value"></strong></div>
+          <div id="error" class="status"></div>
+          <label class="terms-row"><input type="checkbox" id="terms-check" /><span>I agree to the <a href="/terms" target="_blank">Terms &amp; Conditions</a>, <a href="/subscription-policy" target="_blank">Billing Policy</a>, and <a href="/privacy" target="_blank">Privacy Policy</a>.</span></label>
+          <button id="checkout-button" class="cta-btn" type="button" disabled>Continue &#8594;</button>
+          <div class="security-note"><span>&#128737;</span> Billing is managed securely through your Vendor Account.</div>
+          <div class="billing-section">
+            <h3>Manage existing billing</h3>
+            <p class="billing-sub">Update payment methods, view invoices, and manage billing.</p>
+            <div id="billing-error" class="status"></div>
+            <button id="billing-button" class="outline-btn" type="button">Manage Billing</button>
+          </div>
+        </div>
+        <!-- BILLING -->
+        <div id="view-billing" style="display:none">
+          <h1 class="view-title">Billing &amp; Invoices</h1>
+          <p class="view-sub">View your billing information, invoices, and payment history.</p>
+          <div class="card-grid">
+            <div class="section-card"><div class="section-header"><span class="section-icon">&#128179;</span><span class="section-title">Payment Method</span></div>
+              <div class="info-row"><span class="info-label">Status</span><span class="info-value" id="b-paystatus">&#8212;</span></div>
+              <div class="note-box"><span class="note-box-text">Payment methods are managed securely through your vendor account.</span></div></div>
+            <div class="section-card"><div class="section-header"><span class="section-icon">&#128197;</span><span class="section-title">Current Billing</span></div>
+              <div class="info-row"><span class="info-label">Service</span><span class="info-value" id="b-service">&#8212;</span></div>
+              <div class="info-row"><span class="info-label">Status</span><span class="info-value" id="b-status">&#8212;</span></div>
+              <div class="info-row"><span class="info-label">Next Renewal</span><span class="info-value" id="b-renewal">&#8212;</span></div>
+              <div class="info-row"><span class="info-label">Cancellation</span><span class="info-value" id="b-cancel">None</span></div></div>
+            <div class="section-card"><div class="section-header"><span class="section-icon">&#128336;</span><span class="section-title">Billing History</span></div>
+              <div class="empty-state"><div class="empty-icon">&#128196;</div><div class="empty-title">No billing history available</div><div class="empty-text">Transaction history appears here once billing activity is recorded.</div></div></div>
+            <div class="section-card"><div class="section-header"><span class="section-icon">&#128203;</span><span class="section-title">Invoices &amp; Receipts</span></div>
+              <div class="empty-state"><div class="empty-icon">&#128194;</div><div class="empty-title">No invoices yet</div><div class="empty-text">Invoices and receipts will be listed here as they become available.</div></div></div>
+          </div>
+        </div>
+        <!-- HELP -->
+        <div id="view-help" style="display:none">
+          <h1 class="view-title">Help &amp; Support</h1>
+          <p class="view-sub">Get help with your vendor account and services.</p>
+          <div class="card-grid">
+            <div class="section-card" style="grid-column:1/-1"><div class="section-header"><span class="section-icon">&#128172;</span><span class="section-title">Frequently Asked Questions</span></div>
+              <div class="faq-item"><div class="faq-q">How do I change my service?</div><div class="faq-a">Go to Manage Service from the sidebar to view available services and select a different plan.</div></div>
+              <div class="faq-item"><div class="faq-q">How is billing handled?</div><div class="faq-a">Billing and vendor account management are handled securely through the Eki Business Portal. Your payment details are never stored on our servers.</div></div>
+              <div class="faq-item"><div class="faq-q">Can I cancel my service?</div><div class="faq-a">You can manage your service from the Manage Service page. Your service remains active until the end of the current billing period.</div></div>
+              <div class="faq-item"><div class="faq-q">What happens when I reach my limits?</div><div class="faq-a">You will be notified in the app when approaching limits. You can select a higher-tier service at any time to increase your capacity.</div></div></div>
+            <div class="section-card"><div class="section-header"><span class="section-icon">&#9993;</span><span class="section-title">Contact Support</span></div>
+              <div class="note-box"><span class="note-box-text">For account issues, billing questions, or technical support, please contact us through the Eki app or email support. Our team typically responds within 24 hours.</span></div></div>
+            <div class="section-card"><div class="section-header"><span class="section-icon">&#127970;</span><span class="section-title">Business Details</span></div>
+              <div class="note-box"><span class="note-box-text">Your store information, business documents, and verification status are managed through the Eki vendor app. Open the app to update your business profile.</span></div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <script>
-    const plansNode=document.getElementById('plans'),notice=document.getElementById('notice'),errorNode=document.getElementById('error'),summary=document.getElementById('summary'),summaryValue=summary.querySelector('strong'),emailInput=document.getElementById('email'),checkoutButton=document.getElementById('checkout-button'),form=document.getElementById('checkout-form'),termsCheck=document.getElementById('terms-check');
-    let plans=[],selected='GROWTH';
-    const params=new URLSearchParams(location.search);emailInput.value=params.get('email')||'';
-    if(params.get('success')==='true')show(notice,'Payment received. Open the Eki app and refresh your vendor account.','ok');
-    else if(params.get('cancelled')==='true')show(notice,'Payment was cancelled. You can start again when ready.','warn');
+    var API='';
+    var T='',vendorEmail='',vendorCurrency='GBP';
+
+    function $(id){return document.getElementById(id)}
+    function esc(v){return String(v||'').replace(/[&<>"']/g,function(c){return({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c]})}
+    function fmt(n,c){c=c||vendorCurrency||'GBP';try{return new Intl.NumberFormat('en-GB',{style:'currency',currency:c,maximumFractionDigits:0}).format((n||0)/100)}catch(e){return c+' '+(n/100).toFixed(2)}}
+
+    /* Sidebar */
+    function openSidebar(){$('sidebar').classList.add('open');$('overlay').classList.add('show')}
+    function closeSidebar(){$('sidebar').classList.remove('open');$('overlay').classList.remove('show')}
+    var currentView='dashboard';
+    function switchView(view){document.querySelectorAll('[id^="view-"]').forEach(function(el){el.style.display='none'});$('view-'+view).style.display='';document.querySelectorAll('.nav-item').forEach(function(el){el.classList.remove('active')});var btn=document.querySelector('[data-view="'+view+'"]');if(btn)btn.classList.add('active');currentView=view;if(vendorEmail)$('email').value=vendorEmail;closeSidebar()}
+
+    /* Logout */
+    function doLogout(){T='';vendorEmail='';$('portalScreen').classList.add('hidden');$('loginScreen').style.display='';$('loginEmail').value='';$('loginPass').value=''}
+
+    /* Login */
+    $('loginForm').addEventListener('submit',async function(e){e.preventDefault();
+      var btn=$('loginBtn');btn.disabled=true;btn.textContent='Signing in...';
+      var msgEl=$('loginMsg');msgEl.className='login-msg';
+      try{
+        var r=await fetch(API+'/api/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:$('loginEmail').value.trim(),password:$('loginPass').value})});
+        var d=await r.json();
+        if(!r.ok||!d.token){msgEl.textContent=d.message||'Invalid email or password';msgEl.className='login-msg err';btn.disabled=false;btn.textContent='Sign In';return}
+        T=d.token;vendorEmail=$('loginEmail').value.trim();
+        $('loginScreen').style.display='none';$('portalScreen').classList.remove('hidden');
+        $('email').value=vendorEmail;
+        loadDashboardData();loadSubscriptionData();loadLimitsData();
+        switchView('manage-service');
+      }catch(err){msgEl.textContent='Connection error. Please try again.';msgEl.className='login-msg err'}
+      btn.disabled=false;btn.textContent='Sign In';
+    });
+
+    /* Load dashboard data */
+    async function loadDashboardData(){
+      try{
+        var r=await fetch(API+'/api/vendors/me/dashboard',{headers:{'Authorization':'Bearer '+T}});
+        if(r.status===401){doLogout();return}
+        if(!r.ok){console.warn('Dashboard returned '+r.status);return}
+        var d=await r.json();var data=d.dashboard||d||{};var e=data.earnings||{};
+        vendorCurrency=e.currency||'GBP';
+        $('d-email').textContent=vendorEmail;
+        $('d-status').textContent='Active';$('d-status').classList.add('accent');
+        $('d-storename').textContent=data.storeName||'Your store';
+        $('d-visibility').textContent='Live on Eki';$('d-visibility').classList.add('accent');
+        $('d-products').textContent=(data.insights?data.insights.totalProducts:'0')+' active';
+        $('d-orders').textContent=data.insights?data.insights.totalOrders:'0';
+        $('d-salesToday').textContent=fmt(e.salesToday,e.currency);
+        $('d-salesWeek').textContent=fmt(e.salesThisWeek,e.currency);
+        $('d-salesMonth').textContent=fmt(e.salesThisMonth,e.currency);
+        $('d-balance').textContent=fmt(e.availableBalance,e.currency);
+        $('statusDot').style.background='#34d399';$('statusText').textContent='Service Active';
+      }catch(err){console.error('Dashboard load error',err)}
+    }
+
+    /* Load subscription data */
+    async function loadSubscriptionData(){
+      try{
+        var r=await fetch(API+'/api/subscriptions/me',{headers:{'Authorization':'Bearer '+T}});
+        if(!r.ok)return;
+        var d=await r.json();var sub=d.subscription||d||{};
+        var planName=sub.planName||sub.plan||'Starter';
+        var isActive=String(sub.status||'').toUpperCase()==='ACTIVE';
+        var renewal=sub.currentPeriodEnd?new Date(sub.currentPeriodEnd).toLocaleDateString('en-GB',{month:'long',day:'numeric',year:'numeric'}):'\\u2014';
+        $('d-plan').textContent=planName;
+        $('d-platformfee').textContent=sub.platformFeePercent||'\\u2014';
+        $('d-renewal').textContent=renewal;
+        $('d-billing').textContent=isActive?'Active':'Inactive';if(isActive)$('d-billing').classList.add('accent');
+        $('d-nextrenewal').textContent=renewal;
+        $('d-cancel').textContent=sub.cancelAtPeriodEnd?'Scheduled':'None';
+        $('b-paystatus').textContent=isActive?'Active':'No active service';if(isActive)$('b-paystatus').classList.add('accent');
+        $('b-service').textContent=planName;
+        $('b-status').textContent=isActive?'Active':'Inactive';if(isActive)$('b-status').classList.add('accent');
+        $('b-renewal').textContent=renewal;
+        $('b-cancel').textContent=sub.cancelAtPeriodEnd?'Scheduled':'None';
+      }catch(err){console.error('Subscription load error',err)}
+    }
+
+    /* Load limits data */
+    async function loadLimitsData(){
+      try{
+        var r=await fetch(API+'/api/subscriptions/me/limits',{headers:{'Authorization':'Bearer '+T}});
+        if(!r.ok)return;
+        var d=await r.json();var lim=d.limits||d||{};
+        var maxP=lim.maxProducts===-1||lim.maxProducts>=999999?'Unlimited':lim.maxProducts;
+        $('d-prodlimit').textContent=(lim.currentProducts||0)+' / '+maxP;
+        $('d-orderlimit').textContent=(lim.currentOrders||0)+' / '+(lim.maxOrders||'Unlimited');
+        $('d-canreceive').textContent=lim.canReceiveOrders!==false?'Yes':'No';
+        if(lim.canReceiveOrders!==false)$('d-canreceive').classList.add('accent');
+        $('d-analytics').textContent=lim.canAccessAnalytics?'Enabled':'Disabled';if(lim.canAccessAnalytics)$('d-analytics').classList.add('accent');
+        $('d-discounts').textContent=lim.discounts?'Enabled':'Disabled';if(lim.discounts)$('d-discounts').classList.add('accent');
+        $('d-flash').textContent=lim.flashSales?'Enabled':'Disabled';if(lim.flashSales)$('d-flash').classList.add('accent');
+        $('d-marketing').textContent=lim.marketingTools?'Enabled':'Disabled';if(lim.marketingTools)$('d-marketing').classList.add('accent');
+        $('d-bundles').textContent=lim.bundles?'Enabled':'Disabled';if(lim.bundles)$('d-bundles').classList.add('accent');
+      }catch(err){console.error('Limits load error',err)}
+    }
+
+    /* URL params */
+    var params=new URLSearchParams(location.search);
+    if(params.get('success')==='true'||params.get('cancelled')==='true'){switchView('manage-service')}
+
+    /* Plan loading */
+    var plansNode=$('plans'),notice=$('notice'),errorNode=$('error'),summary=$('summary'),summaryValue=summary.querySelector('strong'),emailInput=$('email'),checkoutButton=$('checkout-button'),termsCheck=$('terms-check');
+    var plans=[],selected='GROWTH';
+    emailInput.value=vendorEmail||params.get('email')||'';
+    if(params.get('success')==='true'){
+      notice.innerHTML='Payment received. Your vendor service is now active. <a href="ekiapp://" style="color:#065f46;font-weight:700;text-decoration:underline">Return to the Eki app &#8594;</a>';
+      notice.className='status ok';
+      setTimeout(function(){try{location.href='ekiapp://'}catch(e){}},1500);
+    }
+    else if(params.get('cancelled')==='true')show(notice,'Service selection was cancelled. You can try again when ready.','warn');
     function show(node,text,type){node.textContent=text;node.className='status '+type}
     function clear(node){node.textContent='';node.className='status'}
-    function esc(value){return String(value||'').replace(/[&<>"']/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[char])}
-    function money(plan){return new Intl.NumberFormat('en-GB',{style:'currency',currency:plan.currency||'GBP',maximumFractionDigits:0}).format(Number(plan.monthlyPriceCents||0)/100)}
-    function planId(plan){const value=String(plan.plan||plan.id||'').toUpperCase();return value==='GROWTH'||value==='PRO'?value:null}
-    function render(){plansNode.innerHTML=plans.map(plan=>{const id=planId(plan),active=id===selected,features=[plan.maxProducts===-1?'Unlimited active products':plan.maxProducts+' active products',plan.analytics?'Analytics access':'Basic dashboard',plan.discounts?'Discount campaigns':'Standard listings',plan.prioritySupport?'Priority support':'Standard support'];return '<button type="button" class="plan '+(active?'active':'')+'" data-plan="'+id+'"><div class="plan-head"><div><div class="plan-name">'+esc(plan.name||id)+'</div><div class="fee">'+esc(((Number(plan.platformFeeBps||0)/100).toFixed(2).replace(/\\.00$/,'')+'%'))+' platform fee per order</div></div><span class="radio">'+(active?'âœ“':'')+'</span></div><div class="price">'+esc(money(plan))+' <small>/ month</small></div><ul class="features">'+features.map(item=>'<li>'+esc(item)+'</li>').join('')+'</ul></button>'}).join('');plansNode.querySelectorAll('[data-plan]').forEach(button=>button.addEventListener('click',()=>{selected=button.dataset.plan;render()}));const active=plans.find(plan=>planId(plan)===selected);summary.hidden=!active;if(active)summaryValue.textContent=(active.name||selected)+' - '+money(active)+'/month';checkoutButton.disabled=!active||!termsCheck.checked}
-    termsCheck.addEventListener('change',render)
-    fetch('/api/subscriptions/plans').then(response=>response.json().then(data=>({response,data}))).then(({response,data})=>{if(!response.ok)throw new Error(data.message||'Unable to load plans.');plans=(Array.isArray(data.plans)?data.plans:[]).filter(plan=>planId(plan));if(!plans.some(plan=>planId(plan)===selected)&&plans[0])selected=planId(plans[0]);render();if(!plans.length)show(errorNode,'No paid plans are currently available.','error')}).catch(error=>{plansNode.innerHTML='';show(errorNode,error.message||'Unable to load plans.','error')});
-    document.getElementById('billing-button').addEventListener('click',async()=>{const billingError=document.getElementById('billing-error'),billingEmail=document.getElementById('billing-email').value.trim().toLowerCase(),billingBtn=document.getElementById('billing-button');clear(billingError);if(!billingEmail){show(billingError,'Enter the email used by your Eki vendor account.','error');return}billingBtn.disabled=true;billingBtn.textContent='Opening billing...';try{const r=await fetch('/api/subscriptions/billing-portal',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:billingEmail})});const d=await r.json().catch(()=>({}));if(!r.ok)throw new Error(d.message||'Could not open billing portal.');if(!d.portalUrl)throw new Error('Billing portal URL was not returned.');location.assign(d.portalUrl)}catch(e){show(billingError,e.message||'Could not open billing portal.','error');billingBtn.disabled=false;billingBtn.textContent='Manage Billing'}});
-    form.addEventListener('submit',async event=>{event.preventDefault();clear(errorNode);if(!termsCheck.checked){show(errorNode,'You must agree to the Terms & Conditions and Billing Policy to continue.','error');return}const email=emailInput.value.trim().toLowerCase();if(!email){show(errorNode,'Enter the email used by your Eki vendor account.','error');return}checkoutButton.disabled=true;checkoutButton.textContent='Opening secure billing...';try{const response=await fetch('/api/subscriptions/web-checkout',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email,plan:selected})});const data=await response.json().catch(()=>({}));if(!response.ok)throw new Error(data.message||'Could not start checkout.');if(!data.checkoutUrl)throw new Error('Checkout URL was not returned.');location.assign(data.checkoutUrl)}catch(error){show(errorNode,error.message||'Could not start checkout.','error');checkoutButton.disabled=false;checkoutButton.textContent='Continue to Stripe'}});
+    function money(plan){return new Intl.NumberFormat('en-GB',{style:'currency',currency:plan.currency||'GBP',maximumFractionDigits:2}).format(Number(plan.monthlyPriceCents||0)/100).replace(/\\.00$/,'')}
+    function planId(plan){return String(plan.slug||plan.plan||plan.id||'').toLowerCase()}
+    function isPaid(plan){return Number(plan.monthlyPriceCents||0)>0}
+    function featureList(p){
+      var a=[];
+      if(p.maxProducts===-1)a.push('Unlimited active products');else if(p.maxProducts>0)a.push('Up to '+p.maxProducts+' active products');
+      if(p.maxOrders==null||p.maxOrders===-1)a.push('Unlimited orders');else a.push('Up to '+p.maxOrders+' orders');
+      if(p.analytics)a.push('Analytics dashboard');
+      if(p.discounts)a.push('Discount campaigns');
+      if(p.flashSales)a.push('Flash sales');
+      if(p.bundles)a.push('Product bundles');
+      if(p.marketingTools)a.push('Marketing tools');
+      a.push(p.prioritySupport?'Priority support':'Standard support');
+      return a.slice(0,6)
+    }
+    function render(){plansNode.innerHTML=plans.map(function(plan){var id=planId(plan),paid=isPaid(plan),active=id===selected;var features=featureList(plan);return '<button type="button" class="plan '+(active?'active':'')+'" data-plan="'+esc(id)+'" '+(paid?'':'style="opacity:.75"')+'><div class="plan-head"><div><div class="plan-name">'+esc(plan.name||id)+'</div><div class="plan-fee">'+esc(((Number(plan.platformFeeBps||plan.defaultPlatformFeeBps||0)/100).toFixed(2).replace(/\\.00$/,'')+'%'))+' platform fee per order</div></div><span class="radio">'+(active?'\\u2713':'')+'</span></div><div class="plan-price">'+(paid?esc(money(plan))+' <small>/ month</small>':'Free')+'</div><ul class="features">'+features.map(function(f){return '<li>'+esc(f)+'</li>'}).join('')+'</ul>'+(paid?'':'<div class="plan-fee" style="margin-top:8px">Included by default \\u2014 no payment needed</div>')+'</button>'}).join('');plansNode.querySelectorAll('[data-plan]').forEach(function(btn){btn.addEventListener('click',function(){selected=btn.dataset.plan;render()})});var active=plans.find(function(p){return planId(p)===selected});summary.hidden=!active;if(active)summaryValue.textContent=active.name||selected;checkoutButton.disabled=!active||!isPaid(active||{})||!termsCheck.checked}
+    termsCheck.addEventListener('change',render);
+    fetch('/api/subscriptions/plans').then(function(r){return r.json().then(function(d){return{response:r,data:d}})}).then(function(obj){if(!obj.response.ok)throw new Error(obj.data.message||'Unable to load plans.');plans=(Array.isArray(obj.data.plans)?obj.data.plans:[]).filter(function(p){return p.isActive!==false});plans.sort(function(a,b){return(a.displayOrder||0)-(b.displayOrder||0)});var firstPaid=plans.find(isPaid);selected=firstPaid?planId(firstPaid):(plans[0]?planId(plans[0]):'');render();if(!plans.length)show(errorNode,'No vendor services are currently available.','error')}).catch(function(e){plansNode.innerHTML='';show(errorNode,e.message||'Unable to load plans.','error')});
+
+    /* Checkout */
+    checkoutButton.addEventListener('click',async function(){clear(errorNode);if(!termsCheck.checked){show(errorNode,'You must agree to the Terms & Conditions and Billing Policy to continue.','error');return}var em=vendorEmail||emailInput.value.trim().toLowerCase();if(!em){show(errorNode,'Please sign in first to select a service.','error');return}checkoutButton.disabled=true;checkoutButton.textContent='Processing...';try{var r=await fetch('/api/subscriptions/web-checkout',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:em,plan:selected})});var d=await r.json().catch(function(){return{}});if(!r.ok)throw new Error(d.message||'Could not proceed.');if(!d.checkoutUrl)throw new Error('Billing URL was not returned.');location.assign(d.checkoutUrl)}catch(e){show(errorNode,e.message||'Could not proceed.','error');checkoutButton.disabled=false;checkoutButton.innerHTML='Continue &#8594;'}});
+
+    /* Manage Billing */
+    $('billing-button').addEventListener('click',async function(){var billingError=$('billing-error'),billingBtn=$('billing-button');clear(billingError);var em=vendorEmail||emailInput.value.trim().toLowerCase();if(!em){show(billingError,'Sign in first to manage billing.','error');return}billingBtn.disabled=true;billingBtn.textContent='Opening billing...';try{var r=await fetch('/api/subscriptions/billing-portal',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({email:em})});var d=await r.json().catch(function(){return{}});if(!r.ok)throw new Error(d.message||'Could not open billing portal.');if(!d.portalUrl)throw new Error('Billing portal URL was not returned.');location.assign(d.portalUrl)}catch(e){show(billingError,e.message||'Could not open billing portal.','error');billingBtn.disabled=false;billingBtn.textContent='Manage Billing'}});
   </script>
 </body>
 </html>`;

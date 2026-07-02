@@ -64,6 +64,26 @@ export const scheduledCommunicationService = {
     });
   },
 
+  async update(id: string, input: { subject?: string; body?: string; scheduledFor?: string; audience?: string; channel?: string }) {
+    const item = await prisma.scheduledCommunication.findUnique({ where: { id } });
+    if (!item) throw new AppError("Scheduled communication not found", 404);
+    if (item.status !== "SCHEDULED") throw new AppError("Only SCHEDULED items can be edited", 400);
+
+    const data: Record<string, unknown> = {};
+    if (typeof input.subject === "string" && input.subject.trim()) data.subject = input.subject.trim();
+    if (typeof input.body === "string" && input.body.trim()) data.body = input.body.trim();
+    if (typeof input.audience === "string" && input.audience.trim()) data.audience = input.audience.trim();
+    if (typeof input.channel === "string" && input.channel.trim()) data.channel = input.channel.trim();
+    if (typeof input.scheduledFor === "string" && input.scheduledFor) {
+      const when = new Date(input.scheduledFor);
+      if (isNaN(when.getTime())) throw new AppError("Invalid scheduledFor date", 400);
+      data.scheduledFor = when;
+    }
+    if (Object.keys(data).length === 0) throw new AppError("Nothing to update", 400);
+
+    return prisma.scheduledCommunication.update({ where: { id }, data });
+  },
+
   async runDue(): Promise<{ processed: number; sent: number; failed: number }> {
     const now = new Date();
     const dueItems = await prisma.scheduledCommunication.findMany({

@@ -99,6 +99,7 @@ import {
   seedCommunicationTemplates, updateCommunicationTemplate,
   createScheduledCommunication, listScheduledCommunications,
   cancelScheduledCommunication, runScheduledCommunications,
+  updateScheduledCommunication,
 } from "../communications/communication.controller";
 import {
   assignAdminRole,
@@ -189,6 +190,7 @@ adminRouter.patch("/communications/templates/:key", asyncHandler(requireAdminPer
 adminRouter.post("/communications/scheduled", asyncHandler(requireAdminPermission("communications.send")), asyncHandler(createScheduledCommunication));
 adminRouter.get("/communications/scheduled", asyncHandler(requireAdminPermission("communications.send")), asyncHandler(listScheduledCommunications));
 adminRouter.patch("/communications/scheduled/:id/cancel", asyncHandler(requireAdminPermission("communications.send")), asyncHandler(cancelScheduledCommunication));
+adminRouter.patch("/communications/scheduled/:id", asyncHandler(requireAdminPermission("communications.send")), asyncHandler(updateScheduledCommunication));
 adminRouter.post("/communications/run-scheduled", asyncHandler(requireAdminPermission("communications.send")), asyncHandler(runScheduledCommunications));
 
 // Admin role management

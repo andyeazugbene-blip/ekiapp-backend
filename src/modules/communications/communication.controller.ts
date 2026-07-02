@@ -77,6 +77,16 @@ export async function cancelScheduledCommunication(request: Request, response: R
   response.status(200).json(item);
 }
 
+export async function updateScheduledCommunication(request: Request, response: Response): Promise<void> {
+  const id = request.params.id as string;
+  if (!id) throw new AppError("ID is required", 400);
+  const { subject, body, scheduledFor, audience, channel } = request.body as {
+    subject?: string; body?: string; scheduledFor?: string; audience?: string; channel?: string;
+  };
+  const item = await scheduledCommunicationService.update(id, { subject, body, scheduledFor, audience, channel });
+  response.status(200).json(item);
+}
+
 export async function runScheduledCommunications(_request: Request, response: Response): Promise<void> {
   const result = await scheduledCommunicationService.runDue();
   response.status(200).json(result);
