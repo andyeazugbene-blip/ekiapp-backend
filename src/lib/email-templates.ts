@@ -220,7 +220,7 @@ export const emailTemplates = {
     };
   },
 
-  otpVerification(params: { code: string }): { subject: string; html: string } {
+  otpVerification(params: { code: string }): { subject: string; html: string; text: string } {
     return {
       subject: "Your Eki verification code",
       html: baseLayout(`
@@ -231,6 +231,7 @@ export const emailTemplates = {
         </div>
         <p style="color: #6b7280; font-size: 14px;">This code expires in 10 minutes. If you didn't request this, you can safely ignore this email.</p>
       `),
+      text: `Your Eki verification code is: ${params.code}\n\nThis code expires in 10 minutes. If you didn't request this, you can safely ignore this email.\n\nEki Marketplace`,
     };
   },
 };

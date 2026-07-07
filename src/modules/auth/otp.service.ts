@@ -70,6 +70,7 @@ export const otpService = {
       to: email,
       subject: template.subject,
       html: template.html,
+      text: template.text,
     });
   },
 
