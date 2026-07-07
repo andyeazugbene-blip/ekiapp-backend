@@ -1,7 +1,7 @@
 import type { DeliveryMethod, DeliveryZone } from "@prisma/client";
 
-import { env } from "../../config/env";
 import { prisma } from "../../lib/prisma";
+import { currencyFromCountry } from "../../shared/currency";
 import { AppError } from "../../shared/errors/app-error";
 import type {
   CreateDeliveryMethodInput,
@@ -48,7 +48,11 @@ export const deliveryZonesService = {
         flag: input.flag,
         baseFeeAmount: input.baseFeeAmount,
         feePerKgAmount: input.feePerKgAmount,
-        currency: input.currency ?? env.defaultCurrency,
+        // Always derive from country — never trust a client-supplied currency
+        // for a delivery zone. A mismatched currency here (e.g. a "United
+        // States" zone saved as EUR) blocks checkout for every buyer whose
+        // cart is priced in the zone's actual country currency.
+        currency: currencyFromCountry(input.country),
         isActive: input.isActive ?? true,
       },
     });
@@ -66,7 +70,12 @@ export const deliveryZonesService = {
     if (!zone) throw new AppError("Delivery zone not found", 404);
     if (zone.vendorId !== vendor.id) throw new AppError("Forbidden", 403);
 
-    return prisma.deliveryZone.update({ where: { id: zoneId }, data: input });
+    // If the country changes, the currency must follow it — never accept a
+    // client-supplied currency independent of country (see createVendorZone).
+    const { currency: _ignoredCurrency, ...rest } = input;
+    const data = input.country ? { ...rest, currency: currencyFromCountry(input.country) } : rest;
+
+    return prisma.deliveryZone.update({ where: { id: zoneId }, data });
   },
 
   async deleteVendorZone(userId: string, zoneId: string): Promise<void> {

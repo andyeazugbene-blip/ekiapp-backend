@@ -65,6 +65,7 @@ import { getAdminRevenue } from "./admin-revenue.controller";
 import {
   createDeliveryZone,
   deleteDeliveryZone,
+  fixDeliveryZoneCurrencies,
   listAllDeliveryZones,
   updateDeliveryZone,
 } from "./admin-delivery-zones.controller";
@@ -235,6 +236,7 @@ adminRouter.get("/delivery-zones", asyncHandler(requireAdminPermission("delivery
 adminRouter.post("/delivery-zones", asyncHandler(requireAdminPermission("delivery_zones.mutate")), asyncHandler(createDeliveryZone));
 adminRouter.patch("/delivery-zones/:id", asyncHandler(requireAdminPermission("delivery_zones.mutate")), asyncHandler(updateDeliveryZone));
 adminRouter.delete("/delivery-zones/:id", asyncHandler(requireAdminPermission("delivery_zones.mutate")), asyncHandler(deleteDeliveryZone));
+adminRouter.post("/delivery-zones/fix-currencies", asyncHandler(requireAdminPermission("delivery_zones.mutate")), asyncHandler(fixDeliveryZoneCurrencies));
 
 // Promo code management
 adminRouter.get("/promo-codes", asyncHandler(requireAdminPermission("promos.read")), asyncHandler(adminListPromoCodes));
