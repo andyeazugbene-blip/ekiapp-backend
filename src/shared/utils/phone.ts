@@ -8,7 +8,10 @@ export function normalizePhoneNumber(value: string, field = "phone"): string {
     throw new AppError(`Invalid ${field}`, 400);
   }
 
-  let normalized = trimmed.replace(/[\s().-]/g, "");
+  // Strip everything except digits and "+" — handles ordinary spaces/dashes/
+  // parens as well as odd whitespace (e.g. non-breaking spaces from mobile
+  // keyboard autofill/suggestions) that a narrower character class can miss.
+  let normalized = trimmed.replace(/[^\d+]/g, "");
   normalized = normalized.replace(/(?!^)\+/g, "");
 
   if (normalized.startsWith("00")) {
