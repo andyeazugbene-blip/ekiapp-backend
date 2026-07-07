@@ -165,22 +165,18 @@ export const adminListingsService = {
     return prisma.vendor.update({ where: { id: vendorId }, data });
   },
 
-  async deleteVendor(vendorId: string) {
-    const vendor = await prisma.vendor.findUnique({
-      where: { id: vendorId },
-      include: { _count: { select: { orderItems: true, payoutRequests: true } } },
-    });
+  async deleteVendor(vendorId: string, reason?: string) {
+    const vendor = await prisma.vendor.findUnique({ where: { id: vendorId }, select: { userId: true } });
     if (!vendor) throw new AppError("Vendor not found", 404);
-    if (vendor._count.orderItems > 0 || vendor._count.payoutRequests > 0) {
-      throw new AppError("Vendor has order or payout history and cannot be deleted; suspend instead", 409);
-    }
-    await prisma.$transaction([
-      prisma.product.deleteMany({ where: { vendorId } }),
-      prisma.verificationDocument.deleteMany({ where: { vendorId } }),
-      prisma.wallet.deleteMany({ where: { vendorId } }),
-      prisma.vendor.delete({ where: { id: vendorId } }),
-    ]);
-    return { id: vendorId, deleted: true };
+
+    // Vendor.user is onDelete: Cascade, so deleting the underlying User row
+    // takes the Vendor (and its products/wallet/verification docs, which are
+    // also Cascade) with it in one shot. If the vendor has order/payout/
+    // payout-method/wallet-transaction history, those relations are RESTRICT
+    // and this throws — deleteUser catches that and anonymizes instead of
+    // silently leaving a half-deleted vendor or an orphaned login account.
+    const result = await this.deleteUser(vendor.userId, reason ?? "Vendor deleted by admin");
+    return { id: vendorId, deleted: result.hardDeleted, hardDeleted: result.hardDeleted };
   },
 
   async getOrder(orderId: string) {
@@ -710,6 +706,34 @@ export const adminListingsService = {
     if (!user) throw new AppError("User not found", 404);
     if (user.role === UserRole.ADMIN) throw new AppError("Admin accounts cannot be deleted here", 409);
 
+    // Try a real hard delete first. Cascade relations (cart, messages,
+    // notifications, push tokens, favorites, etc.) clean themselves up
+    // automatically. If the user (or their vendor) has order/payment/review
+    // history, Postgres will reject this with a foreign-key violation
+    // (those relations are RESTRICT, not CASCADE, on purpose — financial
+    // and other people's order records must never disappear). In that case
+    // fall back to the existing anonymize-and-suspend behavior below.
+    try {
+      await prisma.user.delete({ where: { id: userId } });
+      return {
+        id: userId,
+        email: null,
+        name: null,
+        role: user.role,
+        isSuspended: true,
+        suspendedReason: reason ?? "Deleted by admin",
+        createdAt: user.createdAt,
+        updatedAt: new Date(),
+        hardDeleted: true,
+      };
+    } catch (error) {
+      const code = (error as { code?: string } | null)?.code;
+      if (code !== "P2003" && code !== "P2014") {
+        throw error;
+      }
+      // Has order/payment/review history — cannot fully erase. Anonymize instead.
+    }
+
     return prisma.$transaction(async (tx) => {
       await tx.pushToken.deleteMany({ where: { userId } });
       await tx.notification.deleteMany({ where: { userId } });
@@ -731,7 +755,7 @@ export const adminListingsService = {
         });
       }
 
-      return tx.user.update({
+      const anonymized = await tx.user.update({
         where: { id: userId },
         data: {
           email: `deleted_${userId}@anonymized.local`,
@@ -755,6 +779,7 @@ export const adminListingsService = {
           updatedAt: true,
         },
       });
+      return { ...anonymized, hardDeleted: false as const };
     });
   },
 };

@@ -71,12 +71,17 @@ export async function deleteUser(request: Request, response: Response): Promise<
   const result = await adminListingsService.deleteUser(userId, reason);
   await recordAudit({
     actorId: requireUserId(request),
-    action: "user.delete",
+    action: result.hardDeleted ? "user.hard_delete" : "user.delete",
     entityType: "User",
     entityId: userId,
-    metadata: { reason: reason ?? null, role: result.role },
+    metadata: { reason: reason ?? null, role: result.role, hardDeleted: result.hardDeleted },
   });
-  response.status(200).json({ message: "User account data has been anonymized.", user: result });
+  response.status(200).json({
+    message: result.hardDeleted
+      ? "User account and all related data have been permanently deleted."
+      : "User has order/payment/review history and cannot be fully erased; account data has been anonymized instead.",
+    user: result,
+  });
 }
 
 export async function listVendors(request: Request, response: Response): Promise<void> {
@@ -197,14 +202,23 @@ export async function updateVendor(request: Request, response: Response): Promis
 
 export async function deleteVendor(request: Request, response: Response): Promise<void> {
   const vendorId = requireIdParam(request);
-  const result = await adminListingsService.deleteVendor(vendorId);
+  const reason = typeof request.body?.reason === "string" && request.body.reason.trim().length > 0
+    ? request.body.reason.trim()
+    : undefined;
+  const result = await adminListingsService.deleteVendor(vendorId, reason);
   await recordAudit({
     actorId: requireUserId(request),
-    action: "vendor.delete",
+    action: result.hardDeleted ? "vendor.hard_delete" : "vendor.delete",
     entityType: "Vendor",
     entityId: vendorId,
+    metadata: { hardDeleted: result.hardDeleted },
   });
-  response.status(200).json(result);
+  response.status(200).json({
+    ...result,
+    message: result.hardDeleted
+      ? "Vendor account and all related data have been permanently deleted."
+      : "Vendor has order/payout history and cannot be fully erased; account has been anonymized and suspended instead.",
+  });
 }
 
 export async function getVendorStats(_request: Request, response: Response): Promise<void> {
