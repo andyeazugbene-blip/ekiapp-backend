@@ -4,13 +4,14 @@ import { authenticate, optionalAuthenticate } from "../../middlewares/authentica
 import { authRateLimiter } from "../../middlewares/rate-limit";
 import { requireTurnstile } from "../../middlewares/turnstile";
 import { asyncHandler } from "../../shared/utils/async-handler";
-import { forgotPassword, login, me, register, resetPassword, switchRole, updateProfile, verifyEmail } from "./auth.controller";
+import { forgotPassword, login, me, register, resetPassword, switchRole, updateProfile, vendorPortalLogin, verifyEmail } from "./auth.controller";
 import { sendOtp, verifyOtp } from "./otp.controller";
 
 export const authRouter = Router();
 
 authRouter.post("/register", authRateLimiter, requireTurnstile, asyncHandler(register));
 authRouter.post("/login", authRateLimiter, asyncHandler(login));
+authRouter.post("/vendor-portal-login", authRateLimiter, asyncHandler(vendorPortalLogin));
 authRouter.get("/me", authenticate, asyncHandler(me));
 authRouter.patch("/me", authenticate, asyncHandler(updateProfile));
 authRouter.post("/forgot-password", authRateLimiter, asyncHandler(forgotPassword));

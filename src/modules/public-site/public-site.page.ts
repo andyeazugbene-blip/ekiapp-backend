@@ -1,5 +1,40 @@
 import type { Request, Response } from "express";
 
+import { authService } from "../auth/auth.service";
+
+const VENDOR_PORTAL_COOKIE = "eki_vp_session";
+
+function parseCookies(header: string | undefined): Record<string, string> {
+  const out: Record<string, string> = {};
+  if (!header) return out;
+  for (const part of header.split(";")) {
+    const idx = part.indexOf("=");
+    if (idx === -1) continue;
+    const key = part.slice(0, idx).trim();
+    const value = part.slice(idx + 1).trim();
+    if (key) {
+      try {
+        out[key] = decodeURIComponent(value);
+      } catch {
+        out[key] = value;
+      }
+    }
+  }
+  return out;
+}
+
+async function isVendorSession(token: string | undefined): Promise<boolean> {
+  if (!token) return false;
+  try {
+    const payload = authService.verifyToken(token);
+    const check = await authService.verifyTokenVersion(payload.sub, payload.tv ?? 0);
+    const role = check.role ?? payload.role;
+    return check.valid && !check.suspended && role === "VENDOR";
+  } catch {
+    return false;
+  }
+}
+
 function escape(value: unknown): string {
   if (value === null || value === undefined) return "";
   return String(value)
@@ -312,9 +347,484 @@ function renderHomeLayout(page: PageDefinition): string {
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <meta name="theme-color" content="#094f38" />
+  <meta name="theme-color" content="#134f3b" />
   <title>${escape(page.title)}</title>
   <meta name="description" content="${escape(page.description)}" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" />
+  <style>
+    *,*::before,*::after{box-sizing:border-box}
+    html,body{margin:0;padding:0;scroll-behavior:smooth}
+    body{background:#fff;color:#111827;font-family:'Inter',-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;-webkit-font-smoothing:antialiased;line-height:1.5}
+    a{color:inherit;text-decoration:none}
+    img{display:block;max-width:100%}
+    .shell{width:min(1200px,calc(100% - 48px));margin:0 auto}
+
+    /* ── Header ── */
+    .topbar{position:sticky;top:0;z-index:50;background:#134f3b}
+    .topbar-inner{display:flex;align-items:center;justify-content:space-between;min-height:64px;gap:20px}
+    .brand{display:inline-flex;align-items:center;gap:6px;font-weight:800;font-size:20px;color:#fff;letter-spacing:-0.02em}
+    .brand-dot{width:10px;height:10px;border-radius:999px;background:#4ade80;display:inline-block}
+    .topnav{display:flex;align-items:center;gap:28px}
+    .topnav a{font-size:14px;font-weight:600;color:rgba(255,255,255,.85);transition:color .15s ease}
+    .topnav a:hover{color:#fff}
+    .topnav .nav-cta{display:inline-flex;align-items:center;justify-content:center;min-height:40px;padding:0 22px;border-radius:10px;background:#fff;color:#134f3b;font-weight:700;font-size:14px;transition:transform .2s cubic-bezier(.34,1.56,.64,1),box-shadow .2s ease}
+    .topnav .nav-cta:hover{transform:translateY(-1px);box-shadow:0 8px 20px rgba(0,0,0,.15)}
+
+    /* ── Hero ── */
+    .hero-wrap{background:linear-gradient(135deg,#134f3b 0%,#1a6b4f 50%,#134f3b 100%);color:#fff;overflow:hidden}
+    .hero{display:grid;grid-template-columns:minmax(0,1fr) minmax(340px,520px);align-items:center;gap:40px;padding:72px 0 48px}
+    .hero-copy{max-width:540px}
+    .hero-badge{display:inline-flex;align-items:center;gap:6px;padding:6px 16px;border-radius:999px;background:rgba(255,255,255,.12);color:rgba(255,255,255,.9);font-size:12px;font-weight:700;letter-spacing:0.04em;text-transform:uppercase;margin-bottom:24px;border:1px solid rgba(255,255,255,.15)}
+    .hero-badge-dot{width:6px;height:6px;border-radius:999px;background:#4ade80;display:inline-block}
+    h1{margin:0;font-size:clamp(32px,4.2vw,52px);line-height:1.06;letter-spacing:-0.04em;font-weight:800}
+    .hero-intro{margin:20px 0 0;max-width:440px;color:rgba(255,255,255,.8);font-size:17px;line-height:1.6}
+    .hero-actions{display:flex;gap:14px;margin-top:32px;flex-wrap:wrap}
+    .btn-app{display:inline-flex;align-items:center;gap:12px;min-width:170px;height:56px;padding:0 22px;border-radius:12px;background:#fff;color:#134f3b;text-decoration:none;box-shadow:0 16px 36px rgba(0,0,0,.12);transition:transform .25s cubic-bezier(.34,1.56,.64,1),box-shadow .25s ease}
+    .btn-app:hover{transform:translateY(-3px) scale(1.03);box-shadow:0 22px 44px rgba(0,0,0,.18)}
+    .btn-app:active{transform:translateY(0) scale(.98)}
+    .btn-app.google{background:#2b7a4b;color:#fff}
+    .btn-app.google:hover{background:#33995c}
+    .btn-app-icon{font-size:22px;flex-shrink:0}
+    .btn-app-text{display:flex;flex-direction:column}
+    .btn-small{font-size:10px;font-weight:600;opacity:.7}
+    .btn-main{font-size:15px;font-weight:800;margin-top:1px}
+    .hero-trust{margin-top:20px;font-size:13px;color:rgba(255,255,255,.55)}
+
+    /* ── Hero showcase ── */
+    .hero-showcase{position:relative;min-height:500px;display:flex;align-items:center;justify-content:center}
+    .phone-mockup{width:260px;background:#1a1a1a;border-radius:32px;padding:8px;box-shadow:0 40px 80px rgba(0,0,0,.35),0 0 0 2px rgba(255,255,255,.08);position:relative;z-index:2}
+    .phone-notch{position:absolute;top:8px;left:50%;transform:translateX(-50%);width:80px;height:20px;background:#1a1a1a;border-radius:0 0 12px 12px;z-index:2}
+    .phone-screen{background:#f8f9f7;border-radius:24px;overflow:hidden;min-height:460px;position:relative}
+    .phone-top{background:#134f3b;color:#fff;padding:28px 14px 10px;text-align:center}
+    .phone-top-brand{font-weight:800;font-size:14px;display:flex;align-items:center;justify-content:center;gap:4px}
+    .phone-top-brand .dot{width:6px;height:6px;border-radius:99px;background:#4ade80;display:inline-block}
+    .phone-top-sub{font-size:10px;color:rgba(255,255,255,.7);margin-top:2px}
+    .phone-cats{display:flex;gap:5px;padding:8px 14px;overflow-x:auto}
+    .phone-cat{padding:5px 12px;border-radius:18px;font-size:9px;font-weight:600;white-space:nowrap}
+    .phone-cat.active{background:#134f3b;color:#fff}
+    .phone-cat:not(.active){background:#fff;color:#555;border:1px solid #e5e7eb}
+    .phone-vendor{margin:6px 14px;background:#fff;border-radius:10px;padding:10px;display:flex;align-items:center;gap:10px;box-shadow:0 1px 4px rgba(0,0,0,.06)}
+    .phone-vendor-av{width:36px;height:36px;border-radius:8px;background:#fef3c7;display:flex;align-items:center;justify-content:center;font-size:16px}
+    .phone-vendor-info{flex:1}
+    .phone-vendor-name{font-size:10px;font-weight:800;color:#111}
+    .phone-vendor-meta{font-size:8px;color:#6b7280;margin-top:1px}
+    .phone-products{display:grid;grid-template-columns:1fr 1fr;gap:6px;padding:8px 14px}
+    .phone-prod{background:#fff;border-radius:8px;padding:8px;text-align:center;box-shadow:0 1px 3px rgba(0,0,0,.04)}
+    .phone-prod-icon{font-size:20px;margin-bottom:4px}
+    .phone-prod-name{font-size:9px;font-weight:700;color:#111}
+    .phone-prod-price{font-size:8px;color:#134f3b;font-weight:700;margin-top:1px}
+    .phone-prod-old{text-decoration:line-through;color:#999;font-size:7px;margin-left:3px}
+    .phone-order{margin:6px 14px;background:#eef8f2;border-radius:8px;padding:8px 10px}
+    .phone-order-title{font-size:9px;font-weight:700;color:#111}
+    .phone-order-sub{font-size:8px;color:#134f3b;margin-top:1px}
+    .phone-reorder{margin:6px 14px;display:flex;align-items:center;justify-content:space-between}
+    .phone-reorder-label{font-size:8px;color:#6b7280}
+    .phone-reorder-btn{font-size:8px;font-weight:700;color:#fff;background:#134f3b;padding:4px 12px;border-radius:12px}
+    .phone-bottom-nav{position:absolute;bottom:0;left:0;right:0;background:#fff;border-top:1px solid #e5e7eb;display:flex;justify-content:space-around;padding:7px 0}
+    .phone-nav-item{display:flex;flex-direction:column;align-items:center;gap:1px;font-size:7px;color:#999}
+    .phone-nav-item.active{color:#134f3b}
+    .phone-nav-icon{font-size:13px}
+
+    /* ── Floating cards ── */
+    .fcard{position:absolute;background:#fff;border-radius:14px;padding:10px 14px;box-shadow:0 8px 28px rgba(0,0,0,.12);display:flex;align-items:center;gap:10px;z-index:1;white-space:nowrap;transition:transform .3s ease}
+    .fcard:hover{transform:scale(1.05)}
+    .fcard-icon{width:40px;height:40px;border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:18px;flex-shrink:0}
+    .fcard-text h4{margin:0;font-size:11px;font-weight:800;color:#111}
+    .fcard-text p{margin:1px 0 0;font-size:9px;color:#6b7280}
+    .fcard-badge{position:absolute;background:#fff;border-radius:12px;padding:8px 14px;box-shadow:0 6px 20px rgba(0,0,0,.1);z-index:1;display:flex;align-items:center;gap:6px;font-size:10px;font-weight:700}
+    .fcard-badge .bdot{width:8px;height:8px;border-radius:99px;display:inline-block}
+    .fc-tl{top:20px;left:-30px}.fc-ml{top:160px;left:-50px}.fc-bl{bottom:100px;left:-20px}
+    .fc-tr{top:20px;right:-30px}.fc-mr{top:180px;right:-50px}.fc-br{bottom:100px;right:-20px}
+    .fb-tl{top:70px;left:-70px}.fb-tr{top:50px;right:-80px}.fb-b{bottom:30px;left:50%;transform:translateX(-50%)}
+
+    /* ── Features ── */
+    .features-band{padding:80px 0 72px;background:#f9fafb}
+    .features-header{text-align:center;margin-bottom:48px}
+    .features-header h2{margin:0;font-size:clamp(26px,4vw,38px);font-weight:800;letter-spacing:-.03em;line-height:1.12;color:#111}
+    .features-header p{margin:14px auto 0;color:#6b7280;font-size:16px;max-width:480px}
+    .features-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:20px}
+    .feature-card{background:#fff;border:1px solid #e5e7eb;border-radius:16px;padding:28px 24px;transition:transform .2s ease,box-shadow .2s ease,border-color .2s ease}
+    .feature-card:hover{transform:translateY(-4px);box-shadow:0 16px 36px rgba(19,79,59,.1);border-color:#b8d4c3}
+    .feature-icon{width:48px;height:48px;border-radius:12px;background:#eef8f2;color:#134f3b;display:flex;align-items:center;justify-content:center;font-size:22px;margin-bottom:16px}
+    .feature-card h3{margin:0 0 8px;font-size:16px;font-weight:800;letter-spacing:-.02em;color:#111}
+    .feature-card p{margin:0;color:#6b7280;font-size:14px;line-height:1.55}
+
+    /* ── Pricing ── */
+    .pricing-band{padding:80px 0 72px;background:#fff}
+    .pricing-header{text-align:center;margin-bottom:48px}
+    .pricing-header h2{margin:0;font-size:clamp(26px,4vw,38px);font-weight:800;letter-spacing:-.03em;line-height:1.12;color:#111}
+    .pricing-header p{margin:14px auto 0;color:#6b7280;font-size:16px;max-width:560px}
+    .pricing-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:20px;max-width:960px;margin:0 auto}
+    .pricing-card{background:#fff;border:1px solid #e5e7eb;border-radius:20px;padding:32px 28px;display:flex;flex-direction:column;transition:transform .2s ease,box-shadow .2s ease}
+    .pricing-card:hover{transform:translateY(-4px);box-shadow:0 16px 36px rgba(19,79,59,.1)}
+    .pricing-card.popular{border-color:#076b51;box-shadow:0 0 0 2px #076b51}
+    .pricing-badge{display:inline-block;background:#eef8f2;color:#076b51;font-size:11px;font-weight:700;border-radius:999px;padding:4px 14px;margin-bottom:16px;align-self:flex-start;text-transform:uppercase;letter-spacing:.04em}
+    .pricing-name{font-size:22px;font-weight:800;color:#111;margin:0 0 6px}
+    .pricing-desc{font-size:13px;color:#6b7280;line-height:1.5;margin:0 0 20px}
+    .pricing-price{font-size:36px;font-weight:800;color:#111;margin:0 0 4px}.pricing-price small{font-size:14px;font-weight:400;color:#6b7280}
+    .pricing-fee{font-size:12px;color:#6b7280;margin:0 0 20px}
+    .pricing-list{list-style:none;padding:0;margin:0 0 24px;flex:1}
+    .pricing-list li{padding:7px 0;font-size:13px;color:#374151;display:flex;align-items:center;gap:8px}
+    .pricing-list li::before{content:"✓";color:#076b51;font-weight:800;font-size:14px}
+    .pricing-cta{display:block;width:100%;height:48px;border:0;border-radius:12px;background:#134f3b;color:#fff;font-weight:700;font-size:14px;cursor:pointer;text-align:center;line-height:48px;text-decoration:none;transition:background .15s ease}
+    .pricing-cta:hover{background:#0f4030}
+    .pricing-cta.outline{background:transparent;border:1px solid #d1d5db;color:#374151}
+    .pricing-cta.outline:hover{border-color:#134f3b;color:#134f3b}
+    .pricing-note{text-align:center;margin-top:24px;color:#6b7280;font-size:13px}
+
+    /* ── Order lookup ── */
+    .order-band{padding:56px 0;background:#fff;border-top:1px solid #e5e7eb}
+    .order-inner{max-width:600px;margin:0 auto;text-align:center}
+    .order-inner h2{margin:0 0 8px;font-size:22px;font-weight:800;color:#111;letter-spacing:-.02em}
+    .order-inner p{margin:0 0 24px;color:#6b7280;font-size:14px}
+    .order-form{display:flex;gap:10px;max-width:480px;margin:0 auto}
+    .order-form input{flex:1;height:48px;border:1px solid #d1d5db;border-radius:10px;padding:0 16px;font-size:14px;outline:none;background:#fff;color:#111}
+    .order-form input:focus{border-color:#134f3b;box-shadow:0 0 0 3px rgba(19,79,59,.1)}
+    .order-form button{height:48px;padding:0 24px;border:0;border-radius:10px;background:#134f3b;color:#fff;font-weight:700;font-size:14px;cursor:pointer;white-space:nowrap;transition:background .15s ease}
+    .order-form button:hover{background:#0f4030}
+
+    /* ── Footer ── */
+    .footer{background:#0d2a20;color:rgba(255,255,255,.72);padding:48px 0 32px}
+    .footer-grid{display:grid;grid-template-columns:minmax(0,1.2fr) repeat(3,minmax(0,1fr));gap:32px;padding-bottom:32px;border-bottom:1px solid rgba(255,255,255,.08)}
+    .footer-brand{display:inline-flex;align-items:center;gap:8px;margin-bottom:12px;font-weight:800;font-size:16px;color:#fff;letter-spacing:-.03em}
+    .footer-brand .brand-dot{width:10px;height:10px;border-radius:999px;background:#4ade80;display:inline-block}
+    .footer p{font-size:13px;line-height:1.55;margin:0;color:rgba(255,255,255,.6)}
+    .footer h4{margin:0 0 12px;font-size:11px;font-weight:700;color:#fff;text-transform:uppercase;letter-spacing:.06em}
+    .footer-links{display:flex;flex-direction:column;gap:8px}
+    .footer-links a{font-size:13px;color:rgba(255,255,255,.6);transition:color .15s ease}
+    .footer-links a:hover{color:#fff}
+    .footer-bottom{padding-top:24px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px;font-size:12px}
+    .footer-bottom a{color:rgba(255,255,255,.6);transition:color .15s ease}
+    .footer-bottom a:hover{color:#fff}
+
+    /* ── Responsive ── */
+    @media(max-width:1020px){
+      .hero{grid-template-columns:1fr;gap:24px;padding:40px 0 0}
+      .hero-showcase{min-height:auto;padding:20px 0}
+      .fcard,.fcard-badge{display:none}
+      .phone-mockup{margin:0 auto}
+      h1{font-size:36px}
+      .features-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+      .pricing-grid{grid-template-columns:1fr}
+      .pricing-card.popular{order:-1}
+      .footer-grid{grid-template-columns:1fr 1fr;gap:24px}
+    }
+    @media(max-width:600px){
+      .shell{width:min(100% - 24px,1200px)}
+      .topnav{gap:16px}
+      .topnav a:not(.nav-cta){display:none}
+      .hero{padding:32px 0 40px}
+      h1{font-size:30px}
+      .hero-intro{font-size:15px}
+      .hero-actions{gap:10px}
+      .btn-app{min-width:0;flex:1;height:50px;padding:0 14px}
+      .features-grid{grid-template-columns:1fr}
+      .features-header h2{font-size:26px}
+      .footer-grid{grid-template-columns:1fr}
+      .footer-bottom{flex-direction:column;text-align:center}
+      .order-form{flex-direction:column}
+      .order-form button{width:100%}
+    }
+  </style>
+</head>
+<body>
+
+<!-- ── HEADER ── -->
+<header class="topbar">
+  <div class="shell topbar-inner">
+    <a class="brand" href="/">
+      <span class="brand-dot"></span>eki
+    </a>
+    <nav class="topnav" aria-label="Main">
+      <a href="/store">Buyers</a>
+      <a href="/sell">Sell on Eki</a>
+      <a href="#pricing">Pricing</a>
+      <a class="nav-cta" href="/store">Sign In</a>
+    </nav>
+  </div>
+</header>
+
+<!-- ── HERO ── -->
+<main>
+  <section class="hero-wrap">
+    <div class="shell hero">
+      <div class="hero-copy">
+        <div class="hero-badge">
+          <span class="hero-badge-dot"></span> Now live in the UK
+        </div>
+        <h1>Your favourite foodstuff vendors. One trusted app.</h1>
+        <p class="hero-intro">All in one place for Africans, Caribbeans, and people who love authentic foodstuff. Buy, sell, and receive your favourites in one app.</p>
+        <div class="hero-actions">
+          <a class="btn-app" href="https://apps.apple.com/app/id" aria-label="Download on App Store">
+            <span class="btn-app-icon">&#xF8FF;</span>
+            <span class="btn-app-text">
+              <span class="btn-small">Download on the</span>
+              <span class="btn-main">App Store</span>
+            </span>
+          </a>
+          <a class="btn-app google" href="https://play.google.com/store/apps/details?id=com.ekiapp.mobile" aria-label="Get it on Google Play">
+            <span class="btn-app-icon">&#9654;</span>
+            <span class="btn-app-text">
+              <span class="btn-small">Get it on</span>
+              <span class="btn-main">Google Play</span>
+            </span>
+          </a>
+        </div>
+        <div class="hero-trust">Free app · No spam · No hidden fees</div>
+      </div>
+      <div class="hero-showcase" aria-label="Eki app preview">
+        <!-- Floating badge cards -->
+        <div class="fcard-badge fb-tl"><span class="bdot" style="background:#4ade80"></span> Verified vendor<br><span style="font-weight:400;font-size:8px;color:#6b7280">Safe to buy from</span></div>
+        <div class="fcard-badge fb-tr"><span class="bdot" style="background:#f87171"></span> Live tracking<br><span style="font-weight:400;font-size:8px;color:#6b7280">Know your order status</span></div>
+        <div class="fcard-badge fb-b"><span class="bdot" style="background:#fbbf24"></span> Secure checkout<br><span style="font-weight:400;font-size:8px;color:#6b7280">No random transfers</span></div>
+
+        <!-- Floating product cards - left -->
+        <div class="fcard fc-tl">
+          <div class="fcard-icon" style="background:#fef3c7">🌾</div>
+          <div class="fcard-text"><h4>GARRI</h4><p>5kg bag</p></div>
+        </div>
+        <div class="fcard fc-ml">
+          <div class="fcard-icon" style="background:#fce7f3">🛢️</div>
+          <div class="fcard-text"><h4>PALM OIL</h4><p>1 litre</p></div>
+        </div>
+        <div class="fcard fc-bl">
+          <div class="fcard-icon" style="background:#fee2e2">🌶️</div>
+          <div class="fcard-text"><h4>PEPPERS</h4><p>dried</p></div>
+        </div>
+
+        <!-- Floating product cards - right -->
+        <div class="fcard fc-tr">
+          <div class="fcard-icon" style="background:#fce7f3">🦐</div>
+          <div class="fcard-text"><h4>CRAYFISH</h4><p>200g</p></div>
+        </div>
+        <div class="fcard fc-mr">
+          <div class="fcard-icon" style="background:#d1fae5">🥜</div>
+          <div class="fcard-text"><h4>EGUSI</h4><p>500g bag</p></div>
+        </div>
+        <div class="fcard fc-br">
+          <div class="fcard-icon" style="background:#dbeafe">🐟</div>
+          <div class="fcard-text"><h4>STOCKFISH</h4><p>dried</p></div>
+        </div>
+
+        <!-- Center phone -->
+        <div class="phone-mockup">
+          <div class="phone-notch"></div>
+          <div class="phone-screen">
+            <div class="phone-top">
+              <div class="phone-top-brand"><span class="dot"></span> eki</div>
+              <div class="phone-top-sub">Find. Order. Track.</div>
+            </div>
+            <div class="phone-cats">
+              <span class="phone-cat active">Grains</span>
+              <span class="phone-cat">Soups</span>
+              <span class="phone-cat">Oils</span>
+            </div>
+            <div class="phone-vendor">
+              <div class="phone-vendor-av">🌿</div>
+              <div class="phone-vendor-info">
+                <div class="phone-vendor-name">Mama Chioma Store</div>
+                <div class="phone-vendor-meta">★ 4.9 · Lagos Island · Verified</div>
+              </div>
+            </div>
+            <div class="phone-products">
+              <div class="phone-prod">
+                <div class="phone-prod-icon">🌾</div>
+                <div class="phone-prod-name">Garri 5kg</div>
+                <div class="phone-prod-price">₦3,500</div>
+              </div>
+              <div class="phone-prod">
+                <div class="phone-prod-icon">🥜</div>
+                <div class="phone-prod-name">Egusi 1kg</div>
+                <div class="phone-prod-price">₦2,800</div>
+              </div>
+            </div>
+            <div class="phone-order">
+              <div class="phone-order-title">Order #1042 — In transit</div>
+              <div class="phone-order-sub">Arriving today by 4pm</div>
+            </div>
+            <div class="phone-reorder">
+              <span class="phone-reorder-label">Reorder from last week</span>
+              <span class="phone-reorder-btn">One tap →</span>
+            </div>
+            <div class="phone-bottom-nav">
+              <div class="phone-nav-item active"><span class="phone-nav-icon">🏠</span><span>Home</span></div>
+              <div class="phone-nav-item"><span class="phone-nav-icon">🔍</span><span>Search</span></div>
+              <div class="phone-nav-item"><span class="phone-nav-icon">🛒</span><span>Cart</span></div>
+              <div class="phone-nav-item"><span class="phone-nav-icon">👤</span><span>Profile</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── FEATURES ── -->
+  <section class="features-band">
+    <div class="shell">
+      <div class="features-header">
+        <h2>Everything buyers need in one app.</h2>
+        <p>Discover, order, track, and enjoy your favourite foodstuff from trusted vendors.</p>
+      </div>
+      <div class="features-grid">
+        <article class="feature-card">
+          <div class="feature-icon">🔍</div>
+          <h3>Find trusted vendors</h3>
+          <p>Browse verified African and Caribbean vendors. Search by product, category, or vendor name.</p>
+        </article>
+        <article class="feature-card">
+          <div class="feature-icon">🚚</div>
+          <h3>Live order tracking</h3>
+          <p>Follow your order from checkout to delivery. Get real-time updates at every step.</p>
+        </article>
+        <article class="feature-card">
+          <div class="feature-icon">🛡️</div>
+          <h3>Secure checkout</h3>
+          <p>Pay safely by card or wallet. Every transaction is protected and recorded on Eki.</p>
+        </article>
+        <article class="feature-card">
+          <div class="feature-icon">📱</div>
+          <h3>One app access</h3>
+          <p>Everything in one place — browse, order, pay, track, and chat with your vendor.</p>
+        </article>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── PRICING ── -->
+  <section class="pricing-band" id="pricing">
+    <div class="shell">
+      <div class="pricing-header">
+        <h2>Vendor services built for growth.</h2>
+        <p>Eki provides the tools and infrastructure to help food vendors manage and grow their businesses.</p>
+      </div>
+      <div id="pricing-grid" class="pricing-grid">
+        <div class="pricing-card" id="pricing-loading" style="grid-column:1/-1;text-align:center;border-style:dashed">
+          <p class="pricing-desc" style="margin:24px 0">Loading vendor services&hellip;</p>
+        </div>
+      </div>
+      <p class="pricing-note">All vendor services are managed securely through the Eki Business Portal.</p>
+    </div>
+  </section>
+  <script>
+  (function(){
+    var grid=document.getElementById('pricing-grid');
+    function esc(v){return String(v||'').replace(/[&<>"']/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]})}
+    function money(cents,cur){return new Intl.NumberFormat('en-GB',{style:'currency',currency:cur||'GBP',maximumFractionDigits:2}).format(Number(cents||0)/100).replace(/\\.00$/,'')}
+    function fee(bps){return ((Number(bps||0)/100).toFixed(2).replace(/\\.00$/,''))+'%'}
+    function items(p){
+      var a=[];
+      if(p.maxProducts===-1)a.push('Unlimited active products');else if(p.maxProducts>0)a.push('Up to '+p.maxProducts+' active products');
+      if(p.maxOrders==null||p.maxOrders===-1)a.push('Unlimited orders');else a.push('Up to '+p.maxOrders+' orders');
+      if(p.analytics)a.push('Analytics dashboard');
+      if(p.discounts)a.push('Discount campaigns');
+      if(p.flashSales)a.push('Flash sales');
+      if(p.bundles)a.push('Product bundles');
+      if(p.marketingTools)a.push('Marketing tools');
+      if(p.customerDatabase)a.push('Customer database');
+      if(p.professionalStorefront)a.push('Professional storefront');
+      if(p.orderManagement)a.push('Order management');
+      a.push(p.prioritySupport?'Priority support':'Standard support');
+      return a.slice(0,8)
+    }
+    function fallback(){
+      grid.innerHTML='<div class="pricing-card"><div class="pricing-name">Starter</div><p class="pricing-desc">Get started selling on Eki with essential commerce tools.</p><div class="pricing-price">Free</div><ul class="pricing-list"><li>Store page</li><li>Order management</li><li>Standard support</li></ul><a class="pricing-cta outline" href="/business-portal">Get started</a></div>'
+    }
+    fetch('/api/subscriptions/plans').then(function(r){return r.json()}).then(function(d){
+      var plans=(Array.isArray(d.plans)?d.plans:[]).filter(function(p){return p.isActive!==false});
+      plans.sort(function(a,b){return(a.displayOrder||0)-(b.displayOrder||0)});
+      if(!plans.length){fallback();return}
+      grid.innerHTML='';
+      grid.style.gridTemplateColumns='repeat('+Math.min(plans.length,3)+',minmax(0,1fr))';
+      plans.forEach(function(p){
+        var k=String(p.plan||p.id||'').toUpperCase();
+        var isFree=!p.monthlyPriceCents;
+        var popular=p.isDefault===true||k==='GROWTH';
+        var card=document.createElement('div');
+        card.className='pricing-card'+(popular?' popular':'');
+        card.innerHTML=(popular?'<span class="pricing-badge">Most popular</span>':'')+
+          '<div class="pricing-name">'+esc(p.name||k)+'</div>'+
+          '<p class="pricing-desc">'+esc(p.description||'Grow your food business on Eki.')+'</p>'+
+          '<div class="pricing-price">'+(isFree?'Free':esc(money(p.monthlyPriceCents,p.currency))+' <small>/ month</small>')+'</div>'+
+          '<p class="pricing-fee">'+esc(fee(p.platformFeeBps||p.defaultPlatformFeeBps))+' platform fee per order</p>'+
+          '<ul class="pricing-list">'+items(p).map(function(i){return'<li>'+esc(i)+'</li>'}).join('')+'</ul>'+
+          '<a class="pricing-cta'+(isFree?' outline':'')+'" href="/business-portal">'+(isFree?'Get started':'Activate '+esc(p.name||k))+'</a>';
+        grid.appendChild(card);
+      });
+    }).catch(fallback);
+  })();
+  </script>
+
+  <!-- ── Order Lookup ── -->
+  <section class="order-band">
+    <div class="shell">
+      <div class="order-inner">
+        <h2>Find your order</h2>
+        <p>Enter your order number or checkout email to track your delivery.</p>
+        <form class="order-form" onsubmit="event.preventDefault();window.location.href='/find-order'">
+          <input type="text" placeholder="Order number or email address" aria-label="Order number or email" />
+          <button type="submit">Find Order</button>
+        </form>
+      </div>
+    </div>
+  </section>
+</main>
+
+<!-- ── FOOTER ── -->
+<footer class="footer">
+  <div class="shell">
+    <div class="footer-grid">
+      <div>
+        <div class="footer-brand">
+          <span class="brand-dot"></span>eki
+        </div>
+        <p>Your favourite foodstuff vendors, all in one trusted app. Buy, sell, and receive authentic African and Caribbean foodstuff.</p>
+      </div>
+      <div>
+        <h4>Platform</h4>
+        <div class="footer-links">
+          <a href="/store">Browse vendors</a>
+          <a href="/find-order">Find order</a>
+          <a href="/sell">Sell on Eki</a>
+          <a href="/vendor">Vendor portal</a>
+        </div>
+      </div>
+      <div>
+        <h4>Support</h4>
+        <div class="footer-links">
+          <a href="/help">Help centre</a>
+          <a href="mailto:adminandy@eki.app">Contact support</a>
+        </div>
+      </div>
+      <div>
+        <h4>Legal</h4>
+        <div class="footer-links">
+          <a href="/privacy">Privacy policy</a>
+          <a href="/terms">Terms of service</a>
+          <a href="/account-deletion">Account deletion</a>
+        </div>
+      </div>
+    </div>
+    <div class="footer-bottom">
+      <span>&copy; ${new Date().getFullYear()} Eki. All rights reserved.</span>
+      <span>Built for your favourite foodstuff vendors.</span>
+    </div>
+  </div>
+</footer>
+
+</body>
+</html>`;
+}
+
+function renderSellLayout(): string {
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#094f38" />
+  <title>Sell on Eki | Turn DMs into paid orders</title>
+  <meta name="description" content="Give your customers a real checkout. Share one Eki store link, get paid securely, and stop losing orders in your DMs." />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" />
   <style>
@@ -553,7 +1063,7 @@ function renderHomeLayout(page: PageDefinition): string {
     <a class="brand" href="/">eki</a>
     <span class="spacer"></span>
     <nav class="topnav" aria-label="Main">
-      <a href="/">Product</a>
+      <a href="/">eki for Buyers</a>
       <a href="#growth-tools">Growth Tools</a>
       <a href="#how-it-works">How It Works</a>
       <a href="#pricing">Pricing</a>
@@ -938,6 +1448,7 @@ function renderHomeLayout(page: PageDefinition): string {
 </body>
 </html>`;
 }
+
 
 function renderFindOrderLayout(): string {
   return `<!DOCTYPE html>
@@ -2072,6 +2583,12 @@ export async function getPublicHomePage(_request: Request, response: Response): 
   sendPage(response, homePage);
 }
 
+export async function getPublicSellPage(_request: Request, response: Response): Promise<void> {
+  response.setHeader("Content-Type", "text/html; charset=utf-8");
+  response.setHeader("Cache-Control", "public, max-age=300, s-maxage=900");
+  response.status(200).send(renderSellLayout());
+}
+
 export async function getPublicFindOrderPage(_request: Request, response: Response): Promise<void> {
   response.setHeader("Content-Type", "text/html; charset=utf-8");
   response.setHeader("Cache-Control", "public, max-age=120, s-maxage=300");
@@ -2120,11 +2637,113 @@ export async function getPublicInvitePage(request: Request, response: Response):
   response.status(200).send(renderReferralInviteLayout(String(request.params.code ?? "")));
 }
 
-export async function getPublicVendorSubscriptionPage(_request: Request, response: Response): Promise<void> {
+export async function getPublicVendorSubscriptionPage(request: Request, response: Response): Promise<void> {
+  const cookies = parseCookies(request.headers.cookie);
+  const token = cookies[VENDOR_PORTAL_COOKIE];
+  const authorized = await isVendorSession(token);
+
   response.setHeader("Content-Type", "text/html; charset=utf-8");
-  response.setHeader("Cache-Control", "public, max-age=120, s-maxage=300");
+  response.setHeader("Cache-Control", "private, no-store");
+
+  if (!authorized) {
+    if (token) response.clearCookie(VENDOR_PORTAL_COOKIE, { path: "/" });
+    response.status(200).send(renderVendorPortalGate());
+    return;
+  }
+
   response.status(200).send(renderVendorSubscriptionLayout());
-}function renderVendorPortalLayout(): string { return `<!DOCTYPE html>
+}
+
+function renderVendorPortalGate(): string {
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#076b51" />
+  <title>Vendor Sign In | Eki Business Portal</title>
+  <meta name="description" content="Sign in with your Eki vendor account to manage your store, billing, and services." />
+  <meta name="robots" content="noindex, nofollow" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" />
+  <style>
+    *{box-sizing:border-box;margin:0;padding:0}
+    body{min-height:100vh;display:grid;place-items:center;padding:24px;background:linear-gradient(135deg,#076b51 0%,#0a8a68 50%,#076b51 100%);font-family:'Inter',Arial,sans-serif;-webkit-font-smoothing:antialiased}
+    a{color:inherit;text-decoration:none}
+    button,input{font:inherit}
+    .card{width:min(100%,400px);background:#fff;border-radius:20px;padding:36px 32px;box-shadow:0 24px 60px rgba(0,0,0,.2)}
+    .logo{background:#076b51;color:#fff;border-radius:10px;padding:8px 18px;font-weight:800;font-size:16px;display:inline-block;margin-bottom:20px}
+    .title{font-size:22px;font-weight:800;letter-spacing:-.03em;color:#0d1b16}
+    .sub{color:#66736d;font-size:13px;margin:6px 0 22px;line-height:1.5}
+    .note{background:#f6f8f7;border-radius:10px;padding:10px 12px;font-size:12px;color:#66736d;line-height:1.5;margin-bottom:20px}
+    .form-group{margin-bottom:16px}
+    .form-group label{display:block;font-size:12px;font-weight:700;margin-bottom:5px;color:#374151}
+    .input{width:100%;height:46px;border:1px solid #dde7e2;border-radius:10px;padding:0 14px;font-size:14px;outline:none;background:#fff;color:#0d1b16}
+    .input:focus{border-color:#076b51;box-shadow:0 0 0 3px rgba(7,107,81,.1)}
+    .btn{width:100%;height:46px;border:0;border-radius:10px;background:#076b51;color:#fff;font-weight:700;font-size:14px;cursor:pointer;margin-top:6px}
+    .btn:hover{background:#065a44}
+    .btn:disabled{opacity:.6;cursor:not-allowed}
+    .msg{display:none;padding:10px 12px;border-radius:8px;font-size:12px;margin-bottom:12px}
+    .msg.err{display:block;background:#fff0f0;border:1px solid #f3caca;color:#a62e2e}
+    .back{display:block;text-align:center;margin-top:18px;font-size:12px;color:#66736d;font-weight:600}
+    .back:hover{color:#0d1b16}
+  </style>
+</head>
+<body>
+  <form class="card" id="gateForm" novalidate>
+    <span class="logo">eki</span>
+    <div class="title">Vendor Sign In</div>
+    <div class="sub">This area is for Eki vendors only. Sign in with your vendor account to manage your store, billing, and services.</div>
+    <div class="note">Not a vendor yet? Download the Eki app to create a vendor account, then come back here to manage your subscription.</div>
+    <div id="gateMsg" class="msg"></div>
+    <div class="form-group">
+      <label for="gateEmail">Email</label>
+      <input id="gateEmail" class="input" type="email" placeholder="vendor@eki.app" autocomplete="email" required />
+    </div>
+    <div class="form-group">
+      <label for="gatePass">Password</label>
+      <input id="gatePass" class="input" type="password" autocomplete="current-password" required />
+    </div>
+    <button class="btn" id="gateBtn" type="submit">Sign In</button>
+    <a class="back" href="/">&larr; Back to Eki</a>
+  </form>
+  <script>
+    document.getElementById('gateForm').addEventListener('submit', async function(e){
+      e.preventDefault();
+      var btn = document.getElementById('gateBtn');
+      var msgEl = document.getElementById('gateMsg');
+      btn.disabled = true; btn.textContent = 'Signing in...';
+      msgEl.className = 'msg';
+      try {
+        var r = await fetch('/api/auth/vendor-portal-login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'same-origin',
+          body: JSON.stringify({
+            email: document.getElementById('gateEmail').value.trim(),
+            password: document.getElementById('gatePass').value,
+          }),
+        });
+        var d = await r.json().catch(function(){ return {}; });
+        if (!r.ok) {
+          msgEl.textContent = d.message || 'Invalid email or password';
+          msgEl.className = 'msg err';
+          btn.disabled = false; btn.textContent = 'Sign In';
+          return;
+        }
+        window.location.reload();
+      } catch (err) {
+        msgEl.textContent = 'Connection error. Please try again.';
+        msgEl.className = 'msg err';
+        btn.disabled = false; btn.textContent = 'Sign In';
+      }
+    });
+  </script>
+</body>
+</html>`;
+}
+
+function renderVendorPortalLayout(): string { return `<!DOCTYPE html>
 <html lang="en"><head>
 <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0"><meta name="theme-color" content="#134f3b">
 <title>Vendor Portal | Eki</title>

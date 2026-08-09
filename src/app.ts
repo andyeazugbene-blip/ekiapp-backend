@@ -18,6 +18,7 @@ import {
   getPublicFindOrderPage,
   getPublicHelpPage,
   getPublicHomePage,
+  getPublicSellPage,
   getPublicInvitePage,
   getPublicPrivacyPage,
   getPublicTermsPage,
@@ -54,7 +55,7 @@ app.disable("x-powered-by");
 
 // Security headers. CSP must be relaxed on /api/docs and server-rendered
 // public HTML pages that use inline scripts.
-const publicHtmlPaths = new Set(["/", "/find-order", "/help", "/support", "/privacy", "/terms", "/account-deletion", "/refund-policy", "/cookie-policy", "/subscription-policy", "/acceptable-use", "/vendor-agreement", "/vendor/subscription", "/vendor", "/cart", "/checkout", "/business-portal"]);
+const publicHtmlPaths = new Set(["/", "/sell", "/find-order", "/help", "/support", "/privacy", "/terms", "/account-deletion", "/refund-policy", "/cookie-policy", "/subscription-policy", "/acceptable-use", "/vendor-agreement", "/vendor/subscription", "/vendor", "/cart", "/checkout", "/business-portal"]);
 const swaggerAndPublicPagePaths = (req: { path: string }) =>
   req.path === "/api/docs" || req.path.startsWith("/store") || req.path.startsWith("/invite/") || publicHtmlPaths.has(req.path);
 
@@ -131,6 +132,9 @@ app.get("/assets/public-site/hero-phone-mockup.png", (_req, res) => {
 // Public web routes (server-rendered pages outside /api).
 app.get("/", (req, res, next) => {
   Promise.resolve(getPublicHomePage(req, res)).catch(next);
+});
+app.get("/sell", (req, res, next) => {
+  Promise.resolve(getPublicSellPage(req, res)).catch(next);
 });
 app.get("/find-order", (req, res, next) => {
   Promise.resolve(getPublicFindOrderPage(req, res)).catch(next);

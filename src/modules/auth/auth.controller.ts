@@ -1,5 +1,6 @@
 import type { Request, Response } from "express";
 
+import { env } from "../../config/env";
 import { AppError } from "../../shared/errors/app-error";
 import { authService } from "./auth.service";
 import {
@@ -21,6 +22,36 @@ export async function login(request: Request, response: Response): Promise<void>
   const result = await authService.login(input, {
     ip: request.ip,
     userAgent: typeof request.headers["user-agent"] === "string" ? request.headers["user-agent"] : null,
+  });
+  response.status(200).json(result);
+}
+
+const VENDOR_PORTAL_COOKIE = "eki_vp_session";
+
+/**
+ * Sign-in for the server-rendered vendor business portal (/business-portal,
+ * /vendor/subscription). Reuses the same credential check as the main login
+ * but rejects non-vendor accounts and sets an httpOnly session cookie so the
+ * portal route can gate the HTML server-side, instead of shipping the page
+ * publicly and relying only on a client-side login screen.
+ */
+export async function vendorPortalLogin(request: Request, response: Response): Promise<void> {
+  const input = validateLoginInput(request.body);
+  const result = await authService.login(input, {
+    ip: request.ip,
+    userAgent: typeof request.headers["user-agent"] === "string" ? request.headers["user-agent"] : null,
+  });
+
+  if (result.user.role !== "VENDOR") {
+    throw new AppError("This sign-in is for vendor accounts only.", 403);
+  }
+
+  response.cookie(VENDOR_PORTAL_COOKIE, result.token, {
+    httpOnly: true,
+    secure: env.nodeEnv === "production",
+    sameSite: "lax",
+    maxAge: 12 * 60 * 60 * 1000,
+    path: "/",
   });
   response.status(200).json(result);
 }
