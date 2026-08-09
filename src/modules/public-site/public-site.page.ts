@@ -312,7 +312,7 @@ function renderHomeLayout(page: PageDefinition): string {
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <meta name="theme-color" content="#134f3b" />
+  <meta name="theme-color" content="#094f38" />
   <title>${escape(page.title)}</title>
   <meta name="description" content="${escape(page.description)}" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
@@ -320,338 +320,416 @@ function renderHomeLayout(page: PageDefinition): string {
   <style>
     *,*::before,*::after{box-sizing:border-box}
     html,body{margin:0;padding:0;scroll-behavior:smooth}
-    body{background:#fff;color:#111827;font-family:'Inter',-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;-webkit-font-smoothing:antialiased;line-height:1.5}
+    body{background:#fff;color:#0d0d0d;font-family:'Inter',-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;-webkit-font-smoothing:antialiased;line-height:1.4}
     a{color:inherit;text-decoration:none}
     img{display:block;max-width:100%}
-    .shell{width:min(1200px,calc(100% - 48px));margin:0 auto}
+    .shell{max-width:1440px;margin:0 auto;padding:0 72px}
 
-    /* ── Header ── */
-    .topbar{position:sticky;top:0;z-index:50;background:#134f3b}
-    .topbar-inner{display:flex;align-items:center;justify-content:space-between;min-height:64px;gap:20px}
-    .brand{display:inline-flex;align-items:center;gap:6px;font-weight:800;font-size:20px;color:#fff;letter-spacing:-0.02em}
-    .brand-dot{width:10px;height:10px;border-radius:999px;background:#4ade80;display:inline-block}
-    .topnav{display:flex;align-items:center;gap:28px}
-    .topnav a{font-size:14px;font-weight:600;color:rgba(255,255,255,.85);transition:color .15s ease}
-    .topnav a:hover{color:#fff}
-    .topnav .nav-cta{display:inline-flex;align-items:center;justify-content:center;min-height:40px;padding:0 22px;border-radius:10px;background:#fff;color:#134f3b;font-weight:700;font-size:14px;transition:transform .2s cubic-bezier(.34,1.56,.64,1),box-shadow .2s ease}
-    .topnav .nav-cta:hover{transform:translateY(-1px);box-shadow:0 8px 20px rgba(0,0,0,.15)}
+    /* ── Nav ── */
+    .topbar{position:sticky;top:0;z-index:50;background:#094f38}
+    .topbar-inner{display:flex;align-items:center;gap:24px;min-height:82px}
+    .brand{font-weight:800;font-size:28px;color:#fff;letter-spacing:-.02em}
+    .spacer{flex:1}
+    .topnav{display:flex;align-items:center;gap:24px}
+    .topnav a{font-size:14px;font-weight:600;color:#fff;opacity:.92;transition:opacity .15s ease}
+    .topnav a:hover{opacity:1}
+    .nav-signin{display:inline-flex;align-items:center;justify-content:center;height:44px;padding:0 18px;border-radius:10px;border:1px solid #ccdbcf;color:#fff;font-weight:700;font-size:14px}
+    .nav-cta{display:inline-flex;align-items:center;justify-content:center;height:46px;padding:0 22px;border-radius:12px;background:#94c71f;color:#094f38;font-weight:700;font-size:15px;transition:transform .2s cubic-bezier(.34,1.56,.64,1)}
+    .nav-cta:hover{transform:translateY(-1px)}
 
     /* ── Hero ── */
-    .hero-wrap{background:linear-gradient(135deg,#134f3b 0%,#1a6b4f 50%,#134f3b 100%);color:#fff;overflow:hidden}
-    .hero{display:grid;grid-template-columns:minmax(0,1fr) minmax(340px,520px);align-items:center;gap:40px;padding:72px 0 48px}
-    .hero-copy{max-width:540px}
-    .hero-badge{display:inline-flex;align-items:center;gap:6px;padding:6px 16px;border-radius:999px;background:rgba(255,255,255,.12);color:rgba(255,255,255,.9);font-size:12px;font-weight:700;letter-spacing:0.04em;text-transform:uppercase;margin-bottom:24px;border:1px solid rgba(255,255,255,.15)}
-    .hero-badge-dot{width:6px;height:6px;border-radius:999px;background:#4ade80;display:inline-block}
-    h1{margin:0;font-size:clamp(32px,4.2vw,52px);line-height:1.06;letter-spacing:-0.04em;font-weight:800}
-    .hero-intro{margin:20px 0 0;max-width:440px;color:rgba(255,255,255,.8);font-size:17px;line-height:1.6}
-    .hero-actions{display:flex;gap:14px;margin-top:32px;flex-wrap:wrap}
-    .btn-app{display:inline-flex;align-items:center;gap:12px;min-width:170px;height:56px;padding:0 22px;border-radius:12px;background:#fff;color:#134f3b;text-decoration:none;box-shadow:0 16px 36px rgba(0,0,0,.12);transition:transform .25s cubic-bezier(.34,1.56,.64,1),box-shadow .25s ease}
-    .btn-app:hover{transform:translateY(-3px) scale(1.03);box-shadow:0 22px 44px rgba(0,0,0,.18)}
-    .btn-app:active{transform:translateY(0) scale(.98)}
-    .btn-app.google{background:#2b7a4b;color:#fff}
-    .btn-app.google:hover{background:#33995c}
-    .btn-app-icon{font-size:22px;flex-shrink:0}
-    .btn-app-text{display:flex;flex-direction:column}
-    .btn-small{font-size:10px;font-weight:600;opacity:.7}
-    .btn-main{font-size:15px;font-weight:800;margin-top:1px}
-    .hero-trust{margin-top:20px;font-size:13px;color:rgba(255,255,255,.55)}
+    .hero-wrap{background:#f7f5eb}
+    .hero{display:flex;gap:44px;align-items:flex-start;padding:68px 0}
+    .hero-copy{width:min(620px,100%);flex-shrink:0}
+    .hero-badge{display:inline-flex;align-items:center;gap:6px;padding:8px 12px;border-radius:999px;background:#f0f5f0;color:#0f7a57;font-size:12px;font-weight:700;margin-bottom:20px}
+    .hero-badge .dot{color:#0f7a57}
+    h1{margin:0 0 20px;font-size:clamp(34px,4.8vw,64px);line-height:1.12;letter-spacing:-.02em;font-weight:800;color:#0d0d0d}
+    .hero-intro{margin:0 0 24px;max-width:580px;color:#63696e;font-size:clamp(16px,1.6vw,22px);line-height:1.5}
+    .hero-actions{display:flex;gap:16px;flex-wrap:wrap;margin-bottom:22px}
+    .btn-primary{display:inline-flex;align-items:center;justify-content:center;height:46px;padding:0 22px;border-radius:12px;background:#0f7a57;color:#fff;font-weight:700;font-size:16px;border:0;cursor:pointer;transition:transform .2s cubic-bezier(.34,1.56,.64,1),box-shadow .2s ease}
+    .btn-primary:hover{transform:translateY(-2px);box-shadow:0 14px 28px rgba(15,122,87,.25)}
+    .btn-outline{display:inline-flex;align-items:center;justify-content:center;height:46px;padding:0 18px;border-radius:12px;background:transparent;color:#094f38;font-weight:600;font-size:16px;border:1px solid #0f7a57;transition:background .15s ease}
+    .btn-outline:hover{background:#f0f5f0}
+    .hero-fine{font-size:15px;font-weight:600;color:#094f38}
 
-    /* ── Hero showcase ── */
-    .hero-showcase{position:relative;min-height:500px;display:flex;align-items:center;justify-content:center}
-    .phone-mockup{width:260px;background:#1a1a1a;border-radius:32px;padding:8px;box-shadow:0 40px 80px rgba(0,0,0,.35),0 0 0 2px rgba(255,255,255,.08);position:relative;z-index:2}
-    .phone-notch{position:absolute;top:8px;left:50%;transform:translateX(-50%);width:80px;height:20px;background:#1a1a1a;border-radius:0 0 12px 12px;z-index:2}
-    .phone-screen{background:#f8f9f7;border-radius:24px;overflow:hidden;min-height:460px;position:relative}
-    .phone-top{background:#134f3b;color:#fff;padding:28px 14px 10px;text-align:center}
-    .phone-top-brand{font-weight:800;font-size:14px;display:flex;align-items:center;justify-content:center;gap:4px}
-    .phone-top-brand .dot{width:6px;height:6px;border-radius:99px;background:#4ade80;display:inline-block}
-    .phone-top-sub{font-size:10px;color:rgba(255,255,255,.7);margin-top:2px}
-    .phone-cats{display:flex;gap:5px;padding:8px 14px;overflow-x:auto}
-    .phone-cat{padding:5px 12px;border-radius:18px;font-size:9px;font-weight:600;white-space:nowrap}
-    .phone-cat.active{background:#134f3b;color:#fff}
-    .phone-cat:not(.active){background:#fff;color:#555;border:1px solid #e5e7eb}
-    .phone-vendor{margin:6px 14px;background:#fff;border-radius:10px;padding:10px;display:flex;align-items:center;gap:10px;box-shadow:0 1px 4px rgba(0,0,0,.06)}
-    .phone-vendor-av{width:36px;height:36px;border-radius:8px;background:#fef3c7;display:flex;align-items:center;justify-content:center;font-size:16px}
-    .phone-vendor-info{flex:1}
-    .phone-vendor-name{font-size:10px;font-weight:800;color:#111}
-    .phone-vendor-meta{font-size:8px;color:#6b7280;margin-top:1px}
-    .phone-products{display:grid;grid-template-columns:1fr 1fr;gap:6px;padding:8px 14px}
-    .phone-prod{background:#fff;border-radius:8px;padding:8px;text-align:center;box-shadow:0 1px 3px rgba(0,0,0,.04)}
-    .phone-prod-icon{font-size:20px;margin-bottom:4px}
-    .phone-prod-name{font-size:9px;font-weight:700;color:#111}
-    .phone-prod-price{font-size:8px;color:#134f3b;font-weight:700;margin-top:1px}
-    .phone-prod-old{text-decoration:line-through;color:#999;font-size:7px;margin-left:3px}
-    .phone-order{margin:6px 14px;background:#eef8f2;border-radius:8px;padding:8px 10px}
-    .phone-order-title{font-size:9px;font-weight:700;color:#111}
-    .phone-order-sub{font-size:8px;color:#134f3b;margin-top:1px}
-    .phone-reorder{margin:6px 14px;display:flex;align-items:center;justify-content:space-between}
-    .phone-reorder-label{font-size:8px;color:#6b7280}
-    .phone-reorder-btn{font-size:8px;font-weight:700;color:#fff;background:#134f3b;padding:4px 12px;border-radius:12px}
-    .phone-bottom-nav{position:absolute;bottom:0;left:0;right:0;background:#fff;border-top:1px solid #e5e7eb;display:flex;justify-content:space-around;padding:7px 0}
-    .phone-nav-item{display:flex;flex-direction:column;align-items:center;gap:1px;font-size:7px;color:#999}
-    .phone-nav-item.active{color:#134f3b}
-    .phone-nav-icon{font-size:13px}
+    .hero-visual{background:#f7f6ed;border-radius:28px;padding:18px;width:600px;max-width:100%;flex-shrink:0}
+    .hv-kicker{font-size:12px;font-weight:600;color:#094029;margin:0 0 10px}
+    .hv-heading{font-size:clamp(20px,2.2vw,30px);font-weight:700;color:#0a0d0a;line-height:1.25;margin:0 0 16px}
+    .hv-row{display:flex;align-items:stretch;gap:14px}
+    .hv-card{border-radius:20px;padding:14px;flex:1;display:flex;flex-direction:column;gap:10px}
+    .hv-card.chaos{background:#fff0f0}
+    .hv-card.paid{background:#e8f7ed}
+    .hv-tag{display:inline-flex;align-self:flex-start;padding:7px 10px;border-radius:999px;font-size:11px;font-weight:600}
+    .hv-tag.chaos{background:#ffdbdb;color:#c71f1f}
+    .hv-tag.paid{background:#094029;color:#fff}
+    .hv-bubble{background:#fff;border-radius:12px;padding:8px 10px;font-size:12px;color:#0a0d0a}
+    .hv-bubble.warn{color:#c71f1f;font-weight:600}
+    .hv-note{font-size:12px;font-weight:600;color:#c71f1f;margin-top:2px}
+    .hv-arrow{display:flex;align-items:center;justify-content:center;flex:0 0 44px;font-size:28px;font-weight:700;color:#094029}
+    .hv-panel{background:#fff;border-radius:14px;padding:12px}
+    .hv-panel-label{font-size:11px;font-weight:600;color:#094029;margin:0 0 4px}
+    .hv-panel-title{font-size:14px;font-weight:600;color:#0a0d0a;margin:0 0 4px}
+    .hv-panel-sub{font-size:12px;color:#0a0d0a;margin:0}
+    .hv-panel .hv-panel-sub.accent{color:#094029;font-size:11px}
+    .hv-panel-note{font-size:12px;font-weight:600;color:#094029;margin-top:2px}
 
-    /* ── Floating cards ── */
-    .fcard{position:absolute;background:#fff;border-radius:14px;padding:10px 14px;box-shadow:0 8px 28px rgba(0,0,0,.12);display:flex;align-items:center;gap:10px;z-index:1;white-space:nowrap;transition:transform .3s ease}
-    .fcard:hover{transform:scale(1.05)}
-    .fcard-icon{width:40px;height:40px;border-radius:10px;display:flex;align-items:center;justify-content:center;font-size:18px;flex-shrink:0}
-    .fcard-text h4{margin:0;font-size:11px;font-weight:800;color:#111}
-    .fcard-text p{margin:1px 0 0;font-size:9px;color:#6b7280}
-    .fcard-badge{position:absolute;background:#fff;border-radius:12px;padding:8px 14px;box-shadow:0 6px 20px rgba(0,0,0,.1);z-index:1;display:flex;align-items:center;gap:6px;font-size:10px;font-weight:700}
-    .fcard-badge .bdot{width:8px;height:8px;border-radius:99px;display:inline-block}
-    .fc-tl{top:20px;left:-30px}.fc-ml{top:160px;left:-50px}.fc-bl{bottom:100px;left:-20px}
-    .fc-tr{top:20px;right:-30px}.fc-mr{top:180px;right:-50px}.fc-br{bottom:100px;right:-20px}
-    .fb-tl{top:70px;left:-70px}.fb-tr{top:50px;right:-80px}.fb-b{bottom:30px;left:50%;transform:translateX(-50%)}
+    /* ── Pain section ── */
+    .pain-band{background:#094f38;padding:64px 0}
+    .pain-kicker{font-size:12px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:#bfe3d1;margin:0 0 14px}
+    .pain-heading{font-size:clamp(26px,3.6vw,38px);font-weight:700;color:#fff;line-height:1.15;margin:0 0 34px;max-width:800px}
+    .pain-grid{display:flex;gap:18px;flex-wrap:wrap;margin-bottom:28px}
+    .pain-card{background:rgba(254,249,246,.06);border:1px solid #29785c;border-radius:18px;padding:18px 22px;width:300px;flex:1 1 260px}
+    .pain-x{font-size:22px;font-weight:700;color:#c71f1f;margin:0 0 12px}
+    .pain-card h3{font-size:18px;font-weight:700;color:#fff;margin:0 0 12px;line-height:1.25}
+    .pain-card p{font-size:14px;color:#ccdbd1;margin:0;line-height:1.5}
+    .pain-close{font-size:18px;font-weight:600;color:#94c71f;margin:0}
 
-    /* ── Features ── */
-    .features-band{padding:80px 0 72px;background:#f9fafb}
-    .features-header{text-align:center;margin-bottom:48px}
-    .features-header h2{margin:0;font-size:clamp(26px,4vw,38px);font-weight:800;letter-spacing:-.03em;line-height:1.12;color:#111}
-    .features-header p{margin:14px auto 0;color:#6b7280;font-size:16px;max-width:480px}
-    .features-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:20px}
-    .feature-card{background:#fff;border:1px solid #e5e7eb;border-radius:16px;padding:28px 24px;transition:transform .2s ease,box-shadow .2s ease,border-color .2s ease}
-    .feature-card:hover{transform:translateY(-4px);box-shadow:0 16px 36px rgba(19,79,59,.1);border-color:#b8d4c3}
-    .feature-icon{width:48px;height:48px;border-radius:12px;background:#eef8f2;color:#134f3b;display:flex;align-items:center;justify-content:center;font-size:22px;margin-bottom:16px}
-    .feature-card h3{margin:0 0 8px;font-size:16px;font-weight:800;letter-spacing:-.02em;color:#111}
-    .feature-card p{margin:0;color:#6b7280;font-size:14px;line-height:1.55}
+    /* ── How it works ── */
+    .how-band{background:#fff;padding:72px 0}
+    .section-kicker{font-size:12px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:#094029;margin:0 0 14px}
+    .how-heading{font-size:clamp(28px,3.4vw,40px);font-weight:700;color:#094f38;margin:0 0 14px;max-width:600px}
+    .how-sub{font-size:20px;color:#63696e;margin:0 0 30px}
+    .how-grid{display:flex;gap:18px;flex-wrap:wrap}
+    .how-card{background:#f7f5eb;border:1px solid #d1dbd1;border-radius:18px;padding:22px;flex:1 1 320px;display:flex;flex-direction:column;gap:14px}
+    .how-num{display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;border-radius:999px;background:#0f7a57;color:#fff;font-weight:700;font-size:18px}
+    .how-card h3{font-size:22px;font-weight:800;color:#0d0d0d;margin:0}
+    .how-card p{font-size:16px;color:#63696e;margin:0;line-height:1.5}
+    .how-tags{font-size:13px;font-weight:600;color:#0f7a57;margin:0}
+    .how-close{font-size:18px;font-weight:600;color:#0f7a57;margin:30px 0 0}
+
+    /* ── Growth stories ── */
+    .growth-band{background:#f7f5eb;padding:80px 0}
+    .growth-heading{font-size:clamp(28px,3.6vw,40px);font-weight:700;color:#0d0d0d;margin:0 0 14px;max-width:880px}
+    .growth-sub{font-size:20px;color:#63696e;margin:0 0 42px}
+    .story{display:flex;gap:40px;align-items:flex-start;flex-wrap:wrap;margin-bottom:42px}
+    .story:last-child{margin-bottom:0}
+    .story-copy{flex:1 1 480px;max-width:560px}
+    .story-eyebrow{font-size:clamp(22px,2.6vw,34px);font-weight:800;color:#0d0d0d;margin:0 0 12px;line-height:1.2}
+    .story-title{font-size:24px;font-weight:700;color:#094f38;margin:0 0 14px}
+    .story-desc{font-size:18px;color:#63696e;margin:0 0 20px;line-height:1.5}
+    .story-proof{flex:1 1 460px;max-width:620px;background:#fff;border:1px solid #d1dbd1;border-radius:24px;padding:22px;display:flex;flex-direction:column;gap:14px}
+    .story-proof h4{font-size:22px;font-weight:700;color:#0d0d0d;margin:0}
+    .story-proof .meta{font-size:16px;font-weight:600;color:#63696e;margin:0}
+    .story-ui-panel{background:#f0f5f0;border-radius:14px;padding:18px}
+    .story-ui-panel span{font-size:18px;font-weight:800;color:#0f7a57}
+
+    /* ── Transformation ── */
+    .transform-band{display:flex;flex-wrap:wrap}
+    .transform-panel{flex:1 1 480px;padding:40px;display:flex;flex-direction:column;gap:16px}
+    .transform-panel.hustle{background:#121212}
+    .transform-panel.business{background:#094f38}
+    .transform-kicker{font-size:20px;font-weight:700;margin:0}
+    .transform-kicker.hustle{color:#db241c}
+    .transform-kicker.business{color:#94c71f}
+    .transform-heading{font-size:clamp(24px,3vw,42px);font-weight:800;color:#fff;line-height:1.2;margin:0}
+    .transform-list{margin:6px 0 0;font-size:17px;font-weight:600;line-height:1.9}
+    .transform-list.hustle{color:#d1d1d1}
+    .transform-list.business{color:#fff}
 
     /* ── Pricing ── */
-    .pricing-band{padding:80px 0 72px;background:#fff}
-    .pricing-header{text-align:center;margin-bottom:48px}
-    .pricing-header h2{margin:0;font-size:clamp(26px,4vw,38px);font-weight:800;letter-spacing:-.03em;line-height:1.12;color:#111}
-    .pricing-header p{margin:14px auto 0;color:#6b7280;font-size:16px;max-width:560px}
-    .pricing-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:20px;max-width:960px;margin:0 auto}
-    .pricing-card{background:#fff;border:1px solid #e5e7eb;border-radius:20px;padding:32px 28px;display:flex;flex-direction:column;transition:transform .2s ease,box-shadow .2s ease}
-    .pricing-card:hover{transform:translateY(-4px);box-shadow:0 16px 36px rgba(19,79,59,.1)}
-    .pricing-card.popular{border-color:#076b51;box-shadow:0 0 0 2px #076b51}
-    .pricing-badge{display:inline-block;background:#eef8f2;color:#076b51;font-size:11px;font-weight:700;border-radius:999px;padding:4px 14px;margin-bottom:16px;align-self:flex-start;text-transform:uppercase;letter-spacing:.04em}
-    .pricing-name{font-size:22px;font-weight:800;color:#111;margin:0 0 6px}
-    .pricing-desc{font-size:13px;color:#6b7280;line-height:1.5;margin:0 0 20px}
-    .pricing-price{font-size:36px;font-weight:800;color:#111;margin:0 0 4px}.pricing-price small{font-size:14px;font-weight:400;color:#6b7280}
-    .pricing-fee{font-size:12px;color:#6b7280;margin:0 0 20px}
-    .pricing-list{list-style:none;padding:0;margin:0 0 24px;flex:1}
-    .pricing-list li{padding:7px 0;font-size:13px;color:#374151;display:flex;align-items:center;gap:8px}
-    .pricing-list li::before{content:"✓";color:#076b51;font-weight:800;font-size:14px}
-    .pricing-cta{display:block;width:100%;height:48px;border:0;border-radius:12px;background:#134f3b;color:#fff;font-weight:700;font-size:14px;cursor:pointer;text-align:center;line-height:48px;text-decoration:none;transition:background .15s ease}
-    .pricing-cta:hover{background:#0f4030}
-    .pricing-cta.outline{background:transparent;border:1px solid #d1d5db;color:#374151}
-    .pricing-cta.outline:hover{border-color:#134f3b;color:#134f3b}
-    .pricing-note{text-align:center;margin-top:24px;color:#6b7280;font-size:13px}
+    .pricing-band{background:#fff;padding:72px 0}
+    .pricing-heading{font-size:clamp(26px,3.4vw,38px);font-weight:700;color:#0d0d0d;margin:0 0 16px;max-width:565px}
+    .pricing-sub{font-size:19px;color:#63696e;margin:0 0 28px}
+    .plan-card{background:#f7f5eb;border:2px solid #0f7a57;border-radius:22px;padding:28px;display:flex;gap:36px;flex-wrap:wrap}
+    .plan-intro{flex:1 1 300px;display:flex;flex-direction:column;gap:12px}
+    .plan-name{font-size:26px;font-weight:800;color:#0d0d0d;margin:0}
+    .plan-price{font-size:clamp(30px,3.4vw,44px);font-weight:800;color:#094f38;margin:0}
+    .plan-fee{font-size:15px;font-weight:600;color:#63696e;margin:0}
+    .plan-features{flex:1 1 200px;list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:11px;font-size:15px;font-weight:600;color:#0d0d0d}
+    .plan-reframe{flex:1 1 280px;background:#f0f5f0;border-radius:18px;padding:18px;display:flex;flex-direction:column;gap:12px}
+    .plan-reframe-kicker{font-size:15px;font-weight:700;color:#094f38;margin:0}
+    .plan-reframe p{font-size:18px;font-weight:600;color:#0d0d0d;margin:0;line-height:1.4}
 
-    /* ── Order lookup ── */
-    .order-band{padding:56px 0;background:#fff;border-top:1px solid #e5e7eb}
-    .order-inner{max-width:600px;margin:0 auto;text-align:center}
-    .order-inner h2{margin:0 0 8px;font-size:22px;font-weight:800;color:#111;letter-spacing:-.02em}
-    .order-inner p{margin:0 0 24px;color:#6b7280;font-size:14px}
-    .order-form{display:flex;gap:10px;max-width:480px;margin:0 auto}
-    .order-form input{flex:1;height:48px;border:1px solid #d1d5db;border-radius:10px;padding:0 16px;font-size:14px;outline:none;background:#fff;color:#111}
-    .order-form input:focus{border-color:#134f3b;box-shadow:0 0 0 3px rgba(19,79,59,.1)}
-    .order-form button{height:48px;padding:0 24px;border:0;border-radius:10px;background:#134f3b;color:#fff;font-weight:700;font-size:14px;cursor:pointer;white-space:nowrap;transition:background .15s ease}
-    .order-form button:hover{background:#0f4030}
+    /* ── Final CTA ── */
+    .final-band{background:#094f38;padding:72px 0}
+    .final-heading{font-size:clamp(26px,3.6vw,44px);font-weight:800;color:#fff;line-height:1.25;margin:0 0 18px}
+    .final-sub{font-size:20px;color:#d6e5db;margin:0 0 22px;max-width:800px}
+    .final-fine{font-size:14px;font-weight:600;color:#94c71f;margin:16px 0 0}
 
     /* ── Footer ── */
-    .footer{background:#0d2a20;color:rgba(255,255,255,.72);padding:48px 0 32px}
-    .footer-grid{display:grid;grid-template-columns:minmax(0,1.2fr) repeat(3,minmax(0,1fr));gap:32px;padding-bottom:32px;border-bottom:1px solid rgba(255,255,255,.08)}
-    .footer-brand{display:inline-flex;align-items:center;gap:8px;margin-bottom:12px;font-weight:800;font-size:16px;color:#fff;letter-spacing:-.03em}
-    .footer-brand .brand-dot{width:10px;height:10px;border-radius:999px;background:#4ade80;display:inline-block}
-    .footer p{font-size:13px;line-height:1.55;margin:0;color:rgba(255,255,255,.6)}
-    .footer h4{margin:0 0 12px;font-size:11px;font-weight:700;color:#fff;text-transform:uppercase;letter-spacing:.06em}
-    .footer-links{display:flex;flex-direction:column;gap:8px}
-    .footer-links a{font-size:13px;color:rgba(255,255,255,.6);transition:color .15s ease}
-    .footer-links a:hover{color:#fff}
-    .footer-bottom{padding-top:24px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px;font-size:12px}
-    .footer-bottom a{color:rgba(255,255,255,.6);transition:color .15s ease}
-    .footer-bottom a:hover{color:#fff}
+    .footer{background:#052b1f;padding:28px 0}
+    .footer-row{display:flex;gap:32px;flex-wrap:wrap;font-size:13px;font-weight:600;color:#fff}
 
     /* ── Responsive ── */
     @media(max-width:1020px){
-      .hero{grid-template-columns:1fr;gap:24px;padding:40px 0 0}
-      .hero-showcase{min-height:auto;padding:20px 0}
-      .fcard,.fcard-badge{display:none}
-      .phone-mockup{margin:0 auto}
-      h1{font-size:36px}
-      .features-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
-      .pricing-grid{grid-template-columns:1fr}
-      .pricing-card.popular{order:-1}
-      .footer-grid{grid-template-columns:1fr 1fr;gap:24px}
+      .shell{padding:0 32px}
+      .hero{flex-direction:column;padding:40px 0}
+      .hero-visual{width:100%}
+      .transform-band{flex-direction:column}
     }
-    @media(max-width:600px){
-      .shell{width:min(100% - 24px,1200px)}
-      .topnav{gap:16px}
-      .topnav a:not(.nav-cta){display:none}
-      .hero{padding:32px 0 40px}
-      h1{font-size:30px}
-      .hero-intro{font-size:15px}
-      .hero-actions{gap:10px}
-      .btn-app{min-width:0;flex:1;height:50px;padding:0 14px}
-      .features-grid{grid-template-columns:1fr}
-      .features-header h2{font-size:26px}
-      .footer-grid{grid-template-columns:1fr}
-      .footer-bottom{flex-direction:column;text-align:center}
-      .order-form{flex-direction:column}
-      .order-form button{width:100%}
+    @media(max-width:700px){
+      .shell{padding:0 20px}
+      .topnav a:not(.nav-cta):not(.nav-signin){display:none}
+      .hv-row{flex-direction:column}
+      .hv-arrow{transform:rotate(90deg);flex:0 0 28px}
+      .plan-card{flex-direction:column}
     }
+
+    /* ── Mobile app-size layout (matches Figma "Eki Landing — Mobile" frame) ── */
+    .desktop-only{display:block}
+    .mobile-only{display:none}
+    @media(max-width:680px){
+      .desktop-only{display:none}
+      .mobile-only{display:block}
+    }
+    .m-shell{padding:0 20px}
+    .m-topbar{background:#094f38;padding:14px 20px;display:flex;align-items:center;gap:18px;position:sticky;top:0;z-index:50}
+    .m-brand{font-weight:800;font-size:28px;color:#fff;letter-spacing:-.02em}
+    .m-spacer{flex:1}
+    .m-signin{font-size:14px;font-weight:700;color:#fff}
+    .m-hero{background:#f7f5eb;padding:28px 20px}
+    .m-badge{font-size:11px;font-weight:700;color:#0f7a57;margin:0 0 12px}
+    .m-h1{margin:0 0 14px;font-size:43px;line-height:1.03;letter-spacing:-.02em;font-weight:800;color:#0d0d0d}
+    .m-intro{margin:0 0 18px;font-size:18px;line-height:1.3;color:#63696e}
+    .m-btn{display:inline-flex;align-items:center;justify-content:center;height:46px;padding:0 20px;border-radius:12px;background:#0f7a57;color:#fff;font-weight:700;font-size:16px;margin-bottom:14px}
+    .m-fine{font-size:12px;font-weight:600;color:#094f38;margin:0 0 18px}
+    .m-proof{display:flex;align-items:stretch;gap:10px}
+    .m-proof-card{border-radius:18px;padding:10px;flex:1;display:flex;flex-direction:column;gap:8px;min-width:0}
+    .m-proof-card.chaos{background:#fff0f0}
+    .m-proof-card.paid{background:#e8f7ed}
+    .m-proof-label{font-size:11px;font-weight:600;margin:0}
+    .m-proof-label.chaos{color:#c71f1f}
+    .m-proof-label.paid{color:#094029}
+    .m-bubble{background:#fff;border-radius:11px;padding:7px 9px;font-size:11px;color:#0a0d0a}
+    .m-bubble.warn{color:#c71f1f;font-weight:600}
+    .m-proof-arrow{flex:0 0 30px;display:flex;align-items:center;justify-content:center;font-size:24px;font-weight:700;color:#094029}
+    .m-proof-panel{background:#fff;border-radius:12px;padding:9px}
+    .m-proof-panel p{margin:0}
+    .m-panel-label{font-size:10px;font-weight:600;color:#094029}
+    .m-panel-title{font-size:12px;font-weight:600;color:#0a0d0a;margin-top:5px !important}
+    .m-panel-sub{font-size:11px;color:#0a0d0a;margin-top:2px !important}
+    .m-proof-note{font-size:11px;font-weight:600;color:#094029;margin:0;line-height:1.3}
+    .m-pain{background:#094f38;padding:38px 20px}
+    .m-pain-heading{font-size:29px;font-weight:800;color:#fff;line-height:1.14;margin:0 0 16px}
+    .m-pain-card{background:#083d2b;border-radius:14px;padding:14px 16px;margin-bottom:12px}
+    .m-pain-card h3{font-size:16px;font-weight:700;color:#fff;margin:0 0 8px}
+    .m-pain-card p{font-size:13px;color:#d1dbd1;margin:0}
+    .m-pain-close{font-size:14px;font-weight:600;color:#94c71f;margin:4px 0 0}
+    .m-section{background:#fff;padding:38px 20px}
+    .m-section-heading{font-size:29px;font-weight:800;color:#094f38;margin:0 0 18px}
+    .m-step{background:#f7f5eb;border-radius:14px;padding:14px 16px;margin-bottom:8px}
+    .m-step h3{font-size:18px;font-weight:800;color:#094f38;margin:0 0 8px}
+    .m-step p{font-size:14px;color:#63696e;margin:0}
+    .m-close{font-size:14px;font-weight:600;color:#0f7a57;margin:10px 0 0}
+    .m-growth{background:#f7f5eb;padding:42px 20px}
+    .m-growth-heading{font-size:29px;font-weight:800;color:#0d0d0d;margin:0 0 24px}
+    .m-growth-card{background:#fff;border:1px solid #d6dbd6;border-radius:16px;padding:16px;margin-bottom:16px}
+    .m-growth-card h3{font-size:20px;font-weight:800;color:#094f38;margin:0 0 10px}
+    .m-growth-card p{font-size:15px;color:#63696e;margin:0 0 10px}
+    .m-growth-proof{display:inline-flex;background:#f0f5f0;border-radius:10px;padding:10px 12px;font-size:13px;font-weight:600;color:#0f7a57}
+    .m-transform-panel{padding:34px 20px}
+    .m-transform-panel.hustle{background:#121212}
+    .m-transform-panel.business{background:#094f38}
+    .m-transform-kicker{font-size:14px;font-weight:700;margin:0 0 10px}
+    .m-transform-kicker.hustle{color:#db241c}
+    .m-transform-kicker.business{color:#94c71f}
+    .m-transform-heading{font-size:30px;font-weight:800;color:#fff;line-height:1.14;margin:0 0 10px}
+    .m-transform-list{font-size:14px;font-weight:600;line-height:1.9;margin:0}
+    .m-transform-list.hustle{color:#d1d1d1}
+    .m-transform-list.business{color:#fff}
+    .m-pricing{background:#fff;padding:40px 20px}
+    .m-plan-card{background:#f7f5eb;border:2px solid #0f7a57;border-radius:18px;padding:18px}
+    .m-plan-name{font-size:22px;font-weight:800;color:#0d0d0d;margin:0 0 12px}
+    .m-plan-price{font-size:38px;font-weight:800;color:#094f38;margin:0 0 6px}
+    .m-plan-fee{font-size:13px;font-weight:600;color:#63696e;margin:0 0 12px}
+    .m-plan-features{list-style:none;margin:0 0 16px;padding:0;display:flex;flex-direction:column;gap:9px;font-size:14px;font-weight:600;color:#0d0d0d}
+    .m-plan-reframe{font-size:14px;font-weight:600;color:#094f38;margin:14px 0 0}
+    .m-final{background:#094f38;padding:42px 20px}
+    .m-final-heading{font-size:29px;font-weight:800;color:#fff;line-height:1.14;margin:0 0 14px}
+    .m-final-sub{font-size:15px;color:#d6e5db;margin:0 0 16px}
+    .m-footer{background:#052b1f;padding:24px 20px}
+    .m-footer-brand{font-size:18px;font-weight:800;color:#fff;margin:0 0 8px}
+    .m-footer-links{font-size:12px;color:#ccdbd1;margin:0}
+    .m-footer-links a{color:#ccdbd1}
+    .m-footer-links a:hover{color:#fff}
   </style>
 </head>
 <body>
 
-<!-- ── HEADER ── -->
+<div class="desktop-only">
+<!-- ── NAV ── -->
 <header class="topbar">
   <div class="shell topbar-inner">
-    <a class="brand" href="/">
-      <span class="brand-dot"></span>eki
-    </a>
+    <a class="brand" href="/">eki</a>
+    <span class="spacer"></span>
     <nav class="topnav" aria-label="Main">
-      <a href="/store">Buyers</a>
-      <a href="/vendor">Vendors</a>
+      <a href="/">Product</a>
+      <a href="#growth-tools">Growth Tools</a>
+      <a href="#how-it-works">How It Works</a>
       <a href="#pricing">Pricing</a>
-      <a class="nav-cta" href="/store">Sign In</a>
+      <a href="/store">For Buyers</a>
+      <a class="nav-signin" href="/vendor">Sign In</a>
+      <a class="nav-cta" href="/business-portal">Create your Eki store</a>
     </nav>
   </div>
 </header>
 
-<!-- ── HERO ── -->
 <main>
+  <!-- ── HERO ── -->
   <section class="hero-wrap">
     <div class="shell hero">
       <div class="hero-copy">
-        <div class="hero-badge">
-          <span class="hero-badge-dot"></span> Now live in the UK
-        </div>
-        <h1>Your favourite foodstuff vendors. One trusted app.</h1>
-        <p class="hero-intro">All in one place for Africans, Caribbeans, and people who love authentic foodstuff. Buy, sell, and receive your favourites in one app.</p>
+        <div class="hero-badge"><span class="dot">●</span> NOW LIVE IN THE UK</div>
+        <h1>Stop losing orders in your DMs.</h1>
+        <p class="hero-intro">Turn your foodstuff hustle into a business customers can buy from anytime. Share one store link, get paid securely, manage orders, and win repeat customers.</p>
         <div class="hero-actions">
-          <a class="btn-app" href="https://apps.apple.com/app/id" aria-label="Download on App Store">
-            <span class="btn-app-icon">&#xF8FF;</span>
-            <span class="btn-app-text">
-              <span class="btn-small">Download on the</span>
-              <span class="btn-main">App Store</span>
-            </span>
-          </a>
-          <a class="btn-app google" href="https://play.google.com/store/apps/details?id=com.ekiapp.mobile" aria-label="Get it on Google Play">
-            <span class="btn-app-icon">&#9654;</span>
-            <span class="btn-app-text">
-              <span class="btn-small">Get it on</span>
-              <span class="btn-main">Google Play</span>
-            </span>
-          </a>
+          <a class="btn-primary" href="/business-portal">Create your Eki store →</a>
+          <a class="btn-outline" href="#how-it-works">See how Eki works</a>
         </div>
-        <div class="hero-trust">Free app · No spam · No hidden fees</div>
+        <p class="hero-fine">£20/month · 0% Eki platform fee · Unlimited orders</p>
       </div>
-      <div class="hero-showcase" aria-label="Eki app preview">
-        <!-- Floating badge cards -->
-        <div class="fcard-badge fb-tl"><span class="bdot" style="background:#4ade80"></span> Verified vendor<br><span style="font-weight:400;font-size:8px;color:#6b7280">Safe to buy from</span></div>
-        <div class="fcard-badge fb-tr"><span class="bdot" style="background:#f87171"></span> Live tracking<br><span style="font-weight:400;font-size:8px;color:#6b7280">Know your order status</span></div>
-        <div class="fcard-badge fb-b"><span class="bdot" style="background:#fbbf24"></span> Secure checkout<br><span style="font-weight:400;font-size:8px;color:#6b7280">No random transfers</span></div>
 
-        <!-- Floating product cards - left -->
-        <div class="fcard fc-tl">
-          <div class="fcard-icon" style="background:#fef3c7">🌾</div>
-          <div class="fcard-text"><h4>GARRI</h4><p>5kg bag</p></div>
-        </div>
-        <div class="fcard fc-ml">
-          <div class="fcard-icon" style="background:#fce7f3">🛢️</div>
-          <div class="fcard-text"><h4>PALM OIL</h4><p>1 litre</p></div>
-        </div>
-        <div class="fcard fc-bl">
-          <div class="fcard-icon" style="background:#fee2e2">🌶️</div>
-          <div class="fcard-text"><h4>PEPPERS</h4><p>dried</p></div>
-        </div>
-
-        <!-- Floating product cards - right -->
-        <div class="fcard fc-tr">
-          <div class="fcard-icon" style="background:#fce7f3">🦐</div>
-          <div class="fcard-text"><h4>CRAYFISH</h4><p>200g</p></div>
-        </div>
-        <div class="fcard fc-mr">
-          <div class="fcard-icon" style="background:#d1fae5">🥜</div>
-          <div class="fcard-text"><h4>EGUSI</h4><p>500g bag</p></div>
-        </div>
-        <div class="fcard fc-br">
-          <div class="fcard-icon" style="background:#dbeafe">🐟</div>
-          <div class="fcard-text"><h4>STOCKFISH</h4><p>dried</p></div>
-        </div>
-
-        <!-- Center phone -->
-        <div class="phone-mockup">
-          <div class="phone-notch"></div>
-          <div class="phone-screen">
-            <div class="phone-top">
-              <div class="phone-top-brand"><span class="dot"></span> eki</div>
-              <div class="phone-top-sub">Find. Order. Track.</div>
+      <div class="hero-visual">
+        <p class="hv-kicker">FROM DM CHAOS → PAID ORDER</p>
+        <p class="hv-heading">Customers can buy without waiting for you.</p>
+        <div class="hv-row">
+          <div class="hv-card chaos">
+            <span class="hv-tag chaos">WHATSAPP CHAOS</span>
+            <div class="hv-bubble">&ldquo;Hi, can I order?&rdquo;</div>
+            <div class="hv-bubble">&ldquo;Are you there?&rdquo;</div>
+            <div class="hv-bubble">&ldquo;How much delivery?&rdquo;</div>
+            <div class="hv-bubble warn">&ldquo;Never mind. I bought elsewhere.&rdquo;</div>
+            <p class="hv-note">1 missed reply = 1 lost sale</p>
+          </div>
+          <div class="hv-arrow">→</div>
+          <div class="hv-card paid">
+            <span class="hv-tag paid">EKI STORE</span>
+            <div class="hv-panel">
+              <p class="hv-panel-label">NEW PAID ORDER</p>
+              <p class="hv-panel-title">Egusi + Crayfish Bundle</p>
+              <p class="hv-panel-sub">£42.00 · Payment confirmed</p>
             </div>
-            <div class="phone-cats">
-              <span class="phone-cat active">Grains</span>
-              <span class="phone-cat">Soups</span>
-              <span class="phone-cat">Oils</span>
+            <div class="hv-panel">
+              <p class="hv-panel-title" style="font-weight:500">Buyer ordered at 11:42</p>
+              <p class="hv-panel-sub accent">No DM. No chasing. No screenshot.</p>
             </div>
-            <div class="phone-vendor">
-              <div class="phone-vendor-av">🌿</div>
-              <div class="phone-vendor-info">
-                <div class="phone-vendor-name">Mama Chioma Store</div>
-                <div class="phone-vendor-meta">★ 4.9 · Lagos Island · Verified</div>
-              </div>
-            </div>
-            <div class="phone-products">
-              <div class="phone-prod">
-                <div class="phone-prod-icon">🌾</div>
-                <div class="phone-prod-name">Garri 5kg</div>
-                <div class="phone-prod-price">₦3,500</div>
-              </div>
-              <div class="phone-prod">
-                <div class="phone-prod-icon">🥜</div>
-                <div class="phone-prod-name">Egusi 1kg</div>
-                <div class="phone-prod-price">₦2,800</div>
-              </div>
-            </div>
-            <div class="phone-order">
-              <div class="phone-order-title">Order #1042 — In transit</div>
-              <div class="phone-order-sub">Arriving today by 4pm</div>
-            </div>
-            <div class="phone-reorder">
-              <span class="phone-reorder-label">Reorder from last week</span>
-              <span class="phone-reorder-btn">One tap →</span>
-            </div>
-            <div class="phone-bottom-nav">
-              <div class="phone-nav-item active"><span class="phone-nav-icon">🏠</span><span>Home</span></div>
-              <div class="phone-nav-item"><span class="phone-nav-icon">🔍</span><span>Search</span></div>
-              <div class="phone-nav-item"><span class="phone-nav-icon">🛒</span><span>Cart</span></div>
-              <div class="phone-nav-item"><span class="phone-nav-icon">👤</span><span>Profile</span></div>
-            </div>
+            <p class="hv-panel-note">You wake up to an order — not a message to answer.</p>
           </div>
         </div>
       </div>
     </div>
   </section>
 
-  <!-- ── FEATURES ── -->
-  <section class="features-band">
+  <!-- ── PAIN ── -->
+  <section class="pain-band">
     <div class="shell">
-      <div class="features-header">
-        <h2>Everything buyers need in one app.</h2>
-        <p>Discover, order, track, and enjoy your favourite foodstuff from trusted vendors.</p>
+      <p class="pain-kicker">THE PROBLEM</p>
+      <h2 class="pain-heading">You have customers.<br />Your system is costing you sales.</h2>
+      <div class="pain-grid">
+        <article class="pain-card">
+          <p class="pain-x">✕</p>
+          <h3>Orders disappear in chats</h3>
+          <p>Three people message at once. One gets forgotten.</p>
+        </article>
+        <article class="pain-card">
+          <p class="pain-x">✕</p>
+          <h3>Payments become detective work</h3>
+          <p>Who paid? Which order? Which screenshot?</p>
+        </article>
+        <article class="pain-card">
+          <p class="pain-x">✕</p>
+          <h3>Customers wait for replies</h3>
+          <p>By the time you respond, they may buy elsewhere.</p>
+        </article>
+        <article class="pain-card">
+          <p class="pain-x">✕</p>
+          <h3>No system for repeat customers</h3>
+          <p>Your best customers become another number in your inbox.</p>
+        </article>
       </div>
-      <div class="features-grid">
-        <article class="feature-card">
-          <div class="feature-icon">🔍</div>
-          <h3>Find trusted vendors</h3>
-          <p>Browse verified African and Caribbean vendors. Search by product, category, or vendor name.</p>
+      <p class="pain-close">More customers shouldn&rsquo;t create more chaos.</p>
+    </div>
+  </section>
+
+  <!-- ── HOW IT WORKS ── -->
+  <section class="how-band" id="how-it-works">
+    <div class="shell">
+      <p class="section-kicker">HOW EKI WORKS</p>
+      <h2 class="how-heading">One link changes how you sell.</h2>
+      <p class="how-sub">Share your store. Customers shop. You get paid.</p>
+      <div class="how-grid">
+        <article class="how-card">
+          <span class="how-num">1</span>
+          <h3>SHARE</h3>
+          <p>Put your Eki store link where your customers already are.</p>
+          <p class="how-tags">WhatsApp · Instagram · SMS · Link in bio</p>
         </article>
-        <article class="feature-card">
-          <div class="feature-icon">🚚</div>
-          <h3>Live order tracking</h3>
-          <p>Follow your order from checkout to delivery. Get real-time updates at every step.</p>
+        <article class="how-card">
+          <span class="how-num">2</span>
+          <h3>THEY SHOP</h3>
+          <p>Buyers browse your foodstuff, choose what they want and pay securely.</p>
+          <p class="how-tags">No DMs · No waiting · Clear pricing</p>
         </article>
-        <article class="feature-card">
-          <div class="feature-icon">🛡️</div>
-          <h3>Secure checkout</h3>
-          <p>Pay safely by card or wallet. Every transaction is protected and recorded on Eki.</p>
+        <article class="how-card">
+          <span class="how-num">3</span>
+          <h3>YOU GET THE ORDER</h3>
+          <p>Every order arrives structured and ready to fulfil.</p>
+          <p class="how-tags">Order details · Buyer info · Tracking</p>
         </article>
-        <article class="feature-card">
-          <div class="feature-icon">📱</div>
-          <h3>One app access</h3>
-          <p>Everything in one place — browse, order, pay, track, and chat with your vendor.</p>
-        </article>
+      </div>
+      <p class="how-close">They don&rsquo;t need to wait for you to reply before they can buy.</p>
+    </div>
+  </section>
+
+  <!-- ── GROWTH STORIES ── -->
+  <section class="growth-band" id="growth-tools">
+    <div class="shell">
+      <p class="section-kicker">GROWTH TOOLS</p>
+      <h2 class="growth-heading">Make every customer worth more.</h2>
+      <p class="growth-sub">The tools vendors care about when the goal is more revenue, not more admin.</p>
+
+      <div class="story">
+        <div class="story-copy">
+          <p class="story-eyebrow">SELL MORE WITH BUNDLES</p>
+          <p class="story-title">Turn 3 products into 1 bigger order.</p>
+          <p class="story-desc">Create family packs, soup bundles, reseller boxes or monthly essentials.</p>
+          <a class="btn-primary" href="/vendor">See bundles →</a>
+        </div>
+        <div class="story-proof">
+          <h4>Family Food Box</h4>
+          <p class="meta">Ofada Rice 5kg · Beans 2kg · Palm Oil 1L</p>
+          <div class="story-ui-panel"><span>£49 bundle price</span></div>
+        </div>
+      </div>
+
+      <div class="story">
+        <div class="story-copy">
+          <p class="story-eyebrow">KNOW WHO SPENDS THE MOST</p>
+          <p class="story-title">Stop treating every buyer the same.</p>
+          <p class="story-desc">See top buyers this week, this month or all time — then reward loyalty.</p>
+          <a class="btn-primary" href="/vendor">See customer insights →</a>
+        </div>
+        <div class="story-proof">
+          <h4>Top buyers</h4>
+          <p class="meta">Aisha M. £320.50 · Emeka O. £215.00</p>
+          <div class="story-ui-panel"><span>Repeat buyers +13%</span></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ── TRANSFORMATION ── -->
+  <section class="transform-band">
+    <div class="transform-panel hustle">
+      <p class="transform-kicker hustle">FROM HUSTLE MODE…</p>
+      <h2 class="transform-heading">BUSY ALL DAY.<br />STILL CHASING ORDERS.</h2>
+      <div class="transform-list hustle">
+        ✕ Orders buried in WhatsApp<br />
+        ✕ Payment screenshots everywhere<br />
+        ✕ Manual follow-ups<br />
+        ✕ Customers forgotten<br />
+        ✕ No clear sales visibility
+      </div>
+    </div>
+    <div class="transform-panel business">
+      <p class="transform-kicker business">…TO BUSINESS MODE</p>
+      <h2 class="transform-heading">YOU RUN THE BUSINESS.<br />EKI RUNS THE SYSTEM.</h2>
+      <div class="transform-list business">
+        ✓ Your own store link<br />
+        ✓ Secure checkout<br />
+        ✓ Organised orders<br />
+        ✓ Repeat customer insights<br />
+        ✓ Bundles, discounts &amp; flash sales
       </div>
     </div>
   </section>
@@ -659,127 +737,208 @@ function renderHomeLayout(page: PageDefinition): string {
   <!-- ── PRICING ── -->
   <section class="pricing-band" id="pricing">
     <div class="shell">
-      <div class="pricing-header">
-        <h2>Vendor services built for growth.</h2>
-        <p>Eki provides the tools and infrastructure to help food vendors manage and grow their businesses.</p>
-      </div>
-      <div id="pricing-grid" class="pricing-grid">
-        <div class="pricing-card" id="pricing-loading" style="grid-column:1/-1;text-align:center;border-style:dashed">
-          <p class="pricing-desc" style="margin:24px 0">Loading vendor services&hellip;</p>
+      <p class="section-kicker">PRICING</p>
+      <h2 class="pricing-heading">One plan. Built to pay for itself.</h2>
+      <p class="pricing-sub">Simple pricing for vendors who want structure and growth without platform commission.</p>
+      <div class="plan-card">
+        <div class="plan-intro">
+          <p class="plan-name">Growth</p>
+          <p class="plan-price">£20 / month</p>
+          <p class="plan-fee">0% Eki platform fee</p>
+          <a class="btn-primary" href="/business-portal">Start your store — £20/mo</a>
+        </div>
+        <ul class="plan-features">
+          <li>✓ Unlimited orders</li>
+          <li>✓ Up to 100 active products</li>
+          <li>✓ Product bundles</li>
+          <li>✓ Discounts &amp; flash sales</li>
+          <li>✓ Customer management</li>
+          <li>✓ Analytics dashboard</li>
+          <li>✓ Public web store</li>
+          <li>✓ Live order tracking</li>
+        </ul>
+        <div class="plan-reframe">
+          <p class="plan-reframe-kicker">WHY IT CAN PAY FOR ITSELF</p>
+          <p>One recovered order, one bigger bundle sale, or a few repeat customers can cover your plan.</p>
         </div>
       </div>
-      <p class="pricing-note">All vendor services are managed securely through the Eki Business Portal.</p>
     </div>
   </section>
-  <script>
-  (function(){
-    var grid=document.getElementById('pricing-grid');
-    function esc(v){return String(v||'').replace(/[&<>"']/g,function(c){return{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]})}
-    function money(cents,cur){return new Intl.NumberFormat('en-GB',{style:'currency',currency:cur||'GBP',maximumFractionDigits:2}).format(Number(cents||0)/100).replace(/\\.00$/,'')}
-    function fee(bps){return ((Number(bps||0)/100).toFixed(2).replace(/\\.00$/,''))+'%'}
-    function items(p){
-      var a=[];
-      if(p.maxProducts===-1)a.push('Unlimited active products');else if(p.maxProducts>0)a.push('Up to '+p.maxProducts+' active products');
-      if(p.maxOrders==null||p.maxOrders===-1)a.push('Unlimited orders');else a.push('Up to '+p.maxOrders+' orders');
-      if(p.analytics)a.push('Analytics dashboard');
-      if(p.discounts)a.push('Discount campaigns');
-      if(p.flashSales)a.push('Flash sales');
-      if(p.bundles)a.push('Product bundles');
-      if(p.marketingTools)a.push('Marketing tools');
-      if(p.customerDatabase)a.push('Customer database');
-      if(p.professionalStorefront)a.push('Professional storefront');
-      if(p.orderManagement)a.push('Order management');
-      a.push(p.prioritySupport?'Priority support':'Standard support');
-      return a.slice(0,8)
-    }
-    function fallback(){
-      grid.innerHTML='<div class="pricing-card"><div class="pricing-name">Starter</div><p class="pricing-desc">Get started selling on Eki with essential commerce tools.</p><div class="pricing-price">Free</div><ul class="pricing-list"><li>Store page</li><li>Order management</li><li>Standard support</li></ul><a class="pricing-cta outline" href="/business-portal">Get started</a></div>'
-    }
-    fetch('/api/subscriptions/plans').then(function(r){return r.json()}).then(function(d){
-      var plans=(Array.isArray(d.plans)?d.plans:[]).filter(function(p){return p.isActive!==false});
-      plans.sort(function(a,b){return(a.displayOrder||0)-(b.displayOrder||0)});
-      if(!plans.length){fallback();return}
-      grid.innerHTML='';
-      grid.style.gridTemplateColumns='repeat('+Math.min(plans.length,3)+',minmax(0,1fr))';
-      plans.forEach(function(p){
-        var k=String(p.plan||p.id||'').toUpperCase();
-        var isFree=!p.monthlyPriceCents;
-        var popular=p.isDefault===true||k==='GROWTH';
-        var card=document.createElement('div');
-        card.className='pricing-card'+(popular?' popular':'');
-        card.innerHTML=(popular?'<span class="pricing-badge">Most popular</span>':'')+
-          '<div class="pricing-name">'+esc(p.name||k)+'</div>'+
-          '<p class="pricing-desc">'+esc(p.description||'Grow your food business on Eki.')+'</p>'+
-          '<div class="pricing-price">'+(isFree?'Free':esc(money(p.monthlyPriceCents,p.currency))+' <small>/ month</small>')+'</div>'+
-          '<p class="pricing-fee">'+esc(fee(p.platformFeeBps||p.defaultPlatformFeeBps))+' platform fee per order</p>'+
-          '<ul class="pricing-list">'+items(p).map(function(i){return'<li>'+esc(i)+'</li>'}).join('')+'</ul>'+
-          '<a class="pricing-cta'+(isFree?' outline':'')+'" href="/business-portal">'+(isFree?'Get started':'Activate '+esc(p.name||k))+'</a>';
-        grid.appendChild(card);
-      });
-    }).catch(fallback);
-  })();
-  </script>
 
-  <!-- ── Order Lookup ── -->
-  <section class="order-band">
+  <!-- ── FINAL CTA ── -->
+  <section class="final-band">
     <div class="shell">
-      <div class="order-inner">
-        <h2>Find your order</h2>
-        <p>Enter your order number or checkout email to track your delivery.</p>
-        <form class="order-form" onsubmit="event.preventDefault();window.location.href='/find-order'">
-          <input type="text" placeholder="Order number or email address" aria-label="Order number or email" />
-          <button type="submit">Find Order</button>
-        </form>
-      </div>
+      <h2 class="final-heading">YOUR CUSTOMERS ARE ALREADY BUYING.<br />MAKE IT EASIER TO BUY FROM YOU.</h2>
+      <p class="final-sub">Eki gives your foodstuff business the store, checkout, customer tools and growth system to sell professionally.</p>
+      <a class="btn-primary" href="/business-portal">Create your Eki store →</a>
+      <p class="final-fine">£20/month · 0% Eki platform fee · Unlimited orders</p>
     </div>
   </section>
 </main>
 
 <!-- ── FOOTER ── -->
 <footer class="footer">
-  <div class="shell">
-    <div class="footer-grid">
-      <div>
-        <div class="footer-brand">
-          <span class="brand-dot"></span>eki
-        </div>
-        <p>Your favourite foodstuff vendors, all in one trusted app. Buy, sell, and receive authentic African and Caribbean foodstuff.</p>
-      </div>
-      <div>
-        <h4>Platform</h4>
-        <div class="footer-links">
-          <a href="/store">Browse vendors</a>
-          <a href="/find-order">Find order</a>
-          <a href="/vendor">Vendor portal</a>
-          <a href="/#pricing">Pricing</a>
-        </div>
-      </div>
-      <div>
-        <h4>Support</h4>
-        <div class="footer-links">
-          <a href="/help">Help centre</a>
-          <a href="mailto:adminandy@eki.app">Contact support</a>
-        </div>
-      </div>
-      <div>
-        <h4>Legal</h4>
-        <div class="footer-links">
-          <a href="/privacy">Privacy policy</a>
-          <a href="/terms">Terms of service</a>
-          <a href="/account-deletion">Account deletion</a>
-        </div>
-      </div>
-    </div>
-    <div class="footer-bottom">
-      <span>&copy; ${new Date().getFullYear()} Eki. All rights reserved.</span>
-      <span>Built for your favourite foodstuff vendors.</span>
-    </div>
+  <div class="shell footer-row">
+    <span>Secure payments</span>
+    <span>Live order tracking</span>
+    <a href="/help">Vendor support</a>
+    <a href="/store">For buyers</a>
+    <a href="/privacy">Privacy</a>
+    <a href="/terms">Terms</a>
   </div>
 </footer>
+</div>
+
+<!-- ── MOBILE (app-size) ── -->
+<div class="mobile-only">
+  <header class="m-topbar">
+    <a class="m-brand" href="/">eki</a>
+    <span class="m-spacer"></span>
+    <a class="m-signin" href="/vendor">Sign In</a>
+  </header>
+
+  <main>
+    <section class="m-hero">
+      <p class="m-badge">● NOW LIVE IN THE UK</p>
+      <h1 class="m-h1">Stop losing<br />orders in your<br />DMs.</h1>
+      <p class="m-intro">Turn your foodstuff hustle into a business customers can buy from anytime.</p>
+      <a class="m-btn" href="/business-portal">Create your Eki store →</a>
+      <p class="m-fine">£20/month · 0% platform fee · Unlimited orders</p>
+
+      <div class="m-proof">
+        <div class="m-proof-card chaos">
+          <p class="m-proof-label chaos">DM CHAOS</p>
+          <div class="m-bubble">&ldquo;Can I order?&rdquo;</div>
+          <div class="m-bubble">&ldquo;Hello?&rdquo;</div>
+          <div class="m-bubble warn">&ldquo;Never mind.&rdquo;</div>
+        </div>
+        <div class="m-proof-arrow">→</div>
+        <div class="m-proof-card paid">
+          <p class="m-proof-label paid">EKI ORDER</p>
+          <div class="m-proof-panel">
+            <p class="m-panel-label">PAID ORDER</p>
+            <p class="m-panel-title">Egusi Bundle</p>
+            <p class="m-panel-sub">£42 confirmed</p>
+          </div>
+          <p class="m-proof-note">No reply needed.<br />Order captured.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="m-pain">
+      <h2 class="m-pain-heading">You have customers.<br />Your system is costing you sales.</h2>
+      <div class="m-pain-card">
+        <h3>✕ Orders disappear in chats</h3>
+        <p>One customer gets forgotten.</p>
+      </div>
+      <div class="m-pain-card">
+        <h3>✕ Customers wait for replies</h3>
+        <p>By the time you respond, they may buy elsewhere.</p>
+      </div>
+      <div class="m-pain-card">
+        <h3>✕ Payments become detective work</h3>
+        <p>Who paid? Which order? Which screenshot?</p>
+      </div>
+      <div class="m-pain-card">
+        <h3>✕ No repeat-customer system</h3>
+        <p>Your best buyers disappear into your contacts.</p>
+      </div>
+      <p class="m-pain-close">More customers shouldn&rsquo;t create more chaos.</p>
+    </section>
+
+    <section class="m-section">
+      <h2 class="m-section-heading">One link changes how you sell.</h2>
+      <div class="m-step">
+        <h3>1&nbsp; SHARE</h3>
+        <p>Put your Eki store link where your customers already are.</p>
+      </div>
+      <div class="m-step">
+        <h3>2&nbsp; THEY SHOP</h3>
+        <p>Buyers browse, choose what they want and pay securely.</p>
+      </div>
+      <div class="m-step">
+        <h3>3&nbsp; YOU GET THE ORDER</h3>
+        <p>Every order arrives structured and ready to fulfil.</p>
+      </div>
+      <p class="m-close">They don&rsquo;t need to wait for you to reply before they can buy.</p>
+    </section>
+
+    <section class="m-growth">
+      <h2 class="m-growth-heading">Sell more without more chaos.</h2>
+      <div class="m-growth-card">
+        <h3>BUNDLES</h3>
+        <p>Turn 3 products into 1 bigger order.</p>
+        <span class="m-growth-proof">Family Food Box · £49</span>
+      </div>
+      <div class="m-growth-card">
+        <h3>TOP BUYERS</h3>
+        <p>Know who spends the most — then reward loyalty.</p>
+        <span class="m-growth-proof">This week · This month · All time</span>
+      </div>
+      <div class="m-growth-card">
+        <h3>INSIGHTS</h3>
+        <p>Stop guessing what&rsquo;s working.</p>
+        <span class="m-growth-proof">Clicks · Orders · Repeat buyers · Sales by country</span>
+      </div>
+    </section>
+
+    <div class="m-transform-panel hustle">
+      <p class="m-transform-kicker hustle">FROM HUSTLE MODE…</p>
+      <h2 class="m-transform-heading">BUSY ALL DAY.<br />STILL CHASING ORDERS.</h2>
+      <p class="m-transform-list hustle">
+        ✕ Orders in WhatsApp<br />
+        ✕ Payment screenshots<br />
+        ✕ Manual follow-ups<br />
+        ✕ Customers forgotten
+      </p>
+    </div>
+    <div class="m-transform-panel business">
+      <p class="m-transform-kicker business">…TO BUSINESS MODE</p>
+      <h2 class="m-transform-heading">YOU RUN THE BUSINESS.<br />EKI RUNS THE SYSTEM.</h2>
+      <p class="m-transform-list business">
+        ✓ Your own store link<br />
+        ✓ Secure checkout<br />
+        ✓ Organised orders<br />
+        ✓ Repeat customer insights
+      </p>
+    </div>
+
+    <section class="m-pricing">
+      <h2 class="m-section-heading">One plan. Built to pay for itself.</h2>
+      <div class="m-plan-card">
+        <p class="m-plan-name">Growth</p>
+        <p class="m-plan-price">£20 / month</p>
+        <p class="m-plan-fee">0% Eki platform fee</p>
+        <ul class="m-plan-features">
+          <li>✓ Unlimited orders</li>
+          <li>✓ Up to 100 active products</li>
+          <li>✓ Bundles &amp; promotions</li>
+          <li>✓ Customer management</li>
+          <li>✓ Analytics dashboard</li>
+          <li>✓ Public web store</li>
+        </ul>
+        <a class="m-btn" href="/business-portal">Start your store — £20/mo</a>
+      </div>
+      <p class="m-plan-reframe">One recovered order, one bigger bundle sale, or a few repeat customers can cover your plan.</p>
+    </section>
+
+    <section class="m-final">
+      <h2 class="m-final-heading">YOUR CUSTOMERS ARE ALREADY BUYING.<br />MAKE IT EASIER TO BUY FROM YOU.</h2>
+      <p class="m-final-sub">Eki gives your foodstuff business the store, checkout, customer tools and growth system to sell professionally.</p>
+      <a class="m-btn" href="/business-portal">Create your Eki store →</a>
+    </section>
+  </main>
+
+  <footer class="m-footer">
+    <p class="m-footer-brand">eki by Culinary Tales</p>
+    <p class="m-footer-links">Secure payments · Tracking · <a href="/help">Vendor support</a> · <a href="/privacy">Privacy</a> · <a href="/terms">Terms</a></p>
+  </footer>
+</div>
 
 </body>
 </html>`;
 }
+
 function renderFindOrderLayout(): string {
   return `<!DOCTYPE html>
 <html lang="en">
