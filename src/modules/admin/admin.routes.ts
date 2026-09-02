@@ -130,12 +130,18 @@ import {
   adminListPendingSuppliers,
   adminListRefunds,
   adminListSupplierPayments,
+  adminListVerifiedOrganisers,
+  adminListVerifiedSuppliers,
   adminPauseCampaign,
   adminReleaseSupplierPayment,
   adminResumeCampaign,
   adminRejectCampaign,
   adminRejectExtension,
   adminRequestCampaignChanges,
+  adminRestrictOrganiser,
+  adminRestrictSupplier,
+  adminUnrestrictOrganiser,
+  adminUnrestrictSupplier,
   adminUpdateMarketConfiguration,
   adminVerifyOrganiser,
   adminVerifySupplier,
@@ -221,6 +227,12 @@ adminRouter.get("/community-buy/markets", asyncHandler(requireAdminPermission("c
 adminRouter.patch("/community-buy/markets/:id", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(adminUpdateMarketConfiguration));
 adminRouter.get("/community-buy/ledger", asyncHandler(requireAdminPermission("community_buy.read")), asyncHandler(adminGetLedgerSummary));
 adminRouter.get("/community-campaigns/:id/ledger", asyncHandler(requireAdminPermission("community_buy.read")), asyncHandler(adminGetCampaignLedger));
+adminRouter.get("/community-buy/organisers", asyncHandler(requireAdminPermission("community_buy.read")), asyncHandler(adminListVerifiedOrganisers));
+adminRouter.post("/community-buy/organisers/:id/restrict", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(adminRestrictOrganiser));
+adminRouter.post("/community-buy/organisers/:id/unrestrict", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(adminUnrestrictOrganiser));
+adminRouter.get("/community-buy/suppliers", asyncHandler(requireAdminPermission("community_buy.read")), asyncHandler(adminListVerifiedSuppliers));
+adminRouter.post("/community-buy/suppliers/:id/restrict", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(adminRestrictSupplier));
+adminRouter.post("/community-buy/suppliers/:id/unrestrict", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(adminUnrestrictSupplier));
 
 // Listings
 adminRouter.get("/users", asyncHandler(requireAdminPermission("users.read")), asyncHandler(listUsers));

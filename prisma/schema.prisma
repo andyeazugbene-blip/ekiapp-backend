@@ -1710,27 +1710,34 @@ enum ContributionStatus {
 }
 
 model OrganiserProfile {
-  id         String              @id @default(cuid())
-  userId     String              @unique
-  isVerified Boolean             @default(false)
-  verifiedAt DateTime?
-  country    String
-  user       User                @relation(fields: [userId], references: [id], onDelete: Cascade)
-  campaigns  CommunityCampaign[]
-  createdAt  DateTime            @default(now())
-  updatedAt  DateTime            @updatedAt
+  id               String              @id @default(cuid())
+  userId           String              @unique
+  isVerified       Boolean             @default(false)
+  verifiedAt       DateTime?
+  // Admin risk control — doc §Risk Controls. Independent of isVerified: a
+  // verified organiser can be temporarily restricted without revoking
+  // verification (revocable, distinct from rejection).
+  isRestricted     Boolean             @default(false)
+  restrictedReason String?
+  country          String
+  user             User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  campaigns        CommunityCampaign[]
+  createdAt        DateTime            @default(now())
+  updatedAt        DateTime            @updatedAt
 }
 
 model SupplierProfile {
-  id         String              @id @default(cuid())
-  vendorId   String              @unique
-  isVerified Boolean             @default(false)
-  verifiedAt DateTime?
-  country    String
-  vendor     Vendor              @relation(fields: [vendorId], references: [id], onDelete: Cascade)
-  campaigns  CommunityCampaign[]
-  createdAt  DateTime            @default(now())
-  updatedAt  DateTime            @updatedAt
+  id               String              @id @default(cuid())
+  vendorId         String              @unique
+  isVerified       Boolean             @default(false)
+  verifiedAt       DateTime?
+  isRestricted     Boolean             @default(false)
+  restrictedReason String?
+  country          String
+  vendor           Vendor              @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+  campaigns        CommunityCampaign[]
+  createdAt        DateTime            @default(now())
+  updatedAt        DateTime            @updatedAt
 }
 
 model CommunityCampaign {

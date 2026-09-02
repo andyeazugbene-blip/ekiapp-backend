@@ -8,8 +8,8 @@ vi.mock("../lib/prisma", () => ({
     campaignParticipant: { findMany: vi.fn(), upsert: vi.fn() },
     campaignExtensionRequest: { create: vi.fn(), findUnique: vi.fn(), update: vi.fn(), findMany: vi.fn() },
     campaignSupplierPayment: { findUnique: vi.fn(), create: vi.fn(), update: vi.fn(), findMany: vi.fn() },
-    organiserProfile: { findUnique: vi.fn() },
-    supplierProfile: { findUnique: vi.fn() },
+    organiserProfile: { findUnique: vi.fn(), update: vi.fn() },
+    supplierProfile: { findUnique: vi.fn(), findMany: vi.fn(), update: vi.fn() },
     user: { findUnique: vi.fn() },
     marketConfiguration: { findUnique: vi.fn(), count: vi.fn(), upsert: vi.fn() },
     $transaction: vi.fn(),
@@ -33,6 +33,7 @@ import { stripe } from "../lib/stripe";
 import { communityCampaignsService } from "../modules/community-buy/community-campaigns.service";
 import { campaignContributionsService } from "../modules/community-buy/campaign-contributions.service";
 import { marketConfigurationService } from "../modules/community-buy/market-configuration.service";
+import { organiserSupplierService } from "../modules/community-buy/organiser-supplier.service";
 
 const m = vi.mocked(prisma, true);
 
@@ -399,6 +400,73 @@ describe("campaignContributionsService — financial ledger (read-only aggregati
     });
   });
 
+});
+
+describe("Community Buy risk controls — restrict/unrestrict organiser and supplier", () => {
+  const validInput = {
+    supplierId: "sup-1",
+    title: "Bulk rice buy",
+    country: "GB",
+    currency: "GBP",
+    minimumShares: 5,
+    goalShares: 10,
+    maximumShares: 15,
+    pricePerShareMinor: 1000,
+    deadline: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
+  };
+
+  it("organiserSupplierService.restrictOrganiser sets isRestricted and the reason", async () => {
+    m.organiserProfile.update.mockResolvedValue({ id: "org-1", isRestricted: true, restrictedReason: "fraud report" } as never);
+    const result = await organiserSupplierService.restrictOrganiser("org-1", "fraud report");
+    expect(m.organiserProfile.update).toHaveBeenCalledWith({ where: { id: "org-1" }, data: { isRestricted: true, restrictedReason: "fraud report" } });
+    expect(result.isRestricted).toBe(true);
+  });
+
+  it("organiserSupplierService.unrestrictOrganiser clears isRestricted and the reason", async () => {
+    m.organiserProfile.update.mockResolvedValue({ id: "org-1", isRestricted: false, restrictedReason: null } as never);
+    await organiserSupplierService.unrestrictOrganiser("org-1");
+    expect(m.organiserProfile.update).toHaveBeenCalledWith({ where: { id: "org-1" }, data: { isRestricted: false, restrictedReason: null } });
+  });
+
+  it("organiserSupplierService.restrictSupplier / unrestrictSupplier mirror the organiser behavior", async () => {
+    m.supplierProfile.update.mockResolvedValueOnce({ id: "sup-1", isRestricted: true } as never);
+    await organiserSupplierService.restrictSupplier("sup-1", "quality complaints");
+    expect(m.supplierProfile.update).toHaveBeenCalledWith({ where: { id: "sup-1" }, data: { isRestricted: true, restrictedReason: "quality complaints" } });
+
+    m.supplierProfile.update.mockResolvedValueOnce({ id: "sup-1", isRestricted: false } as never);
+    await organiserSupplierService.unrestrictSupplier("sup-1");
+    expect(m.supplierProfile.update).toHaveBeenCalledWith({ where: { id: "sup-1" }, data: { isRestricted: false, restrictedReason: null } });
+  });
+
+  it("create() rejects a restricted organiser even though they're verified", async () => {
+    m.organiserProfile.findUnique.mockResolvedValue({ id: "org-1", isVerified: true, isRestricted: true } as never);
+    await expect(communityCampaignsService.create("organiser-user-1", validInput)).rejects.toMatchObject({ statusCode: 403 });
+  });
+
+  it("create() rejects a restricted supplier even though they're verified", async () => {
+    m.organiserProfile.findUnique.mockResolvedValue({ id: "org-1", isVerified: true, isRestricted: false } as never);
+    m.marketConfiguration.findUnique.mockResolvedValue({ countryCode: "GB", communityBuyEnabled: true } as never);
+    m.marketConfiguration.count.mockResolvedValue(1);
+    m.supplierProfile.findUnique.mockResolvedValue({ id: "sup-1", isVerified: true, isRestricted: true, country: "GB" } as never);
+    await expect(communityCampaignsService.create("organiser-user-1", validInput)).rejects.toMatchObject({ statusCode: 403 });
+  });
+
+  it("confirmSupplierCommitment rejects a restricted supplier", async () => {
+    m.supplierProfile.findUnique.mockResolvedValue({ id: "sup-1", isRestricted: true } as never);
+    m.communityCampaign.findUnique.mockResolvedValue({ id: "camp-1", supplierId: "sup-1", status: "DRAFT" } as never);
+    await expect(communityCampaignsService.confirmSupplierCommitment("vendor-1", "camp-1")).rejects.toMatchObject({ statusCode: 403 });
+  });
+
+  it("listVerifiedSuppliers (organiser-facing picker) excludes restricted suppliers", async () => {
+    m.supplierProfile.findMany.mockResolvedValue([] as never);
+    await organiserSupplierService.listVerifiedSuppliers("GB");
+    expect(m.supplierProfile.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { isVerified: true, isRestricted: false, country: "GB" } }),
+    );
+  });
+});
+
+describe("campaignContributionsService — financial ledger continued", () => {
   it("getCampaignLedger includes the supplier payment only when it has actually been PAID, not merely created", async () => {
     m.communityCampaign.findUnique.mockResolvedValue({
       id: "camp-3", title: "Oil bulk buy", currency: "GBP", status: "FULFILLING", fundingOutcome: "GOAL_REACHED",

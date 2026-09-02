@@ -17,6 +17,12 @@ const mockListPendingOrganisers = vi.fn();
 const mockListPendingSuppliers = vi.fn();
 const mockVerifyOrganiser = vi.fn();
 const mockVerifySupplier = vi.fn();
+const mockListVerifiedOrganisersForAdmin = vi.fn();
+const mockListVerifiedSuppliersForAdmin = vi.fn();
+const mockRestrictOrganiser = vi.fn();
+const mockUnrestrictOrganiser = vi.fn();
+const mockRestrictSupplier = vi.fn();
+const mockUnrestrictSupplier = vi.fn();
 
 vi.mock("../modules/community-buy/organiser-supplier.service", () => ({
   organiserSupplierService: {
@@ -29,6 +35,12 @@ vi.mock("../modules/community-buy/organiser-supplier.service", () => ({
     listPendingSuppliers: (...a: unknown[]) => mockListPendingSuppliers(...a),
     verifyOrganiser: (...a: unknown[]) => mockVerifyOrganiser(...a),
     verifySupplier: (...a: unknown[]) => mockVerifySupplier(...a),
+    listVerifiedOrganisersForAdmin: (...a: unknown[]) => mockListVerifiedOrganisersForAdmin(...a),
+    listVerifiedSuppliersForAdmin: (...a: unknown[]) => mockListVerifiedSuppliersForAdmin(...a),
+    restrictOrganiser: (...a: unknown[]) => mockRestrictOrganiser(...a),
+    unrestrictOrganiser: (...a: unknown[]) => mockUnrestrictOrganiser(...a),
+    restrictSupplier: (...a: unknown[]) => mockRestrictSupplier(...a),
+    unrestrictSupplier: (...a: unknown[]) => mockUnrestrictSupplier(...a),
   },
 }));
 
@@ -508,5 +520,55 @@ describe("Admin routes — permission-gated, id handling", () => {
     const res = await request(app).get("/api/admin/community-campaigns/camp-1/ledger").set("Authorization", `Bearer ${adminToken()}`);
     expect(res.status).toBe(200);
     expect(mockGetCampaignLedger).toHaveBeenCalledWith("camp-1");
+  });
+
+  it("GET /api/admin/community-buy/organisers — 401 without token, 200 for admin", async () => {
+    mockListVerifiedOrganisersForAdmin.mockResolvedValue([]);
+    const noAuth = await request(app).get("/api/admin/community-buy/organisers");
+    expect(noAuth.status).toBe(401);
+    const res = await request(app).get("/api/admin/community-buy/organisers").set("Authorization", `Bearer ${adminToken()}`);
+    expect(res.status).toBe(200);
+  });
+
+  it("POST /api/admin/community-buy/organisers/:id/restrict — requires a reason, then forwards id + reason", async () => {
+    const bad = await request(app).post("/api/admin/community-buy/organisers/org-9/restrict").set("Authorization", `Bearer ${adminToken()}`).send({});
+    expect(bad.status).toBe(400);
+    expect(mockRestrictOrganiser).not.toHaveBeenCalled();
+
+    mockRestrictOrganiser.mockResolvedValue({ id: "org-9", isRestricted: true });
+    const res = await request(app).post("/api/admin/community-buy/organisers/org-9/restrict").set("Authorization", `Bearer ${adminToken()}`).send({ reason: "repeated no-shows" });
+    expect(res.status).toBe(200);
+    expect(mockRestrictOrganiser).toHaveBeenCalledWith("org-9", "repeated no-shows");
+  });
+
+  it("POST /api/admin/community-buy/organisers/:id/unrestrict — id parsed correctly", async () => {
+    mockUnrestrictOrganiser.mockResolvedValue({ id: "org-9", isRestricted: false });
+    const res = await request(app).post("/api/admin/community-buy/organisers/org-9/unrestrict").set("Authorization", `Bearer ${adminToken()}`);
+    expect(res.status).toBe(200);
+    expect(mockUnrestrictOrganiser).toHaveBeenCalledWith("org-9");
+  });
+
+  it("GET /api/admin/community-buy/suppliers — 200 for admin", async () => {
+    mockListVerifiedSuppliersForAdmin.mockResolvedValue([]);
+    const res = await request(app).get("/api/admin/community-buy/suppliers").set("Authorization", `Bearer ${adminToken()}`);
+    expect(res.status).toBe(200);
+  });
+
+  it("POST /api/admin/community-buy/suppliers/:id/restrict — requires a reason, then forwards id + reason", async () => {
+    const bad = await request(app).post("/api/admin/community-buy/suppliers/sup-4/restrict").set("Authorization", `Bearer ${adminToken()}`).send({});
+    expect(bad.status).toBe(400);
+    expect(mockRestrictSupplier).not.toHaveBeenCalled();
+
+    mockRestrictSupplier.mockResolvedValue({ id: "sup-4", isRestricted: true });
+    const res = await request(app).post("/api/admin/community-buy/suppliers/sup-4/restrict").set("Authorization", `Bearer ${adminToken()}`).send({ reason: "quality complaints" });
+    expect(res.status).toBe(200);
+    expect(mockRestrictSupplier).toHaveBeenCalledWith("sup-4", "quality complaints");
+  });
+
+  it("POST /api/admin/community-buy/suppliers/:id/unrestrict — id parsed correctly", async () => {
+    mockUnrestrictSupplier.mockResolvedValue({ id: "sup-4", isRestricted: false });
+    const res = await request(app).post("/api/admin/community-buy/suppliers/sup-4/unrestrict").set("Authorization", `Bearer ${adminToken()}`);
+    expect(res.status).toBe(200);
+    expect(mockUnrestrictSupplier).toHaveBeenCalledWith("sup-4");
   });
 });

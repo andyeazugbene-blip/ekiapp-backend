@@ -40,10 +40,10 @@ export const organiserSupplierService = {
     return prisma.supplierProfile.findUnique({ where: { vendorId } });
   },
 
-  /** Verified suppliers an organiser can pick when creating a campaign in their market — spec §8.2 (same-market pairing only). */
+  /** Verified, non-restricted suppliers an organiser can pick when creating a campaign in their market — spec §8.2 (same-market pairing only). */
   async listVerifiedSuppliers(country: string) {
     return prisma.supplierProfile.findMany({
-      where: { isVerified: true, country },
+      where: { isVerified: true, isRestricted: false, country },
       include: { vendor: { select: { storeName: true } } },
       orderBy: { verifiedAt: "desc" },
     });
@@ -73,5 +73,43 @@ export const organiserSupplierService = {
 
   async verifySupplier(id: string) {
     return prisma.supplierProfile.update({ where: { id }, data: { isVerified: true, verifiedAt: new Date() } });
+  },
+
+  // ─── Risk controls — restrict/unrestrict a verified organiser or
+  // supplier without revoking verification. A restricted organiser can't
+  // create new campaigns; a restricted supplier can't be picked for new
+  // campaigns or commit to one awaiting their acceptance. Existing live
+  // campaigns are untouched — restriction only closes the door forward. ──
+
+  async listVerifiedOrganisersForAdmin() {
+    return prisma.organiserProfile.findMany({
+      where: { isVerified: true },
+      include: { user: { select: { name: true, email: true } } },
+      orderBy: { verifiedAt: "desc" },
+    });
+  },
+
+  async listVerifiedSuppliersForAdmin() {
+    return prisma.supplierProfile.findMany({
+      where: { isVerified: true },
+      include: { vendor: { select: { storeName: true } } },
+      orderBy: { verifiedAt: "desc" },
+    });
+  },
+
+  async restrictOrganiser(id: string, reason: string) {
+    return prisma.organiserProfile.update({ where: { id }, data: { isRestricted: true, restrictedReason: reason } });
+  },
+
+  async unrestrictOrganiser(id: string) {
+    return prisma.organiserProfile.update({ where: { id }, data: { isRestricted: false, restrictedReason: null } });
+  },
+
+  async restrictSupplier(id: string, reason: string) {
+    return prisma.supplierProfile.update({ where: { id }, data: { isRestricted: true, restrictedReason: reason } });
+  },
+
+  async unrestrictSupplier(id: string) {
+    return prisma.supplierProfile.update({ where: { id }, data: { isRestricted: false, restrictedReason: null } });
   },
 };

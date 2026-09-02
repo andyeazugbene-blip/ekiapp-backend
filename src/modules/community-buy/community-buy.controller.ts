@@ -371,3 +371,49 @@ export async function adminGetLedgerSummary(_request: Request, response: Respons
 export async function adminGetCampaignLedger(request: Request, response: Response): Promise<void> {
   response.json(await campaignContributionsService.getCampaignLedger(requireIdParam(request)));
 }
+
+// ─── Risk controls ────────────────────────────────────────────────────
+
+export async function adminListVerifiedOrganisers(_request: Request, response: Response): Promise<void> {
+  response.json({ items: await organiserSupplierService.listVerifiedOrganisersForAdmin() });
+}
+
+export async function adminListVerifiedSuppliers(_request: Request, response: Response): Promise<void> {
+  response.json({ items: await organiserSupplierService.listVerifiedSuppliersForAdmin() });
+}
+
+export async function adminRestrictOrganiser(request: Request, response: Response): Promise<void> {
+  const adminId = requireUserId(request);
+  const reason = request.body?.reason;
+  if (typeof reason !== "string" || !reason.trim()) throw new AppError("reason is required", 400);
+  const id = requireIdParam(request);
+  const profile = await organiserSupplierService.restrictOrganiser(id, reason);
+  await recordAudit({ actorId: adminId, action: "community_organiser.restrict", entityType: "OrganiserProfile", entityId: id, metadata: { reason } });
+  response.json({ profile });
+}
+
+export async function adminUnrestrictOrganiser(request: Request, response: Response): Promise<void> {
+  const adminId = requireUserId(request);
+  const id = requireIdParam(request);
+  const profile = await organiserSupplierService.unrestrictOrganiser(id);
+  await recordAudit({ actorId: adminId, action: "community_organiser.unrestrict", entityType: "OrganiserProfile", entityId: id });
+  response.json({ profile });
+}
+
+export async function adminRestrictSupplier(request: Request, response: Response): Promise<void> {
+  const adminId = requireUserId(request);
+  const reason = request.body?.reason;
+  if (typeof reason !== "string" || !reason.trim()) throw new AppError("reason is required", 400);
+  const id = requireIdParam(request);
+  const profile = await organiserSupplierService.restrictSupplier(id, reason);
+  await recordAudit({ actorId: adminId, action: "community_supplier.restrict", entityType: "SupplierProfile", entityId: id, metadata: { reason } });
+  response.json({ profile });
+}
+
+export async function adminUnrestrictSupplier(request: Request, response: Response): Promise<void> {
+  const adminId = requireUserId(request);
+  const id = requireIdParam(request);
+  const profile = await organiserSupplierService.unrestrictSupplier(id);
+  await recordAudit({ actorId: adminId, action: "community_supplier.unrestrict", entityType: "SupplierProfile", entityId: id });
+  response.json({ profile });
+}

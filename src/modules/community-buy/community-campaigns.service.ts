@@ -35,12 +35,14 @@ export const communityCampaignsService = {
   async create(userId: string, input: CreateCampaignInput) {
     const organiser = await prisma.organiserProfile.findUnique({ where: { userId } });
     if (!organiser || !organiser.isVerified) throw new AppError("Verified organiser profile required", 403);
+    if (organiser.isRestricted) throw new AppError("Your organiser account is currently restricted from creating new campaigns", 403);
 
     const config = await marketConfigurationService.get(input.country);
     if (!config?.communityBuyEnabled) throw new AppError("Community Buy is not available in this market yet", 403);
 
     const supplier = await prisma.supplierProfile.findUnique({ where: { id: input.supplierId } });
     if (!supplier || !supplier.isVerified) throw new AppError("Supplier not found or not verified", 404);
+    if (supplier.isRestricted) throw new AppError("This supplier is currently restricted and cannot take on new campaigns", 403);
     if (supplier.country !== input.country) {
       // spec §8.2: campaigns operate as a local-market feature only — no
       // cross-border organiser/supplier pairing in this version.
@@ -122,6 +124,7 @@ export const communityCampaignsService = {
     if (!campaign || !supplier || campaign.supplierId !== supplier.id) {
       throw new AppError("Campaign not found", 404);
     }
+    if (supplier.isRestricted) throw new AppError("Your supplier account is currently restricted from committing to campaigns", 403);
     if (campaign.status !== "DRAFT" && campaign.status !== "CHANGES_REQUIRED") {
       throw new AppError("This campaign is not awaiting supplier commitment", 409);
     }
