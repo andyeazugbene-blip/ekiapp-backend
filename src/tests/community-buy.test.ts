@@ -403,6 +403,128 @@ describe("campaignContributionsService — financial ledger (read-only aggregati
 
 });
 
+describe("communityCampaignsService.update — 'Edit Live Campaign'", () => {
+  it("allows full edits including financial terms while DRAFT and unlocked", async () => {
+    m.organiserProfile.findUnique.mockResolvedValue({ id: "org-1" } as never);
+    m.communityCampaign.findUnique.mockResolvedValue({ id: "camp-1", organiserId: "org-1", status: "DRAFT", termsLockedAt: null, goalShares: 10 } as never);
+    m.communityCampaign.update.mockResolvedValue({ id: "camp-1" } as never);
+
+    await communityCampaignsService.update("organiser-user-1", "camp-1", { title: "New title", minimumShares: 5, goalShares: 10, pricePerShareMinor: 500 });
+
+    expect(m.communityCampaign.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ title: "New title", minimumShares: 5, pricePerShareMinor: 500 }) }),
+    );
+  });
+
+  it("rejects any edit once terms are locked, even while still DRAFT", async () => {
+    m.organiserProfile.findUnique.mockResolvedValue({ id: "org-1" } as never);
+    m.communityCampaign.findUnique.mockResolvedValue({ id: "camp-1", organiserId: "org-1", status: "DRAFT", termsLockedAt: new Date() } as never);
+
+    await expect(
+      communityCampaignsService.update("organiser-user-1", "camp-1", { pricePerShareMinor: 999 }),
+    ).rejects.toMatchObject({ statusCode: 409 });
+  });
+
+  it("allows a title/description-only edit while LIVE", async () => {
+    m.organiserProfile.findUnique.mockResolvedValue({ id: "org-1" } as never);
+    m.communityCampaign.findUnique.mockResolvedValue({ id: "camp-1", organiserId: "org-1", status: "LIVE", termsLockedAt: new Date() } as never);
+    m.communityCampaign.update.mockResolvedValue({ id: "camp-1" } as never);
+
+    await communityCampaignsService.update("organiser-user-1", "camp-1", { title: "Corrected title", description: "Fixed a typo" });
+
+    expect(m.communityCampaign.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: { title: "Corrected title", description: "Fixed a typo" } }),
+    );
+  });
+
+  it("rejects a financial-terms edit while LIVE, even though title/description edits are allowed", async () => {
+    m.organiserProfile.findUnique.mockResolvedValue({ id: "org-1" } as never);
+    m.communityCampaign.findUnique.mockResolvedValue({ id: "camp-1", organiserId: "org-1", status: "LIVE", termsLockedAt: new Date() } as never);
+
+    await expect(
+      communityCampaignsService.update("organiser-user-1", "camp-1", { title: "ok", pricePerShareMinor: 999 }),
+    ).rejects.toMatchObject({ statusCode: 409 });
+    expect(m.communityCampaign.update).not.toHaveBeenCalled();
+  });
+
+  it("allows a content-only edit during RESCUE_WINDOW too", async () => {
+    m.organiserProfile.findUnique.mockResolvedValue({ id: "org-1" } as never);
+    m.communityCampaign.findUnique.mockResolvedValue({ id: "camp-1", organiserId: "org-1", status: "RESCUE_WINDOW", termsLockedAt: new Date() } as never);
+    m.communityCampaign.update.mockResolvedValue({ id: "camp-1" } as never);
+
+    await communityCampaignsService.update("organiser-user-1", "camp-1", { description: "Almost there — thank you!" });
+
+    expect(m.communityCampaign.update).toHaveBeenCalled();
+  });
+
+  it("rejects any edit once the campaign has reached a terminal state", async () => {
+    m.organiserProfile.findUnique.mockResolvedValue({ id: "org-1" } as never);
+    m.communityCampaign.findUnique.mockResolvedValue({ id: "camp-1", organiserId: "org-1", status: "COMPLETED", termsLockedAt: new Date() } as never);
+
+    await expect(
+      communityCampaignsService.update("organiser-user-1", "camp-1", { title: "too late" }),
+    ).rejects.toMatchObject({ statusCode: 409 });
+  });
+});
+
+describe("communityCampaignsService.listParticipantsForOrganiser — 'Participants'", () => {
+  it("only returns participants with an actual PAID contribution, with real totals", async () => {
+    m.organiserProfile.findUnique.mockResolvedValue({ id: "org-1" } as never);
+    m.communityCampaign.findUnique.mockResolvedValue({ id: "camp-1", organiserId: "org-1" } as never);
+    m.campaignParticipant.findMany.mockResolvedValue([
+      {
+        userId: "buyer-1",
+        user: { name: "Amina", email: "amina@example.com" },
+        joinedAt: new Date("2026-01-01"),
+        contributions: [
+          { quantity: 2, amount: 2000, isOrganiserTopUp: false, createdAt: new Date() },
+          { quantity: 1, amount: 1000, isOrganiserTopUp: true, createdAt: new Date() },
+        ],
+      },
+    ] as never);
+
+    const result = await communityCampaignsService.listParticipantsForOrganiser("organiser-user-1", "camp-1");
+
+    expect(result).toEqual([
+      expect.objectContaining({ userId: "buyer-1", totalQuantity: 3, totalPaid: 3000, isOrganiser: true }),
+    ]);
+    expect(m.campaignParticipant.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { campaignId: "camp-1", contributions: { some: { status: "PAID" } } } }),
+    );
+  });
+
+  it("rejects a caller who doesn't own the campaign", async () => {
+    m.organiserProfile.findUnique.mockResolvedValue({ id: "org-1" } as never);
+    m.communityCampaign.findUnique.mockResolvedValue({ id: "camp-1", organiserId: "someone-else" } as never);
+    await expect(communityCampaignsService.listParticipantsForOrganiser("organiser-user-1", "camp-1")).rejects.toMatchObject({ statusCode: 404 });
+    expect(m.campaignParticipant.findMany).not.toHaveBeenCalled();
+  });
+});
+
+describe("communityCampaignsService.getRefundProgressForOrganiser — 'Refund Progress'", () => {
+  it("counts real refund records by status, never a fabricated percentage", async () => {
+    m.organiserProfile.findUnique.mockResolvedValue({ id: "org-1" } as never);
+    m.communityCampaign.findUnique.mockResolvedValue({ id: "camp-1", organiserId: "org-1" } as never);
+    m.campaignRefund.findMany.mockResolvedValue([
+      { status: "REFUNDED" }, { status: "REFUNDED" }, { status: "REFUND_PENDING" }, { status: "REFUND_FAILED" },
+    ] as never);
+
+    const result = await communityCampaignsService.getRefundProgressForOrganiser("organiser-user-1", "camp-1");
+
+    expect(result).toEqual({ total: 4, completed: 2, pending: 1, failed: 1 });
+  });
+
+  it("returns all zeros when there are no refunds at all for this campaign", async () => {
+    m.organiserProfile.findUnique.mockResolvedValue({ id: "org-1" } as never);
+    m.communityCampaign.findUnique.mockResolvedValue({ id: "camp-1", organiserId: "org-1" } as never);
+    m.campaignRefund.findMany.mockResolvedValue([] as never);
+
+    const result = await communityCampaignsService.getRefundProgressForOrganiser("organiser-user-1", "camp-1");
+
+    expect(result).toEqual({ total: 0, completed: 0, pending: 0, failed: 0 });
+  });
+});
+
 describe("Community Buy risk controls — restrict/unrestrict organiser and supplier", () => {
   const validInput = {
     supplierId: "sup-1",

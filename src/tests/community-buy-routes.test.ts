@@ -67,11 +67,15 @@ const mockRejectExtension = vi.fn();
 const mockListExtensionRequestsForAdmin = vi.fn();
 const mockRequireOwnedByOrganiser = vi.fn();
 const mockListMyCampaignUpdates = vi.fn();
+const mockListParticipantsForOrganiser = vi.fn();
+const mockGetRefundProgressForOrganiser = vi.fn();
 
 vi.mock("../modules/community-buy/community-campaigns.service", () => ({
   communityCampaignsService: {
     listLive: (...a: unknown[]) => mockListLive(...a),
     listMyCampaignUpdates: (...a: unknown[]) => mockListMyCampaignUpdates(...a),
+    listParticipantsForOrganiser: (...a: unknown[]) => mockListParticipantsForOrganiser(...a),
+    getRefundProgressForOrganiser: (...a: unknown[]) => mockGetRefundProgressForOrganiser(...a),
     get: (...a: unknown[]) => mockGetCampaign(...a),
     create: (...a: unknown[]) => mockCreateCampaign(...a),
     update: (...a: unknown[]) => mockUpdateCampaign(...a),
@@ -337,6 +341,23 @@ describe("Organiser routes — role/id handling", () => {
     const publish = await request(app).post("/api/organiser/campaigns/camp-77/publish").set("Authorization", `Bearer ${buyerToken()}`);
     expect(publish.status).toBe(200);
     expect(mockPublishCampaign).toHaveBeenCalledWith("buyer-1", "camp-77");
+  });
+
+  it("GET /api/organiser/campaigns/:id/participants — 401 without token, id parsed correctly", async () => {
+    const unauth = await request(app).get("/api/organiser/campaigns/camp-77/participants");
+    expect(unauth.status).toBe(401);
+
+    mockListParticipantsForOrganiser.mockResolvedValue([]);
+    const res = await request(app).get("/api/organiser/campaigns/camp-77/participants").set("Authorization", `Bearer ${buyerToken()}`);
+    expect(res.status).toBe(200);
+    expect(mockListParticipantsForOrganiser).toHaveBeenCalledWith("buyer-1", "camp-77");
+  });
+
+  it("GET /api/organiser/campaigns/:id/refund-progress — id parsed correctly", async () => {
+    mockGetRefundProgressForOrganiser.mockResolvedValue({ total: 0, completed: 0, pending: 0, failed: 0 });
+    const res = await request(app).get("/api/organiser/campaigns/camp-77/refund-progress").set("Authorization", `Bearer ${buyerToken()}`);
+    expect(res.status).toBe(200);
+    expect(mockGetRefundProgressForOrganiser).toHaveBeenCalledWith("buyer-1", "camp-77");
   });
 
   it("GET /api/organiser/suppliers — 400 without a country query param", async () => {

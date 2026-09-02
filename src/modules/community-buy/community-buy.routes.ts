@@ -12,6 +12,7 @@ import {
   createOrganiserTopUp,
   endCampaignRescue,
   getCampaign,
+  getCampaignRefundProgress,
   getCampaignUpdates,
   getContribution,
   getMyOrganiserProfile,
@@ -20,6 +21,7 @@ import {
   joinCampaign,
   legacyCancelFailedCampaignShim,
   legacyFulfilCampaignAnywayShim,
+  listCampaignParticipants,
   listCampaigns,
   listMyContributions,
   listMyOrganiserCampaigns,
@@ -66,6 +68,8 @@ organiserRouter.post("/campaigns/:id/publish", asyncHandler(publishOrganiserCamp
 organiserRouter.post("/campaigns/:id/rescue/top-up", asyncHandler(createOrganiserTopUp));
 organiserRouter.post("/campaigns/:id/rescue/extension-request", asyncHandler(requestCampaignExtension));
 organiserRouter.post("/campaigns/:id/rescue/end", asyncHandler(endCampaignRescue));
+organiserRouter.get("/campaigns/:id/participants", asyncHandler(listCampaignParticipants));
+organiserRouter.get("/campaigns/:id/refund-progress", asyncHandler(getCampaignRefundProgress));
 
 // TEMPORARY compatibility shim for the currently-deployed mobile app — see
 // the long comment in community-buy.controller.ts. Remove once the new

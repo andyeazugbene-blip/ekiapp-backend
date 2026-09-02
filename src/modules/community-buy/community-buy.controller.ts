@@ -140,6 +140,16 @@ export async function updateOrganiserCampaign(request: Request, response: Respon
   response.json({ campaign });
 }
 
+export async function listCampaignParticipants(request: Request, response: Response): Promise<void> {
+  const userId = requireUserId(request);
+  response.json({ items: await communityCampaignsService.listParticipantsForOrganiser(userId, requireIdParam(request)) });
+}
+
+export async function getCampaignRefundProgress(request: Request, response: Response): Promise<void> {
+  const userId = requireUserId(request);
+  response.json(await communityCampaignsService.getRefundProgressForOrganiser(userId, requireIdParam(request)));
+}
+
 export async function submitOrganiserCampaign(request: Request, response: Response): Promise<void> {
   const userId = requireUserId(request);
   response.json({ campaign: await communityCampaignsService.submit(userId, requireIdParam(request)) });

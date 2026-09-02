@@ -91,14 +91,29 @@ export const communityCampaignsService = {
 
   async update(userId: string, campaignId: string, input: Partial<CreateCampaignInput>) {
     const campaign = await this.requireOwnedByOrganiser(userId, campaignId);
+
+    const financialFieldsTouched = input.minimumShares !== undefined || input.goalShares !== undefined
+      || input.maximumShares !== undefined || input.pricePerShareMinor !== undefined || input.deadline !== undefined;
+
     // spec §8.10 / doc §Screen 102: an organiser cannot edit financial
     // terms after contributions begin — termsLockedAt is set on the first
-    // confirmed contribution (see campaign-contributions.service.ts).
-    if (campaign.status !== "DRAFT" && campaign.status !== "CHANGES_REQUIRED") {
+    // confirmed contribution (see campaign-contributions.service.ts). Once
+    // a campaign is live, only non-financial content (title/description)
+    // stays editable — doc's "Edit Live Campaign" is about correcting
+    // copy, never about changing the terms participants already paid under.
+    const isDraftLike = campaign.status === "DRAFT" || campaign.status === "CHANGES_REQUIRED";
+    const isLiveLike = campaign.status === "LIVE" || campaign.status === "PAUSED" || campaign.status === "RESCUE_WINDOW";
+
+    if (!isDraftLike && !isLiveLike) {
       throw new AppError("This campaign can no longer be edited", 409);
     }
-    if (campaign.termsLockedAt) {
-      throw new AppError("This campaign's terms are locked after the first confirmed contribution", 409);
+    if (financialFieldsTouched && (!isDraftLike || campaign.termsLockedAt)) {
+      throw new AppError(
+        campaign.termsLockedAt
+          ? "This campaign's terms are locked after the first confirmed contribution"
+          : "Financial terms can only be edited while a campaign is in draft",
+        409,
+      );
     }
     return prisma.communityCampaign.update({
       where: { id: campaignId },
@@ -143,6 +158,42 @@ export const communityCampaignsService = {
       throw new AppError("The supplier must accept this campaign before it can be submitted for review", 409);
     }
     return prisma.communityCampaign.update({ where: { id: campaignId }, data: { status: "UNDER_REVIEW" } });
+  },
+
+  /** "Participants" — every contributor to the organiser's own campaign, with their real total. */
+  async listParticipantsForOrganiser(userId: string, campaignId: string) {
+    await this.requireOwnedByOrganiser(userId, campaignId);
+    const participants = await prisma.campaignParticipant.findMany({
+      where: { campaignId, contributions: { some: { status: "PAID" } } },
+      include: {
+        user: { select: { name: true, email: true } },
+        contributions: { where: { status: "PAID" }, select: { quantity: true, amount: true, isOrganiserTopUp: true, createdAt: true } },
+      },
+      orderBy: { joinedAt: "asc" },
+    });
+    return participants.map((p) => ({
+      userId: p.userId,
+      name: p.user.name,
+      email: p.user.email,
+      joinedAt: p.joinedAt,
+      totalQuantity: p.contributions.reduce((sum, c) => sum + c.quantity, 0),
+      totalPaid: p.contributions.reduce((sum, c) => sum + c.amount, 0),
+      isOrganiser: p.contributions.some((c) => c.isOrganiserTopUp),
+    }));
+  },
+
+  /** "Refund Progress" — real counts, not a fabricated progress bar, for a campaign the organiser owns. */
+  async getRefundProgressForOrganiser(userId: string, campaignId: string) {
+    await this.requireOwnedByOrganiser(userId, campaignId);
+    const refunds = await prisma.campaignRefund.findMany({
+      where: { contribution: { campaignId } },
+      select: { status: true },
+    });
+    const total = refunds.length;
+    const completed = refunds.filter((r) => r.status === "REFUNDED").length;
+    const pending = refunds.filter((r) => r.status === "REFUND_PENDING" || r.status === "REFUND_PROCESSING").length;
+    const failed = refunds.filter((r) => r.status === "REFUND_FAILED").length;
+    return { total, completed, pending, failed };
   },
 
   async requireOwnedByOrganiser(userId: string, campaignId: string) {
