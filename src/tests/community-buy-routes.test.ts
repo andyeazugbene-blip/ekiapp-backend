@@ -66,10 +66,12 @@ const mockApproveExtension = vi.fn();
 const mockRejectExtension = vi.fn();
 const mockListExtensionRequestsForAdmin = vi.fn();
 const mockRequireOwnedByOrganiser = vi.fn();
+const mockListMyCampaignUpdates = vi.fn();
 
 vi.mock("../modules/community-buy/community-campaigns.service", () => ({
   communityCampaignsService: {
     listLive: (...a: unknown[]) => mockListLive(...a),
+    listMyCampaignUpdates: (...a: unknown[]) => mockListMyCampaignUpdates(...a),
     get: (...a: unknown[]) => mockGetCampaign(...a),
     create: (...a: unknown[]) => mockCreateCampaign(...a),
     update: (...a: unknown[]) => mockUpdateCampaign(...a),
@@ -103,10 +105,12 @@ const mockReleaseSupplierPayment = vi.fn();
 const mockHoldSupplierPayment = vi.fn();
 const mockGetLedgerSummaryForAdmin = vi.fn();
 const mockGetCampaignLedger = vi.fn();
+const mockListMyContributions = vi.fn();
 
 vi.mock("../modules/community-buy/campaign-contributions.service", () => ({
   campaignContributionsService: {
     join: (...a: unknown[]) => mockJoin(...a),
+    listMyContributions: (...a: unknown[]) => mockListMyContributions(...a),
     createContributionIntent: (...a: unknown[]) => mockCreateContributionIntent(...a),
     createOrganiserTopUp: (...a: unknown[]) => mockCreateOrganiserTopUp(...a),
     getMyContribution: (...a: unknown[]) => mockGetMyContribution(...a),
@@ -280,6 +284,28 @@ describe("Participant routes", () => {
       .send({ quantity: 2 });
     expect(res.status).toBe(201);
     expect(mockCreateContributionIntent).toHaveBeenCalledWith("buyer-1", "camp-99", 2);
+  });
+
+  it("GET /api/community-buy/my-contributions — 401 without token, 200 for a buyer, and is NOT swallowed by /campaigns/:id", async () => {
+    const unauth = await request(app).get("/api/community-buy/my-contributions");
+    expect(unauth.status).toBe(401);
+
+    mockListMyContributions.mockResolvedValue([{ campaign: { id: "camp-1" }, totalQuantity: 2 }]);
+    const res = await request(app).get("/api/community-buy/my-contributions").set("Authorization", `Bearer ${buyerToken()}`);
+    expect(res.status).toBe(200);
+    expect(mockListMyContributions).toHaveBeenCalledWith("buyer-1");
+    expect(mockGetCampaign).not.toHaveBeenCalled();
+    expect(res.body.items).toHaveLength(1);
+  });
+
+  it("GET /api/community-buy/campaigns/:id/updates — 401 without token, id parsed correctly for a buyer", async () => {
+    const unauth = await request(app).get("/api/community-buy/campaigns/camp-99/updates");
+    expect(unauth.status).toBe(401);
+
+    mockListMyCampaignUpdates.mockResolvedValue([]);
+    const res = await request(app).get("/api/community-buy/campaigns/camp-99/updates").set("Authorization", `Bearer ${buyerToken()}`);
+    expect(res.status).toBe(200);
+    expect(mockListMyCampaignUpdates).toHaveBeenCalledWith("buyer-1", "camp-99");
   });
 });
 

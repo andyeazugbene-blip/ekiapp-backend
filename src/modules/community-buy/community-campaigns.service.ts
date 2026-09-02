@@ -597,4 +597,32 @@ export const communityCampaignsService = {
     }
     return notified;
   },
+
+  /**
+   * "Campaign Updates" — reuses the existing Notification records that
+   * notifyCampaign() already writes for every real campaign event
+   * (outcome, rescue window, extension decision, refund progress, etc).
+   * No separate updates model; this is just a scoped read over data that
+   * already exists, restricted to people who actually have a stake in
+   * the campaign.
+   */
+  async listMyCampaignUpdates(userId: string, campaignId: string) {
+    const campaign = await prisma.communityCampaign.findUnique({
+      where: { id: campaignId },
+      select: { organiser: { select: { userId: true } } },
+    });
+    if (!campaign) throw new AppError("Campaign not found", 404);
+
+    const isOrganiser = campaign.organiser.userId === userId;
+    const isParticipant = isOrganiser
+      ? true
+      : (await prisma.campaignParticipant.findUnique({ where: { campaignId_userId: { campaignId, userId } } })) != null;
+    if (!isParticipant) throw new AppError("You don't have access to this campaign's updates", 403);
+
+    return prisma.notification.findMany({
+      where: { userId, type: "COMMUNITY_CAMPAIGN_UPDATE", data: { path: ["campaignId"], equals: campaignId } },
+      orderBy: { createdAt: "desc" },
+      take: 100,
+    });
+  },
 };

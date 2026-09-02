@@ -93,6 +93,16 @@ export async function confirmContributionPayment(request: Request, response: Res
   response.json({ contribution: await campaignContributionsService.verifyContribution(userId, requireIdParam(request)) });
 }
 
+export async function listMyContributions(request: Request, response: Response): Promise<void> {
+  const userId = requireUserId(request);
+  response.json({ items: await campaignContributionsService.listMyContributions(userId) });
+}
+
+export async function getCampaignUpdates(request: Request, response: Response): Promise<void> {
+  const userId = requireUserId(request);
+  response.json({ items: await communityCampaignsService.listMyCampaignUpdates(userId, requireIdParam(request)) });
+}
+
 // ─── Organiser ──────────────────────────────────────────────────────────
 
 export async function applyAsOrganiser(request: Request, response: Response): Promise<void> {

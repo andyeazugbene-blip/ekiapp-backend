@@ -12,6 +12,7 @@ import {
   createOrganiserTopUp,
   endCampaignRescue,
   getCampaign,
+  getCampaignUpdates,
   getContribution,
   getMyOrganiserProfile,
   getMySupplierProfile,
@@ -20,6 +21,7 @@ import {
   legacyCancelFailedCampaignShim,
   legacyFulfilCampaignAnywayShim,
   listCampaigns,
+  listMyContributions,
   listMyOrganiserCampaigns,
   listMySupplierCampaigns,
   listPublicMarketConfigs,
@@ -35,7 +37,9 @@ export const communityBuyRouter = Router();
 communityBuyRouter.get("/markets", asyncHandler(listPublicMarketConfigs));
 communityBuyRouter.get("/markets/:country", asyncHandler(getPublicMarketConfig));
 communityBuyRouter.get("/campaigns", asyncHandler(listCampaigns));
+communityBuyRouter.get("/my-contributions", authenticate, asyncHandler(listMyContributions));
 communityBuyRouter.get("/campaigns/:id", asyncHandler(getCampaign));
+communityBuyRouter.get("/campaigns/:id/updates", authenticate, asyncHandler(getCampaignUpdates));
 communityBuyRouter.post("/campaigns/:id/contributions", authenticate, asyncHandler(createContribution));
 communityBuyRouter.get("/contributions/:id", authenticate, asyncHandler(getContribution));
 communityBuyRouter.post("/contributions/:id/payment", authenticate, asyncHandler(confirmContributionPayment));

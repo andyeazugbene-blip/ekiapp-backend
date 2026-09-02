@@ -5,7 +5,8 @@ vi.mock("../lib/prisma", () => ({
     communityCampaign: { findMany: vi.fn(), update: vi.fn(), updateMany: vi.fn(), findUnique: vi.fn(), findUniqueOrThrow: vi.fn(), create: vi.fn() },
     campaignContribution: { findMany: vi.fn(), update: vi.fn(), findUnique: vi.fn(), findUniqueOrThrow: vi.fn(), create: vi.fn(), groupBy: vi.fn() },
     campaignRefund: { create: vi.fn(), findMany: vi.fn(), update: vi.fn(), groupBy: vi.fn() },
-    campaignParticipant: { findMany: vi.fn(), upsert: vi.fn() },
+    campaignParticipant: { findMany: vi.fn(), findUnique: vi.fn(), upsert: vi.fn() },
+    notification: { findMany: vi.fn() },
     campaignExtensionRequest: { create: vi.fn(), findUnique: vi.fn(), update: vi.fn(), findMany: vi.fn() },
     campaignSupplierPayment: { findUnique: vi.fn(), create: vi.fn(), update: vi.fn(), findMany: vi.fn() },
     organiserProfile: { findUnique: vi.fn(), update: vi.fn() },
@@ -480,5 +481,91 @@ describe("campaignContributionsService — financial ledger continued", () => {
     const ledger = await campaignContributionsService.getCampaignLedger("camp-3");
     expect(ledger.entries).toHaveLength(0);
     expect(ledger.totals.totalPaidToSupplier).toBe(0);
+  });
+});
+
+describe("campaignContributionsService.listMyContributions — 'My Community Buys'", () => {
+  it("excludes a joined campaign the user never actually contributed to (no PAID/attempted contribution)", async () => {
+    m.campaignParticipant.findMany.mockResolvedValue([
+      { campaign: { id: "camp-1" }, contributions: [] },
+    ] as never);
+    const result = await campaignContributionsService.listMyContributions("user-1");
+    expect(result).toEqual([]);
+  });
+
+  it("sums quantity/amount across only PAID contributions and surfaces the highest-priority refund status", async () => {
+    m.campaignParticipant.findMany.mockResolvedValue([
+      {
+        campaign: { id: "camp-1", title: "Rice bulk buy" },
+        contributions: [
+          { status: "PAID", quantity: 2, amount: 2000, createdAt: new Date("2026-01-02"), refund: null },
+          { status: "PAID", quantity: 1, amount: 1000, createdAt: new Date("2026-01-01"), refund: { status: "REFUNDED" } },
+          { status: "PAYMENT_FAILED", quantity: 1, amount: 1000, createdAt: new Date("2026-01-03"), refund: null },
+        ],
+      },
+    ] as never);
+
+    const result = await campaignContributionsService.listMyContributions("user-1");
+
+    expect(result).toEqual([
+      expect.objectContaining({
+        totalQuantity: 3,
+        totalPaid: 3000,
+        refundStatus: "REFUNDED",
+      }),
+    ]);
+  });
+
+  it("prioritizes REFUND_FAILED over REFUNDED so a needs-attention case is never hidden behind an unrelated completed refund", async () => {
+    m.campaignParticipant.findMany.mockResolvedValue([
+      {
+        campaign: { id: "camp-1" },
+        contributions: [
+          { status: "PAID", quantity: 1, amount: 1000, createdAt: new Date(), refund: { status: "REFUNDED" } },
+          { status: "PAID", quantity: 1, amount: 1000, createdAt: new Date(), refund: { status: "REFUND_FAILED" } },
+        ],
+      },
+    ] as never);
+
+    const result = await campaignContributionsService.listMyContributions("user-1");
+    expect(result[0].refundStatus).toBe("REFUND_FAILED");
+  });
+});
+
+describe("communityCampaignsService.listMyCampaignUpdates — 'Campaign Updates'", () => {
+  it("throws 404 for a campaign that doesn't exist", async () => {
+    m.communityCampaign.findUnique.mockResolvedValue(null);
+    await expect(communityCampaignsService.listMyCampaignUpdates("user-1", "camp-x")).rejects.toMatchObject({ statusCode: 404 });
+  });
+
+  it("throws 403 for a user who is neither the organiser nor a participant", async () => {
+    m.communityCampaign.findUnique.mockResolvedValue({ organiser: { userId: "someone-else" } } as never);
+    m.campaignParticipant.findUnique.mockResolvedValue(null);
+    await expect(communityCampaignsService.listMyCampaignUpdates("user-1", "camp-x")).rejects.toMatchObject({ statusCode: 403 });
+    expect(m.notification.findMany).not.toHaveBeenCalled();
+  });
+
+  it("returns updates for a participant, scoped to their own notifications for this campaign", async () => {
+    m.communityCampaign.findUnique.mockResolvedValue({ organiser: { userId: "organiser-user" } } as never);
+    m.campaignParticipant.findUnique.mockResolvedValue({ id: "participant-1" } as never);
+    m.notification.findMany.mockResolvedValue([{ id: "notif-1", title: "Campaign succeeded!" }] as never);
+
+    const result = await communityCampaignsService.listMyCampaignUpdates("user-1", "camp-x");
+
+    expect(m.notification.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { userId: "user-1", type: "COMMUNITY_CAMPAIGN_UPDATE", data: { path: ["campaignId"], equals: "camp-x" } },
+      }),
+    );
+    expect(result).toHaveLength(1);
+  });
+
+  it("allows the organiser without requiring a separate participant row", async () => {
+    m.communityCampaign.findUnique.mockResolvedValue({ organiser: { userId: "user-1" } } as never);
+    m.notification.findMany.mockResolvedValue([] as never);
+
+    await communityCampaignsService.listMyCampaignUpdates("user-1", "camp-x");
+
+    expect(m.campaignParticipant.findUnique).not.toHaveBeenCalled();
   });
 });

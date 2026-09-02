@@ -244,6 +244,44 @@ export const campaignContributionsService = {
     return contribution;
   },
 
+  /** "My Community Buys" — every campaign this user has actually contributed to (paid or attempted), with their totals and any refund status for that campaign. */
+  async listMyContributions(userId: string) {
+    const participants = await prisma.campaignParticipant.findMany({
+      where: { userId },
+      include: {
+        campaign: {
+          select: {
+            id: true, title: true, status: true, fundingOutcome: true, currency: true, deadline: true,
+            supplier: { select: { vendor: { select: { storeName: true } } } },
+          },
+        },
+        contributions: {
+          where: { status: { not: "INITIATED" } },
+          include: { refund: true },
+          orderBy: { createdAt: "desc" },
+        },
+      },
+      orderBy: { joinedAt: "desc" },
+    });
+
+    return participants
+      .filter((p) => p.contributions.length > 0)
+      .map((p) => {
+        const paid = p.contributions.filter((c) => c.status === "PAID");
+        const refunds = p.contributions.map((c) => c.refund).filter((r): r is NonNullable<typeof r> => r != null);
+        return {
+          campaign: p.campaign,
+          totalQuantity: paid.reduce((sum, c) => sum + c.quantity, 0),
+          totalPaid: paid.reduce((sum, c) => sum + c.amount, 0),
+          latestContribution: p.contributions[0],
+          refundStatus: refunds.find((r) => r.status === "REFUND_FAILED")?.status
+            ?? refunds.find((r) => r.status === "REFUND_PENDING" || r.status === "REFUND_PROCESSING")?.status
+            ?? refunds.find((r) => r.status === "REFUNDED")?.status
+            ?? null,
+        };
+      });
+  },
+
   // ─── Refunds — doc §10 ──────────────────────────────────────────────────
   // Refund *records* are created eagerly at campaign-failure time
   // (community-campaigns.service.ts) or on a capacity-lost race
