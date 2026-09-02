@@ -23,6 +23,8 @@ vi.mock("../modules/automation/automation.service", () => ({
     listVendorActivity: (...args: unknown[]) => mockListVendorActivity(...args),
     adminSummary: (...args: unknown[]) => mockAdminSummary(...args),
   },
+  CONFIGURABLE_TYPES: new Set(["CART_RECOVERY", "BUYER_WIN_BACK"]),
+  DEFAULT_CONFIG: { CART_RECOVERY: { reminderHours: 2 }, BUYER_WIN_BACK: { inactivityDays: 45 } },
 }));
 
 const mockVendorFindUnique = vi.fn();
@@ -157,6 +159,33 @@ describe("Automation routes — PATCH :id param handling", () => {
       .set("Authorization", `Bearer ${vendorToken()}`)
       .send({ enabled: "false" });
     expect(res.status).toBe(400);
+  });
+
+  it("PATCH /api/vendor/automations/:id — forwards a valid config for a configurable type", async () => {
+    const res = await request(app)
+      .patch("/api/vendor/automations/CART_RECOVERY")
+      .set("Authorization", `Bearer ${vendorToken()}`)
+      .send({ enabled: true, config: { reminderHours: 24 } });
+    expect(res.status).toBe(200);
+    expect(mockSetVendorAutomation).toHaveBeenCalledWith("vendor-db-1", "CART_RECOVERY", true, { reminderHours: 24 });
+  });
+
+  it("PATCH /api/vendor/automations/:id — 400 when a config value is not a positive number", async () => {
+    const res = await request(app)
+      .patch("/api/vendor/automations/BUYER_WIN_BACK")
+      .set("Authorization", `Bearer ${vendorToken()}`)
+      .send({ enabled: true, config: { inactivityDays: 0 } });
+    expect(res.status).toBe(400);
+    expect(mockSetVendorAutomation).not.toHaveBeenCalled();
+  });
+
+  it("PATCH /api/vendor/automations/:id — ignores a config payload for a non-configurable type", async () => {
+    const res = await request(app)
+      .patch("/api/vendor/automations/FIRST_SALE")
+      .set("Authorization", `Bearer ${vendorToken()}`)
+      .send({ enabled: true, config: { anything: 5 } });
+    expect(res.status).toBe(200);
+    expect(mockSetVendorAutomation).toHaveBeenCalledWith("vendor-db-1", "FIRST_SALE", true);
   });
 });
 

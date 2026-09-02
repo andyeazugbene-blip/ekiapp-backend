@@ -98,6 +98,16 @@ const DEFAULT_TEMPLATES: Record<AutomationType, { title: string; body: string; c
   },
 };
 
+// Automation types whose behavior a vendor can tune, and their defaults.
+// Kept intentionally narrow — only types the doc specifies concrete tunable
+// fields for (CART_RECOVERY: reminder delay, BUYER_WIN_BACK: inactivity
+// window). Every other type stays a plain on/off toggle.
+export const CONFIGURABLE_TYPES = new Set<AutomationType>(["CART_RECOVERY", "BUYER_WIN_BACK"]);
+export const DEFAULT_CONFIG: Record<string, Record<string, number>> = {
+  CART_RECOVERY: { reminderHours: 2 },
+  BUYER_WIN_BACK: { inactivityDays: 45 },
+};
+
 async function ensureTemplate(type: AutomationType): Promise<void> {
   const key = automationEventKey(type);
   const existing = await prisma.communicationTemplate.findUnique({ where: { key } });
@@ -231,21 +241,36 @@ export const automationService = {
 
   async listVendorAutomations(vendorId: string) {
     const settings = await prisma.vendorAutomationSetting.findMany({ where: { vendorId } });
-    const enabledByType = new Map(settings.map((s) => [s.type, s.enabled]));
+    const settingByType = new Map(settings.map((s) => [s.type, s]));
     const types = Object.keys(DEFAULT_TEMPLATES) as AutomationType[];
-    return types.map((type) => ({
-      type,
-      enabled: enabledByType.get(type) ?? true,
-      description: DEFAULT_TEMPLATES[type].body,
-    }));
+    return types.map((type) => {
+      const setting = settingByType.get(type);
+      return {
+        type,
+        enabled: setting?.enabled ?? true,
+        description: DEFAULT_TEMPLATES[type].body,
+        config: CONFIGURABLE_TYPES.has(type) ? { ...DEFAULT_CONFIG[type], ...(setting?.config as object | undefined) } : null,
+      };
+    });
   },
 
-  async setVendorAutomation(vendorId: string, type: AutomationType, enabled: boolean) {
+  async setVendorAutomation(vendorId: string, type: AutomationType, enabled: boolean, config?: Record<string, number>) {
+    const data: { enabled: boolean; config?: object } = { enabled };
+    if (config && CONFIGURABLE_TYPES.has(type)) data.config = config;
     return prisma.vendorAutomationSetting.upsert({
       where: { vendorId_type: { vendorId, type } },
-      update: { enabled },
-      create: { vendorId, type, enabled },
+      update: data,
+      create: { vendorId, type, ...data },
     });
+  },
+
+  /** Resolves a vendor's tunable config for a configurable automation type, falling back to defaults. */
+  async getVendorAutomationConfig(vendorId: string, type: "CART_RECOVERY" | "BUYER_WIN_BACK"): Promise<{ reminderHours: number } | { inactivityDays: number }> {
+    const setting = await prisma.vendorAutomationSetting.findUnique({
+      where: { vendorId_type: { vendorId, type } },
+      select: { config: true },
+    });
+    return { ...DEFAULT_CONFIG[type], ...(setting?.config as object | undefined) } as any;
   },
 
   async listVendorActivity(vendorId: string, limit = 50) {

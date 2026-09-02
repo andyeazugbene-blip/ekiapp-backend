@@ -135,3 +135,54 @@ describe("automationService.scheduleAutomation", () => {
     );
   });
 });
+
+describe("automationService — per-vendor tunable config (CART_RECOVERY, BUYER_WIN_BACK)", () => {
+  it("getVendorAutomationConfig falls back to defaults when no row exists", async () => {
+    m.vendorAutomationSetting.findUnique.mockResolvedValue(null);
+    const config = await automationService.getVendorAutomationConfig("vendor-1", "CART_RECOVERY");
+    expect(config).toEqual({ reminderHours: 2 });
+  });
+
+  it("getVendorAutomationConfig merges a stored override on top of the defaults", async () => {
+    m.vendorAutomationSetting.findUnique.mockResolvedValue({ config: { reminderHours: 24 } } as never);
+    const config = await automationService.getVendorAutomationConfig("vendor-1", "CART_RECOVERY");
+    expect(config).toEqual({ reminderHours: 24 });
+  });
+
+  it("getVendorAutomationConfig defaults BUYER_WIN_BACK inactivityDays to 45", async () => {
+    m.vendorAutomationSetting.findUnique.mockResolvedValue(null);
+    const config = await automationService.getVendorAutomationConfig("vendor-1", "BUYER_WIN_BACK");
+    expect(config).toEqual({ inactivityDays: 45 });
+  });
+
+  it("listVendorAutomations exposes merged config only for configurable types", async () => {
+    m.vendorAutomationSetting.findMany.mockResolvedValue([
+      { type: "CART_RECOVERY", enabled: true, config: { reminderHours: 12 } },
+      { type: "FIRST_SALE", enabled: true, config: null },
+    ] as never);
+    const items = await automationService.listVendorAutomations("vendor-1");
+    const cartRecovery = items.find((i) => i.type === "CART_RECOVERY");
+    const firstSale = items.find((i) => i.type === "FIRST_SALE");
+    expect(cartRecovery?.config).toEqual({ reminderHours: 12 });
+    expect(firstSale?.config).toBeNull();
+  });
+
+  it("setVendorAutomation persists config for a configurable type", async () => {
+    m.vendorAutomationSetting.upsert.mockResolvedValue({} as never);
+    await automationService.setVendorAutomation("vendor-1", "BUYER_WIN_BACK", true, { inactivityDays: 90 });
+    expect(m.vendorAutomationSetting.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        update: { enabled: true, config: { inactivityDays: 90 } },
+        create: expect.objectContaining({ enabled: true, config: { inactivityDays: 90 } }),
+      }),
+    );
+  });
+
+  it("setVendorAutomation ignores a config payload for a non-configurable type", async () => {
+    m.vendorAutomationSetting.upsert.mockResolvedValue({} as never);
+    await automationService.setVendorAutomation("vendor-1", "FIRST_SALE", true, { anything: 1 });
+    expect(m.vendorAutomationSetting.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({ update: { enabled: true }, create: expect.objectContaining({ enabled: true }) }),
+    );
+  });
+});

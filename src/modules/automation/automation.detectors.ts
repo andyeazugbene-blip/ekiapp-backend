@@ -41,54 +41,104 @@ async function detectFirstSale(): Promise<number> {
   return vendors.length;
 }
 
-/** CART_RECOVERY: items sitting in a buyer's cart for >2h. */
+/**
+ * CART_RECOVERY: items sitting in a buyer's cart past a per-vendor reminder
+ * delay (default 2h, vendor-configurable via VendorAutomationSetting.config).
+ * A cart can span multiple vendors' products, so it's evaluated once per
+ * vendor represented in the cart, each against that vendor's own delay.
+ */
 async function detectCartRecovery(): Promise<number> {
-  const cutoff = new Date(Date.now() - 2 * 60 * 60 * 1000);
+  const widestCutoff = new Date(Date.now() - 60 * 60 * 1000); // API enforces reminderHours >= 1, so this is a safe pre-filter floor.
   const carts = await prisma.cart.findMany({
-    where: { items: { some: { createdAt: { lte: cutoff } } } },
-    select: { id: true, buyerId: true, items: { select: { id: true } } },
+    where: { items: { some: { createdAt: { lte: widestCutoff } } } },
+    select: {
+      id: true,
+      buyerId: true,
+      items: { select: { id: true, createdAt: true, product: { select: { vendorId: true } } } },
+    },
     take: 500,
   });
+
+  const vendorConfigCache = new Map<string, { reminderHours: number }>();
+  async function reminderHoursFor(vendorId: string): Promise<number> {
+    if (!vendorConfigCache.has(vendorId)) {
+      vendorConfigCache.set(vendorId, await automationService.getVendorAutomationConfig(vendorId, "CART_RECOVERY") as { reminderHours: number });
+    }
+    return vendorConfigCache.get(vendorId)!.reminderHours;
+  }
+
+  let scheduled = 0;
   for (const cart of carts) {
     if (cart.items.length === 0) continue;
-    await automationService.scheduleAutomation({
-      type: "CART_RECOVERY",
-      recipientUserId: cart.buyerId,
-      subjectKey: `${cart.id}:${isoDate(new Date())}`,
-      frequencyCapDays: 1,
-      requiresMarketingConsent: true,
-      title: "You left something in your cart",
-      body: "Items are waiting in your cart.",
-    });
+    const vendorIds = new Set(cart.items.map((item) => item.product.vendorId));
+    for (const vendorId of vendorIds) {
+      const reminderHours = await reminderHoursFor(vendorId);
+      const cutoff = new Date(Date.now() - reminderHours * 60 * 60 * 1000);
+      const hasStaleItemForVendor = cart.items.some((item) => item.product.vendorId === vendorId && item.createdAt <= cutoff);
+      if (!hasStaleItemForVendor) continue;
+      await automationService.scheduleAutomation({
+        type: "CART_RECOVERY",
+        recipientUserId: cart.buyerId,
+        vendorId,
+        subjectKey: `${cart.id}:${vendorId}:${isoDate(new Date())}`,
+        frequencyCapDays: 1,
+        requiresMarketingConsent: true,
+        title: "You left something in your cart",
+        body: "Items are waiting in your cart.",
+      });
+      scheduled++;
+    }
   }
-  return carts.length;
+  return scheduled;
 }
 
-/** BUYER_WIN_BACK: buyer had at least one paid order, none in the last 45 days. */
+/**
+ * BUYER_WIN_BACK: for each vendor, a buyer who has bought from THAT vendor
+ * before but not again within the vendor's own inactivity window (default
+ * 45 days, vendor-configurable). Scoped per-vendor rather than
+ * platform-wide, so each vendor's win-back reflects their own buyers.
+ */
 async function detectBuyerWinBack(): Promise<number> {
-  const cutoff = new Date(Date.now() - 45 * DAY_MS);
-  const buyers = await prisma.user.findMany({
-    where: {
-      role: "BUYER",
-      isSuspended: false,
-      orders: { some: { status: { in: ["PAID", "DELIVERED", "COMPLETED"] } } },
-      NOT: { orders: { some: { status: { in: ["PAID", "DELIVERED", "COMPLETED"] }, createdAt: { gte: cutoff } } } },
-    },
-    select: { id: true },
+  const PAID_STATUSES = ["PAID", "DELIVERED", "COMPLETED"] as const;
+  const vendors = await prisma.vendor.findMany({
+    where: { isSuspended: false, orderItems: { some: {} } },
+    select: { id: true, userId: true },
     take: 500,
   });
-  for (const buyer of buyers) {
-    await automationService.scheduleAutomation({
-      type: "BUYER_WIN_BACK",
-      recipientUserId: buyer.id,
-      subjectKey: `${buyer.id}:${isoWeek(new Date())}`,
-      frequencyCapDays: 30,
-      requiresMarketingConsent: true,
-      title: "We miss you at Eki",
-      body: "Take a look at what's new.",
+
+  let scheduled = 0;
+  for (const vendor of vendors) {
+    const { inactivityDays } = (await automationService.getVendorAutomationConfig(vendor.id, "BUYER_WIN_BACK")) as { inactivityDays: number };
+    const cutoff = new Date(Date.now() - inactivityDays * DAY_MS);
+
+    const buyers = await prisma.user.findMany({
+      where: {
+        role: "BUYER",
+        isSuspended: false,
+        orders: { some: { status: { in: [...PAID_STATUSES] }, vendorId: vendor.id } },
+        NOT: {
+          orders: { some: { status: { in: [...PAID_STATUSES] }, vendorId: vendor.id, createdAt: { gte: cutoff } } },
+        },
+      },
+      select: { id: true },
+      take: 200,
     });
+
+    for (const buyer of buyers) {
+      await automationService.scheduleAutomation({
+        type: "BUYER_WIN_BACK",
+        recipientUserId: buyer.id,
+        vendorId: vendor.id,
+        subjectKey: `${buyer.id}:${vendor.id}:${isoWeek(new Date())}`,
+        frequencyCapDays: 30,
+        requiresMarketingConsent: true,
+        title: "We miss you at Eki",
+        body: "Take a look at what's new.",
+      });
+      scheduled++;
+    }
   }
-  return buyers.length;
+  return scheduled;
 }
 
 /** REVIEW_REQUEST: delivered 1–14 days ago, no review yet. */

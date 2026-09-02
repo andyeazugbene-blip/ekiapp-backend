@@ -3,7 +3,7 @@ import type { AutomationType } from "@prisma/client";
 
 import { prisma } from "../../lib/prisma";
 import { AppError } from "../../shared/errors/app-error";
-import { automationService } from "./automation.service";
+import { automationService, CONFIGURABLE_TYPES, DEFAULT_CONFIG } from "./automation.service";
 
 const VALID_TYPES: AutomationType[] = [
   "FIRST_SALE", "CART_RECOVERY", "BUYER_WIN_BACK", "REVIEW_REQUEST", "LOW_STOCK_ALERT",
@@ -33,7 +33,24 @@ export async function updateVendorAutomation(request: Request, response: Respons
   if (!VALID_TYPES.includes(type)) throw new AppError("Unknown automation type", 400);
   const enabled = request.body?.enabled;
   if (typeof enabled !== "boolean") throw new AppError("enabled must be a boolean", 400);
-  const setting = await automationService.setVendorAutomation(vendorId, type, enabled);
+
+  let config: Record<string, number> | undefined;
+  if (CONFIGURABLE_TYPES.has(type) && request.body?.config) {
+    const defaults = DEFAULT_CONFIG[type];
+    config = {};
+    for (const key of Object.keys(defaults)) {
+      const value = request.body.config[key];
+      if (value === undefined) continue;
+      if (typeof value !== "number" || !Number.isFinite(value) || value < 1) {
+        throw new AppError(`config.${key} must be a number >= 1`, 400);
+      }
+      config[key] = value;
+    }
+  }
+
+  const setting = config
+    ? await automationService.setVendorAutomation(vendorId, type, enabled, config)
+    : await automationService.setVendorAutomation(vendorId, type, enabled);
   response.json({ setting });
 }
 
