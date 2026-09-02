@@ -118,15 +118,21 @@ import { getAdminAutomationSummary } from "../automation/automation.controller";
 import { adminListSubscriptionExceptions } from "../regular-deliveries/regular-deliveries.controller";
 import {
   adminApproveCampaign,
+  adminApproveExtension,
+  adminHoldSupplierPayment,
   adminListCampaignsForReview,
+  adminListExtensionRequests,
   adminListRecentlyClosedCampaigns,
   adminListMarketConfigurations,
   adminListPendingOrganisers,
   adminListPendingSuppliers,
   adminListRefunds,
+  adminListSupplierPayments,
   adminPauseCampaign,
+  adminReleaseSupplierPayment,
   adminResumeCampaign,
   adminRejectCampaign,
+  adminRejectExtension,
   adminRequestCampaignChanges,
   adminUpdateMarketConfiguration,
   adminVerifyOrganiser,
@@ -203,6 +209,12 @@ adminRouter.post("/community-buy/organisers/:id/verify", asyncHandler(requireAdm
 adminRouter.get("/community-buy/suppliers/pending", asyncHandler(requireAdminPermission("community_buy.read")), asyncHandler(adminListPendingSuppliers));
 adminRouter.post("/community-buy/suppliers/:id/verify", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(adminVerifySupplier));
 adminRouter.get("/community-buy/refunds", asyncHandler(requireAdminPermission("community_buy.read")), asyncHandler(adminListRefunds));
+adminRouter.get("/community-buy/extension-requests", asyncHandler(requireAdminPermission("community_buy.read")), asyncHandler(adminListExtensionRequests));
+adminRouter.post("/community-buy/extension-requests/:id/approve", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(adminApproveExtension));
+adminRouter.post("/community-buy/extension-requests/:id/reject", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(adminRejectExtension));
+adminRouter.get("/community-buy/supplier-payments", asyncHandler(requireAdminPermission("community_buy.read")), asyncHandler(adminListSupplierPayments));
+adminRouter.post("/community-campaigns/:id/supplier-payment/release", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(adminReleaseSupplierPayment));
+adminRouter.post("/community-campaigns/:id/supplier-payment/hold", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(adminHoldSupplierPayment));
 adminRouter.get("/community-buy/markets", asyncHandler(requireAdminPermission("community_buy.read")), asyncHandler(adminListMarketConfigurations));
 adminRouter.patch("/community-buy/markets/:id", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(adminUpdateMarketConfiguration));
 

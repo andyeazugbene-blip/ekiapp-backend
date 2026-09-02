@@ -85,12 +85,16 @@ async function runRenewalsSweep() {
 // submits any pending refunds from a previously-failed campaign.
 async function runCommunityBuySweep() {
   const closing = await communityCampaignsService.closeDueCampaigns();
+  const rescueOutcome = await communityCampaignsService.evaluateRescueExpiry();
   const remindedParticipants = await communityCampaignsService.remindApproachingDeadlines();
   const refunds = await campaignContributionsService.processPendingRefunds();
   return {
     closed: closing.closed,
     succeeded: closing.succeeded,
     campaignsFailed: closing.failed,
+    rescueWindowsOpened: closing.rescued,
+    rescueWindowsExpiredSucceeded: rescueOutcome.rescued,
+    rescueWindowsExpiredFailed: rescueOutcome.failed,
     remindedParticipants,
     refundsProcessed: refunds.processed,
     refundsFailed: refunds.failed,

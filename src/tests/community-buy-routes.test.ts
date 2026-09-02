@@ -47,8 +47,13 @@ const mockRequestChanges = vi.fn();
 const mockRejectCampaign = vi.fn();
 const mockPauseCampaign = vi.fn();
 const mockResumeCampaign = vi.fn();
-const mockFulfilAnyway = vi.fn();
-const mockCancelAfterFailure = vi.fn();
+const mockEndRescueAndRefund = vi.fn();
+const mockRequestExtension = vi.fn();
+const mockConfirmSupplierCommitment = vi.fn();
+const mockApproveExtension = vi.fn();
+const mockRejectExtension = vi.fn();
+const mockListExtensionRequestsForAdmin = vi.fn();
+const mockRequireOwnedByOrganiser = vi.fn();
 
 vi.mock("../modules/community-buy/community-campaigns.service", () => ({
   communityCampaignsService: {
@@ -56,8 +61,13 @@ vi.mock("../modules/community-buy/community-campaigns.service", () => ({
     get: (...a: unknown[]) => mockGetCampaign(...a),
     create: (...a: unknown[]) => mockCreateCampaign(...a),
     update: (...a: unknown[]) => mockUpdateCampaign(...a),
-    fulfilAnyway: (...a: unknown[]) => mockFulfilAnyway(...a),
-    cancelAfterFailure: (...a: unknown[]) => mockCancelAfterFailure(...a),
+    requireOwnedByOrganiser: (...a: unknown[]) => mockRequireOwnedByOrganiser(...a),
+    endRescueAndRefund: (...a: unknown[]) => mockEndRescueAndRefund(...a),
+    requestExtension: (...a: unknown[]) => mockRequestExtension(...a),
+    confirmSupplierCommitment: (...a: unknown[]) => mockConfirmSupplierCommitment(...a),
+    approveExtension: (...a: unknown[]) => mockApproveExtension(...a),
+    rejectExtension: (...a: unknown[]) => mockRejectExtension(...a),
+    listExtensionRequestsForAdmin: (...a: unknown[]) => mockListExtensionRequestsForAdmin(...a),
     submit: (...a: unknown[]) => mockSubmitCampaign(...a),
     publish: (...a: unknown[]) => mockPublishCampaign(...a),
     listForOrganiser: (...a: unknown[]) => mockListForOrganiser(...a),
@@ -74,15 +84,21 @@ vi.mock("../modules/community-buy/community-campaigns.service", () => ({
 
 const mockJoin = vi.fn();
 const mockCreateContributionIntent = vi.fn();
+const mockCreateOrganiserTopUp = vi.fn();
 const mockGetMyContribution = vi.fn();
 const mockVerifyContribution = vi.fn();
+const mockReleaseSupplierPayment = vi.fn();
+const mockHoldSupplierPayment = vi.fn();
 
 vi.mock("../modules/community-buy/campaign-contributions.service", () => ({
   campaignContributionsService: {
     join: (...a: unknown[]) => mockJoin(...a),
     createContributionIntent: (...a: unknown[]) => mockCreateContributionIntent(...a),
+    createOrganiserTopUp: (...a: unknown[]) => mockCreateOrganiserTopUp(...a),
     getMyContribution: (...a: unknown[]) => mockGetMyContribution(...a),
     verifyContribution: (...a: unknown[]) => mockVerifyContribution(...a),
+    releaseSupplierPayment: (...a: unknown[]) => mockReleaseSupplierPayment(...a),
+    holdSupplierPayment: (...a: unknown[]) => mockHoldSupplierPayment(...a),
     listRefundsForAdmin: vi.fn().mockResolvedValue([]),
   },
 }));
@@ -167,8 +183,10 @@ beforeEach(() => {
   mockUpdateCampaign.mockResolvedValue({ id: "camp-2", status: "DRAFT" });
   mockSubmitCampaign.mockResolvedValue({ id: "camp-2", status: "UNDER_REVIEW" });
   mockPublishCampaign.mockResolvedValue({ id: "camp-2", status: "LIVE" });
-  mockFulfilAnyway.mockResolvedValue({ id: "camp-2", status: "FULFILLING" });
-  mockCancelAfterFailure.mockResolvedValue({ id: "camp-2", status: "CANCELLED" });
+  mockEndRescueAndRefund.mockResolvedValue({ id: "camp-2", status: "FAILED" });
+  mockRequestExtension.mockResolvedValue({ id: "ext-1", status: "PENDING" });
+  mockConfirmSupplierCommitment.mockResolvedValue({ id: "camp-2", supplierCommitted: true });
+  mockCreateOrganiserTopUp.mockResolvedValue({ contributionId: "contrib-top-1", clientSecret: "pi_test_secret" });
   mockApplyAsOrganiser.mockResolvedValue({ id: "org-1", isVerified: false });
   mockApplyAsSupplier.mockResolvedValue({ id: "sup-1", isVerified: false });
   mockGetOrganiserProfile.mockResolvedValue(null);
@@ -221,22 +239,31 @@ describe("Participant routes", () => {
     expect(mockJoin).toHaveBeenCalledWith("buyer-1", "camp-99");
   });
 
-  it("POST /api/community-buy/campaigns/:id/contributions — 400 for a non-positive amount", async () => {
+  it("POST /api/community-buy/campaigns/:id/contributions — 400 for a non-positive quantity", async () => {
     const res = await request(app)
       .post("/api/community-buy/campaigns/camp-99/contributions")
       .set("Authorization", `Bearer ${buyerToken()}`)
-      .send({ amount: 0 });
+      .send({ quantity: 0 });
     expect(res.status).toBe(400);
     expect(mockCreateContributionIntent).not.toHaveBeenCalled();
   });
 
-  it("POST /api/community-buy/campaigns/:id/contributions — 201 for a valid amount", async () => {
+  it("POST /api/community-buy/campaigns/:id/contributions — 400 for a non-integer quantity", async () => {
     const res = await request(app)
       .post("/api/community-buy/campaigns/camp-99/contributions")
       .set("Authorization", `Bearer ${buyerToken()}`)
-      .send({ amount: 2500 });
+      .send({ quantity: 2.5 });
+    expect(res.status).toBe(400);
+    expect(mockCreateContributionIntent).not.toHaveBeenCalled();
+  });
+
+  it("POST /api/community-buy/campaigns/:id/contributions — 201 for a valid quantity", async () => {
+    const res = await request(app)
+      .post("/api/community-buy/campaigns/camp-99/contributions")
+      .set("Authorization", `Bearer ${buyerToken()}`)
+      .send({ quantity: 2 });
     expect(res.status).toBe(201);
-    expect(mockCreateContributionIntent).toHaveBeenCalledWith("buyer-1", "camp-99", 2500);
+    expect(mockCreateContributionIntent).toHaveBeenCalledWith("buyer-1", "camp-99", 2);
   });
 });
 
@@ -275,21 +302,76 @@ describe("Organiser routes — role/id handling", () => {
     expect(res.status).toBe(400);
   });
 
-  it("POST /api/organiser/campaigns/:id/fulfil-anyway — 401 without token, id parsed correctly with one", async () => {
-    const noAuth = await request(app).post("/api/organiser/campaigns/camp-77/fulfil-anyway");
+  it("POST /api/organiser/campaigns/:id/rescue/end — 401 without token, id parsed correctly with one", async () => {
+    const noAuth = await request(app).post("/api/organiser/campaigns/camp-77/rescue/end");
     expect(noAuth.status).toBe(401);
 
-    const res = await request(app).post("/api/organiser/campaigns/camp-77/fulfil-anyway").set("Authorization", `Bearer ${buyerToken()}`);
+    const res = await request(app).post("/api/organiser/campaigns/camp-77/rescue/end").set("Authorization", `Bearer ${buyerToken()}`);
     expect(res.status).toBe(200);
-    expect(res.body.campaign.status).toBe("FULFILLING");
-    expect(mockFulfilAnyway).toHaveBeenCalledWith("buyer-1", "camp-77");
+    expect(res.body.campaign.status).toBe("FAILED");
+    expect(mockEndRescueAndRefund).toHaveBeenCalledWith("buyer-1", "camp-77");
   });
 
-  it("POST /api/organiser/campaigns/:id/cancel — id parsed correctly", async () => {
-    const res = await request(app).post("/api/organiser/campaigns/camp-77/cancel").set("Authorization", `Bearer ${buyerToken()}`);
-    expect(res.status).toBe(200);
-    expect(res.body.campaign.status).toBe("CANCELLED");
-    expect(mockCancelAfterFailure).toHaveBeenCalledWith("buyer-1", "camp-77");
+  it("POST /api/organiser/campaigns/:id/rescue/top-up — quantity validated, id parsed correctly", async () => {
+    const bad = await request(app)
+      .post("/api/organiser/campaigns/camp-77/rescue/top-up")
+      .set("Authorization", `Bearer ${buyerToken()}`)
+      .send({ quantity: 0 });
+    expect(bad.status).toBe(400);
+
+    const res = await request(app)
+      .post("/api/organiser/campaigns/camp-77/rescue/top-up")
+      .set("Authorization", `Bearer ${buyerToken()}`)
+      .send({ quantity: 3 });
+    expect(res.status).toBe(201);
+    expect(mockCreateOrganiserTopUp).toHaveBeenCalledWith("buyer-1", "camp-77", 3);
+  });
+
+  it("POST /api/organiser/campaigns/:id/rescue/extension-request — requires requestedDeadline and reason", async () => {
+    const bad = await request(app)
+      .post("/api/organiser/campaigns/camp-77/rescue/extension-request")
+      .set("Authorization", `Bearer ${buyerToken()}`)
+      .send({});
+    expect(bad.status).toBe(400);
+    expect(mockRequestExtension).not.toHaveBeenCalled();
+
+    const res = await request(app)
+      .post("/api/organiser/campaigns/camp-77/rescue/extension-request")
+      .set("Authorization", `Bearer ${buyerToken()}`)
+      .send({ requestedDeadline: "2026-12-01T00:00:00.000Z", reason: "need more time", supplierReconfirmed: true, priceUnchangedConfirmed: true, participantTermsUnchanged: true });
+    expect(res.status).toBe(201);
+    expect(mockRequestExtension).toHaveBeenCalledWith("buyer-1", "camp-77", {
+      requestedDeadline: "2026-12-01T00:00:00.000Z",
+      reason: "need more time",
+      supplierReconfirmed: true,
+      priceUnchangedConfirmed: true,
+      participantTermsUnchanged: true,
+    });
+  });
+
+  describe("legacy fulfil-anyway / cancel shim — temporary compatibility for the currently-deployed app", () => {
+    it("fulfil-anyway always returns a controlled 409, never takes a financial action, regardless of campaign state", async () => {
+      const res = await request(app).post("/api/organiser/campaigns/camp-77/fulfil-anyway").set("Authorization", `Bearer ${buyerToken()}`);
+      expect(res.status).toBe(409);
+      expect(res.body.code).toBe("ENDPOINT_REPLACED");
+      expect(mockEndRescueAndRefund).not.toHaveBeenCalled();
+    });
+
+    it("cancel on an already-FAILED campaign returns the current (already-refunding) state as a no-op — accurate, not a new action", async () => {
+      mockRequireOwnedByOrganiser.mockResolvedValue({ id: "camp-77", status: "FAILED" });
+      const res = await request(app).post("/api/organiser/campaigns/camp-77/cancel").set("Authorization", `Bearer ${buyerToken()}`);
+      expect(res.status).toBe(200);
+      expect(res.body.campaign.status).toBe("FAILED");
+      expect(mockEndRescueAndRefund).not.toHaveBeenCalled();
+    });
+
+    it("cancel on a LIVE campaign — ambiguous under the old model, returns a controlled 409 rather than guessing", async () => {
+      mockRequireOwnedByOrganiser.mockResolvedValue({ id: "camp-77", status: "LIVE" });
+      const res = await request(app).post("/api/organiser/campaigns/camp-77/cancel").set("Authorization", `Bearer ${buyerToken()}`);
+      expect(res.status).toBe(409);
+      expect(res.body.code).toBe("ENDPOINT_REPLACED");
+      expect(mockEndRescueAndRefund).not.toHaveBeenCalled();
+    });
   });
 });
 
@@ -309,6 +391,15 @@ describe("Supplier routes — vendor-only", () => {
   it("GET /api/supplier/campaigns — 403 for a buyer token", async () => {
     const res = await request(app).get("/api/supplier/campaigns").set("Authorization", `Bearer ${buyerToken()}`);
     expect(res.status).toBe(403);
+  });
+
+  it("POST /api/supplier/campaigns/:id/supplier-commitment — 403 for a buyer, 200 for a vendor with id parsed correctly", async () => {
+    const forbidden = await request(app).post("/api/supplier/campaigns/camp-77/supplier-commitment").set("Authorization", `Bearer ${buyerToken()}`);
+    expect(forbidden.status).toBe(403);
+
+    const res = await request(app).post("/api/supplier/campaigns/camp-77/supplier-commitment").set("Authorization", `Bearer ${vendorToken()}`);
+    expect(res.status).toBe(200);
+    expect(mockConfirmSupplierCommitment).toHaveBeenCalledWith("vendor-db-1", "camp-77");
   });
 });
 
@@ -357,5 +448,45 @@ describe("Admin routes — permission-gated, id handling", () => {
     const res = await request(app).get("/api/admin/community-buy/refunds").set("Authorization", `Bearer ${adminToken()}`);
     expect(res.status).toBe(200);
     expect(res.body.items).toEqual([]);
+  });
+
+  it("GET /api/admin/community-buy/extension-requests — 401 without token, 200 for admin", async () => {
+    mockListExtensionRequestsForAdmin.mockResolvedValue([]);
+    const noAuth = await request(app).get("/api/admin/community-buy/extension-requests");
+    expect(noAuth.status).toBe(401);
+    const res = await request(app).get("/api/admin/community-buy/extension-requests").set("Authorization", `Bearer ${adminToken()}`);
+    expect(res.status).toBe(200);
+  });
+
+  it("POST /api/admin/community-buy/extension-requests/:id/approve — id parsed correctly", async () => {
+    mockApproveExtension.mockResolvedValue({ id: "ext-9", status: "APPROVED" });
+    const res = await request(app).post("/api/admin/community-buy/extension-requests/ext-9/approve").set("Authorization", `Bearer ${adminToken()}`);
+    expect(res.status).toBe(200);
+    expect(mockApproveExtension).toHaveBeenCalledWith("admin-1", "ext-9");
+  });
+
+  it("POST /api/admin/community-buy/extension-requests/:id/reject — id parsed correctly", async () => {
+    mockRejectExtension.mockResolvedValue({ id: "ext-9", status: "REJECTED" });
+    const res = await request(app).post("/api/admin/community-buy/extension-requests/ext-9/reject").set("Authorization", `Bearer ${adminToken()}`).send({ notes: "not enough evidence" });
+    expect(res.status).toBe(200);
+    expect(mockRejectExtension).toHaveBeenCalledWith("admin-1", "ext-9", "not enough evidence");
+  });
+
+  it("POST /api/admin/community-campaigns/:id/supplier-payment/release — id parsed correctly", async () => {
+    mockReleaseSupplierPayment.mockResolvedValue({ campaignId: "camp-88", status: "PROCESSING" });
+    const res = await request(app).post("/api/admin/community-campaigns/camp-88/supplier-payment/release").set("Authorization", `Bearer ${adminToken()}`);
+    expect(res.status).toBe(200);
+    expect(mockReleaseSupplierPayment).toHaveBeenCalledWith("admin-1", "camp-88");
+  });
+
+  it("POST /api/admin/community-campaigns/:id/supplier-payment/hold — requires a reason", async () => {
+    const bad = await request(app).post("/api/admin/community-campaigns/camp-88/supplier-payment/hold").set("Authorization", `Bearer ${adminToken()}`).send({});
+    expect(bad.status).toBe(400);
+    expect(mockHoldSupplierPayment).not.toHaveBeenCalled();
+
+    mockHoldSupplierPayment.mockResolvedValue({ campaignId: "camp-88", status: "ON_HOLD" });
+    const res = await request(app).post("/api/admin/community-campaigns/camp-88/supplier-payment/hold").set("Authorization", `Bearer ${adminToken()}`).send({ reason: "payout account changed" });
+    expect(res.status).toBe(200);
+    expect(mockHoldSupplierPayment).toHaveBeenCalledWith("admin-1", "camp-88", "payout account changed");
   });
 });

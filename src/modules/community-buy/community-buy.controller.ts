@@ -2,6 +2,7 @@ import type { Request, Response } from "express";
 
 import { prisma } from "../../lib/prisma";
 import { AppError } from "../../shared/errors/app-error";
+import { recordAudit } from "../../shared/utils/audit";
 import { organiserSupplierService } from "./organiser-supplier.service";
 import { communityCampaignsService } from "./community-campaigns.service";
 import { campaignContributionsService } from "./campaign-contributions.service";
@@ -68,9 +69,17 @@ export async function joinCampaign(request: Request, response: Response): Promis
 
 export async function createContribution(request: Request, response: Response): Promise<void> {
   const userId = requireUserId(request);
-  const amount = Number(request.body?.amount);
-  if (!Number.isFinite(amount) || amount <= 0) throw new AppError("A positive amount is required", 400);
-  const result = await campaignContributionsService.createContributionIntent(userId, requireIdParam(request), amount);
+  const quantity = Number(request.body?.quantity);
+  if (!Number.isInteger(quantity) || quantity <= 0) throw new AppError("A positive integer quantity is required", 400);
+  const result = await campaignContributionsService.createContributionIntent(userId, requireIdParam(request), quantity);
+  response.status(201).json(result);
+}
+
+export async function createOrganiserTopUp(request: Request, response: Response): Promise<void> {
+  const userId = requireUserId(request);
+  const quantity = Number(request.body?.quantity);
+  if (!Number.isInteger(quantity) || quantity <= 0) throw new AppError("A positive integer quantity is required", 400);
+  const result = await campaignContributionsService.createOrganiserTopUp(userId, requireIdParam(request), quantity);
   response.status(201).json(result);
 }
 
@@ -131,14 +140,75 @@ export async function publishOrganiserCampaign(request: Request, response: Respo
   response.json({ campaign: await communityCampaignsService.publish(userId, requireIdParam(request)) });
 }
 
-export async function fulfilCampaignAnyway(request: Request, response: Response): Promise<void> {
+export async function endCampaignRescue(request: Request, response: Response): Promise<void> {
   const userId = requireUserId(request);
-  response.json({ campaign: await communityCampaignsService.fulfilAnyway(userId, requireIdParam(request)) });
+  response.json({ campaign: await communityCampaignsService.endRescueAndRefund(userId, requireIdParam(request)) });
 }
 
-export async function cancelFailedCampaign(request: Request, response: Response): Promise<void> {
+export async function requestCampaignExtension(request: Request, response: Response): Promise<void> {
   const userId = requireUserId(request);
-  response.json({ campaign: await communityCampaignsService.cancelAfterFailure(userId, requireIdParam(request)) });
+  const body = request.body ?? {};
+  if (typeof body.requestedDeadline !== "string" || typeof body.reason !== "string" || !body.reason.trim()) {
+    throw new AppError("requestedDeadline and reason are required", 400);
+  }
+  const request_ = await communityCampaignsService.requestExtension(userId, requireIdParam(request), {
+    requestedDeadline: body.requestedDeadline,
+    reason: body.reason,
+    supplierReconfirmed: Boolean(body.supplierReconfirmed),
+    priceUnchangedConfirmed: Boolean(body.priceUnchangedConfirmed),
+    participantTermsUnchanged: Boolean(body.participantTermsUnchanged),
+  });
+  response.status(201).json({ extensionRequest: request_ });
+}
+
+export async function confirmSupplierCommitment(request: Request, response: Response): Promise<void> {
+  const vendorId = await requireVendorId(requireUserId(request));
+  response.json({ campaign: await communityCampaignsService.confirmSupplierCommitment(vendorId, requireIdParam(request)) });
+}
+
+// ─── TEMPORARY compatibility shim ──────────────────────────────────────────
+// The mobile app already live in production calls these two routes from its
+// organiser decision screen. The flexible-fulfilment rewrite replaced that
+// screen's entire model (RESCUE_WINDOW / top-up / extension / end-and-refund
+// — see community-campaigns.service.ts), so the old endpoints no longer map
+// to any real action. This shim exists ONLY so the currently-deployed app
+// gets a controlled response instead of Express's plain 404, while the new
+// mobile UI is being built. It never charges, refunds, or fulfils anything
+// itself — "fulfil anyway below minimum" does not exist as a real action
+// anywhere in this codebase, on purpose.
+//
+// Remove this shim once: (1) the new mobile UI is deployed, (2) a production
+// smoke test confirms the new /rescue/* routes are reachable, and (3) usage
+// of these two legacy paths has actually dropped to zero in production logs.
+
+export async function legacyFulfilCampaignAnywayShim(request: Request, response: Response): Promise<void> {
+  requireUserId(request);
+  response.status(409).json({
+    message: "This action is no longer available. Update the app to see the current campaign status and available actions.",
+    code: "ENDPOINT_REPLACED",
+    details: null,
+  });
+}
+
+export async function legacyCancelFailedCampaignShim(request: Request, response: Response): Promise<void> {
+  const userId = requireUserId(request);
+  const campaignId = requireIdParam(request);
+  const campaign = await communityCampaignsService.requireOwnedByOrganiser(userId, campaignId);
+
+  // The only state where "cancel" has an unambiguous, already-true answer:
+  // a campaign that finished below minimum already has its refunds created
+  // automatically (see evaluateRescueExpiry / endRescueAndRefund) — telling
+  // the old app that is accurate, not a new financial action taken here.
+  if (campaign.status === "FAILED" || campaign.status === "CANCELLED") {
+    response.json({ campaign });
+    return;
+  }
+
+  response.status(409).json({
+    message: "This action is no longer available. Update the app to see the current campaign status and available actions.",
+    code: "ENDPOINT_REPLACED",
+    details: null,
+  });
 }
 
 // ─── Supplier ───────────────────────────────────────────────────────────
@@ -172,29 +242,44 @@ export async function adminListRecentlyClosedCampaigns(_request: Request, respon
 
 export async function adminApproveCampaign(request: Request, response: Response): Promise<void> {
   const adminId = requireUserId(request);
-  response.json({ campaign: await communityCampaignsService.approve(adminId, requireIdParam(request)) });
+  const id = requireIdParam(request);
+  const campaign = await communityCampaignsService.approve(adminId, id);
+  await recordAudit({ actorId: adminId, action: "community_campaign.approve", entityType: "CommunityCampaign", entityId: id });
+  response.json({ campaign });
 }
 
 export async function adminRequestCampaignChanges(request: Request, response: Response): Promise<void> {
   const adminId = requireUserId(request);
   const notes = request.body?.notes;
   if (typeof notes !== "string" || !notes.trim()) throw new AppError("notes is required", 400);
-  response.json({ campaign: await communityCampaignsService.requestChanges(adminId, requireIdParam(request), notes) });
+  const id = requireIdParam(request);
+  const campaign = await communityCampaignsService.requestChanges(adminId, id, notes);
+  await recordAudit({ actorId: adminId, action: "community_campaign.request_changes", entityType: "CommunityCampaign", entityId: id, metadata: { notes } });
+  response.json({ campaign });
 }
 
 export async function adminRejectCampaign(request: Request, response: Response): Promise<void> {
   const adminId = requireUserId(request);
-  response.json({ campaign: await communityCampaignsService.reject(adminId, requireIdParam(request), request.body?.notes) });
+  const id = requireIdParam(request);
+  const campaign = await communityCampaignsService.reject(adminId, id, request.body?.notes);
+  await recordAudit({ actorId: adminId, action: "community_campaign.reject", entityType: "CommunityCampaign", entityId: id, metadata: { notes: request.body?.notes } });
+  response.json({ campaign });
 }
 
 export async function adminPauseCampaign(request: Request, response: Response): Promise<void> {
   const adminId = requireUserId(request);
-  response.json({ campaign: await communityCampaignsService.pause(adminId, requireIdParam(request)) });
+  const id = requireIdParam(request);
+  const campaign = await communityCampaignsService.pause(adminId, id);
+  await recordAudit({ actorId: adminId, action: "community_campaign.pause", entityType: "CommunityCampaign", entityId: id });
+  response.json({ campaign });
 }
 
 export async function adminResumeCampaign(request: Request, response: Response): Promise<void> {
   const adminId = requireUserId(request);
-  response.json({ campaign: await communityCampaignsService.resume(adminId, requireIdParam(request)) });
+  const id = requireIdParam(request);
+  const campaign = await communityCampaignsService.resume(adminId, id);
+  await recordAudit({ actorId: adminId, action: "community_campaign.resume", entityType: "CommunityCampaign", entityId: id });
+  response.json({ campaign });
 }
 
 export async function adminListPendingOrganisers(_request: Request, response: Response): Promise<void> {
@@ -202,7 +287,11 @@ export async function adminListPendingOrganisers(_request: Request, response: Re
 }
 
 export async function adminVerifyOrganiser(request: Request, response: Response): Promise<void> {
-  response.json({ profile: await organiserSupplierService.verifyOrganiser(requireIdParam(request)) });
+  const adminId = requireUserId(request);
+  const id = requireIdParam(request);
+  const profile = await organiserSupplierService.verifyOrganiser(id);
+  await recordAudit({ actorId: adminId, action: "community_organiser.verify", entityType: "CommunityOrganiserProfile", entityId: id });
+  response.json({ profile });
 }
 
 export async function adminListPendingSuppliers(_request: Request, response: Response): Promise<void> {
@@ -210,11 +299,57 @@ export async function adminListPendingSuppliers(_request: Request, response: Res
 }
 
 export async function adminVerifySupplier(request: Request, response: Response): Promise<void> {
-  response.json({ profile: await organiserSupplierService.verifySupplier(requireIdParam(request)) });
+  const adminId = requireUserId(request);
+  const id = requireIdParam(request);
+  const profile = await organiserSupplierService.verifySupplier(id);
+  await recordAudit({ actorId: adminId, action: "community_supplier.verify", entityType: "CommunitySupplierProfile", entityId: id });
+  response.json({ profile });
 }
 
 export async function adminListRefunds(_request: Request, response: Response): Promise<void> {
   response.json({ items: await campaignContributionsService.listRefundsForAdmin() });
+}
+
+export async function adminListExtensionRequests(_request: Request, response: Response): Promise<void> {
+  response.json({ items: await communityCampaignsService.listExtensionRequestsForAdmin() });
+}
+
+export async function adminApproveExtension(request: Request, response: Response): Promise<void> {
+  const adminId = requireUserId(request);
+  const id = requireIdParam(request);
+  const extensionRequest = await communityCampaignsService.approveExtension(adminId, id);
+  await recordAudit({ actorId: adminId, action: "community_campaign_extension.approve", entityType: "CampaignExtensionRequest", entityId: id });
+  response.json({ extensionRequest });
+}
+
+export async function adminRejectExtension(request: Request, response: Response): Promise<void> {
+  const adminId = requireUserId(request);
+  const id = requireIdParam(request);
+  const extensionRequest = await communityCampaignsService.rejectExtension(adminId, id, request.body?.notes);
+  await recordAudit({ actorId: adminId, action: "community_campaign_extension.reject", entityType: "CampaignExtensionRequest", entityId: id, metadata: { notes: request.body?.notes } });
+  response.json({ extensionRequest });
+}
+
+export async function adminListSupplierPayments(_request: Request, response: Response): Promise<void> {
+  response.json({ items: await campaignContributionsService.listSupplierPaymentsForAdmin() });
+}
+
+export async function adminReleaseSupplierPayment(request: Request, response: Response): Promise<void> {
+  const adminId = requireUserId(request);
+  const id = requireIdParam(request);
+  const payment = await campaignContributionsService.releaseSupplierPayment(adminId, id);
+  await recordAudit({ actorId: adminId, action: "community_supplier_payment.release", entityType: "CampaignSupplierPayment", entityId: id });
+  response.json({ payment });
+}
+
+export async function adminHoldSupplierPayment(request: Request, response: Response): Promise<void> {
+  const adminId = requireUserId(request);
+  const reason = request.body?.reason;
+  if (typeof reason !== "string" || !reason.trim()) throw new AppError("reason is required", 400);
+  const id = requireIdParam(request);
+  const payment = await campaignContributionsService.holdSupplierPayment(adminId, id, reason);
+  await recordAudit({ actorId: adminId, action: "community_supplier_payment.hold", entityType: "CampaignSupplierPayment", entityId: id, metadata: { reason } });
+  response.json({ payment });
 }
 
 export async function adminListMarketConfigurations(_request: Request, response: Response): Promise<void> {
@@ -222,7 +357,9 @@ export async function adminListMarketConfigurations(_request: Request, response:
 }
 
 export async function adminUpdateMarketConfiguration(request: Request, response: Response): Promise<void> {
+  const adminId = requireUserId(request);
   const countryCode = requireIdParam(request);
   const config = await marketConfigurationService.update(countryCode, request.body);
+  await recordAudit({ actorId: adminId, action: "community_market_config.update", entityType: "MarketConfiguration", entityId: countryCode, metadata: request.body });
   response.json({ config });
 }

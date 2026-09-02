@@ -6,22 +6,26 @@ import {
   applyAsOrganiser,
   applyAsSupplier,
   confirmContributionPayment,
-  cancelFailedCampaign,
+  confirmSupplierCommitment,
   createContribution,
   createOrganiserCampaign,
-  fulfilCampaignAnyway,
+  createOrganiserTopUp,
+  endCampaignRescue,
   getCampaign,
   getContribution,
   getMyOrganiserProfile,
   getMySupplierProfile,
   getPublicMarketConfig,
   joinCampaign,
+  legacyCancelFailedCampaignShim,
+  legacyFulfilCampaignAnywayShim,
   listCampaigns,
   listMyOrganiserCampaigns,
   listMySupplierCampaigns,
   listPublicMarketConfigs,
   listVerifiedSuppliers,
   publishOrganiserCampaign,
+  requestCampaignExtension,
   submitOrganiserCampaign,
   updateOrganiserCampaign,
 } from "./community-buy.controller";
@@ -51,11 +55,19 @@ organiserRouter.post("/campaigns", asyncHandler(createOrganiserCampaign));
 organiserRouter.patch("/campaigns/:id", asyncHandler(updateOrganiserCampaign));
 organiserRouter.post("/campaigns/:id/submit", asyncHandler(submitOrganiserCampaign));
 organiserRouter.post("/campaigns/:id/publish", asyncHandler(publishOrganiserCampaign));
-// Post-failure decision — see community-campaigns.service.ts for why no
-// financial action is taken by fulfil-anyway (client hasn't confirmed the
-// charging behavior); cancel reuses the existing, already-built refund path.
-organiserRouter.post("/campaigns/:id/fulfil-anyway", asyncHandler(fulfilCampaignAnyway));
-organiserRouter.post("/campaigns/:id/cancel", asyncHandler(cancelFailedCampaign));
+// Rescue-window actions — doc §8. "Fulfil anyway below minimum" does not
+// exist; the only paths out of RESCUE_WINDOW are a real top-up purchase,
+// inviting more participants (no endpoint — just sharing), a single
+// admin-approved extension, or ending the campaign into refunds.
+organiserRouter.post("/campaigns/:id/rescue/top-up", asyncHandler(createOrganiserTopUp));
+organiserRouter.post("/campaigns/:id/rescue/extension-request", asyncHandler(requestCampaignExtension));
+organiserRouter.post("/campaigns/:id/rescue/end", asyncHandler(endCampaignRescue));
+
+// TEMPORARY compatibility shim for the currently-deployed mobile app — see
+// the long comment in community-buy.controller.ts. Remove once the new
+// mobile UI is live and legacy usage has dropped to zero in production.
+organiserRouter.post("/campaigns/:id/fulfil-anyway", asyncHandler(legacyFulfilCampaignAnywayShim));
+organiserRouter.post("/campaigns/:id/cancel", asyncHandler(legacyCancelFailedCampaignShim));
 
 // Supplier — mounted at /supplier. Only a verified vendor may apply.
 export const supplierRouter = Router();
@@ -63,3 +75,4 @@ supplierRouter.use(authenticate, requireRole("VENDOR"));
 supplierRouter.get("/profile", asyncHandler(getMySupplierProfile));
 supplierRouter.post("/applications", asyncHandler(applyAsSupplier));
 supplierRouter.get("/campaigns", asyncHandler(listMySupplierCampaigns));
+supplierRouter.post("/campaigns/:id/supplier-commitment", asyncHandler(confirmSupplierCommitment));

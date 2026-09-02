@@ -11,9 +11,15 @@ export interface CreateCampaignInput {
   description?: string;
   country: string;
   currency: string;
-  targetAmount: number;
+  minimumShares: number;
+  goalShares: number;
+  maximumShares: number;
+  pricePerShareMinor: number;
   deadline: string;
+  rescueDurationMinutes?: number;
 }
+
+const MAX_EXTENSIONS = 1;
 
 async function notifyCampaign(userId: string, event: string, title: string, body: string, campaignId: string) {
   await notificationsService.enqueue({
@@ -40,7 +46,20 @@ export const communityCampaignsService = {
       // cross-border organiser/supplier pairing in this version.
       throw new AppError("Supplier must be based in the same market as the campaign", 400);
     }
-    if (input.targetAmount <= 0) throw new AppError("Target amount must be positive", 400);
+
+    // Flexible-fulfilment quantity model validation — doc §5.
+    if (!Number.isInteger(input.minimumShares) || input.minimumShares < 1) {
+      throw new AppError("Minimum shares must be at least 1", 400);
+    }
+    if (!Number.isInteger(input.goalShares) || input.goalShares < input.minimumShares) {
+      throw new AppError("Campaign goal must be at least the minimum shares", 400);
+    }
+    if (!Number.isInteger(input.maximumShares) || input.maximumShares < input.goalShares) {
+      throw new AppError("Maximum capacity must be at least the campaign goal", 400);
+    }
+    if (!Number.isInteger(input.pricePerShareMinor) || input.pricePerShareMinor <= 0) {
+      throw new AppError("Price per share must be positive", 400);
+    }
     const deadline = new Date(input.deadline);
     if (Number.isNaN(deadline.getTime()) || deadline <= new Date()) {
       throw new AppError("Deadline must be a valid future date", 400);
@@ -54,7 +73,14 @@ export const communityCampaignsService = {
         description: input.description,
         country: input.country,
         currency: input.currency,
-        targetAmount: input.targetAmount,
+        // targetAmount kept in sync with goalShares × price for anything
+        // still reading the amount-based field during the UI migration.
+        targetAmount: input.goalShares * input.pricePerShareMinor,
+        minimumShares: input.minimumShares,
+        goalShares: input.goalShares,
+        maximumShares: input.maximumShares,
+        pricePerShareMinor: input.pricePerShareMinor,
+        rescueDurationMinutes: input.rescueDurationMinutes ?? 2880,
         deadline,
         status: "DRAFT",
       },
@@ -63,19 +89,45 @@ export const communityCampaignsService = {
 
   async update(userId: string, campaignId: string, input: Partial<CreateCampaignInput>) {
     const campaign = await this.requireOwnedByOrganiser(userId, campaignId);
-    // spec §8.10: an organiser cannot edit financial terms after
-    // contributions begin.
+    // spec §8.10 / doc §Screen 102: an organiser cannot edit financial
+    // terms after contributions begin — termsLockedAt is set on the first
+    // confirmed contribution (see campaign-contributions.service.ts).
     if (campaign.status !== "DRAFT" && campaign.status !== "CHANGES_REQUIRED") {
       throw new AppError("This campaign can no longer be edited", 409);
+    }
+    if (campaign.termsLockedAt) {
+      throw new AppError("This campaign's terms are locked after the first confirmed contribution", 409);
     }
     return prisma.communityCampaign.update({
       where: { id: campaignId },
       data: {
         ...(input.title !== undefined && { title: input.title }),
         ...(input.description !== undefined && { description: input.description }),
-        ...(input.targetAmount !== undefined && { targetAmount: input.targetAmount }),
+        ...(input.minimumShares !== undefined && { minimumShares: input.minimumShares }),
+        ...(input.goalShares !== undefined && { goalShares: input.goalShares }),
+        ...(input.maximumShares !== undefined && { maximumShares: input.maximumShares }),
+        ...(input.pricePerShareMinor !== undefined && {
+          pricePerShareMinor: input.pricePerShareMinor,
+          targetAmount: (input.goalShares ?? campaign.goalShares ?? 0) * input.pricePerShareMinor,
+        }),
         ...(input.deadline !== undefined && { deadline: new Date(input.deadline) }),
       },
+    });
+  },
+
+  /** Supplier-side commitment — doc screens 115-117. Required before the organiser can submit for admin review. */
+  async confirmSupplierCommitment(vendorId: string, campaignId: string) {
+    const supplier = await prisma.supplierProfile.findUnique({ where: { vendorId } });
+    const campaign = await prisma.communityCampaign.findUnique({ where: { id: campaignId } });
+    if (!campaign || !supplier || campaign.supplierId !== supplier.id) {
+      throw new AppError("Campaign not found", 404);
+    }
+    if (campaign.status !== "DRAFT" && campaign.status !== "CHANGES_REQUIRED") {
+      throw new AppError("This campaign is not awaiting supplier commitment", 409);
+    }
+    return prisma.communityCampaign.update({
+      where: { id: campaignId },
+      data: { supplierCommitted: true, supplierCommittedAt: new Date() },
     });
   },
 
@@ -83,6 +135,9 @@ export const communityCampaignsService = {
     const campaign = await this.requireOwnedByOrganiser(userId, campaignId);
     if (campaign.status !== "DRAFT" && campaign.status !== "CHANGES_REQUIRED") {
       throw new AppError("Only a draft campaign can be submitted for review", 409);
+    }
+    if (!campaign.supplierCommitted) {
+      throw new AppError("The supplier must accept this campaign before it can be submitted for review", 409);
     }
     return prisma.communityCampaign.update({ where: { id: campaignId }, data: { status: "UNDER_REVIEW" } });
   },
@@ -217,117 +272,241 @@ export const communityCampaignsService = {
       where: { id: campaignId },
       include: {
         supplier: { include: { vendor: { select: { storeName: true } } } },
-        contributions: { where: { status: "PAID" }, select: { amount: true } },
+        contributions: { where: { status: "PAID" }, select: { amount: true, quantity: true } },
         _count: { select: { participants: true } },
       },
     });
     if (!campaign) throw new AppError("Campaign not found", 404);
     const paidTotal = campaign.contributions.reduce((sum, c) => sum + c.amount, 0);
-    const progressPct = campaign.targetAmount > 0 ? Math.min(100, Math.round((paidTotal / campaign.targetAmount) * 100)) : 0;
+    // confirmedShares is the authoritative, atomically-maintained count
+    // (see campaign-contributions.service.ts) — this is only a display
+    // cross-check, never used to decide success/failure.
+    const goal = campaign.goalShares ?? 0;
+    const progressPct = goal > 0 ? Math.min(100, Math.round((campaign.confirmedShares / goal) * 100)) : 0;
     return { ...campaign, paidTotal, progressPct, participantCount: campaign._count.participants };
   },
 
-  // ─── Closing workflow — spec §8.7/§8.8/§8.9 ────────────────────────────
+  // ─── Closing workflow — doc §7 Deadline Evaluation ─────────────────────
   // Financial success/failure is always decided here, server-side, from
-  // reconciled PAID contribution totals — never from the progress bar or
-  // a client-reported state, per spec §22 Definition of Done.
+  // the authoritative confirmedShares counter — never from the progress
+  // bar or a client-reported state.
+  //
+  //   confirmed >= goal      -> GOAL_REACHED, proceed (FULFILLING)
+  //   confirmed >= minimum   -> MINIMUM_REACHED, proceed (FULFILLING)
+  //   confirmed <  minimum   -> RESCUE_WINDOW opens, no supplier order yet
 
-  async closeDueCampaigns(): Promise<{ closed: number; succeeded: number; failed: number }> {
+  async closeDueCampaigns(): Promise<{ closed: number; succeeded: number; failed: number; rescued: number }> {
     const due = await prisma.communityCampaign.findMany({
       where: { status: "LIVE", deadline: { lte: new Date() } },
-      include: { contributions: { where: { status: "PAID" }, select: { amount: true } } },
     });
 
     let succeeded = 0;
     let failed = 0;
+    let rescued = 0;
     for (const campaign of due) {
-      const paidTotal = campaign.contributions.reduce((sum, c) => sum + c.amount, 0);
-      const wasSuccessful = paidTotal >= campaign.targetAmount;
+      const minimum = campaign.minimumShares ?? 0;
+      const goal = campaign.goalShares ?? 0;
 
-      await prisma.communityCampaign.update({
-        where: { id: campaign.id },
-        data: {
-          status: wasSuccessful ? "SUCCEEDED" : "FAILED",
-          paidTotal,
-          closedAt: new Date(),
-        },
-      });
-
-      if (wasSuccessful) {
+      if (campaign.confirmedShares >= minimum) {
+        const outcome = campaign.confirmedShares >= goal ? "GOAL_REACHED" : "MINIMUM_REACHED";
+        await prisma.communityCampaign.update({
+          where: { id: campaign.id },
+          data: { status: "FULFILLING", fundingOutcome: outcome, closedAt: new Date() },
+        });
         succeeded++;
         await this.notifyOutcome(campaign.id, "succeeded");
+        await this.createSupplierOrder(campaign);
       } else {
-        failed++;
-        await this.notifyOutcome(campaign.id, "failed");
-        // No automatic refund here. The client hasn't confirmed what
-        // "Fulfil Anyway" means financially, so a missed-target campaign
-        // now waits for an explicit organiser decision (fulfilAnyway() /
-        // cancelAfterFailure()) instead of assuming cancellation and
-        // refunding unilaterally. Refund records are only ever created
-        // from cancelAfterFailure(), once the organiser has actually
-        // chosen to cancel.
+        rescued++;
+        const rescueEndsAt = new Date(Date.now() + (campaign.rescueDurationMinutes ?? 2880) * 60 * 1000);
+        await prisma.communityCampaign.update({
+          where: { id: campaign.id },
+          data: { status: "RESCUE_WINDOW", rescueEndsAt },
+        });
+        await this.notifyRescueOpened(campaign.id, rescueEndsAt);
       }
     }
-    return { closed: due.length, succeeded, failed };
+    return { closed: due.length, succeeded, failed, rescued };
   },
 
-  // ─── Post-failure organiser decision ───────────────────────────────────
-  // A campaign that misses its target stops at FAILED and waits here. The
-  // organiser is the only one who can move it forward, and only in the two
-  // directions the client has actually confirmed exist: fulfil the order
-  // anyway (no financial action taken — the client hasn't decided what
-  // charging looks like under a missed-target fulfilment), or cancel and
-  // refund (reuses the exact same refund path that already existed).
+  /** One supplier order per campaign, using the actual final confirmedShares — never the goal — doc §11. */
+  async createSupplierOrder(campaign: { id: string; supplierId: string; title: string; currency: string; confirmedShares: number; pricePerShareMinor: number | null }): Promise<void> {
+    if (!campaign.pricePerShareMinor) return;
+    const existing = await prisma.campaignSupplierPayment.findUnique({ where: { campaignId: campaign.id } });
+    if (existing) return; // idempotent — never create a second supplier order/payment record.
 
-  async fulfilAnyway(userId: string, campaignId: string) {
-    const campaign = await this.requireOwnedByOrganiser(userId, campaignId);
-    if (campaign.status !== "FAILED") throw new AppError("Only a campaign that missed its target can be fulfilled anyway", 409);
-    const updated = await prisma.communityCampaign.update({ where: { id: campaignId }, data: { status: "FULFILLING" } });
-    // userId here is already the organiser's real User.id (validated by
-    // requireOwnedByOrganiser above) — campaign.organiserId is the
-    // OrganiserProfile FK, not a user, and must never be passed to a
-    // notification call expecting a User.id.
-    await notifyCampaign(
-      userId,
-      "fulfilling",
-      "Campaign proceeding",
-      `${campaign.title} didn't reach its target, but the organiser has chosen to proceed. No payment action has been taken — further details will follow.`,
-      campaignId,
-    );
-    const participants = await prisma.campaignParticipant.findMany({ where: { campaignId }, select: { userId: true } });
-    for (const p of participants) {
-      await notifyCampaign(
-        p.userId,
-        "fulfilling",
-        "Campaign proceeding",
-        `${campaign.title} didn't reach its target, but the organiser has chosen to proceed. No payment action has been taken — further details will follow.`,
-        campaignId,
-      );
+    const supplier = await prisma.supplierProfile.findUnique({ where: { id: campaign.supplierId }, include: { vendor: true } });
+    const amount = campaign.confirmedShares * campaign.pricePerShareMinor;
+    await prisma.campaignSupplierPayment.create({
+      data: {
+        campaignId: campaign.id,
+        amount,
+        currency: campaign.currency,
+        status: "NOT_RELEASED",
+        payoutStripeAccountIdAtApproval: supplier?.vendor.stripeAccountId ?? null,
+      },
+    });
+    if (supplier) {
+      await notifyCampaign(supplier.vendor.userId, "supplier_order_created", "Campaign order confirmed", `${campaign.title} reached its funding requirement. Final quantity: ${campaign.confirmedShares}.`, campaign.id);
     }
-    return updated;
   },
 
-  async cancelAfterFailure(userId: string, campaignId: string) {
-    const campaign = await this.requireOwnedByOrganiser(userId, campaignId);
-    if (campaign.status !== "FAILED") throw new AppError("Only a campaign that missed its target can be cancelled this way", 409);
-    const updated = await prisma.communityCampaign.update({ where: { id: campaignId }, data: { status: "CANCELLED" } });
-    await this.createRefundRecordsForFailedCampaign(campaignId);
+  async notifyRescueOpened(campaignId: string, rescueEndsAt: Date): Promise<void> {
+    const campaign = await prisma.communityCampaign.findUnique({
+      where: { id: campaignId },
+      include: { organiser: true, participants: true },
+    });
+    if (!campaign) return;
+    const remaining = Math.max(0, (campaign.minimumShares ?? 0) - campaign.confirmedShares);
+    const body = `${campaign.title} needs ${remaining} more share(s) to proceed. The organiser has until ${rescueEndsAt.toISOString()} to act.`;
+    await notifyCampaign(campaign.organiser.userId, "rescue_opened", "Campaign needs more participants", body, campaignId);
+    for (const p of campaign.participants) {
+      await notifyCampaign(p.userId, "rescue_opened", "Campaign needs more participants", body, campaignId);
+    }
+  },
 
-    await notifyCampaign(userId, "cancelled", "Campaign cancelled", `${campaign.title} has been cancelled. Refunds are being processed for anyone who contributed.`, campaignId);
+  // ─── Rescue-window actions — doc §8 ─────────────────────────────────────
+  // "Fulfil anyway below the supplier-approved minimum" is explicitly
+  // forbidden by the spec. The only ways out of RESCUE_WINDOW are: an
+  // organiser top-up purchase (campaign-contributions.service.ts —
+  // ordinary paid checkout, re-evaluated atomically on confirmation),
+  // inviting more participants (no server action needed), one
+  // admin-approved extension, or ending the campaign into refunds.
+
+  /** Evaluates campaigns whose rescue window has expired — run from the cron sweep alongside closeDueCampaigns(). */
+  async evaluateRescueExpiry(): Promise<{ rescued: number; failed: number }> {
+    const expired = await prisma.communityCampaign.findMany({
+      where: { status: "RESCUE_WINDOW", rescueEndsAt: { lte: new Date() } },
+    });
+    let rescued = 0;
+    let failed = 0;
+    for (const campaign of expired) {
+      const minimum = campaign.minimumShares ?? 0;
+      const goal = campaign.goalShares ?? 0;
+      if (campaign.confirmedShares >= minimum) {
+        // A top-up or a newly confirmed participant pushed this over the
+        // line before the window closed — proceed exactly like a normal
+        // on-time success.
+        const outcome = campaign.confirmedShares >= goal ? "GOAL_REACHED" : "MINIMUM_REACHED";
+        await prisma.communityCampaign.update({
+          where: { id: campaign.id },
+          data: { status: "FULFILLING", fundingOutcome: outcome },
+        });
+        rescued++;
+        await this.notifyOutcome(campaign.id, "succeeded");
+        await this.createSupplierOrder(campaign);
+      } else {
+        await prisma.communityCampaign.update({
+          where: { id: campaign.id },
+          data: { status: "FAILED", fundingOutcome: "BELOW_MINIMUM", closedAt: new Date() },
+        });
+        failed++;
+        await this.notifyOutcome(campaign.id, "failed");
+        await this.createRefundRecordsForFailedCampaign(campaign.id);
+      }
+    }
+    return { rescued, failed };
+  },
+
+  /** Organiser ends the campaign during its rescue window instead of waiting it out — doc Screen 105. */
+  async endRescueAndRefund(userId: string, campaignId: string) {
+    const campaign = await this.requireOwnedByOrganiser(userId, campaignId);
+    if (campaign.status !== "RESCUE_WINDOW") {
+      throw new AppError("Only a campaign in its rescue window can be ended this way", 409);
+    }
+    const updated = await prisma.communityCampaign.update({
+      where: { id: campaignId },
+      data: { status: "FAILED", fundingOutcome: "BELOW_MINIMUM", closedAt: new Date() },
+    });
+    await this.createRefundRecordsForFailedCampaign(campaignId);
+    await notifyCampaign(userId, "cancelled", "Campaign ended", `${campaign.title} has been ended. Refunds are being processed for anyone who contributed.`, campaignId);
     const participants = await prisma.campaignParticipant.findMany({ where: { campaignId }, select: { userId: true } });
     for (const p of participants) {
-      await notifyCampaign(p.userId, "cancelled", "Campaign cancelled", `${campaign.title} has been cancelled. Any contribution you made will be refunded.`, campaignId);
+      await notifyCampaign(p.userId, "cancelled", "Campaign ended", `${campaign.title} has ended. Any contribution you made will be refunded.`, campaignId);
       await automationService.scheduleAutomation({
         type: "CAMPAIGN_REFUND_UPDATE",
         recipientUserId: p.userId,
         subjectKey: `${campaignId}:cancelled`,
         requiresMarketingConsent: false,
-        title: "Campaign cancelled",
-        body: `${campaign.title} has been cancelled. Your refund is being processed.`,
+        title: "Campaign ended",
+        body: `${campaign.title} has ended. Your refund is being processed.`,
         data: { campaign_title: campaign.title, refund_status: "processing" },
       });
     }
     return updated;
+  },
+
+  /** Doc Screen 108 — one extension maximum, admin-approved, requires supplier reconfirmation. */
+  async requestExtension(
+    userId: string,
+    campaignId: string,
+    input: { requestedDeadline: string; reason: string; supplierReconfirmed: boolean; priceUnchangedConfirmed: boolean; participantTermsUnchanged: boolean },
+  ) {
+    const campaign = await this.requireOwnedByOrganiser(userId, campaignId);
+    if (campaign.status !== "RESCUE_WINDOW") {
+      throw new AppError("An extension can only be requested while a campaign is in its rescue window", 409);
+    }
+    if (campaign.extensionCount >= MAX_EXTENSIONS) {
+      throw new AppError("This campaign has already used its permitted extension", 409);
+    }
+    const requestedDeadline = new Date(input.requestedDeadline);
+    if (Number.isNaN(requestedDeadline.getTime()) || requestedDeadline <= new Date()) {
+      throw new AppError("Requested deadline must be a valid future date", 400);
+    }
+    return prisma.campaignExtensionRequest.create({
+      data: {
+        campaignId,
+        requestedDeadline,
+        reason: input.reason,
+        supplierReconfirmed: input.supplierReconfirmed,
+        priceUnchangedConfirmed: input.priceUnchangedConfirmed,
+        participantTermsUnchanged: input.participantTermsUnchanged,
+        status: "PENDING",
+      },
+    });
+  },
+
+  async approveExtension(adminId: string, requestId: string) {
+    const request = await prisma.campaignExtensionRequest.findUnique({ where: { id: requestId }, include: { campaign: { include: { organiser: true, participants: true } } } });
+    if (!request) throw new AppError("Extension request not found", 404);
+    if (request.status !== "PENDING") throw new AppError("This extension request has already been decided", 409);
+    if (request.campaign.extensionCount >= MAX_EXTENSIONS) throw new AppError("This campaign has already used its permitted extension", 409);
+    if (!request.supplierReconfirmed || !request.priceUnchangedConfirmed) {
+      throw new AppError("Supplier reconfirmation and price-unchanged confirmation are required before approval", 400);
+    }
+
+    await prisma.$transaction([
+      prisma.campaignExtensionRequest.update({ where: { id: requestId }, data: { status: "APPROVED", reviewedById: adminId, reviewedAt: new Date() } }),
+      prisma.communityCampaign.update({
+        where: { id: request.campaignId },
+        data: { status: "LIVE", deadline: request.requestedDeadline, rescueEndsAt: null, extensionCount: { increment: 1 } },
+      }),
+    ]);
+
+    const body = `${request.campaign.title}'s deadline has been extended to ${request.requestedDeadline.toISOString()}.`;
+    await notifyCampaign(request.campaign.organiser.userId, "extension_approved", "Campaign extended", body, request.campaignId);
+    for (const p of request.campaign.participants) {
+      await notifyCampaign(p.userId, "extension_approved", "Campaign extended", body, request.campaignId);
+    }
+    return prisma.campaignExtensionRequest.findUnique({ where: { id: requestId } });
+  },
+
+  async rejectExtension(adminId: string, requestId: string, notes?: string) {
+    const request = await prisma.campaignExtensionRequest.findUnique({ where: { id: requestId } });
+    if (!request) throw new AppError("Extension request not found", 404);
+    if (request.status !== "PENDING") throw new AppError("This extension request has already been decided", 409);
+    return prisma.campaignExtensionRequest.update({
+      where: { id: requestId },
+      data: { status: "REJECTED", reviewedById: adminId, reviewedAt: new Date(), reviewNotes: notes },
+    });
+  },
+
+  async listExtensionRequestsForAdmin() {
+    return prisma.campaignExtensionRequest.findMany({
+      where: { status: "PENDING" },
+      include: { campaign: { select: { id: true, title: true, confirmedShares: true, minimumShares: true } } },
+      orderBy: { createdAt: "asc" },
+    });
   },
 
   async createRefundRecordsForFailedCampaign(campaignId: string): Promise<number> {

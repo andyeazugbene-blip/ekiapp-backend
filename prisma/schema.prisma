@@ -1396,6 +1396,9 @@ model VendorAutomationSetting {
   vendorId  String
   type      AutomationType
   enabled   Boolean        @default(true)
+  // Per-type tunables (e.g. { reminderHours: 24 } for CART_RECOVERY,
+  // { inactivityDays: 60 } for BUYER_WIN_BACK). Absent/null = defaults.
+  config    Json?
   vendor    Vendor         @relation(fields: [vendorId], references: [id], onDelete: Cascade)
   createdAt DateTime       @default(now())
   updatedAt DateTime       @updatedAt
@@ -1684,6 +1687,7 @@ enum CampaignStatus {
   LIVE
   PAUSED
   CLOSING
+  RESCUE_WINDOW
   SUCCEEDED
   FAILED
   REFUNDING
@@ -1746,10 +1750,29 @@ model CommunityCampaign {
   publishedAt   DateTime?
   closedAt      DateTime?
   paidTotal     Int                    @default(0)
+  // Flexible-fulfilment quantity model (minimum/goal/maximum shares) —
+  // added alongside the original amount-based targetAmount rather than
+  // replacing it, since existing reads of targetAmount (admin list views)
+  // still work during the UI migration; all NEW campaign creation and
+  // state-machine logic treats these as authoritative.
+  minimumShares            Int?
+  goalShares                Int?
+  maximumShares             Int?
+  pricePerShareMinor        Int?
+  confirmedShares           Int              @default(0)
+  fundingOutcome            FundingOutcome   @default(PENDING)
+  supplierCommitted         Boolean          @default(false)
+  supplierCommittedAt       DateTime?
+  rescueDurationMinutes     Int              @default(2880)
+  rescueEndsAt              DateTime?
+  extensionCount            Int              @default(0)
+  termsLockedAt             DateTime?
   organiser     OrganiserProfile       @relation(fields: [organiserId], references: [id], onDelete: Restrict)
   supplier      SupplierProfile        @relation(fields: [supplierId], references: [id], onDelete: Restrict)
   participants  CampaignParticipant[]
   contributions CampaignContribution[]
+  extensionRequests CampaignExtensionRequest[]
+  supplierPayment   CampaignSupplierPayment?
   createdAt     DateTime               @default(now())
   updatedAt     DateTime               @updatedAt
 
@@ -1757,6 +1780,64 @@ model CommunityCampaign {
   @@index([organiserId])
   @@index([supplierId])
   @@index([deadline])
+  @@index([rescueEndsAt])
+}
+
+enum FundingOutcome {
+  PENDING
+  GOAL_REACHED
+  MINIMUM_REACHED
+  BELOW_MINIMUM
+}
+
+enum ExtensionRequestStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+model CampaignExtensionRequest {
+  id                        String                  @id @default(cuid())
+  campaignId                String
+  requestedDeadline         DateTime
+  reason                    String
+  supplierReconfirmed       Boolean                 @default(false)
+  priceUnchangedConfirmed   Boolean                 @default(false)
+  participantTermsUnchanged Boolean                 @default(false)
+  status                    ExtensionRequestStatus  @default(PENDING)
+  reviewedById              String?
+  reviewedAt                DateTime?
+  reviewNotes               String?
+  campaign                  CommunityCampaign       @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  createdAt                 DateTime                @default(now())
+  updatedAt                 DateTime                @updatedAt
+
+  @@index([campaignId, status])
+}
+
+enum SupplierPaymentStatus {
+  NOT_RELEASED
+  PROCESSING
+  PAID
+  ON_HOLD
+  FAILED
+}
+
+model CampaignSupplierPayment {
+  id                       String                 @id @default(cuid())
+  campaignId               String                 @unique
+  amount                   Int
+  currency                 String
+  status                   SupplierPaymentStatus  @default(NOT_RELEASED)
+  payoutStripeAccountIdAtApproval String?
+  holdReason               String?
+  releasedById             String?
+  releasedAt               DateTime?
+  campaign                 CommunityCampaign      @relation(fields: [campaignId], references: [id], onDelete: Restrict)
+  createdAt                DateTime               @default(now())
+  updatedAt                DateTime               @updatedAt
+
+  @@index([status])
 }
 
 model CampaignParticipant {
@@ -1778,6 +1859,8 @@ model CampaignContribution {
   participantId         String
   amount                Int
   currency              String
+  quantity              Int                 @default(1)
+  isOrganiserTopUp      Boolean             @default(false)
   status                ContributionStatus  @default(INITIATED)
   stripePaymentIntentId String?
   campaign              CommunityCampaign   @relation(fields: [campaignId], references: [id], onDelete: Restrict)
