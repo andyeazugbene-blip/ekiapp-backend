@@ -7,6 +7,15 @@
 -- and dropping one confirmed-orphaned enum (GiftCardStatus — no column in
 -- this database uses it, and schema.prisma no longer references it).
 --
+-- 2026-09-02 correction: the first real production deploy attempt (P3018)
+-- proved SellerPlan.customerDatabase already existed in production even
+-- though it was absent from the local DB this migration was diffed
+-- against — i.e. production's actual drift was never fully knowable from
+-- here. Every statement below is now written IF (NOT) EXISTS so this
+-- migration converges production to the same end state regardless of
+-- exactly which of these changes a prior manual/out-of-band change already
+-- made — it was never safe to assume the local diff was complete.
+--
 -- AlterTable
 ALTER TABLE "BuyerWallet" ALTER COLUMN "currency" SET DEFAULT 'EUR';
 
@@ -42,19 +51,19 @@ ALTER TABLE "Product" ALTER COLUMN "currency" SET DEFAULT 'EUR';
 ALTER TABLE "Referral" ALTER COLUMN "currency" SET DEFAULT 'EUR';
 
 -- AlterTable
-ALTER TABLE "SellerPlan" ADD COLUMN     "customerDatabase" BOOLEAN NOT NULL DEFAULT false,
-ADD COLUMN     "maxBundles" INTEGER,
-ADD COLUMN     "maxCoupons" INTEGER,
-ADD COLUMN     "orderManagement" BOOLEAN NOT NULL DEFAULT true,
-ADD COLUMN     "professionalStorefront" BOOLEAN NOT NULL DEFAULT false,
-ADD COLUMN     "repeatBuyerMarketing" BOOLEAN NOT NULL DEFAULT false,
-ADD COLUMN     "storeLinkSharing" BOOLEAN NOT NULL DEFAULT false,
+ALTER TABLE "SellerPlan" ADD COLUMN IF NOT EXISTS "customerDatabase" BOOLEAN NOT NULL DEFAULT false,
+ADD COLUMN IF NOT EXISTS "maxBundles" INTEGER,
+ADD COLUMN IF NOT EXISTS "maxCoupons" INTEGER,
+ADD COLUMN IF NOT EXISTS "orderManagement" BOOLEAN NOT NULL DEFAULT true,
+ADD COLUMN IF NOT EXISTS "professionalStorefront" BOOLEAN NOT NULL DEFAULT false,
+ADD COLUMN IF NOT EXISTS "repeatBuyerMarketing" BOOLEAN NOT NULL DEFAULT false,
+ADD COLUMN IF NOT EXISTS "storeLinkSharing" BOOLEAN NOT NULL DEFAULT false,
 ALTER COLUMN "updatedAt" DROP DEFAULT;
 
 -- AlterTable
-ALTER TABLE "Vendor" ADD COLUMN     "stripeVerificationSessionId" TEXT,
-ADD COLUMN     "verificationFailureReason" TEXT,
-ADD COLUMN     "verifiedAt" TIMESTAMP(3);
+ALTER TABLE "Vendor" ADD COLUMN IF NOT EXISTS "stripeVerificationSessionId" TEXT,
+ADD COLUMN IF NOT EXISTS "verificationFailureReason" TEXT,
+ADD COLUMN IF NOT EXISTS "verifiedAt" TIMESTAMP(3);
 
 -- AlterTable
 ALTER TABLE "Wallet" ALTER COLUMN "currency" SET DEFAULT 'EUR';
@@ -63,10 +72,10 @@ ALTER TABLE "Wallet" ALTER COLUMN "currency" SET DEFAULT 'EUR';
 ALTER TABLE "WalletTransaction" ALTER COLUMN "currency" SET DEFAULT 'EUR';
 
 -- DropEnum
-DROP TYPE "GiftCardStatus";
+DROP TYPE IF EXISTS "GiftCardStatus";
 
 -- CreateTable
-CREATE TABLE "CommunicationLog" (
+CREATE TABLE IF NOT EXISTS "CommunicationLog" (
     "id" TEXT NOT NULL,
     "recipientId" TEXT NOT NULL,
     "recipientType" TEXT NOT NULL,
@@ -82,7 +91,7 @@ CREATE TABLE "CommunicationLog" (
 );
 
 -- CreateTable
-CREATE TABLE "CommunicationTemplate" (
+CREATE TABLE IF NOT EXISTS "CommunicationTemplate" (
     "id" TEXT NOT NULL,
     "key" TEXT NOT NULL,
     "title" TEXT NOT NULL,
@@ -97,7 +106,7 @@ CREATE TABLE "CommunicationTemplate" (
 );
 
 -- CreateTable
-CREATE TABLE "ScheduledCommunication" (
+CREATE TABLE IF NOT EXISTS "ScheduledCommunication" (
     "id" TEXT NOT NULL,
     "audience" TEXT NOT NULL,
     "channel" TEXT NOT NULL,
@@ -116,23 +125,23 @@ CREATE TABLE "ScheduledCommunication" (
 );
 
 -- CreateIndex
-CREATE INDEX "CommunicationLog_recipientId_idx" ON "CommunicationLog"("recipientId");
+CREATE INDEX IF NOT EXISTS "CommunicationLog_recipientId_idx" ON "CommunicationLog"("recipientId");
 
 -- CreateIndex
-CREATE INDEX "CommunicationLog_eventKey_idx" ON "CommunicationLog"("eventKey");
+CREATE INDEX IF NOT EXISTS "CommunicationLog_eventKey_idx" ON "CommunicationLog"("eventKey");
 
 -- CreateIndex
-CREATE INDEX "CommunicationLog_createdAt_idx" ON "CommunicationLog"("createdAt");
+CREATE INDEX IF NOT EXISTS "CommunicationLog_createdAt_idx" ON "CommunicationLog"("createdAt");
 
 -- CreateIndex
-CREATE INDEX "CommunicationLog_recipientType_createdAt_idx" ON "CommunicationLog"("recipientType", "createdAt");
+CREATE INDEX IF NOT EXISTS "CommunicationLog_recipientType_createdAt_idx" ON "CommunicationLog"("recipientType", "createdAt");
 
 -- CreateIndex
-CREATE UNIQUE INDEX "CommunicationTemplate_key_key" ON "CommunicationTemplate"("key");
+CREATE UNIQUE INDEX IF NOT EXISTS "CommunicationTemplate_key_key" ON "CommunicationTemplate"("key");
 
 -- CreateIndex
-CREATE INDEX "ScheduledCommunication_status_scheduledFor_idx" ON "ScheduledCommunication"("status", "scheduledFor");
+CREATE INDEX IF NOT EXISTS "ScheduledCommunication_status_scheduledFor_idx" ON "ScheduledCommunication"("status", "scheduledFor");
 
 -- CreateIndex
-CREATE INDEX "ScheduledCommunication_createdBy_idx" ON "ScheduledCommunication"("createdBy");
+CREATE INDEX IF NOT EXISTS "ScheduledCommunication_createdBy_idx" ON "ScheduledCommunication"("createdBy");
 
