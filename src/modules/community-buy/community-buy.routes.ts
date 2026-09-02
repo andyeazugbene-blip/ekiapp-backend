@@ -9,6 +9,7 @@ import {
   confirmFulfilmentInventory,
   confirmSupplierCommitment,
   createContribution,
+  createSupportCase,
   createOrganiserCampaign,
   createOrganiserTopUp,
   endCampaignRescue,
@@ -19,6 +20,7 @@ import {
   getMyOrganiserProfile,
   getMySupplierPayment,
   getMySupplierProfile,
+  getMySupportCase,
   getOrganiserFulfilment,
   getPublicMarketConfig,
   getSupplierFulfilment,
@@ -28,6 +30,7 @@ import {
   listCampaignParticipants,
   listCampaigns,
   listMyContributions,
+  listMySupportCases,
   listMyOrganiserCampaigns,
   listMySupplierCampaigns,
   listPublicMarketConfigs,
@@ -50,6 +53,8 @@ communityBuyRouter.get("/markets", asyncHandler(listPublicMarketConfigs));
 communityBuyRouter.get("/markets/:country", asyncHandler(getPublicMarketConfig));
 communityBuyRouter.get("/campaigns", asyncHandler(listCampaigns));
 communityBuyRouter.get("/my-contributions", authenticate, asyncHandler(listMyContributions));
+communityBuyRouter.get("/support-cases", authenticate, asyncHandler(listMySupportCases));
+communityBuyRouter.get("/support-cases/:id", authenticate, asyncHandler(getMySupportCase));
 communityBuyRouter.get("/campaigns/:id", asyncHandler(getCampaign));
 communityBuyRouter.get("/campaigns/:id/updates", authenticate, asyncHandler(getCampaignUpdates));
 communityBuyRouter.post("/campaigns/:id/contributions", authenticate, asyncHandler(createContribution));
@@ -59,6 +64,7 @@ communityBuyRouter.post("/contributions/:id/payment", authenticate, asyncHandler
 // Buyers/organisers join a live campaign — kept on the same router since
 // it's participant-facing, not an organiser-only action.
 communityBuyRouter.post("/campaigns/:id/join", authenticate, asyncHandler(joinCampaign));
+communityBuyRouter.post("/campaigns/:id/support-cases", authenticate, asyncHandler(createSupportCase));
 
 // Organiser — mounted at /organiser.
 export const organiserRouter = Router();

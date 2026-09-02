@@ -111,6 +111,12 @@ const mockHoldSupplierPayment = vi.fn();
 const mockGetLedgerSummaryForAdmin = vi.fn();
 const mockGetCampaignLedger = vi.fn();
 const mockListMyContributions = vi.fn();
+const mockCreateSupportCase = vi.fn();
+const mockListMySupportCases = vi.fn();
+const mockGetMySupportCase = vi.fn();
+const mockListSupportCasesForAdmin = vi.fn();
+const mockGetSupportCaseForAdmin = vi.fn();
+const mockAdminUpdateSupportCase = vi.fn();
 
 vi.mock("../modules/community-buy/campaign-contributions.service", () => ({
   campaignContributionsService: {
@@ -150,6 +156,17 @@ vi.mock("../modules/community-buy/campaign-fulfilment.service", () => ({
     markCollected: (...a: unknown[]) => mockMarkFulfilmentCollected(...a),
     getForOrganiser: (...a: unknown[]) => mockGetOrganiserFulfilment(...a),
     organiserConfirmCompletion: (...a: unknown[]) => mockOrganiserConfirmFulfilmentCompletion(...a),
+  },
+}));
+
+vi.mock("../modules/community-buy/support-case.service", () => ({
+  supportCaseService: {
+    create: (...a: unknown[]) => mockCreateSupportCase(...a),
+    listMine: (...a: unknown[]) => mockListMySupportCases(...a),
+    getMine: (...a: unknown[]) => mockGetMySupportCase(...a),
+    listForAdmin: (...a: unknown[]) => mockListSupportCasesForAdmin(...a),
+    getForAdmin: (...a: unknown[]) => mockGetSupportCaseForAdmin(...a),
+    adminUpdate: (...a: unknown[]) => mockAdminUpdateSupportCase(...a),
   },
 }));
 
@@ -336,6 +353,88 @@ describe("Participant routes", () => {
     const res = await request(app).get("/api/community-buy/campaigns/camp-99/updates").set("Authorization", `Bearer ${buyerToken()}`);
     expect(res.status).toBe(200);
     expect(mockListMyCampaignUpdates).toHaveBeenCalledWith("buyer-1", "camp-99");
+  });
+
+  it("POST /api/community-buy/campaigns/:id/support-cases — 401 without token, 400 for an unknown case type", async () => {
+    const unauth = await request(app).post("/api/community-buy/campaigns/camp-99/support-cases").send({});
+    expect(unauth.status).toBe(401);
+
+    const bad = await request(app)
+      .post("/api/community-buy/campaigns/camp-99/support-cases")
+      .set("Authorization", `Bearer ${buyerToken()}`)
+      .send({ caseType: "NOT_A_REAL_TYPE", description: "help" });
+    expect(bad.status).toBe(400);
+    expect(mockCreateSupportCase).not.toHaveBeenCalled();
+  });
+
+  it("POST /api/community-buy/campaigns/:id/support-cases — 201 for a valid case, id parsed correctly", async () => {
+    mockCreateSupportCase.mockResolvedValue({ id: "case-1" });
+    const res = await request(app)
+      .post("/api/community-buy/campaigns/camp-99/support-cases")
+      .set("Authorization", `Bearer ${buyerToken()}`)
+      .send({ caseType: "REFUND_ISSUE", description: "My refund hasn't arrived." });
+    expect(res.status).toBe(201);
+    expect(mockCreateSupportCase).toHaveBeenCalledWith("buyer-1", "camp-99", expect.objectContaining({ caseType: "REFUND_ISSUE", description: "My refund hasn't arrived." }));
+  });
+
+  it("GET /api/community-buy/support-cases — 200 for a buyer, not swallowed by /campaigns/:id", async () => {
+    mockListMySupportCases.mockResolvedValue([]);
+    const res = await request(app).get("/api/community-buy/support-cases").set("Authorization", `Bearer ${buyerToken()}`);
+    expect(res.status).toBe(200);
+    expect(mockListMySupportCases).toHaveBeenCalledWith("buyer-1");
+    expect(mockGetCampaign).not.toHaveBeenCalled();
+  });
+
+  it("GET /api/community-buy/support-cases/:id — id parsed correctly", async () => {
+    mockGetMySupportCase.mockResolvedValue({ id: "case-1" });
+    const res = await request(app).get("/api/community-buy/support-cases/case-1").set("Authorization", `Bearer ${buyerToken()}`);
+    expect(res.status).toBe(200);
+    expect(mockGetMySupportCase).toHaveBeenCalledWith("buyer-1", "case-1");
+  });
+});
+
+describe("Admin support case routes", () => {
+  it("GET /api/admin/community-buy/support-cases — 401 without token, 200 for admin", async () => {
+    const unauth = await request(app).get("/api/admin/community-buy/support-cases");
+    expect(unauth.status).toBe(401);
+
+    mockListSupportCasesForAdmin.mockResolvedValue([]);
+    const res = await request(app).get("/api/admin/community-buy/support-cases").set("Authorization", `Bearer ${adminToken()}`);
+    expect(res.status).toBe(200);
+  });
+
+  it("GET /api/admin/community-buy/support-cases/:id — id parsed correctly", async () => {
+    mockGetSupportCaseForAdmin.mockResolvedValue({ id: "case-1" });
+    const res = await request(app).get("/api/admin/community-buy/support-cases/case-1").set("Authorization", `Bearer ${adminToken()}`);
+    expect(res.status).toBe(200);
+    expect(mockGetSupportCaseForAdmin).toHaveBeenCalledWith("case-1");
+  });
+
+  it("PATCH /api/admin/community-buy/support-cases/:id — 400 for an unknown status", async () => {
+    const res = await request(app)
+      .patch("/api/admin/community-buy/support-cases/case-1")
+      .set("Authorization", `Bearer ${adminToken()}`)
+      .send({ status: "NOT_A_REAL_STATUS" });
+    expect(res.status).toBe(400);
+    expect(mockAdminUpdateSupportCase).not.toHaveBeenCalled();
+  });
+
+  it("PATCH /api/admin/community-buy/support-cases/:id — 400 when escalated is not a boolean", async () => {
+    const res = await request(app)
+      .patch("/api/admin/community-buy/support-cases/case-1")
+      .set("Authorization", `Bearer ${adminToken()}`)
+      .send({ escalated: "yes" });
+    expect(res.status).toBe(400);
+  });
+
+  it("PATCH /api/admin/community-buy/support-cases/:id — 200 for a valid update, id parsed correctly", async () => {
+    mockAdminUpdateSupportCase.mockResolvedValue({ id: "case-1", status: "RESOLVED" });
+    const res = await request(app)
+      .patch("/api/admin/community-buy/support-cases/case-1")
+      .set("Authorization", `Bearer ${adminToken()}`)
+      .send({ status: "RESOLVED", customerVisibleResponse: "Refund has been reissued." });
+    expect(res.status).toBe(200);
+    expect(mockAdminUpdateSupportCase).toHaveBeenCalledWith("admin-1", "case-1", expect.objectContaining({ status: "RESOLVED", customerVisibleResponse: "Refund has been reissued." }));
   });
 });
 

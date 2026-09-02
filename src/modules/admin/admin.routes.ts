@@ -121,6 +121,7 @@ import {
   adminApproveExtension,
   adminGetCampaignLedger,
   adminGetLedgerSummary,
+  adminGetSupportCase,
   adminHoldSupplierPayment,
   adminListCampaignsForReview,
   adminListExtensionRequests,
@@ -130,6 +131,7 @@ import {
   adminListPendingSuppliers,
   adminListRefunds,
   adminListSupplierPayments,
+  adminListSupportCases,
   adminListVerifiedOrganisers,
   adminListVerifiedSuppliers,
   adminPauseCampaign,
@@ -142,6 +144,7 @@ import {
   adminRestrictSupplier,
   adminUnrestrictOrganiser,
   adminUnrestrictSupplier,
+  adminUpdateSupportCase,
   adminUpdateMarketConfiguration,
   adminVerifyOrganiser,
   adminVerifySupplier,
@@ -233,6 +236,9 @@ adminRouter.post("/community-buy/organisers/:id/unrestrict", asyncHandler(requir
 adminRouter.get("/community-buy/suppliers", asyncHandler(requireAdminPermission("community_buy.read")), asyncHandler(adminListVerifiedSuppliers));
 adminRouter.post("/community-buy/suppliers/:id/restrict", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(adminRestrictSupplier));
 adminRouter.post("/community-buy/suppliers/:id/unrestrict", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(adminUnrestrictSupplier));
+adminRouter.get("/community-buy/support-cases", asyncHandler(requireAdminPermission("community_buy.read")), asyncHandler(adminListSupportCases));
+adminRouter.get("/community-buy/support-cases/:id", asyncHandler(requireAdminPermission("community_buy.read")), asyncHandler(adminGetSupportCase));
+adminRouter.patch("/community-buy/support-cases/:id", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(adminUpdateSupportCase));
 
 // Listings
 adminRouter.get("/users", asyncHandler(requireAdminPermission("users.read")), asyncHandler(listUsers));

@@ -162,6 +162,7 @@ model User {
   buyerPaymentMethods     BuyerPaymentMethod[]
   automationRuns          AutomationRun[]
   campaignParticipations  CampaignParticipant[]
+  communityBuySupportCases CommunityBuySupportCase[]
   createdAt               DateTime              @default(now())
   updatedAt               DateTime              @updatedAt
 
@@ -1343,6 +1344,55 @@ model ContentReport {
   @@index([status])
 }
 
+// ─── Community Buy support cases — doc Phase 9 ─────────────────────────
+// Distinct from ContentReport (content moderation) and Dispute (tied 1:1
+// to an Order, which a campaign contribution isn't). Needed fields the
+// doc calls for that neither existing model has: an internal-notes vs
+// customer-visible-response split, evidence, and an escalation flag.
+
+enum SupportCaseType {
+  PAYMENT_ISSUE
+  REFUND_ISSUE
+  FULFILMENT_ISSUE
+  ORGANISER_CONDUCT
+  SUPPLIER_CONDUCT
+  OTHER
+}
+
+enum SupportCaseStatus {
+  OPEN
+  IN_PROGRESS
+  ESCALATED
+  RESOLVED
+  CLOSED
+}
+
+model CommunityBuySupportCase {
+  id                      String            @id @default(cuid())
+  campaignId              String
+  participantId           String
+  caseType                SupportCaseType
+  description             String
+  evidenceUrls            String[]          @default([])
+  status                  SupportCaseStatus @default(OPEN)
+  // Admin-only — never returned to the reporter.
+  internalNotes           String?
+  // Shown to the reporter once set.
+  customerVisibleResponse String?
+  escalated               Boolean           @default(false)
+  escalatedAt             DateTime?
+  resolvedById            String?
+  resolvedAt              DateTime?
+  campaign                CommunityCampaign @relation(fields: [campaignId], references: [id], onDelete: Restrict)
+  participant             User              @relation(fields: [participantId], references: [id], onDelete: Restrict)
+  createdAt               DateTime          @default(now())
+  updatedAt               DateTime          @updatedAt
+
+  @@index([campaignId])
+  @@index([participantId])
+  @@index([status])
+}
+
 model UserBlock {
   id        String   @id @default(cuid())
   blockerId String
@@ -1787,6 +1837,7 @@ model CommunityCampaign {
   extensionRequests CampaignExtensionRequest[]
   supplierPayment   CampaignSupplierPayment?
   fulfilment        CampaignFulfilment?
+  supportCases      CommunityBuySupportCase[]
   createdAt     DateTime               @default(now())
   updatedAt     DateTime               @updatedAt
 

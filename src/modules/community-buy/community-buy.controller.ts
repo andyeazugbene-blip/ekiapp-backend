@@ -8,6 +8,7 @@ import { communityCampaignsService } from "./community-campaigns.service";
 import { campaignContributionsService } from "./campaign-contributions.service";
 import { campaignFulfilmentService } from "./campaign-fulfilment.service";
 import { marketConfigurationService } from "./market-configuration.service";
+import { supportCaseService } from "./support-case.service";
 
 // ─── Public market availability (used by the mobile app to decide whether
 // to show Regular Deliveries / Community Buy entry points at all — the
@@ -245,6 +246,65 @@ export async function getOrganiserFulfilment(request: Request, response: Respons
 export async function organiserConfirmFulfilmentCompletion(request: Request, response: Response): Promise<void> {
   const userId = requireUserId(request);
   response.json({ fulfilment: await campaignFulfilmentService.organiserConfirmCompletion(userId, requireIdParam(request)) });
+}
+
+// ─── Support cases — doc Phase 9 ───────────────────────────────────────
+
+const VALID_CASE_TYPES = ["PAYMENT_ISSUE", "REFUND_ISSUE", "FULFILMENT_ISSUE", "ORGANISER_CONDUCT", "SUPPLIER_CONDUCT", "OTHER"];
+const VALID_CASE_STATUSES = ["OPEN", "IN_PROGRESS", "ESCALATED", "RESOLVED", "CLOSED"];
+
+export async function createSupportCase(request: Request, response: Response): Promise<void> {
+  const userId = requireUserId(request);
+  const caseType = request.body?.caseType;
+  if (!VALID_CASE_TYPES.includes(caseType)) throw new AppError("Unknown case type", 400);
+  const evidenceUrls = Array.isArray(request.body?.evidenceUrls) ? request.body.evidenceUrls.filter((u: unknown) => typeof u === "string") : undefined;
+  const supportCase = await supportCaseService.create(userId, requireIdParam(request), {
+    caseType,
+    description: request.body?.description,
+    evidenceUrls,
+  });
+  response.status(201).json({ supportCase });
+}
+
+export async function listMySupportCases(request: Request, response: Response): Promise<void> {
+  const userId = requireUserId(request);
+  response.json({ items: await supportCaseService.listMine(userId) });
+}
+
+export async function getMySupportCase(request: Request, response: Response): Promise<void> {
+  const userId = requireUserId(request);
+  response.json({ supportCase: await supportCaseService.getMine(userId, requireIdParam(request)) });
+}
+
+export async function adminListSupportCases(request: Request, response: Response): Promise<void> {
+  const status = typeof request.query.status === "string" && VALID_CASE_STATUSES.includes(request.query.status) ? request.query.status as any : undefined;
+  response.json({ items: await supportCaseService.listForAdmin(status) });
+}
+
+export async function adminGetSupportCase(request: Request, response: Response): Promise<void> {
+  response.json({ supportCase: await supportCaseService.getForAdmin(requireIdParam(request)) });
+}
+
+export async function adminUpdateSupportCase(request: Request, response: Response): Promise<void> {
+  const adminId = requireUserId(request);
+  const body = request.body ?? {};
+  if (body.status !== undefined && !VALID_CASE_STATUSES.includes(body.status)) throw new AppError("Unknown status", 400);
+  if (body.escalated !== undefined && typeof body.escalated !== "boolean") throw new AppError("escalated must be a boolean", 400);
+  const id = requireIdParam(request);
+  const supportCase = await supportCaseService.adminUpdate(adminId, id, {
+    status: body.status,
+    internalNotes: typeof body.internalNotes === "string" ? body.internalNotes : undefined,
+    customerVisibleResponse: typeof body.customerVisibleResponse === "string" ? body.customerVisibleResponse : undefined,
+    escalated: body.escalated,
+  });
+  await recordAudit({
+    actorId: adminId,
+    action: "community_support_case.update",
+    entityType: "CommunityBuySupportCase",
+    entityId: id,
+    metadata: { status: body.status, escalated: body.escalated, hasInternalNotes: body.internalNotes !== undefined, hasCustomerResponse: body.customerVisibleResponse !== undefined },
+  });
+  response.json({ supportCase });
 }
 
 // ─── TEMPORARY compatibility shim ──────────────────────────────────────────
