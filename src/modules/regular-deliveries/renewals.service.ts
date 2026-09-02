@@ -58,6 +58,50 @@ export const renewalsService = {
     return { created, skipped };
   },
 
+  /**
+   * Proactive heads-up 1-3 days before a subscription's next renewal —
+   * distinct from any of the reactive renewal-cycle notifications above,
+   * which all fire once a Renewal row already exists. Dedupe key is
+   * per subscription+cycle date, so a buyer gets at most one of these
+   * per renewal even if the sweep runs more than once before it fires.
+   */
+  async sendUpcomingRenewalReminders(): Promise<number> {
+    const now = new Date();
+    const windowEnd = new Date(now.getTime() + 3 * 24 * 60 * 60 * 1000);
+    const upcoming = await prisma.buyerSubscription.findMany({
+      where: { status: "ACTIVE", nextRenewalAt: { gte: now, lte: windowEnd } },
+      select: {
+        id: true,
+        buyerId: true,
+        nextRenewalAt: true,
+        offer: { select: { title: true, vendor: { select: { storeName: true } } } },
+      },
+    });
+
+    for (const sub of upcoming) {
+      if (!sub.nextRenewalAt) continue;
+      const storeName = sub.offer.vendor.storeName;
+      await notificationsService.enqueue({
+        userId: sub.buyerId,
+        type: "SUBSCRIPTION_UPDATE",
+        title: "Upcoming Regular Delivery",
+        body: `Your delivery from ${storeName} renews on ${sub.nextRenewalAt.toDateString()}.`,
+        data: { type: "subscription_update", event: "renewal_upcoming", subscriptionId: sub.id },
+      });
+      await automationService.scheduleAutomation({
+        type: "RENEWAL_REMINDER",
+        recipientUserId: sub.buyerId,
+        subjectKey: `${sub.id}:${sub.nextRenewalAt.toISOString().slice(0, 10)}`,
+        frequencyCapDays: 3,
+        requiresMarketingConsent: false,
+        title: "Upcoming Regular Delivery",
+        body: `Your delivery from ${storeName} renews soon.`,
+        data: { store_name: storeName, renewal_date: sub.nextRenewalAt.toDateString() },
+      });
+    }
+    return upcoming.length;
+  },
+
   async createRenewalForCycle(subscriptionId: string, cycleDate: Date) {
     const sub = await prisma.buyerSubscription.findUniqueOrThrow({
       where: { id: subscriptionId },

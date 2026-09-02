@@ -12,6 +12,7 @@ import {
   decideRenewalPriceChange,
   getBuyerSubscription,
   getPublicSubscriptionOffer,
+  getReorderSuggestions,
   getVendorRegularDeliveryInsights,
   getVendorSubscriberDetail,
   listBuyerSubscriptions,
@@ -78,6 +79,8 @@ export const buyerSubscriptionsRouter = Router();
 buyerSubscriptionsRouter.use(authenticate);
 buyerSubscriptionsRouter.post("/", asyncHandler(createBuyerSubscription));
 buyerSubscriptionsRouter.get("/", asyncHandler(listBuyerSubscriptions));
+// Must come before /:id — otherwise "reorder-suggestions" is swallowed as an :id value.
+buyerSubscriptionsRouter.get("/reorder-suggestions", asyncHandler(getReorderSuggestions));
 buyerSubscriptionsRouter.get("/:id", asyncHandler(getBuyerSubscription));
 buyerSubscriptionsRouter.patch("/:id", asyncHandler(updateBuyerSubscription));
 buyerSubscriptionsRouter.post("/:id/pause", asyncHandler(pauseBuyerSubscription));

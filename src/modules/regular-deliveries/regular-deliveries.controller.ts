@@ -235,6 +235,11 @@ export async function skipNextRenewal(request: Request, response: Response): Pro
   response.json({ subscription: await buyerSubscriptionsService.skipNext(buyerId, requireIdParam(request)) });
 }
 
+export async function getReorderSuggestions(request: Request, response: Response): Promise<void> {
+  const buyerId = requireUserId(request);
+  response.json({ items: await buyerSubscriptionsService.getReorderSuggestions(buyerId) });
+}
+
 export async function decideRenewalPriceChange(request: Request, response: Response): Promise<void> {
   const buyerId = requireUserId(request);
   const decision = request.body?.decision;

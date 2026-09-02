@@ -31,6 +31,7 @@ vi.mock("../modules/automation/automation.service", () => ({
 import { prisma } from "../lib/prisma";
 import { stripe } from "../lib/stripe";
 import { automationService } from "../modules/automation/automation.service";
+import { notificationsService } from "../modules/notifications/notifications.service";
 import { renewalsService } from "../modules/regular-deliveries/renewals.service";
 
 const m = vi.mocked(prisma, true);
@@ -336,6 +337,38 @@ describe("renewalsService.generateDueRenewals", () => {
     expect(result).toEqual({ created: 0, skipped: 1 });
     expect(m.buyerSubscription.findUniqueOrThrow).not.toHaveBeenCalled();
     expect(m.buyerSubscription.update).not.toHaveBeenCalled();
+  });
+
+  it("sendUpcomingRenewalReminders notifies buyers whose renewal is due within 3 days, with a per-cycle dedupe key", async () => {
+    const nextRenewalAt = new Date("2026-06-16T00:00:00.000Z");
+    m.buyerSubscription.findMany.mockResolvedValue([
+      { id: "sub-r1", buyerId: "buyer-9", nextRenewalAt, offer: { title: "Weekly Box", vendor: { storeName: "Green Grocer" } } },
+    ] as never);
+
+    const count = await renewalsService.sendUpcomingRenewalReminders();
+
+    expect(count).toBe(1);
+    expect(notificationsService.enqueue).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: "buyer-9", type: "SUBSCRIPTION_UPDATE" }),
+    );
+    expect(automationService.scheduleAutomation).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "RENEWAL_REMINDER",
+        recipientUserId: "buyer-9",
+        subjectKey: "sub-r1:2026-06-16",
+        requiresMarketingConsent: false,
+      }),
+    );
+  });
+
+  it("sendUpcomingRenewalReminders returns 0 without notifying when no subscription is due soon", async () => {
+    m.buyerSubscription.findMany.mockResolvedValue([] as never);
+
+    const count = await renewalsService.sendUpcomingRenewalReminders();
+
+    expect(count).toBe(0);
+    expect(notificationsService.enqueue).not.toHaveBeenCalled();
+    expect(automationService.scheduleAutomation).not.toHaveBeenCalled();
   });
 
   it("processes a subscription normally when its offer's renewals are not paused", async () => {

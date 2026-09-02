@@ -174,4 +174,47 @@ export const buyerSubscriptionsService = {
     await recordAction(id, "edited", buyerId, { items });
     return this.get(buyerId, id);
   },
+
+  /**
+   * Real, purchase-history-driven suggestions — products a buyer has
+   * actually bought at least twice in the last 90 days, that they aren't
+   * already subscribed to, and that a vendor has actually made available
+   * as a Regular Delivery offer. No invented "AI recommendation" logic —
+   * just a count over the buyer's own completed orders.
+   */
+  async getReorderSuggestions(buyerId: string, limit = 10) {
+    const since = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000);
+    const purchasedItems = await prisma.orderItem.findMany({
+      where: { order: { buyerId, status: { in: ["DELIVERED", "COMPLETED", "AUTO_RELEASED"] }, createdAt: { gte: since } } },
+      select: { productId: true },
+    });
+    if (purchasedItems.length === 0) return [];
+
+    const countByProduct = new Map<string, number>();
+    for (const item of purchasedItems) countByProduct.set(item.productId, (countByProduct.get(item.productId) ?? 0) + 1);
+    const repeatedProductIds = [...countByProduct.entries()].filter(([, count]) => count >= 2).map(([id]) => id);
+    if (repeatedProductIds.length === 0) return [];
+
+    const activeSubs = await prisma.buyerSubscription.findMany({
+      where: { buyerId, status: "ACTIVE" },
+      select: { items: { select: { productId: true } } },
+    });
+    const alreadySubscribed = new Set(activeSubs.flatMap((s) => s.items.map((i) => i.productId)));
+    const candidateProductIds = repeatedProductIds.filter((id) => !alreadySubscribed.has(id));
+    if (candidateProductIds.length === 0) return [];
+
+    const offerProducts = await prisma.subscriptionOfferProduct.findMany({
+      where: { productId: { in: candidateProductIds }, offer: { isActive: true, renewalsPaused: false } },
+      include: {
+        product: { select: { id: true, title: true, priceInCents: true, currency: true, images: true } },
+        offer: { select: { id: true, title: true, frequencies: true, vendor: { select: { storeName: true } } } },
+      },
+    });
+
+    return offerProducts.slice(0, limit).map((op) => ({
+      product: op.product,
+      offer: { id: op.offer.id, title: op.offer.title, frequencies: op.offer.frequencies, vendorStoreName: op.offer.vendor.storeName },
+      orderCount: countByProduct.get(op.productId) ?? 0,
+    }));
+  },
 };

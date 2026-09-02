@@ -42,11 +42,13 @@ const mockPause = vi.fn();
 const mockResume = vi.fn();
 const mockCancel = vi.fn();
 const mockSkipNext = vi.fn();
+const mockGetReorderSuggestions = vi.fn();
 
 vi.mock("../modules/regular-deliveries/buyer-subscriptions.service", () => ({
   buyerSubscriptionsService: {
     create: (...a: unknown[]) => mockCreateSub(...a),
     listForBuyer: (...a: unknown[]) => mockListForBuyer(...a),
+    getReorderSuggestions: (...a: unknown[]) => mockGetReorderSuggestions(...a),
     get: (...a: unknown[]) => mockGetSub(...a),
     updateItems: (...a: unknown[]) => mockUpdateItems(...a),
     pause: (...a: unknown[]) => mockPause(...a),
@@ -299,6 +301,18 @@ describe("Buyer subscription routes", () => {
     expect(res.status).toBe(200);
     expect(mockFn.mock.calls[0][0]).toBe("buyer-1");
     expect(mockFn.mock.calls[0][1]).toBe("sub-9");
+  });
+
+  it("GET /api/buyer/subscriptions/reorder-suggestions — 401 without token, 200 for a buyer, and is NOT swallowed by the /:id route", async () => {
+    const unauth = await request(app).get("/api/buyer/subscriptions/reorder-suggestions");
+    expect(unauth.status).toBe(401);
+
+    mockGetReorderSuggestions.mockResolvedValue([{ product: { id: "p1" }, offer: { id: "offer-1" }, orderCount: 3 }]);
+    const res = await request(app).get("/api/buyer/subscriptions/reorder-suggestions").set("Authorization", `Bearer ${buyerToken()}`);
+    expect(res.status).toBe(200);
+    expect(mockGetReorderSuggestions).toHaveBeenCalledWith("buyer-1");
+    expect(mockGetSub).not.toHaveBeenCalled();
+    expect(res.body.items).toHaveLength(1);
   });
 
   it("GET /api/buyer/subscriptions/:id — 200, id correctly parsed", async () => {
