@@ -9,6 +9,7 @@ vi.mock("../lib/prisma", () => ({
     notification: { findMany: vi.fn() },
     campaignExtensionRequest: { create: vi.fn(), findUnique: vi.fn(), update: vi.fn(), findMany: vi.fn() },
     campaignSupplierPayment: { findUnique: vi.fn(), create: vi.fn(), update: vi.fn(), findMany: vi.fn() },
+    campaignFulfilment: { upsert: vi.fn(), findUnique: vi.fn(), update: vi.fn() },
     organiserProfile: { findUnique: vi.fn(), update: vi.fn() },
     supplierProfile: { findUnique: vi.fn(), findMany: vi.fn(), update: vi.fn() },
     user: { findUnique: vi.fn() },
@@ -522,6 +523,29 @@ describe("communityCampaignsService.getRefundProgressForOrganiser — 'Refund Pr
     const result = await communityCampaignsService.getRefundProgressForOrganiser("organiser-user-1", "camp-1");
 
     expect(result).toEqual({ total: 0, completed: 0, pending: 0, failed: 0 });
+  });
+});
+
+describe("campaignContributionsService.getMyPaymentForCampaign — supplier's own payment view", () => {
+  it("throws 404 when the vendor doesn't own the campaign's supplier profile", async () => {
+    m.supplierProfile.findUnique.mockResolvedValue({ id: "sup-1" } as never);
+    m.communityCampaign.findUnique.mockResolvedValue({ id: "camp-1", supplierId: "someone-else" } as never);
+    await expect(campaignContributionsService.getMyPaymentForCampaign("vendor-1", "camp-1")).rejects.toMatchObject({ statusCode: 404 });
+  });
+
+  it("throws 404 when no payment record exists yet", async () => {
+    m.supplierProfile.findUnique.mockResolvedValue({ id: "sup-1" } as never);
+    m.communityCampaign.findUnique.mockResolvedValue({ id: "camp-1", supplierId: "sup-1" } as never);
+    m.campaignSupplierPayment.findUnique.mockResolvedValue(null);
+    await expect(campaignContributionsService.getMyPaymentForCampaign("vendor-1", "camp-1")).rejects.toMatchObject({ statusCode: 404 });
+  });
+
+  it("returns the real payment record for the owning supplier", async () => {
+    m.supplierProfile.findUnique.mockResolvedValue({ id: "sup-1" } as never);
+    m.communityCampaign.findUnique.mockResolvedValue({ id: "camp-1", supplierId: "sup-1" } as never);
+    m.campaignSupplierPayment.findUnique.mockResolvedValue({ campaignId: "camp-1", status: "NOT_RELEASED", amount: 5000 } as never);
+    const result = await campaignContributionsService.getMyPaymentForCampaign("vendor-1", "camp-1");
+    expect(result).toEqual({ campaignId: "camp-1", status: "NOT_RELEASED", amount: 5000 });
   });
 });
 

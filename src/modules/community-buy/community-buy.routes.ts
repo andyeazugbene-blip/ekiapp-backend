@@ -6,6 +6,7 @@ import {
   applyAsOrganiser,
   applyAsSupplier,
   confirmContributionPayment,
+  confirmFulfilmentInventory,
   confirmSupplierCommitment,
   createContribution,
   createOrganiserCampaign,
@@ -16,8 +17,11 @@ import {
   getCampaignUpdates,
   getContribution,
   getMyOrganiserProfile,
+  getMySupplierPayment,
   getMySupplierProfile,
+  getOrganiserFulfilment,
   getPublicMarketConfig,
+  getSupplierFulfilment,
   joinCampaign,
   legacyCancelFailedCampaignShim,
   legacyFulfilCampaignAnywayShim,
@@ -28,8 +32,14 @@ import {
   listMySupplierCampaigns,
   listPublicMarketConfigs,
   listVerifiedSuppliers,
+  markFulfilmentCollected,
+  markFulfilmentDispatched,
+  markFulfilmentReady,
+  organiserConfirmFulfilmentCompletion,
   publishOrganiserCampaign,
   requestCampaignExtension,
+  setFulfilmentPlan,
+  startFulfilmentPacking,
   submitOrganiserCampaign,
   updateOrganiserCampaign,
 } from "./community-buy.controller";
@@ -70,6 +80,8 @@ organiserRouter.post("/campaigns/:id/rescue/extension-request", asyncHandler(req
 organiserRouter.post("/campaigns/:id/rescue/end", asyncHandler(endCampaignRescue));
 organiserRouter.get("/campaigns/:id/participants", asyncHandler(listCampaignParticipants));
 organiserRouter.get("/campaigns/:id/refund-progress", asyncHandler(getCampaignRefundProgress));
+organiserRouter.get("/campaigns/:id/fulfilment", asyncHandler(getOrganiserFulfilment));
+organiserRouter.post("/campaigns/:id/fulfilment/confirm-completion", asyncHandler(organiserConfirmFulfilmentCompletion));
 
 // TEMPORARY compatibility shim for the currently-deployed mobile app — see
 // the long comment in community-buy.controller.ts. Remove once the new
@@ -84,3 +96,11 @@ supplierRouter.get("/profile", asyncHandler(getMySupplierProfile));
 supplierRouter.post("/applications", asyncHandler(applyAsSupplier));
 supplierRouter.get("/campaigns", asyncHandler(listMySupplierCampaigns));
 supplierRouter.post("/campaigns/:id/supplier-commitment", asyncHandler(confirmSupplierCommitment));
+supplierRouter.get("/campaigns/:id/fulfilment", asyncHandler(getSupplierFulfilment));
+supplierRouter.post("/campaigns/:id/fulfilment/confirm-inventory", asyncHandler(confirmFulfilmentInventory));
+supplierRouter.post("/campaigns/:id/fulfilment/plan", asyncHandler(setFulfilmentPlan));
+supplierRouter.post("/campaigns/:id/fulfilment/start-packing", asyncHandler(startFulfilmentPacking));
+supplierRouter.post("/campaigns/:id/fulfilment/ready", asyncHandler(markFulfilmentReady));
+supplierRouter.post("/campaigns/:id/fulfilment/dispatch", asyncHandler(markFulfilmentDispatched));
+supplierRouter.post("/campaigns/:id/fulfilment/collect", asyncHandler(markFulfilmentCollected));
+supplierRouter.get("/campaigns/:id/payment", asyncHandler(getMySupplierPayment));

@@ -6,6 +6,7 @@ import { recordAudit } from "../../shared/utils/audit";
 import { organiserSupplierService } from "./organiser-supplier.service";
 import { communityCampaignsService } from "./community-campaigns.service";
 import { campaignContributionsService } from "./campaign-contributions.service";
+import { campaignFulfilmentService } from "./campaign-fulfilment.service";
 import { marketConfigurationService } from "./market-configuration.service";
 
 // ─── Public market availability (used by the mobile app to decide whether
@@ -184,6 +185,66 @@ export async function requestCampaignExtension(request: Request, response: Respo
 export async function confirmSupplierCommitment(request: Request, response: Response): Promise<void> {
   const vendorId = await requireVendorId(requireUserId(request));
   response.json({ campaign: await communityCampaignsService.confirmSupplierCommitment(vendorId, requireIdParam(request)) });
+}
+
+// ─── Supplier fulfilment — doc Phase 8 ─────────────────────────────────
+
+export async function getSupplierFulfilment(request: Request, response: Response): Promise<void> {
+  const vendorId = await requireVendorId(requireUserId(request));
+  response.json({ fulfilment: await campaignFulfilmentService.getForSupplier(vendorId, requireIdParam(request)) });
+}
+
+export async function getMySupplierPayment(request: Request, response: Response): Promise<void> {
+  const vendorId = await requireVendorId(requireUserId(request));
+  response.json({ payment: await campaignContributionsService.getMyPaymentForCampaign(vendorId, requireIdParam(request)) });
+}
+
+export async function confirmFulfilmentInventory(request: Request, response: Response): Promise<void> {
+  const vendorId = await requireVendorId(requireUserId(request));
+  response.json({ fulfilment: await campaignFulfilmentService.confirmInventory(vendorId, requireIdParam(request)) });
+}
+
+export async function setFulfilmentPlan(request: Request, response: Response): Promise<void> {
+  const vendorId = await requireVendorId(requireUserId(request));
+  const method = request.body?.method;
+  if (method !== "DELIVERY" && method !== "COLLECTION") throw new AppError("method must be DELIVERY or COLLECTION", 400);
+  response.json({
+    fulfilment: await campaignFulfilmentService.setPlan(vendorId, requireIdParam(request), {
+      method,
+      estimatedReadyAt: typeof request.body?.estimatedReadyAt === "string" ? request.body.estimatedReadyAt : undefined,
+      notes: typeof request.body?.notes === "string" ? request.body.notes : undefined,
+    }),
+  });
+}
+
+export async function startFulfilmentPacking(request: Request, response: Response): Promise<void> {
+  const vendorId = await requireVendorId(requireUserId(request));
+  response.json({ fulfilment: await campaignFulfilmentService.startPacking(vendorId, requireIdParam(request)) });
+}
+
+export async function markFulfilmentReady(request: Request, response: Response): Promise<void> {
+  const vendorId = await requireVendorId(requireUserId(request));
+  response.json({ fulfilment: await campaignFulfilmentService.markReady(vendorId, requireIdParam(request)) });
+}
+
+export async function markFulfilmentDispatched(request: Request, response: Response): Promise<void> {
+  const vendorId = await requireVendorId(requireUserId(request));
+  response.json({ fulfilment: await campaignFulfilmentService.markDispatched(vendorId, requireIdParam(request)) });
+}
+
+export async function markFulfilmentCollected(request: Request, response: Response): Promise<void> {
+  const vendorId = await requireVendorId(requireUserId(request));
+  response.json({ fulfilment: await campaignFulfilmentService.markCollected(vendorId, requireIdParam(request)) });
+}
+
+export async function getOrganiserFulfilment(request: Request, response: Response): Promise<void> {
+  const userId = requireUserId(request);
+  response.json({ fulfilment: await campaignFulfilmentService.getForOrganiser(userId, requireIdParam(request)) });
+}
+
+export async function organiserConfirmFulfilmentCompletion(request: Request, response: Response): Promise<void> {
+  const userId = requireUserId(request);
+  response.json({ fulfilment: await campaignFulfilmentService.organiserConfirmCompletion(userId, requireIdParam(request)) });
 }
 
 // ─── TEMPORARY compatibility shim ──────────────────────────────────────────

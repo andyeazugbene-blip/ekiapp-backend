@@ -104,6 +104,7 @@ const mockJoin = vi.fn();
 const mockCreateContributionIntent = vi.fn();
 const mockCreateOrganiserTopUp = vi.fn();
 const mockGetMyContribution = vi.fn();
+const mockGetMyPaymentForCampaign = vi.fn();
 const mockVerifyContribution = vi.fn();
 const mockReleaseSupplierPayment = vi.fn();
 const mockHoldSupplierPayment = vi.fn();
@@ -118,12 +119,37 @@ vi.mock("../modules/community-buy/campaign-contributions.service", () => ({
     createContributionIntent: (...a: unknown[]) => mockCreateContributionIntent(...a),
     createOrganiserTopUp: (...a: unknown[]) => mockCreateOrganiserTopUp(...a),
     getMyContribution: (...a: unknown[]) => mockGetMyContribution(...a),
+    getMyPaymentForCampaign: (...a: unknown[]) => mockGetMyPaymentForCampaign(...a),
     verifyContribution: (...a: unknown[]) => mockVerifyContribution(...a),
     releaseSupplierPayment: (...a: unknown[]) => mockReleaseSupplierPayment(...a),
     holdSupplierPayment: (...a: unknown[]) => mockHoldSupplierPayment(...a),
     listRefundsForAdmin: vi.fn().mockResolvedValue([]),
     getLedgerSummaryForAdmin: (...a: unknown[]) => mockGetLedgerSummaryForAdmin(...a),
     getCampaignLedger: (...a: unknown[]) => mockGetCampaignLedger(...a),
+  },
+}));
+
+const mockGetSupplierFulfilment = vi.fn();
+const mockConfirmFulfilmentInventory = vi.fn();
+const mockSetFulfilmentPlan = vi.fn();
+const mockStartFulfilmentPacking = vi.fn();
+const mockMarkFulfilmentReady = vi.fn();
+const mockMarkFulfilmentDispatched = vi.fn();
+const mockMarkFulfilmentCollected = vi.fn();
+const mockGetOrganiserFulfilment = vi.fn();
+const mockOrganiserConfirmFulfilmentCompletion = vi.fn();
+
+vi.mock("../modules/community-buy/campaign-fulfilment.service", () => ({
+  campaignFulfilmentService: {
+    getForSupplier: (...a: unknown[]) => mockGetSupplierFulfilment(...a),
+    confirmInventory: (...a: unknown[]) => mockConfirmFulfilmentInventory(...a),
+    setPlan: (...a: unknown[]) => mockSetFulfilmentPlan(...a),
+    startPacking: (...a: unknown[]) => mockStartFulfilmentPacking(...a),
+    markReady: (...a: unknown[]) => mockMarkFulfilmentReady(...a),
+    markDispatched: (...a: unknown[]) => mockMarkFulfilmentDispatched(...a),
+    markCollected: (...a: unknown[]) => mockMarkFulfilmentCollected(...a),
+    getForOrganiser: (...a: unknown[]) => mockGetOrganiserFulfilment(...a),
+    organiserConfirmCompletion: (...a: unknown[]) => mockOrganiserConfirmFulfilmentCompletion(...a),
   },
 }));
 
@@ -463,6 +489,81 @@ describe("Supplier routes — vendor-only", () => {
     const res = await request(app).post("/api/supplier/campaigns/camp-77/supplier-commitment").set("Authorization", `Bearer ${vendorToken()}`);
     expect(res.status).toBe(200);
     expect(mockConfirmSupplierCommitment).toHaveBeenCalledWith("vendor-db-1", "camp-77");
+  });
+
+  it("GET /api/supplier/campaigns/:id/fulfilment — 403 for a buyer, 200 for a vendor with id parsed correctly", async () => {
+    const forbidden = await request(app).get("/api/supplier/campaigns/camp-77/fulfilment").set("Authorization", `Bearer ${buyerToken()}`);
+    expect(forbidden.status).toBe(403);
+
+    mockGetSupplierFulfilment.mockResolvedValue({ status: "AWAITING_INVENTORY_CONFIRMATION" });
+    const res = await request(app).get("/api/supplier/campaigns/camp-77/fulfilment").set("Authorization", `Bearer ${vendorToken()}`);
+    expect(res.status).toBe(200);
+    expect(mockGetSupplierFulfilment).toHaveBeenCalledWith("vendor-db-1", "camp-77");
+  });
+
+  it("POST /api/supplier/campaigns/:id/fulfilment/confirm-inventory — id parsed correctly", async () => {
+    mockConfirmFulfilmentInventory.mockResolvedValue({ status: "INVENTORY_CONFIRMED" });
+    const res = await request(app).post("/api/supplier/campaigns/camp-77/fulfilment/confirm-inventory").set("Authorization", `Bearer ${vendorToken()}`);
+    expect(res.status).toBe(200);
+    expect(mockConfirmFulfilmentInventory).toHaveBeenCalledWith("vendor-db-1", "camp-77");
+  });
+
+  it("POST /api/supplier/campaigns/:id/fulfilment/plan — 400 for an invalid method, 200 for a valid one", async () => {
+    const bad = await request(app)
+      .post("/api/supplier/campaigns/camp-77/fulfilment/plan")
+      .set("Authorization", `Bearer ${vendorToken()}`)
+      .send({ method: "TELEPORT" });
+    expect(bad.status).toBe(400);
+    expect(mockSetFulfilmentPlan).not.toHaveBeenCalled();
+
+    mockSetFulfilmentPlan.mockResolvedValue({ method: "DELIVERY" });
+    const res = await request(app)
+      .post("/api/supplier/campaigns/camp-77/fulfilment/plan")
+      .set("Authorization", `Bearer ${vendorToken()}`)
+      .send({ method: "DELIVERY", notes: "Fragile" });
+    expect(res.status).toBe(200);
+    expect(mockSetFulfilmentPlan).toHaveBeenCalledWith("vendor-db-1", "camp-77", expect.objectContaining({ method: "DELIVERY", notes: "Fragile" }));
+  });
+
+  it.each([
+    ["start-packing", "/api/supplier/campaigns/camp-77/fulfilment/start-packing", mockStartFulfilmentPacking],
+    ["ready", "/api/supplier/campaigns/camp-77/fulfilment/ready", mockMarkFulfilmentReady],
+    ["dispatch", "/api/supplier/campaigns/camp-77/fulfilment/dispatch", mockMarkFulfilmentDispatched],
+    ["collect", "/api/supplier/campaigns/camp-77/fulfilment/collect", mockMarkFulfilmentCollected],
+  ])("POST %s — resolves vendor id + campaign id from the URL correctly", async (_label, path, mockFn) => {
+    mockFn.mockResolvedValue({ status: "PACKING" });
+    const res = await request(app).post(path).set("Authorization", `Bearer ${vendorToken()}`);
+    expect(res.status).toBe(200);
+    expect(mockFn).toHaveBeenCalledWith("vendor-db-1", "camp-77");
+  });
+
+  it("GET /api/supplier/campaigns/:id/payment — 403 for a buyer, 200 for a vendor with id parsed correctly", async () => {
+    const forbidden = await request(app).get("/api/supplier/campaigns/camp-77/payment").set("Authorization", `Bearer ${buyerToken()}`);
+    expect(forbidden.status).toBe(403);
+
+    mockGetMyPaymentForCampaign.mockResolvedValue({ status: "NOT_RELEASED" });
+    const res = await request(app).get("/api/supplier/campaigns/camp-77/payment").set("Authorization", `Bearer ${vendorToken()}`);
+    expect(res.status).toBe(200);
+    expect(mockGetMyPaymentForCampaign).toHaveBeenCalledWith("vendor-db-1", "camp-77");
+  });
+});
+
+describe("Organiser fulfilment routes", () => {
+  it("GET /api/organiser/campaigns/:id/fulfilment — 401 without token, id parsed correctly", async () => {
+    const unauth = await request(app).get("/api/organiser/campaigns/camp-77/fulfilment");
+    expect(unauth.status).toBe(401);
+
+    mockGetOrganiserFulfilment.mockResolvedValue({ status: "PACKING" });
+    const res = await request(app).get("/api/organiser/campaigns/camp-77/fulfilment").set("Authorization", `Bearer ${buyerToken()}`);
+    expect(res.status).toBe(200);
+    expect(mockGetOrganiserFulfilment).toHaveBeenCalledWith("buyer-1", "camp-77");
+  });
+
+  it("POST /api/organiser/campaigns/:id/fulfilment/confirm-completion — id parsed correctly", async () => {
+    mockOrganiserConfirmFulfilmentCompletion.mockResolvedValue({ status: "COMPLETED" });
+    const res = await request(app).post("/api/organiser/campaigns/camp-77/fulfilment/confirm-completion").set("Authorization", `Bearer ${buyerToken()}`);
+    expect(res.status).toBe(200);
+    expect(mockOrganiserConfirmFulfilmentCompletion).toHaveBeenCalledWith("buyer-1", "camp-77");
   });
 });
 

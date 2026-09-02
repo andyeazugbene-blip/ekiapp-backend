@@ -351,6 +351,18 @@ export const campaignContributionsService = {
 
   // ─── Supplier payment — doc §Screen 131, §11 ───────────────────────────
 
+  /** Supplier's own read-only view of their payment for one campaign — never exposes other suppliers' records. */
+  async getMyPaymentForCampaign(vendorId: string, campaignId: string) {
+    const supplier = await prisma.supplierProfile.findUnique({ where: { vendorId } });
+    const campaign = await prisma.communityCampaign.findUnique({ where: { id: campaignId } });
+    if (!campaign || !supplier || campaign.supplierId !== supplier.id) {
+      throw new AppError("Campaign not found", 404);
+    }
+    const payment = await prisma.campaignSupplierPayment.findUnique({ where: { campaignId } });
+    if (!payment) throw new AppError("No supplier payment record exists for this campaign yet", 404);
+    return payment;
+  },
+
   async releaseSupplierPayment(adminId: string, campaignId: string) {
     const payment = await prisma.campaignSupplierPayment.findUnique({ where: { campaignId }, include: { campaign: { include: { supplier: { include: { vendor: true } } } } } });
     if (!payment) throw new AppError("No supplier payment record exists for this campaign", 404);

@@ -400,6 +400,11 @@ export const communityCampaignsService = {
         payoutStripeAccountIdAtApproval: supplier?.vendor.stripeAccountId ?? null,
       },
     });
+    await prisma.campaignFulfilment.upsert({
+      where: { campaignId: campaign.id },
+      update: {},
+      create: { campaignId: campaign.id },
+    });
     if (supplier) {
       await notifyCampaign(supplier.vendor.userId, "supplier_order_created", "Campaign order confirmed", `${campaign.title} reached its funding requirement. Final quantity: ${campaign.confirmedShares}.`, campaign.id);
     }

@@ -1786,6 +1786,7 @@ model CommunityCampaign {
   contributions CampaignContribution[]
   extensionRequests CampaignExtensionRequest[]
   supplierPayment   CampaignSupplierPayment?
+  fulfilment        CampaignFulfilment?
   createdAt     DateTime               @default(now())
   updatedAt     DateTime               @updatedAt
 
@@ -1851,6 +1852,45 @@ model CampaignSupplierPayment {
   updatedAt                DateTime               @updatedAt
 
   @@index([status])
+}
+
+// Operational fulfilment tracking for the supplier, separate from
+// CampaignSupplierPayment (financial only). Created once alongside it,
+// the moment a campaign succeeds — see createSupplierOrder(). Progressing
+// this state machine never moves money; supplier payment release/hold
+// stays a distinct, admin-controlled action.
+model CampaignFulfilment {
+  id                   String              @id @default(cuid())
+  campaignId            String             @unique
+  status                FulfilmentStatus   @default(AWAITING_INVENTORY_CONFIRMATION)
+  method                FulfilmentMethod?
+  notes                 String?
+  estimatedReadyAt      DateTime?
+  inventoryConfirmedAt  DateTime?
+  packingStartedAt      DateTime?
+  readyAt               DateTime?
+  dispatchedAt          DateTime?
+  collectedAt           DateTime?
+  campaign              CommunityCampaign @relation(fields: [campaignId], references: [id], onDelete: Restrict)
+  createdAt             DateTime          @default(now())
+  updatedAt             DateTime          @updatedAt
+
+  @@index([status])
+}
+
+enum FulfilmentStatus {
+  AWAITING_INVENTORY_CONFIRMATION
+  INVENTORY_CONFIRMED
+  PACKING
+  READY_FOR_DISPATCH_OR_COLLECTION
+  DISPATCHED
+  COLLECTED
+  COMPLETED
+}
+
+enum FulfilmentMethod {
+  DELIVERY
+  COLLECTION
 }
 
 model CampaignParticipant {
