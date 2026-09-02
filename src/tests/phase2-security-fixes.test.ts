@@ -26,6 +26,7 @@ vi.mock("../lib/prisma", () => ({
     buyerWalletTransaction: { create: vi.fn() },
     review: { findFirst: vi.fn(), create: vi.fn(), aggregate: vi.fn(), findMany: vi.fn(), findUnique: vi.fn(), update: vi.fn() },
     orderItem: { findFirst: vi.fn() },
+    reward: { findFirst: vi.fn() },
     emailVerificationToken: { create: vi.fn().mockResolvedValue({}), findUnique: vi.fn(), update: vi.fn() },
     $transaction: vi.fn(),
     $executeRaw: vi.fn(),
@@ -74,9 +75,16 @@ const userFindUnique = prisma.user.findUnique as unknown as ReturnType<typeof vi
 const userUpdate = prisma.user.update as unknown as ReturnType<typeof vi.fn>;
 const referralFindUnique = prisma.referral.findUnique as unknown as ReturnType<typeof vi.fn>;
 const orderCount = prisma.order.count as unknown as ReturnType<typeof vi.fn>;
+const rewardFindFirst = prisma.reward.findFirst as unknown as ReturnType<typeof vi.fn>;
 const piCreate = stripe.paymentIntents.create as unknown as ReturnType<typeof vi.fn>;
 
-beforeEach(() => vi.clearAllMocks());
+beforeEach(() => {
+  vi.clearAllMocks();
+  // No admin-configured reward override — falls back to the referral's own
+  // bonusAmount / the default welcome-gift amount, matching this suite's
+  // pre-existing expectations.
+  rewardFindFirst.mockResolvedValue(null);
+});
 
 // ─── 1. Promo code redemption race ──────────────────────────────────────────
 

@@ -13,6 +13,7 @@
     "build": "tsc -p tsconfig.json",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:e2e": "vitest run --config vitest.e2e.config.ts",
     "start": "node dist/src/server.js",
     "vercel-build": "prisma generate && prisma migrate deploy",
     "postinstall": "prisma generate",

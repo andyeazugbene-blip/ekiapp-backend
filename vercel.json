@@ -20,5 +20,11 @@
       "src": "/(.*)",
       "dest": "src/app.ts"
     }
+  ],
+  "crons": [
+    {
+      "path": "/api/internal/jobs/daily-sweep",
+      "schedule": "0 3 * * *"
+    }
   ]
 }

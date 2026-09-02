@@ -13,6 +13,7 @@
  */
 import { Router } from "express";
 
+import { env } from "../../config/env";
 import { authenticate, requireRole } from "../../middlewares/authenticate";
 import { requireAdminPermission } from "../../middlewares/require-admin-permission";
 import { require2fa } from "../../middlewares/require-2fa";
@@ -112,7 +113,25 @@ import {
 } from "./admin-roles.controller";
 import { completeOrder, processStuckOrder } from "./admin-orders.controller";
 import { adminRefundOrder } from "./admin-refunds.controller";
-import { suspendVendor, unsuspendVendor } from "./admin-vendors.controller";
+import { inviteVendor, suspendVendor, unsuspendVendor } from "./admin-vendors.controller";
+import { getAdminAutomationSummary } from "../automation/automation.controller";
+import { adminListSubscriptionExceptions } from "../regular-deliveries/regular-deliveries.controller";
+import {
+  adminApproveCampaign,
+  adminListCampaignsForReview,
+  adminListRecentlyClosedCampaigns,
+  adminListMarketConfigurations,
+  adminListPendingOrganisers,
+  adminListPendingSuppliers,
+  adminListRefunds,
+  adminPauseCampaign,
+  adminResumeCampaign,
+  adminRejectCampaign,
+  adminRequestCampaignChanges,
+  adminUpdateMarketConfiguration,
+  adminVerifyOrganiser,
+  adminVerifySupplier,
+} from "../community-buy/community-buy.controller";
 import {
   disable2fa,
   regenerateBackupCodes,
@@ -136,11 +155,21 @@ import { adminResetUsers } from "./admin-reset.controller";
 
 export const adminRouter = Router();
 
-// Dev/reset utility � bypass auth with debug key
-adminRouter.post("/reset-users", asyncHandler(async (req, res) => {
-  if (req.headers["x-debug-key"] !== "eki-debug-2026") throw new AppError("Forbidden", 403);
-  await adminResetUsers(req, res);
-}));
+// Dev/QA-only database reset+reseed utility — truncates nearly every table.
+// Hard-blocked outside non-production environments (regardless of role) and
+// still requires a real authenticated ADMIN session; never reachable by an
+// unauthenticated request in any environment.
+adminRouter.post(
+  "/reset-users",
+  authenticate,
+  requireRole("ADMIN"),
+  asyncHandler(async (req, res) => {
+    if (env.nodeEnv === "production") {
+      throw new AppError("Not found", 404);
+    }
+    await adminResetUsers(req, res);
+  }),
+);
 
 adminRouter.use(authenticate, requireRole("ADMIN"));
 
@@ -158,6 +187,24 @@ adminRouter.get("/analytics/payments", asyncHandler(requireAdminPermission("anal
 adminRouter.get("/analytics/geography", asyncHandler(requireAdminPermission("analytics.read")), asyncHandler(getAnalyticsGeography));
 adminRouter.get("/revenue", asyncHandler(requireAdminPermission("analytics.read")), asyncHandler(getAdminRevenue));
 adminRouter.get("/audit-logs", asyncHandler(requireAdminPermission("audit.read")), asyncHandler(listAuditLogs));
+adminRouter.get("/automation/summary", asyncHandler(requireAdminPermission("analytics.read")), asyncHandler(getAdminAutomationSummary));
+adminRouter.get("/subscription-exceptions", asyncHandler(requireAdminPermission("orders.read")), asyncHandler(adminListSubscriptionExceptions));
+
+// Community Buy
+adminRouter.get("/community-campaigns/review", asyncHandler(requireAdminPermission("community_buy.read")), asyncHandler(adminListCampaignsForReview));
+adminRouter.get("/community-campaigns/closed", asyncHandler(requireAdminPermission("community_buy.read")), asyncHandler(adminListRecentlyClosedCampaigns));
+adminRouter.post("/community-campaigns/:id/approve", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(adminApproveCampaign));
+adminRouter.post("/community-campaigns/:id/request-changes", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(adminRequestCampaignChanges));
+adminRouter.post("/community-campaigns/:id/reject", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(adminRejectCampaign));
+adminRouter.post("/community-campaigns/:id/pause", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(adminPauseCampaign));
+adminRouter.post("/community-campaigns/:id/resume", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(adminResumeCampaign));
+adminRouter.get("/community-buy/organisers/pending", asyncHandler(requireAdminPermission("community_buy.read")), asyncHandler(adminListPendingOrganisers));
+adminRouter.post("/community-buy/organisers/:id/verify", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(adminVerifyOrganiser));
+adminRouter.get("/community-buy/suppliers/pending", asyncHandler(requireAdminPermission("community_buy.read")), asyncHandler(adminListPendingSuppliers));
+adminRouter.post("/community-buy/suppliers/:id/verify", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(adminVerifySupplier));
+adminRouter.get("/community-buy/refunds", asyncHandler(requireAdminPermission("community_buy.read")), asyncHandler(adminListRefunds));
+adminRouter.get("/community-buy/markets", asyncHandler(requireAdminPermission("community_buy.read")), asyncHandler(adminListMarketConfigurations));
+adminRouter.patch("/community-buy/markets/:id", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(adminUpdateMarketConfiguration));
 
 // Listings
 adminRouter.get("/users", asyncHandler(requireAdminPermission("users.read")), asyncHandler(listUsers));
@@ -170,6 +217,7 @@ adminRouter.delete("/vendors/:id", asyncHandler(requireAdminPermission("vendors.
 adminRouter.post("/vendors/bulk-approve", asyncHandler(requireAdminPermission("vendors.mutate")), asyncHandler(bulkApproveVendors));
 adminRouter.post("/vendors/bulk-reject", asyncHandler(requireAdminPermission("vendors.mutate")), asyncHandler(bulkRejectVendors));
 adminRouter.post("/vendors/bulk-suspend", asyncHandler(requireAdminPermission("vendors.mutate")), asyncHandler(require2fa), asyncHandler(bulkSuspendVendors));
+adminRouter.post("/vendors/invite", asyncHandler(requireAdminPermission("vendors.mutate")), asyncHandler(inviteVendor));
 adminRouter.get("/products", asyncHandler(requireAdminPermission("products.read")), asyncHandler(listProducts));
 adminRouter.get("/products/:id", asyncHandler(requireAdminPermission("products.read")), asyncHandler(getProduct));
 adminRouter.get("/orders", asyncHandler(requireAdminPermission("orders.read")), asyncHandler(listOrders));

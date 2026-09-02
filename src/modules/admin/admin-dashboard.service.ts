@@ -40,6 +40,8 @@ export const adminDashboardService = {
   async getDashboard(): Promise<AdminDashboardData> {
     const weekStart = startOfWeek();
 
+    const sevenDaysFromNow = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+
     const [
       totalVendors,
       pendingApprovals,
@@ -50,6 +52,8 @@ export const adminDashboardService = {
       newVendorsThisWeek,
       newOrdersThisWeek,
       revenueAgg,
+      pendingPayoutsCount,
+      expiringSubscriptionsCount,
     ] = await Promise.all([
       prisma.vendor.count(),
       prisma.vendor.count({ where: { verificationStatus: "PENDING" } }),
@@ -62,6 +66,10 @@ export const adminDashboardService = {
       prisma.payment.aggregate({
         where: { status: "SUCCEEDED" },
         _sum: { amount: true },
+      }),
+      prisma.payoutRequest.count({ where: { status: "PENDING" } }),
+      prisma.vendorSubscription.count({
+        where: { status: "ACTIVE", currentPeriodEnd: { not: null, lte: sevenDaysFromNow } },
       }),
     ]);
 
@@ -78,6 +86,8 @@ export const adminDashboardService = {
       totalBuyers,
       newVendorsThisWeek,
       newOrdersThisWeek,
+      pendingPayoutsCount,
+      expiringSubscriptionsCount,
       currency: env.defaultCurrency,
     };
   },

@@ -39,3 +39,12 @@ export async function unsuspendVendor(request: Request, response: Response): Pro
   );
   response.status(200).json({ vendor });
 }
+
+export async function inviteVendor(request: Request, response: Response): Promise<void> {
+  const email =
+    request.body && typeof request.body === "object" && typeof request.body.email === "string"
+      ? request.body.email
+      : "";
+  const result = await adminVendorsService.inviteVendor(requireUserId(request), email);
+  response.status(200).json(result);
+}

@@ -12,8 +12,9 @@ vi.mock("../lib/prisma", () => ({
     vendor: { findUnique: vi.fn() },
     wallet: { findUnique: vi.fn() },
     orderItem: { findMany: vi.fn() },
-    payment: { findMany: vi.fn() },
+    payment: { findMany: vi.fn(), aggregate: vi.fn() },
     paystackTransaction: { findMany: vi.fn() },
+    payoutRequest: { aggregate: vi.fn() },
   },
 }));
 
@@ -22,6 +23,8 @@ import { getVendorRevenue } from "../modules/vendors/vendors-revenue.controller"
 import { getAdminRevenue } from "../modules/admin/admin-revenue.controller";
 
 const m = vi.mocked(prisma, true);
+m.payment.aggregate.mockResolvedValue({ _sum: { platformFeeAmount: 0, vendorEarningsAmount: 0 } } as never);
+m.payoutRequest.aggregate.mockResolvedValue({ _sum: { amount: 0 } } as never);
 
 function createMockReq(opts: { user?: { id: string; role: string; email: string }; query?: Record<string, unknown> } = {}): Request {
   return {
@@ -163,7 +166,7 @@ describe("getAdminRevenue", () => {
     await getAdminRevenue(req, res as unknown as Response);
 
     const body = res.data as Record<string, unknown> & { series: unknown[] };
-    expect(body.totalRevenue).toBe(0);
+    expect(body.grossRevenue).toBe(0);
     expect(body.stripeRevenue).toBe(0);
     expect(body.paystackRevenue).toBe(0);
     expect(body.orderCount).toBe(0);
@@ -189,7 +192,7 @@ describe("getAdminRevenue", () => {
     const body = res.data as Record<string, unknown> & {
       series: { date: string; revenue: number; stripeRevenue: number; paystackRevenue: number; orders: number }[];
     };
-    expect(body.totalRevenue).toBe(7000);
+    expect(body.grossRevenue).toBe(7000);
     expect(body.stripeRevenue).toBe(4000);
     expect(body.paystackRevenue).toBe(3000);
     expect(body.orderCount).toBe(3);

@@ -270,7 +270,7 @@ export const DEFAULT_PLAN_CONFIGS: Record<SubscriptionPlan, SubscriptionPlanConf
     orderManagement: true,
     storeLinkSharing: true,
     canReceiveOrders: true,
-    isActive: true,
+    isActive: false,
     isDefault: false,
     displayOrder: 30,
     commissionTiers: [
@@ -377,7 +377,7 @@ export const DEFAULT_SELLER_PLAN_CONFIGS: SubscriptionPlanConfigInput[] = [
     plan: "PRO",
     slug: "pro",
     name: "Pro",
-    description: "Advanced seller plan with admin-configurable custom fees and priority support.",
+    description: "Advanced seller plan with admin-configurable custom fees and priority support. Not currently offered — Growth is the only paid vendor plan.",
     monthlyPriceCents: 7999,
     platformFeeBps: 800,
     defaultPlatformFeeBps: 800,
@@ -400,7 +400,7 @@ export const DEFAULT_SELLER_PLAN_CONFIGS: SubscriptionPlanConfigInput[] = [
     orderManagement: true,
     storeLinkSharing: true,
     canReceiveOrders: true,
-    isActive: true,
+    isActive: false,
     isDefault: false,
     displayOrder: 20,
     commissionTiers: [

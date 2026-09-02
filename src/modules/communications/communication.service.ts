@@ -343,13 +343,16 @@ export const communicationService = {
   },
 
   async getStats() {
+    // "Last 30 Days" per the admin dashboard label this feeds.
+    const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+    const since = { createdAt: { gte: thirtyDaysAgo } };
     const [totalSent, totalFailed, totalQueued, total, byEvent, byChannel] = await Promise.all([
-      prisma.communicationLog.count({ where: { status: "SENT" } }),
-      prisma.communicationLog.count({ where: { status: "FAILED" } }),
-      prisma.communicationLog.count({ where: { status: "QUEUED" } }),
-      prisma.communicationLog.count(),
-      prisma.communicationLog.groupBy({ by: ["eventKey"], _count: { id: true } }),
-      prisma.communicationLog.groupBy({ by: ["channel"], _count: { id: true } }),
+      prisma.communicationLog.count({ where: { status: "SENT", ...since } }),
+      prisma.communicationLog.count({ where: { status: "FAILED", ...since } }),
+      prisma.communicationLog.count({ where: { status: "QUEUED", ...since } }),
+      prisma.communicationLog.count({ where: since }),
+      prisma.communicationLog.groupBy({ by: ["eventKey"], where: since, _count: { id: true } }),
+      prisma.communicationLog.groupBy({ by: ["channel"], where: since, _count: { id: true } }),
     ]);
     return {
       total,

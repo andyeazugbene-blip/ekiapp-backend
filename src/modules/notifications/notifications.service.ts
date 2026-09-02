@@ -47,53 +47,46 @@ export const notificationsService = {
   // working in local dev. Never throws — notifications must not break
   // the calling business operation.
   //
-  // After the DB record is created, fire an Expo push notification if
-  // the user has registered push tokens. This ensures push notifications
-  // work even when no Redis/worker infrastructure is available.
+  // Always persists the Notification row directly and fires an Expo push —
+  // does not depend on the BullMQ notifications queue being drained by a
+  // worker. notifications.worker.ts is written to run as a standalone
+  // long-lived process (its own comment says so); nothing in this repo's
+  // deployment config (Vercel serverless functions only, confirmed via
+  // vercel.json / api/index.ts) actually runs it. If REDIS_URL were ever
+  // set in production without also deploying that worker elsewhere, the
+  // old code here would silently queue notifications that nothing ever
+  // processes — the in-app Notification row would just never be created,
+  // even though (confusingly) the push still went out via the code below.
+  // Still best-effort-enqueues afterwards so a real worker, if deployed,
+  // has a record for retries/analytics — but delivery never depends on it.
   async enqueue(input: CreateNotificationInput): Promise<void> {
+    try {
+      await this.create(input);
+    } catch (error) {
+      logger.error("Notification insert failed", {
+        type: input.type,
+        errorMessage: error instanceof Error ? error.message : String(error),
+      });
+    }
+
+    // Fire Expo push after saving to DB — awaited for serverless.
+    await sendPushToUser(input.userId, {
+      title: input.title,
+      body: input.body ?? "",
+      data: input.data as Record<string, unknown> | undefined,
+    }).catch((error) => {
+      logger.warn("Push notification send failed (non-blocking)", {
+        userId: input.userId,
+        errorMessage: error instanceof Error ? error.message : String(error),
+      });
+    });
+
     if (notificationsQueue) {
-      try {
-        await notificationsQueue.add(NOTIFICATION_JOB, input, {
-          jobId: undefined,
-        });
-        // Send Expo push — awaited so it doesn't get cancelled by
-        // Vercel's serverless function lifecycle.
-        await sendPushToUser(input.userId, {
-          title: input.title,
-          body: input.body ?? "",
-          data: input.data as Record<string, unknown> | undefined,
-        }).catch((error) => {
-          logger.warn("Push notification send failed (non-blocking)", {
-            userId: input.userId,
-            errorMessage: error instanceof Error ? error.message : String(error),
-          });
-        });
-        return;
-      } catch (error) {
-        logger.warn("Notification enqueue failed, falling back to direct insert", {
+      notificationsQueue.add(NOTIFICATION_JOB, input, { jobId: undefined }).catch((error) => {
+        logger.warn("Notification best-effort enqueue failed (non-blocking)", {
           type: input.type,
           errorMessage: error instanceof Error ? error.message : String(error),
         });
-      }
-    }
-
-    try {
-      await this.create(input);
-      // Fire Expo push after saving to DB — awaited for serverless
-      await sendPushToUser(input.userId, {
-        title: input.title,
-        body: input.body ?? "",
-        data: input.data as Record<string, unknown> | undefined,
-      }).catch((error) => {
-        logger.warn("Push notification send failed (non-blocking)", {
-          userId: input.userId,
-          errorMessage: error instanceof Error ? error.message : String(error),
-        });
-      });
-    } catch (error) {
-      logger.error("Notification fallback insert failed", {
-        type: input.type,
-        errorMessage: error instanceof Error ? error.message : String(error),
       });
     }
   },

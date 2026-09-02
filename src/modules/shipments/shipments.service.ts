@@ -112,6 +112,8 @@ export const shipmentsService = {
           ? "DELIVERED"
           : null;
 
+    let orderStatusApplied = false;
+
     const updated = await prisma.$transaction(async (tx) => {
       const nextShipment = await tx.shipment.update({
         where: { id: shipmentId },
@@ -131,23 +133,12 @@ export const shipmentsService = {
           },
         });
 
-        if (orderUpdate.count === 1) {
-          const order = await tx.order.findUnique({
-            where: { id: shipment.orderId },
-            select: { buyerId: true, orderNumber: true },
-          });
-          if (order) {
-            await tx.notification.create({
-              data: {
-                userId: order.buyerId,
-                type: "ADMIN_BROADCAST",
-                title: "Order status updated",
-                body: `Order ${order.orderNumber} is now ${nextOrderStatus.toLowerCase().replace("_", " ")}.`,
-                data: { type: "order_status", orderId: shipment.orderId, status: nextOrderStatus },
-              },
-            });
-          }
-        }
+        // Buyer notification (in-app row + push) is sent once, after the
+        // transaction commits, via notificationsService.enqueue below — only
+        // when the order actually transitioned. Do not also insert a raw
+        // Notification row here: that previously sent the buyer a second,
+        // mislabeled ("ADMIN_BROADCAST") duplicate for the same change.
+        orderStatusApplied = orderUpdate.count === 1;
       }
 
       return nextShipment;
@@ -155,7 +146,7 @@ export const shipmentsService = {
 
     // Earnings already released on DISPATCHED — no release here
 
-    if (nextOrderStatus) {
+    if (nextOrderStatus && orderStatusApplied) {
       const order = await prisma.order.findUnique({
         where: { id: shipment.orderId },
         select: { buyerId: true, orderNumber: true },

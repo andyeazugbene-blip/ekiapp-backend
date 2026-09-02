@@ -13,6 +13,7 @@ const TESTS_DIR = path.resolve("src/tests");
 const MONEY_ADJACENT = new Set([
   "payments", "stripe", "paystack", "buyer-wallet", "payouts",
   "orders", "subscriptions", "referrals", "promos",
+  "regular-deliveries", "community-buy",
 ]);
 
 function main() {
@@ -35,10 +36,15 @@ function main() {
 
   for (const mod of modules) {
     const money = MONEY_ADJACENT.has(mod);
-    // Check for direct test file
-    const directTest = testFiles.some(f => f.includes(mod.replace(/-/g, "")));
+    const normalizedMod = mod.replace(/-/g, "");
+    // Check for direct test file. Both sides are hyphen-stripped — a
+    // hyphenated module (e.g. "regular-deliveries") must match a
+    // hyphenated filename ("regular-deliveries-renewals.test.ts"), which a
+    // naive `f.includes(normalizedMod)` never can since the filename still
+    // contains hyphens breaking the substring match.
+    const directTest = testFiles.some(f => f.replace(/-/g, "").includes(normalizedMod));
     // Check for transitive coverage (module name mentioned in any test)
-    const transitive = testContent.some(t => t.content.includes(mod.replace(/-/g, "")));
+    const transitive = testContent.some(t => t.content.replace(/-/g, "").includes(normalizedMod));
 
     let status: string;
     if (directTest) status = "DIRECT_TESTED";

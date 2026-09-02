@@ -24,6 +24,7 @@ const EXCLUDE_PATTERNS = [/\.test\.ts$/, /tests\//, /\.d\.ts$/];
 const ALLOWLIST_FILES = [
   "src/lib/sentry.ts",
   "src/modules/public-stores/public-stores.page.ts", // CSS class names use "placeholder"
+  "src/modules/public-site/public-site.page.ts", // Legal/policy copy legitimately discusses "fake" accounts/reviews and "temporary" suspension
 ];
 
 function scanFile(filePath: string): { file: string; line: number; phrase: string; text: string }[] {

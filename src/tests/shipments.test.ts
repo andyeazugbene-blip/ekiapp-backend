@@ -5,29 +5,22 @@ vi.mock("../lib/prisma", () => ({
     vendor: { findUnique: vi.fn() },
     shipment: { findUnique: vi.fn(), update: vi.fn() },
     order: { updateMany: vi.fn(), findUnique: vi.fn() },
-    notification: { create: vi.fn() },
     $transaction: vi.fn(async (cb: any) =>
       cb({
         shipment: m.shipment,
         order: m.order,
-        notification: m.notification,
       }),
     ),
   },
 }));
 
-vi.mock("../lib/push-notifications", () => ({
-  pushNotifications: { orderStatusUpdate: vi.fn() },
+vi.mock("../modules/notifications/notifications.service", () => ({
+  notificationsService: { enqueue: vi.fn() },
 }));
 
-vi.mock("../shared/utils/wallet-release", () => ({
-  releaseVendorEarnings: vi.fn().mockResolvedValue({ released: true, amount: 1000 }),
-}));
-
-import { pushNotifications } from "../lib/push-notifications";
 import { prisma } from "../lib/prisma";
+import { notificationsService } from "../modules/notifications/notifications.service";
 import { shipmentsService } from "../modules/shipments/shipments.service";
-import { releaseVendorEarnings } from "../shared/utils/wallet-release";
 
 const m = vi.mocked(prisma, true);
 
@@ -47,7 +40,6 @@ describe("shipmentsService.updateShipment", () => {
     m.shipment.update.mockResolvedValue({ id: "shipment-1", status: "DELIVERED" } as never);
     m.order.updateMany.mockResolvedValue({ count: 1 } as never);
     m.order.findUnique.mockResolvedValue({ buyerId: "buyer-1", orderNumber: "EKI-1" } as never);
-    m.notification.create.mockResolvedValue({ id: "notification-1" } as never);
 
     const result = await shipmentsService.updateShipment("vendor-user-1", "shipment-1", { status: "DELIVERED" });
 
@@ -58,13 +50,16 @@ describe("shipmentsService.updateShipment", () => {
         data: expect.objectContaining({ status: "DELIVERED" }),
       }),
     );
-    expect(m.notification.create).toHaveBeenCalledWith(
+    // Exactly one buyer notification (in-app + push) via notificationsService.enqueue —
+    // not a second, separate raw Notification row inside the transaction.
+    expect(notificationsService.enqueue).toHaveBeenCalledTimes(1);
+    expect(notificationsService.enqueue).toHaveBeenCalledWith(
       expect.objectContaining({
-        data: expect.objectContaining({ userId: "buyer-1", data: { orderId: "order-1", status: "DELIVERED" } }),
+        userId: "buyer-1",
+        data: expect.objectContaining({ orderId: "order-1", status: "DELIVERED" }),
       }),
     );
-    expect(releaseVendorEarnings).toHaveBeenCalledWith("order-1");
-    expect(pushNotifications.orderStatusUpdate).toHaveBeenCalledWith("buyer-1", "EKI-1", "DELIVERED");
+    // Vendor earnings are released on DISPATCHED (orders.service.ts), not here.
   });
 
   it("rejects vendors that do not own the shipment", async () => {

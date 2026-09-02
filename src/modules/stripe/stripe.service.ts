@@ -4,7 +4,6 @@ import type Stripe from "stripe";
 import { env } from "../../config/env";
 import { logger, serializeError } from "../../lib/logger";
 import { prisma } from "../../lib/prisma";
-import { pushNotifications } from "../../lib/push-notifications";
 import { stripe } from "../../lib/stripe";
 import { notificationsService } from "../notifications/notifications.service";
 import { referralsService } from "../referrals/referrals.service";
@@ -102,10 +101,15 @@ class StripeWebhookService {
     }
 
     let paidOrders: { id: string; vendorId: string | null; items: { vendorId: string }[] }[] = [];
+    // Captures the transaction's early-exit result (ignored/duplicate) so it
+    // actually reaches the caller instead of being silently discarded.
+    let earlyResult: StripeWebhookResult | null = null;
 
     try {
-      await prisma.$transaction(async (tx) => {
-        if (await this.isDuplicate(tx, event.id, event.type, { checkoutId })) return;
+      earlyResult = await prisma.$transaction(async (tx) => {
+        if (await this.isDuplicate(tx, event.id, event.type, { checkoutId })) {
+          return { received: true, duplicate: true, eventId: event.id, type: event.type };
+        }
 
         const checkout = await tx.checkout.findUnique({
           where: { id: checkoutId },
@@ -200,6 +204,9 @@ class StripeWebhookService {
         logger.info("Webhook processed: payment succeeded", {
           eventId: event.id, checkoutId, orderCount: checkout.orders.length,
         });
+        // null = real success; let the caller fall through to fire
+        // notifications and referral/reward side effects below.
+        return null;
       }, { isolationLevel: "Serializable" });
     } catch (error) {
       if (this.isUniqueConstraintError(error)) {
@@ -207,6 +214,10 @@ class StripeWebhookService {
       }
       logger.error("Webhook failed: payment processing", { eventId: event.id, ...serializeError(error) });
       throw error;
+    }
+
+    if (earlyResult) {
+      return earlyResult;
     }
 
     // Fire notifications AFTER transaction commits
@@ -406,8 +417,30 @@ class StripeWebhookService {
         }
 
         const now = new Date();
-        const periodEnd = new Date(now);
+        let periodStart = now;
+        let periodEnd = new Date(now);
         periodEnd.setMonth(periodEnd.getMonth() + 1);
+        try {
+          const stripeSubscription = await stripe.subscriptions.retrieve(stripeSubscriptionId);
+          // Billing-period dates live on the subscription item, not the
+          // subscription itself, as of the "basil" API version. During a
+          // trial, the item's current_period_end is the trial end date.
+          const item = stripeSubscription.items.data[0];
+          if (item?.current_period_start) {
+            periodStart = new Date(item.current_period_start * 1000);
+          }
+          if (item?.current_period_end) {
+            periodEnd = new Date(item.current_period_end * 1000);
+          }
+        } catch (retrieveError) {
+          // Fall back to the estimated monthly period below rather than fail
+          // the whole webhook if Stripe is briefly unreachable.
+          logger.warn("Could not retrieve Stripe subscription for period dates, using estimate", {
+            eventId: event.id,
+            stripeSubscriptionId,
+            ...serializeError(retrieveError),
+          });
+        }
         const legacyPlan = sellerPlanSlug.toUpperCase();
         const sellerPlan = await tx.sellerPlan.findFirst({
           where: {
@@ -439,7 +472,7 @@ class StripeWebhookService {
             sellerPlanId: sellerPlan.id,
             status: "ACTIVE",
             stripeSubscriptionId,
-            currentPeriodStart: now,
+            currentPeriodStart: periodStart,
             currentPeriodEnd: periodEnd,
             cancelledAt: null,
           },
@@ -449,7 +482,7 @@ class StripeWebhookService {
             sellerPlanId: sellerPlan.id,
             status: "ACTIVE",
             stripeSubscriptionId,
-            currentPeriodStart: now,
+            currentPeriodStart: periodStart,
             currentPeriodEnd: periodEnd,
           },
         });
@@ -685,17 +718,18 @@ class StripeWebhookService {
   }
 
   private async sendSuccessNotificationsAsync(buyerId: string, orders: { id: string; vendorId: string | null; items: { vendorId: string }[] }[]): Promise<void> {
-    // In-app notifications
+    // In-app notification + push to buyer (single send — enqueue() already
+    // sends the push; a separate pushNotifications.orderPaid() call here
+    // previously double-notified the buyer for one payment).
     notificationsService.enqueue({
       userId: buyerId,
       type: NotificationType.ORDER_PAID,
-      title: "Your order has been paid",
-      body: `${orders.length} order(s) confirmed.`,
-      data: { orderIds: orders.map((o) => o.id) },
+      title: "Order Confirmed! 🎉",
+      body: orders.length > 1
+        ? `Your ${orders.length} orders have been confirmed.`
+        : "Your order has been confirmed.",
+      data: { type: "order_paid", orderIds: orders.map((o) => o.id) },
     }).catch(() => {});
-
-    // Push notification to buyer
-    pushNotifications.orderPaid(buyerId, orders.length);
 
     for (const order of orders) {
       const vendorId = order.vendorId ?? order.items[0]?.vendorId;
@@ -752,14 +786,15 @@ class StripeWebhookService {
 
       // ─── Vendor notification ─────────────────────────────────────────
       if (vendorInfo.userId) {
+        // Single send — see buyer notification above for why this isn't
+        // also followed by a separate pushNotifications.vendorNewOrder() call.
         notificationsService.enqueue({
           userId: vendorInfo.userId,
           type: NotificationType.BALANCE_CREDITED,
-          title: "New order received",
-          body: `Order ${order.id} has been paid.`,
-          data: { orderId: order.id },
+          title: "New Order! 🛒",
+          body: "You have a new order to process.",
+          data: { type: "new_order", orderId: order.id },
         }).catch(() => {});
-        pushNotifications.vendorNewOrder(vendorInfo.userId, order.id);
 
         // Check vendor first order
         const vendorOrderCount = await prisma.order.count({

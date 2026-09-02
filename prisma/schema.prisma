@@ -105,6 +105,17 @@ enum NotificationType {
   PAYOUT_REJECTED
   PAYOUT_PAID
   ADMIN_BROADCAST
+  // Diaspora Expansion — Regular Deliveries. Sub-event is carried in
+  // Notification.data.event (e.g. "renewal_upcoming", "payment_failed"),
+  // matching the existing order_status sub-typing convention rather than
+  // adding a new enum value per event.
+  SUBSCRIPTION_UPDATE
+  // Diaspora Expansion — Automation Engine. Sub-type is carried in
+  // Notification.data.automationType.
+  AUTOMATION_MESSAGE
+  // Diaspora Expansion — Community Buy. Sub-event is carried in
+  // Notification.data.event (e.g. "milestone_reached", "refund_started").
+  COMMUNITY_CAMPAIGN_UPDATE
 }
 
 enum ReviewStatus {
@@ -133,6 +144,11 @@ model User {
   trustScore              Int                   @default(50)
   smsMarketingConsentAt   DateTime?
   smsTransactionalEnabled Boolean               @default(true)
+  // Diaspora Expansion: consent for automated marketing messages (push +
+  // email) sent by the Automation Engine — e.g. cart recovery, win-back,
+  // review requests. Distinct from smsMarketingConsentAt (SMS-only) and
+  // never gates transactional messages (order/payment status).
+  marketingConsentAt      DateTime?
   role                    UserRole              @default(BUYER)
   vendor                  Vendor?
   orders                  Order[]               @relation("BuyerOrders")
@@ -141,6 +157,11 @@ model User {
   purchasedGiftCards      PurchasedGiftCard[]
   adminTwoFactor          AdminTwoFactor?
   adminRoleAssignments    AdminRoleAssignment[]
+  organiserProfile        OrganiserProfile?
+  buyerSubscriptions      BuyerSubscription[]
+  buyerPaymentMethods     BuyerPaymentMethod[]
+  automationRuns          AutomationRun[]
+  campaignParticipations  CampaignParticipant[]
   createdAt               DateTime              @default(now())
   updatedAt               DateTime              @updatedAt
 
@@ -150,42 +171,46 @@ model User {
 }
 
 model Vendor {
-  id                   String                   @id @default(cuid())
-  userId               String                   @unique
-  storeName            String                   @unique
-  storeSlug            String                   @unique
-  description          String?
-  contactEmail         String?
-  contactPhone         String?
-  country              String?
-  city                 String?
-  businessType         String?
-  sellerRegion         String?
-  currency             String                   @default("EUR")
-  avatar               String?
-  coverImage           String?
-  isSuspended          Boolean                  @default(false)
-  suspendedReason      String?
-  stripeAccountId      String?                  @unique
-  stripeAccountStatus  String?
-  stripePayoutsEnabled Boolean                  @default(false)
-  stripeChargesEnabled Boolean                  @default(false)
-  stripeOnboardedAt            DateTime?
-  verificationStatus           VendorVerificationStatus @default(PENDING)
-  stripeVerificationSessionId  String?
-  verifiedAt                   DateTime?
-  verificationFailureReason    String?
-  user                         User                     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  wallet               Wallet?
-  products             Product[]
-  orderItems           OrderItem[]
-  walletTransactions   WalletTransaction[]
-  payoutMethods        PayoutMethod[]
-  payoutRequests       PayoutRequest[]
-  bankAccounts         VendorBankAccount[]
-  promoCodes           PromoCode[]
-  createdAt            DateTime                 @default(now())
-  updatedAt            DateTime                 @updatedAt
+  id                          String                    @id @default(cuid())
+  userId                      String                    @unique
+  storeName                   String                    @unique
+  storeSlug                   String                    @unique
+  description                 String?
+  contactEmail                String?
+  contactPhone                String?
+  country                     String?
+  city                        String?
+  businessType                String?
+  sellerRegion                String?
+  currency                    String                    @default("EUR")
+  avatar                      String?
+  coverImage                  String?
+  isSuspended                 Boolean                   @default(false)
+  suspendedReason             String?
+  stripeAccountId             String?                   @unique
+  stripeAccountStatus         String?
+  stripePayoutsEnabled        Boolean                   @default(false)
+  stripeChargesEnabled        Boolean                   @default(false)
+  stripeOnboardedAt           DateTime?
+  verificationStatus          VendorVerificationStatus  @default(PENDING)
+  stripeVerificationSessionId String?
+  verifiedAt                  DateTime?
+  verificationFailureReason   String?
+  user                        User                      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  wallet                      Wallet?
+  products                    Product[]
+  orderItems                  OrderItem[]
+  walletTransactions          WalletTransaction[]
+  payoutMethods               PayoutMethod[]
+  payoutRequests              PayoutRequest[]
+  bankAccounts                VendorBankAccount[]
+  promoCodes                  PromoCode[]
+  supplierProfile             SupplierProfile?
+  subscriptionOffers          SubscriptionOffer[]
+  automationSettings          VendorAutomationSetting[]
+  automationRuns              AutomationRun[]
+  createdAt                   DateTime                  @default(now())
+  updatedAt                   DateTime                  @updatedAt
 
   @@index([verificationStatus, createdAt])
   @@index([createdAt])
@@ -234,25 +259,28 @@ model PayoutRequest {
 }
 
 model Product {
-  id           String      @id @default(cuid())
-  productCode  String?     @unique
-  vendorId     String
-  title        String
-  description  String?
-  priceInCents Int
-  costAmount   Int?
-  costCurrency String?
-  currency     String      @default("EUR")
-  images       String[]    @default([])
-  category     String?
-  stock        Int         @default(0)
-  weightGrams  Int?
-  isActive     Boolean     @default(true)
-  vendor       Vendor      @relation(fields: [vendorId], references: [id], onDelete: Restrict)
-  orderItems   OrderItem[]
-  cartItems    CartItem[]
-  createdAt    DateTime    @default(now())
-  updatedAt    DateTime    @updatedAt
+  id                        String                     @id @default(cuid())
+  productCode               String?                    @unique
+  vendorId                  String
+  title                     String
+  description               String?
+  priceInCents              Int
+  costAmount                Int?
+  costCurrency              String?
+  currency                  String                     @default("EUR")
+  images                    String[]                   @default([])
+  category                  String?
+  stock                     Int                        @default(0)
+  weightGrams               Int?
+  isActive                  Boolean                    @default(true)
+  vendor                    Vendor                     @relation(fields: [vendorId], references: [id], onDelete: Restrict)
+  orderItems                OrderItem[]
+  cartItems                 CartItem[]
+  subscriptionOfferProducts SubscriptionOfferProduct[]
+  subscriptionItems         SubscriptionItem[]
+  renewalItems              RenewalItem[]
+  createdAt                 DateTime                   @default(now())
+  updatedAt                 DateTime                   @updatedAt
 
   @@unique([vendorId, title])
   @@index([productCode])
@@ -322,6 +350,7 @@ model Order {
   deliveryOtp         DeliveryOtp?
   dispute             Dispute?
   walletTransactions  WalletTransaction[]
+  renewal             Renewal?
   createdAt           DateTime             @default(now())
   updatedAt           DateTime             @updatedAt
 
@@ -679,7 +708,7 @@ model VerificationDocument {
 // ─── Phase 2: Buyer Addresses ───────────────────────────────────────────────
 
 model BuyerAddress {
-  id            String   @id @default(cuid())
+  id            String              @id @default(cuid())
   buyerId       String
   recipientName String
   line1         String
@@ -688,9 +717,10 @@ model BuyerAddress {
   postalCode    String
   country       String
   phone         String?
-  isDefault     Boolean  @default(false)
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  isDefault     Boolean             @default(false)
+  subscriptions BuyerSubscription[]
+  createdAt     DateTime            @default(now())
+  updatedAt     DateTime            @updatedAt
 
   @@index([buyerId])
 }
@@ -982,44 +1012,44 @@ model SubscriptionPlanConfig {
 }
 
 model SellerPlan {
-  id                    String               @id @default(cuid())
-  slug                  String               @unique
-  name                  String
-  description           String?
-  legacyPlan            SubscriptionPlan?    @unique
-  monthlyPriceCents     Int                  @default(0)
-  currency              String               @default("GBP")
-  stripePriceId         String?
-  stripeProductId       String?
-  defaultPlatformFeeBps Int                  @default(1500)
-  withdrawalFeeBps      Int                  @default(250)
-  maxProducts           Int                  @default(10)
-  maxImagesPerProduct   Int                  @default(3)
-  maxOrders             Int?
-  maxCoupons            Int?
-  maxBundles            Int?
-  analytics             Boolean              @default(false)
-  prioritySupport       Boolean              @default(false)
-  flashSales            Boolean              @default(false)
-  bundles               Boolean              @default(false)
-  discounts             Boolean              @default(false)
-  marketingTools        Boolean              @default(false)
-  customerDatabase      Boolean              @default(false)
-  repeatBuyerMarketing  Boolean              @default(false)
-  professionalStorefront Boolean             @default(false)
-  orderManagement       Boolean              @default(true)
-  storeLinkSharing      Boolean              @default(false)
-  canReceiveOrders      Boolean              @default(true)
-  isActive              Boolean              @default(true)
-  isDefault             Boolean              @default(false)
-  displayOrder          Int                  @default(0)
-  deletedAt             DateTime?
-  subscriptions         VendorSubscription[]
-  commissionTiers       CommissionTier[]
-  orders                Order[]
-  payments              Payment[]
-  createdAt             DateTime             @default(now())
-  updatedAt             DateTime             @updatedAt
+  id                     String               @id @default(cuid())
+  slug                   String               @unique
+  name                   String
+  description            String?
+  legacyPlan             SubscriptionPlan?    @unique
+  monthlyPriceCents      Int                  @default(0)
+  currency               String               @default("GBP")
+  stripePriceId          String?
+  stripeProductId        String?
+  defaultPlatformFeeBps  Int                  @default(1500)
+  withdrawalFeeBps       Int                  @default(250)
+  maxProducts            Int                  @default(10)
+  maxImagesPerProduct    Int                  @default(3)
+  maxOrders              Int?
+  maxCoupons             Int?
+  maxBundles             Int?
+  analytics              Boolean              @default(false)
+  prioritySupport        Boolean              @default(false)
+  flashSales             Boolean              @default(false)
+  bundles                Boolean              @default(false)
+  discounts              Boolean              @default(false)
+  marketingTools         Boolean              @default(false)
+  customerDatabase       Boolean              @default(false)
+  repeatBuyerMarketing   Boolean              @default(false)
+  professionalStorefront Boolean              @default(false)
+  orderManagement        Boolean              @default(true)
+  storeLinkSharing       Boolean              @default(false)
+  canReceiveOrders       Boolean              @default(true)
+  isActive               Boolean              @default(true)
+  isDefault              Boolean              @default(false)
+  displayOrder           Int                  @default(0)
+  deletedAt              DateTime?
+  subscriptions          VendorSubscription[]
+  commissionTiers        CommissionTier[]
+  orders                 Order[]
+  payments               Payment[]
+  createdAt              DateTime             @default(now())
+  updatedAt              DateTime             @updatedAt
 
   @@index([isActive, deletedAt, displayOrder])
   @@index([legacyPlan])
@@ -1245,9 +1275,9 @@ model Campaign {
 model CommunicationLog {
   id            String   @id @default(cuid())
   recipientId   String
-  recipientType String   // BUYER, VENDOR, ADMIN
+  recipientType String // BUYER, VENDOR, ADMIN
   eventKey      String
-  channel       String   // email, push, in_app, sms
+  channel       String // email, push, in_app, sms
   title         String
   body          String   @db.Text
   status        String   @default("SENT")
@@ -1262,32 +1292,32 @@ model CommunicationLog {
 
 // ─── Communication Templates (DB-backed, editable by admin) ─────────────────
 model CommunicationTemplate {
-  id        String   @id @default(cuid())
-  key       String   @unique
-  title     String
-  body      String   @db.Text
-  channels  String[] @default([])
-  recipientType String @default("BUYER")
-  enabled   Boolean  @default(true)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id            String   @id @default(cuid())
+  key           String   @unique
+  title         String
+  body          String   @db.Text
+  channels      String[] @default([])
+  recipientType String   @default("BUYER")
+  enabled       Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
 }
 
 // ─── Scheduled Communications ───────────────────────────────────────────────
 model ScheduledCommunication {
-  id           String   @id @default(cuid())
+  id           String    @id @default(cuid())
   audience     String
   channel      String
   templateKey  String?
   subject      String
-  body         String   @db.Text
-  status       String   @default("SCHEDULED") // SCHEDULED, SENT, FAILED, CANCELLED
+  body         String    @db.Text
+  status       String    @default("SCHEDULED") // SCHEDULED, SENT, FAILED, CANCELLED
   scheduledFor DateTime
   sentAt       DateTime?
   createdBy    String
   error        String?
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
 
   @@index([status, scheduledFor])
   @@index([createdBy])
@@ -1296,17 +1326,17 @@ model ScheduledCommunication {
 // ─── Content Reports & User Blocks ─────────────────────────────────────────
 
 model ContentReport {
-  id          String   @id @default(cuid())
-  reporterId  String
-  targetType  String   // "review" | "message" | "product" | "store"
-  targetId    String
-  reason      String   // "inappropriate" | "spam" | "harassment" | "fraud" | "other"
-  details     String?
-  status      String   @default("PENDING") // PENDING | REVIEWED | DISMISSED
-  reviewedBy  String?
-  reviewedAt  DateTime?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id         String    @id @default(cuid())
+  reporterId String
+  targetType String // "review" | "message" | "product" | "store"
+  targetId   String
+  reason     String // "inappropriate" | "spam" | "harassment" | "fraud" | "other"
+  details    String?
+  status     String    @default("PENDING") // PENDING | REVIEWED | DISMISSED
+  reviewedBy String?
+  reviewedAt DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
 
   @@index([reporterId])
   @@index([targetType, targetId])
@@ -1314,12 +1344,479 @@ model ContentReport {
 }
 
 model UserBlock {
-  id          String   @id @default(cuid())
-  blockerId   String
-  blockedId   String
-  createdAt   DateTime @default(now())
+  id        String   @id @default(cuid())
+  blockerId String
+  blockedId String
+  createdAt DateTime @default(now())
 
   @@unique([blockerId, blockedId])
   @@index([blockerId])
   @@index([blockedId])
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// DIASPORA EXPANSION — Automation Engine
+//
+// Message content/delivery/audit reuse the existing CommunicationTemplate
+// + communicationService.send() + CommunicationLog infrastructure (see
+// src/modules/communications). These models add only what that
+// infrastructure does not already provide: per-vendor on/off toggles,
+// and event→eligibility→dedupe→outcome tracking so the same trigger can
+// never fire twice for the same recipient, and so failures/suppressions
+// are auditable per the client spec.
+// ═══════════════════════════════════════════════════════════════════════
+
+enum AutomationType {
+  FIRST_SALE
+  CART_RECOVERY
+  BUYER_WIN_BACK
+  REVIEW_REQUEST
+  LOW_STOCK_ALERT
+  BUYER_REFERRAL
+  PAYMENT_RECOVERY
+  RENEWAL_REMINDER
+  PRICE_APPROVAL_REMINDER
+  CAMPAIGN_MILESTONE
+  CAMPAIGN_DEADLINE
+  CAMPAIGN_REFUND_UPDATE
+}
+
+enum AutomationRunStatus {
+  QUEUED
+  ELIGIBILITY_CHECK
+  SCHEDULED
+  SENT
+  SUPPRESSED
+  FAILED
+  CANCELLED
+}
+
+model VendorAutomationSetting {
+  id        String         @id @default(cuid())
+  vendorId  String
+  type      AutomationType
+  enabled   Boolean        @default(true)
+  vendor    Vendor         @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+  createdAt DateTime       @default(now())
+  updatedAt DateTime       @updatedAt
+
+  @@unique([vendorId, type])
+  @@index([vendorId])
+}
+
+model AutomationRun {
+  id                 String              @id @default(cuid())
+  type               AutomationType
+  vendorId           String?
+  recipientUserId    String
+  status             AutomationRunStatus @default(QUEUED)
+  // Prevents the same trigger firing twice for the same recipient, e.g.
+  // "cart-recovery:{cartId}" or "renewal-reminder:{renewalId}". Enforced
+  // at the DB level, not just in application logic.
+  dedupeKey          String              @unique
+  eligibleAt         DateTime            @default(now())
+  scheduledFor       DateTime?
+  sentAt             DateTime?
+  suppressedReason   String?
+  failureReason      String?
+  // Attribution: link back to the order/cart/campaign this run influenced,
+  // and the CommunicationLog row that actually delivered it.
+  communicationLogId String?
+  data               Json?
+  vendor             Vendor?             @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+  recipient          User                @relation(fields: [recipientUserId], references: [id], onDelete: Cascade)
+  createdAt          DateTime            @default(now())
+  updatedAt          DateTime            @updatedAt
+
+  @@index([type, status])
+  @@index([recipientUserId, type])
+  @@index([vendorId, type, createdAt])
+  @@index([status, scheduledFor])
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// DIASPORA EXPANSION — Regular Deliveries (buyer recurring foodstuff)
+//
+// Distinct from VendorSubscription/SellerPlan, which is the existing
+// vendor SaaS billing system and is untouched by this domain.
+//
+// Offer, subscription, renewal and order are kept as four separate
+// records per the spec: a renewal only produces a real Order (reusing
+// the existing Order/OrderItem/Payment models) once its payment has been
+// independently verified — an unpaid renewal is never visible to the
+// vendor as an order.
+// ═══════════════════════════════════════════════════════════════════════
+
+enum SubscriptionFrequency {
+  WEEKLY
+  BIWEEKLY
+  MONTHLY
+}
+
+enum BuyerSubscriptionStatus {
+  DRAFT
+  ACTIVE
+  PAUSED
+  PAYMENT_ATTENTION
+  CANCELLED
+  EXPIRED
+}
+
+enum RenewalStatus {
+  SCHEDULED
+  AWAITING_STOCK
+  AWAITING_PRICE_APPROVAL
+  READY_FOR_PAYMENT
+  PAYMENT_PROCESSING
+  PAYMENT_FAILED
+  PAID
+  ORDER_CREATED
+  SKIPPED
+  CANCELLED
+  EXPIRED
+}
+
+enum SubscriptionPaymentAttemptStatus {
+  PENDING
+  SUCCEEDED
+  FAILED
+}
+
+// A buyer's saved, reusable Stripe payment method — does not exist
+// anywhere in the current app (checkout today is always one-shot).
+model BuyerPaymentMethod {
+  id                    String              @id @default(cuid())
+  buyerId               String
+  stripeCustomerId      String
+  stripePaymentMethodId String              @unique
+  brand                 String?
+  last4                 String?
+  isDefault             Boolean             @default(false)
+  buyer                 User                @relation(fields: [buyerId], references: [id], onDelete: Cascade)
+  subscriptions         BuyerSubscription[]
+  createdAt             DateTime            @default(now())
+  updatedAt             DateTime            @updatedAt
+
+  @@index([buyerId])
+}
+
+model SubscriptionOffer {
+  id                 String                     @id @default(cuid())
+  vendorId           String
+  title              String
+  description        String?
+  frequencies        SubscriptionFrequency[]
+  substitutionPolicy String?
+  renewalCutoffHours Int                        @default(24)
+  isActive           Boolean                    @default(true)
+  vendor             Vendor                     @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+  products           SubscriptionOfferProduct[]
+  subscriptions      BuyerSubscription[]
+  createdAt          DateTime                   @default(now())
+  updatedAt          DateTime                   @updatedAt
+
+  @@index([vendorId, isActive])
+}
+
+model SubscriptionOfferProduct {
+  id        String            @id @default(cuid())
+  offerId   String
+  productId String
+  offer     SubscriptionOffer @relation(fields: [offerId], references: [id], onDelete: Cascade)
+  product   Product           @relation(fields: [productId], references: [id], onDelete: Cascade)
+  createdAt DateTime          @default(now())
+
+  @@unique([offerId, productId])
+  @@index([productId])
+}
+
+model BuyerSubscription {
+  id                          String                      @id @default(cuid())
+  buyerId                     String
+  offerId                     String
+  status                      BuyerSubscriptionStatus     @default(DRAFT)
+  frequency                   SubscriptionFrequency
+  deliveryAddressId           String
+  paymentMethodId             String?
+  // Price-change auto-approval threshold, basis points. A proposed price
+  // increase at or below this is auto-approved; above it requires the
+  // buyer's explicit decision on the renewal (spec §6.6).
+  priceChangeApprovalLimitBps Int                         @default(500)
+  nextRenewalAt               DateTime?
+  pausedUntil                 DateTime?
+  cancelledAt                 DateTime?
+  buyer                       User                        @relation(fields: [buyerId], references: [id], onDelete: Cascade)
+  offer                       SubscriptionOffer           @relation(fields: [offerId], references: [id], onDelete: Restrict)
+  deliveryAddress             BuyerAddress                @relation(fields: [deliveryAddressId], references: [id], onDelete: Restrict)
+  paymentMethod               BuyerPaymentMethod?         @relation(fields: [paymentMethodId], references: [id], onDelete: SetNull)
+  items                       SubscriptionItem[]
+  renewals                    Renewal[]
+  actionHistory               SubscriptionActionHistory[]
+  createdAt                   DateTime                    @default(now())
+  updatedAt                   DateTime                    @updatedAt
+
+  @@index([buyerId, status])
+  @@index([offerId])
+  @@index([status, nextRenewalAt])
+}
+
+model SubscriptionItem {
+  id             String            @id @default(cuid())
+  subscriptionId String
+  productId      String
+  quantity       Int               @default(1)
+  subscription   BuyerSubscription @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+  product        Product           @relation(fields: [productId], references: [id], onDelete: Cascade)
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+
+  @@unique([subscriptionId, productId])
+}
+
+model Renewal {
+  id                   String                       @id @default(cuid())
+  subscriptionId       String
+  // Uniqueness guard from spec §6.5: one renewal per subscription per
+  // scheduled cycle date, enforced at the DB level.
+  cycleDate            DateTime
+  status               RenewalStatus                @default(SCHEDULED)
+  stockConfirmedAt     DateTime?
+  stockConfirmedById   String?
+  priceChangeRequestId String?                      @unique
+  subtotalAmount       Int?
+  currency             String                       @default("GBP")
+  orderId              String?                      @unique
+  failureReason        String?
+  cancelledAt          DateTime?
+  subscription         BuyerSubscription            @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+  order                Order?                       @relation(fields: [orderId], references: [id], onDelete: SetNull)
+  priceChangeRequest   PriceChangeRequest?          @relation("RenewalPriceChange", fields: [priceChangeRequestId], references: [id], onDelete: SetNull)
+  items                RenewalItem[]
+  paymentAttempts      SubscriptionPaymentAttempt[]
+  createdAt            DateTime                     @default(now())
+  updatedAt            DateTime                     @updatedAt
+
+  @@unique([subscriptionId, cycleDate])
+  @@index([status])
+  @@index([subscriptionId, status])
+}
+
+model RenewalItem {
+  id                String   @id @default(cuid())
+  renewalId         String
+  productId         String
+  quantity          Int
+  previousUnitPrice Int
+  currentUnitPrice  Int
+  currency          String   @default("GBP")
+  stockAvailable    Boolean  @default(true)
+  renewal           Renewal  @relation(fields: [renewalId], references: [id], onDelete: Cascade)
+  product           Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  createdAt         DateTime @default(now())
+
+  @@index([renewalId])
+}
+
+model PriceChangeRequest {
+  id                   String    @id @default(cuid())
+  previousUnitPrice    Int
+  proposedUnitPrice    Int
+  percentageDifference Float
+  approvalLimitBps     Int
+  approvalRequired     Boolean
+  buyerDecision        String? // "accepted" | "declined" | null (pending)
+  decidedAt            DateTime?
+  renewal              Renewal?  @relation("RenewalPriceChange")
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+}
+
+model SubscriptionPaymentAttempt {
+  id                    String                           @id @default(cuid())
+  renewalId             String
+  attemptNumber         Int
+  status                SubscriptionPaymentAttemptStatus @default(PENDING)
+  // Idempotency key sent to Stripe: "{renewalId}:{attemptNumber}" — see
+  // spec §6.5. Unique at the DB level as a second line of defense.
+  idempotencyKey        String                           @unique
+  stripePaymentIntentId String?
+  failureCode           String?
+  failureMessage        String?
+  renewal               Renewal                          @relation(fields: [renewalId], references: [id], onDelete: Cascade)
+  createdAt             DateTime                         @default(now())
+  updatedAt             DateTime                         @updatedAt
+
+  @@unique([renewalId, attemptNumber])
+  @@index([renewalId])
+}
+
+model SubscriptionActionHistory {
+  id             String            @id @default(cuid())
+  subscriptionId String
+  action         String // "created" | "paused" | "resumed" | "skipped_next" | "cancelled" | "edited"
+  actorUserId    String?
+  metadata       Json?
+  subscription   BuyerSubscription @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+  createdAt      DateTime          @default(now())
+
+  @@index([subscriptionId, createdAt])
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// DIASPORA EXPANSION — Community Buy (foundation)
+//
+// SCOPE NOTE: this is the role/campaign/review foundation only. The
+// financial layer (contribution charging, refunds-at-scale, supplier
+// settlement) is deliberately NOT built out yet — the client's own spec
+// (§8.4) requires a country-by-country legal/payment-provider decision
+// among three payment modes before any money can move, and
+// community_buy_payments_enabled defaults to false for every market
+// below. Mode A (pay-now/refund-on-failure) has a reference service
+// implementation gated behind that flag; Modes B and C are not built.
+// ═══════════════════════════════════════════════════════════════════════
+
+enum CampaignStatus {
+  DRAFT
+  UNDER_REVIEW
+  CHANGES_REQUIRED
+  APPROVED
+  REJECTED
+  LIVE
+  PAUSED
+  CLOSING
+  SUCCEEDED
+  FAILED
+  REFUNDING
+  FULFILLING
+  COMPLETED
+  FINANCIALLY_CLOSED
+  CANCELLED
+}
+
+enum ContributionStatus {
+  INITIATED
+  PAYMENT_PROCESSING
+  PAID
+  PAYMENT_FAILED
+  REFUND_PENDING
+  REFUND_PROCESSING
+  REFUNDED
+  REFUND_FAILED
+  CANCELLED
+}
+
+model OrganiserProfile {
+  id         String              @id @default(cuid())
+  userId     String              @unique
+  isVerified Boolean             @default(false)
+  verifiedAt DateTime?
+  country    String
+  user       User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  campaigns  CommunityCampaign[]
+  createdAt  DateTime            @default(now())
+  updatedAt  DateTime            @updatedAt
+}
+
+model SupplierProfile {
+  id         String              @id @default(cuid())
+  vendorId   String              @unique
+  isVerified Boolean             @default(false)
+  verifiedAt DateTime?
+  country    String
+  vendor     Vendor              @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+  campaigns  CommunityCampaign[]
+  createdAt  DateTime            @default(now())
+  updatedAt  DateTime            @updatedAt
+}
+
+model CommunityCampaign {
+  id            String                 @id @default(cuid())
+  organiserId   String
+  supplierId    String
+  title         String
+  description   String?
+  country       String
+  currency      String
+  targetAmount  Int
+  deadline      DateTime
+  status        CampaignStatus         @default(DRAFT)
+  reviewNotes   String?
+  reviewedById  String?
+  reviewedAt    DateTime?
+  publishedAt   DateTime?
+  closedAt      DateTime?
+  paidTotal     Int                    @default(0)
+  organiser     OrganiserProfile       @relation(fields: [organiserId], references: [id], onDelete: Restrict)
+  supplier      SupplierProfile        @relation(fields: [supplierId], references: [id], onDelete: Restrict)
+  participants  CampaignParticipant[]
+  contributions CampaignContribution[]
+  createdAt     DateTime               @default(now())
+  updatedAt     DateTime               @updatedAt
+
+  @@index([status, country])
+  @@index([organiserId])
+  @@index([supplierId])
+  @@index([deadline])
+}
+
+model CampaignParticipant {
+  id            String                 @id @default(cuid())
+  campaignId    String
+  userId        String
+  joinedAt      DateTime               @default(now())
+  campaign      CommunityCampaign      @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  user          User                   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  contributions CampaignContribution[]
+
+  @@unique([campaignId, userId])
+  @@index([userId])
+}
+
+model CampaignContribution {
+  id                    String              @id @default(cuid())
+  campaignId            String
+  participantId         String
+  amount                Int
+  currency              String
+  status                ContributionStatus  @default(INITIATED)
+  stripePaymentIntentId String?
+  campaign              CommunityCampaign   @relation(fields: [campaignId], references: [id], onDelete: Restrict)
+  participant           CampaignParticipant @relation(fields: [participantId], references: [id], onDelete: Restrict)
+  refund                CampaignRefund?
+  createdAt             DateTime            @default(now())
+  updatedAt             DateTime            @updatedAt
+
+  @@index([campaignId, status])
+  @@index([participantId])
+}
+
+model CampaignRefund {
+  id             String               @id @default(cuid())
+  contributionId String               @unique
+  amount         Int
+  currency       String
+  status         ContributionStatus   @default(REFUND_PENDING)
+  idempotencyKey String               @unique
+  stripeRefundId String?
+  failureReason  String?
+  contribution   CampaignContribution @relation(fields: [contributionId], references: [id], onDelete: Restrict)
+  createdAt      DateTime             @default(now())
+  updatedAt      DateTime             @updatedAt
+
+  @@index([status])
+}
+
+// Per-country configuration gate. Every market defaults to Community Buy
+// fully disabled — see scope note above.
+model MarketConfiguration {
+  id                           String   @id @default(cuid())
+  countryCode                  String   @unique
+  currency                     String
+  communityBuyEnabled          Boolean  @default(false)
+  communityBuyPaymentsEnabled  Boolean  @default(false)
+  organiserApplicationsEnabled Boolean  @default(false)
+  supplierApplicationsEnabled  Boolean  @default(false)
+  regularDeliveriesEnabled     Boolean  @default(false)
+  createdAt                    DateTime @default(now())
+  updatedAt                    DateTime @updatedAt
 }

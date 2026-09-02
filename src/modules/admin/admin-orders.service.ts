@@ -5,7 +5,6 @@ import { AppError } from "../../shared/errors/app-error";
 import { releaseVendorEarnings } from "../../shared/utils/wallet-release";
 import { logger } from "../../lib/logger";
 import { notificationsService } from "../notifications/notifications.service";
-import { pushNotifications } from "../../lib/push-notifications";
 
 export const adminOrdersService = {
   /**
@@ -103,17 +102,27 @@ export const adminOrdersService = {
       return { amount: order.payment?.vendorEarningsAmount ?? 0 };
     }, { isolationLevel: "Serializable" });
 
-    // Notify
+    // Notify (single send per recipient — enqueue() already sends the push)
     if (order.checkout?.buyerId) {
-      notificationsService.enqueue({ userId: order.checkout.buyerId, type: "ORDER_PAID" as any, title: "Order paid", body: `Order ${orderId} processed.` }).catch(() => {});
-      pushNotifications.orderPaid(order.checkout.buyerId, 1);
+      notificationsService.enqueue({
+        userId: order.checkout.buyerId,
+        type: "ORDER_PAID" as any,
+        title: "Order Confirmed! 🎉",
+        body: "Your order has been confirmed.",
+        data: { type: "order_paid" },
+      }).catch(() => {});
     }
     const vendorId = order.vendorId ?? order.items[0]?.vendorId;
     if (vendorId) {
       const vendor = await prisma.vendor.findUnique({ where: { id: vendorId }, select: { userId: true } });
       if (vendor) {
-        notificationsService.enqueue({ userId: vendor.userId, type: "BALANCE_CREDITED" as any, title: "New order", body: `Order ${orderId} paid.` }).catch(() => {});
-        pushNotifications.vendorNewOrder(vendor.userId, orderId);
+        notificationsService.enqueue({
+          userId: vendor.userId,
+          type: "BALANCE_CREDITED" as any,
+          title: "New Order! 🛒",
+          body: "You have a new order to process.",
+          data: { type: "new_order", orderId },
+        }).catch(() => {});
       }
     }
 

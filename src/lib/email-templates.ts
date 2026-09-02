@@ -209,6 +209,19 @@ export const emailTemplates = {
     };
   },
 
+  vendorInvite(params: { email: string; inviteUrl: string }): { subject: string; html: string } {
+    return {
+      subject: "You're invited to sell on Eki",
+      html: baseLayout(`
+        <h2 style="color: #111827; margin: 0 0 16px;">You're invited to sell on Eki</h2>
+        <p style="color: #374151;">Hi,</p>
+        <p style="color: #374151;">Eki's marketplace team has invited you to open a vendor store on Eki — list products, manage orders, and reach buyers directly from the app.</p>
+        <a href="${params.inviteUrl}" style="display: inline-block; background: #2D6654; color: #ffffff; padding: 12px 24px; border-radius: 8px; text-decoration: none; font-weight: 600; margin: 16px 0;">Get Started</a>
+        <p style="color: #6b7280; font-size: 14px;">Download the app and sign up as a vendor with this email address (${params.email}) to get started.</p>
+      `),
+    };
+  },
+
   vendorVerified(params: { storeName: string }): { subject: string; html: string } {
     return {
       subject: "Your store has been verified!",

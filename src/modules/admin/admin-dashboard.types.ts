@@ -9,6 +9,8 @@ export interface AdminDashboardData {
   totalBuyers: number;
   newVendorsThisWeek: number;
   newOrdersThisWeek: number;
+  pendingPayoutsCount: number;
+  expiringSubscriptionsCount: number;
   currency: string;
 }
 

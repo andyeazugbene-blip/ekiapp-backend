@@ -33,6 +33,7 @@ import {
 import * as bcrypt from "bcryptjs";
 import "dotenv/config";
 import { DEFAULT_PLAN_CONFIGS } from "../src/modules/subscriptions/subscriptions.types";
+import { stripLegacyConfig } from "../src/modules/subscriptions/subscriptions.service";
 
 const prisma = new PrismaClient();
 
@@ -138,13 +139,14 @@ async function main() {
   };
 
   await Promise.all(
-    Object.values(DEFAULT_PLAN_CONFIGS).map((plan) =>
-      prisma.subscriptionPlanConfig.upsert({
-        where: { plan: plan.plan },
-        update: plan,
-        create: plan,
-      }),
-    ),
+    Object.values(DEFAULT_PLAN_CONFIGS).map((plan) => {
+      const legacyConfig = stripLegacyConfig(plan);
+      return prisma.subscriptionPlanConfig.upsert({
+        where: { plan: legacyConfig.plan },
+        update: legacyConfig,
+        create: legacyConfig,
+      });
+    }),
   );
 
   // ─── ADMIN ──────────────────────────────────────────────────────────────

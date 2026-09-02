@@ -1,10 +1,42 @@
 import type { Vendor } from "@prisma/client";
 
+import { env } from "../../config/env";
 import { prisma } from "../../lib/prisma";
+import { enqueueEmail } from "../../lib/email-queue";
+import { emailTemplates } from "../../lib/email-templates";
 import { AppError } from "../../shared/errors/app-error";
 import { recordAudit } from "../../shared/utils/audit";
 
+const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
 export const adminVendorsService = {
+  async inviteVendor(adminId: string, rawEmail: string): Promise<{ email: string }> {
+    const email = rawEmail.trim().toLowerCase();
+    if (!email || !EMAIL_REGEX.test(email)) {
+      throw new AppError("Invalid email", 400);
+    }
+
+    const existingUser = await prisma.user.findUnique({ where: { email }, select: { id: true, role: true } });
+    if (existingUser) {
+      throw new AppError(
+        existingUser.role === "VENDOR" ? "This email already has a vendor account" : "This email already has an Eki account",
+        409,
+      );
+    }
+
+    const template = emailTemplates.vendorInvite({ email, inviteUrl: env.frontendUrl });
+    await enqueueEmail({ to: email, subject: template.subject, html: template.html });
+
+    await recordAudit({
+      actorId: adminId,
+      action: "vendor.invite",
+      entityType: "Vendor",
+      entityId: email,
+    });
+
+    return { email };
+  },
+
   async suspendVendor(
     adminId: string,
     vendorId: string,

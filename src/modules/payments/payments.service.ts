@@ -20,7 +20,6 @@ import { resolveStripeCurrency } from "../../shared/currency";
 import { enqueueEmail } from "../../lib/email-queue";
 import { emailTemplates } from "../../lib/email-templates";
 import { notificationsService } from "../notifications/notifications.service";
-import { pushNotifications } from "../../lib/push-notifications";
 import { communicationService } from "../communications/communication.service";
 
 interface VendorGroup {
@@ -273,6 +272,22 @@ class PaymentsService {
     }
 
     const stripeAmount = grandTotal - walletDeduction;
+
+    // A card charge must be created in the same currency the buyer was
+    // shown. resolveStripeCurrency() falls back to EUR for currencies
+    // Stripe doesn't support (e.g. GHS) — but that fallback only swaps the
+    // currency *code*, not the amount, which would silently submit the
+    // GHS-denominated integer as EUR cents (an ~17x overcharge in the wrong
+    // currency). Reject before any stock/wallet is reserved rather than
+    // invent an FX conversion no one has approved.
+    if (stripeAmount > 0 && resolveStripeCurrency(currency) !== currency) {
+      throw new AppError(
+        `Card payments are not currently available in ${currency.toUpperCase()}. Please contact support.`,
+        400,
+        undefined,
+        "CURRENCY_NOT_SUPPORTED",
+      );
+    }
 
     // ─── Step 3: Atomic DB transaction (stock + checkout + orders) ─────────
 
@@ -572,6 +587,8 @@ class PaymentsService {
         stripeCode: stripeErr.code,
       });
 
+      await this.rollbackFailedCheckout({ checkoutId, orderIds, pricedItems, walletDeduction, buyerId, currency });
+
       // Card-declined or invalid request → client error
       if (stripeErr.type === "StripeCardError") {
         throw new AppError(stripeErr.message ?? "Card declined", 400, undefined, "CARD_DECLINED");
@@ -584,6 +601,7 @@ class PaymentsService {
     }
 
     if (!paymentIntent.client_secret) {
+      await this.rollbackFailedCheckout({ checkoutId, orderIds, pricedItems, walletDeduction, buyerId, currency });
       throw new AppError("Stripe failure: no client secret", 502);
     }
 
@@ -607,6 +625,69 @@ class PaymentsService {
       campaignTitle: appliedCampaignTitle,
       campaignDiscount: campaignDiscountAmount || undefined,
     };
+  }
+
+  /**
+   * Undo the stock/wallet reservations made inside the checkout transaction
+   * when the Stripe PaymentIntent call afterward fails. Without this, a
+   * declined card or a Stripe outage leaves stock permanently decremented
+   * and the buyer's wallet permanently debited behind a PENDING order that
+   * only the (Redis-dependent) cart-cleanup worker would ever reconcile.
+   */
+  private async rollbackFailedCheckout(params: {
+    checkoutId: string;
+    orderIds: string[];
+    pricedItems: PricedOrderItem[];
+    walletDeduction: number;
+    buyerId: string;
+    currency: string;
+  }): Promise<void> {
+    const { checkoutId, orderIds, pricedItems, walletDeduction, buyerId, currency } = params;
+    try {
+      await prisma.$transaction(async (tx) => {
+        for (const item of pricedItems) {
+          await tx.product.update({
+            where: { id: item.productId },
+            data: { stock: { increment: item.quantity } },
+          });
+        }
+
+        if (walletDeduction > 0) {
+          const wallet = await tx.buyerWallet.update({
+            where: { buyerId },
+            data: { balance: { increment: walletDeduction } },
+          });
+          await tx.buyerWalletTransaction.create({
+            data: {
+              walletId: wallet.id,
+              buyerId,
+              type: "REFUND_CREDIT",
+              amount: walletDeduction,
+              currency,
+              description: "Payment failed — wallet debit reversed",
+            },
+          });
+        }
+
+        await tx.order.updateMany({
+          where: { id: { in: orderIds } },
+          data: { status: "FAILED" },
+        });
+        await tx.payment.updateMany({
+          where: { orderId: { in: orderIds } },
+          data: { status: "FAILED" },
+        });
+        await tx.checkout.update({
+          where: { id: checkoutId },
+          data: { status: "FAILED" },
+        });
+      });
+    } catch (rollbackError) {
+      logger.error("rollbackFailedCheckout failed — stock/wallet may be stuck until the cart-cleanup sweep runs", {
+        checkoutId,
+        errorMessage: rollbackError instanceof Error ? rollbackError.message : String(rollbackError),
+      });
+    }
   }
 
   /**
@@ -688,14 +769,15 @@ class PaymentsService {
           continue;
         }
 
+        // Single send — enqueue() already sends the push, matching the
+        // vendor-new-order notification used for Stripe-paid orders.
         await notificationsService.enqueue({
           userId: vendor.userId,
-          type: "ORDER_PAID" as any,
-          title: "New order received",
-          body: `Order ${orderId} has been paid (wallet).`,
-          data: { orderId },
+          type: "BALANCE_CREDITED" as any,
+          title: "New Order! 🛒",
+          body: "You have a new order to process.",
+          data: { type: "new_order", orderId },
         });
-        pushNotifications.vendorNewOrder(vendor.userId, orderId);
 
         const vendorOrderCount = await prisma.order.count({
           where: { vendorId: group.vendorId, status: { notIn: ["PENDING", "FAILED"] } },

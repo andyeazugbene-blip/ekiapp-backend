@@ -35,6 +35,8 @@ export const ADMIN_PERMISSIONS = [
   "campaigns.mutate",
   "subscriptions.read",
   "subscriptions.mutate",
+  "community_buy.read",
+  "community_buy.mutate",
   "settings.read",
   "settings.mutate",
   "security.mutate",

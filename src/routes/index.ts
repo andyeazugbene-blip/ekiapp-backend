@@ -5,6 +5,7 @@ import { addressesRouter } from "../modules/addresses/addresses.routes";
 import { adminRouter } from "../modules/admin/admin.routes";
 import { campaignsRouter } from "../modules/campaigns/campaigns.routes";
 import { authRouter } from "../modules/auth/auth.routes";
+import { automationVendorRouter } from "../modules/automation/automation.routes";
 import { gdprRouter } from "../modules/auth/gdpr.routes";
 import { buyerWalletRouter } from "../modules/buyer-wallet/buyer-wallet.routes";
 import { cartRouter } from "../modules/cart/cart.routes";
@@ -19,6 +20,14 @@ import { payoutRequestsRouter } from "../modules/payouts/payouts.routes";
 import { productsRouter } from "../modules/products/products.routes";
 import { promosRouter } from "../modules/promos/promos.routes";
 import { publicStoresRouter } from "../modules/public-stores/public-stores.routes";
+import {
+  buyerPaymentMethodsRouter,
+  buyerSubscriptionsRouter,
+  regularDeliveriesVendorRouter,
+  renewalsRouter,
+  subscriptionOffersRouter,
+} from "../modules/regular-deliveries/regular-deliveries.routes";
+import { communityBuyRouter, organiserRouter, supplierRouter } from "../modules/community-buy/community-buy.routes";
 import { paystackRouter } from "../modules/paystack/paystack.routes";
 import { pushTokensRouter } from "../modules/push-tokens/push-tokens.routes";
 import { referralsRouter } from "../modules/referrals/referrals.routes";
@@ -101,6 +110,15 @@ apiRouter.use("/promos", promosRouter);
 apiRouter.use("/referrals", referralsRouter);
 apiRouter.use("/subscriptions", subscriptionsRouter);
 apiRouter.use("/vendor", vendorAccountRouter);
+apiRouter.use("/vendor", automationVendorRouter);
+apiRouter.use("/vendor", regularDeliveriesVendorRouter);
+apiRouter.use("/subscription-offers", subscriptionOffersRouter);
+apiRouter.use("/renewals", renewalsRouter);
+apiRouter.use("/buyer/payment-methods", buyerPaymentMethodsRouter);
+apiRouter.use("/buyer/subscriptions", buyerSubscriptionsRouter);
+apiRouter.use("/community-buy", communityBuyRouter);
+apiRouter.use("/organiser", organiserRouter);
+apiRouter.use("/supplier", supplierRouter);
 apiRouter.use("/push-tokens", pushTokensRouter);
 apiRouter.use("/paystack", paystackRouter);
 apiRouter.use("/reports", reportsRouter);

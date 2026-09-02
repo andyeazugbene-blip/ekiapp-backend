@@ -25,6 +25,9 @@ type VendorSubscriptionWithPlan = VendorSubscription & {
   sellerPlan: SellerPlanWithTiers | null;
 };
 
+/** Free trial for the Growth plan — the only paid vendor service on offer. */
+const GROWTH_TRIAL_DAYS = 14;
+
 function percentFromBps(bps: number): string {
   return `${(bps / 100).toFixed(2).replace(/\.00$/, "").replace(/(\.\d)0$/, "$1")}%`;
 }
@@ -35,7 +38,14 @@ function legacyPlanForSlug(slug: string): SubscriptionPlan {
   return "FREE";
 }
 
-function stripLegacyConfig(plan: (typeof DEFAULT_PLAN_CONFIGS)[SubscriptionPlan]) {
+// Only fields that actually exist on the legacy SubscriptionPlanConfig
+// model (see schema.prisma) — DEFAULT_PLAN_CONFIGS carries the richer
+// SellerPlan shape (maxCoupons, maxBundles, customerDatabase, etc.), which
+// this older, narrower table never had. Passing the full object straight
+// through throws a Prisma "Unknown argument" validation error the moment
+// this runs against an actually-empty table (a fresh database), since the
+// existingLegacyPlans === 0 guard below only skips it once rows exist.
+export function stripLegacyConfig(plan: (typeof DEFAULT_PLAN_CONFIGS)[SubscriptionPlan]) {
   return {
     plan: plan.plan ?? legacyPlanForSlug(plan.slug),
     slug: plan.slug,
@@ -47,22 +57,14 @@ function stripLegacyConfig(plan: (typeof DEFAULT_PLAN_CONFIGS)[SubscriptionPlan]
     maxProducts: plan.maxProducts,
     maxImagesPerProduct: plan.maxImagesPerProduct,
     maxOrders: plan.maxOrders,
-    maxCoupons: plan.maxCoupons,
-    maxBundles: plan.maxBundles,
     analytics: plan.analytics,
     prioritySupport: plan.prioritySupport,
     flashSales: plan.flashSales,
     bundles: plan.bundles,
     discounts: plan.discounts,
     marketingTools: plan.marketingTools,
-    customerDatabase: plan.customerDatabase,
-    repeatBuyerMarketing: plan.repeatBuyerMarketing,
-    professionalStorefront: plan.professionalStorefront,
-    orderManagement: plan.orderManagement,
-    storeLinkSharing: plan.storeLinkSharing,
     canReceiveOrders: plan.canReceiveOrders,
     isActive: plan.isActive,
-    isDefault: plan.isDefault,
     displayOrder: plan.displayOrder,
   };
 }
@@ -834,6 +836,11 @@ export const subscriptionsService = {
           quantity: 1,
         };
 
+    // First-time Growth subscribers get a 14-day free trial before the paid
+    // plan takes over. Vendors who have already had a Stripe subscription
+    // (i.e. are re-subscribing after a cancellation) don't get a second one.
+    const eligibleForTrial = planConfig.slug === "growth" && !subscription?.stripeSubscriptionId;
+
     const session = await stripe.checkout.sessions.create({
       customer: customerId,
       mode: "subscription",
@@ -841,7 +848,10 @@ export const subscriptionsService = {
       success_url: `${frontendUrl}/business-portal?success=true&email=${encodeURIComponent(input.email)}`,
       cancel_url: `${frontendUrl}/business-portal?cancelled=true&email=${encodeURIComponent(input.email)}`,
       metadata,
-      subscription_data: { metadata },
+      subscription_data: {
+        metadata,
+        ...(eligibleForTrial ? { trial_period_days: GROWTH_TRIAL_DAYS } : {}),
+      },
     });
 
     if (!session.url) {

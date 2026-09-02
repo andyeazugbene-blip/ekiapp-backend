@@ -4,7 +4,7 @@ vi.mock("../lib/prisma", () => ({
   prisma: {
     vendor: { findUnique: vi.fn() },
     vendorSubscription: { findUnique: vi.fn() },
-    product: { count: vi.fn(), create: vi.fn() },
+    product: { count: vi.fn(), create: vi.fn(), findFirst: vi.fn() },
   },
 }));
 
@@ -15,8 +15,13 @@ const vendorFindUnique = prisma.vendor.findUnique as unknown as ReturnType<typeo
 const subscriptionFindUnique = prisma.vendorSubscription.findUnique as unknown as ReturnType<typeof vi.fn>;
 const productCount = prisma.product.count as unknown as ReturnType<typeof vi.fn>;
 const productCreate = prisma.product.create as unknown as ReturnType<typeof vi.fn>;
+const productFindFirst = prisma.product.findFirst as unknown as ReturnType<typeof vi.fn>;
 
-beforeEach(() => vi.clearAllMocks());
+beforeEach(() => {
+  vi.clearAllMocks();
+  // No existing products — nextProductCode() starts from the base code.
+  productFindFirst.mockResolvedValue(null);
+});
 
 describe("Product currency inherits from vendor", () => {
   it("UK vendor creates product with input.currency=EUR → product.currency must be GBP", async () => {
