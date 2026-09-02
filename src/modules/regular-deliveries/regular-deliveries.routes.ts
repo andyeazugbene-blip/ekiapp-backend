@@ -12,15 +12,19 @@ import {
   decideRenewalPriceChange,
   getBuyerSubscription,
   getPublicSubscriptionOffer,
+  getVendorRegularDeliveryInsights,
+  getVendorSubscriberDetail,
   listBuyerSubscriptions,
   listPaymentMethods,
   listVendorRenewals,
   listVendorSubscribers,
   listVendorSubscriptionOffers,
   pauseBuyerSubscription,
+  pauseSubscriptionOfferRenewals,
   publishSubscriptionOffer,
   removePaymentMethod,
   resumeBuyerSubscription,
+  resumeSubscriptionOfferRenewals,
   retryRenewalPayment,
   skipNextRenewal,
   unpublishSubscriptionOffer,
@@ -38,6 +42,8 @@ subscriptionOffersRouter.get("/:id", asyncHandler(getPublicSubscriptionOffer));
 subscriptionOffersRouter.patch("/:id", authenticate, requireRole("VENDOR"), asyncHandler(updateSubscriptionOffer));
 subscriptionOffersRouter.post("/:id/publish", authenticate, requireRole("VENDOR"), asyncHandler(publishSubscriptionOffer));
 subscriptionOffersRouter.post("/:id/unpublish", authenticate, requireRole("VENDOR"), asyncHandler(unpublishSubscriptionOffer));
+subscriptionOffersRouter.post("/:id/pause-renewals", authenticate, requireRole("VENDOR"), asyncHandler(pauseSubscriptionOfferRenewals));
+subscriptionOffersRouter.post("/:id/resume-renewals", authenticate, requireRole("VENDOR"), asyncHandler(resumeSubscriptionOfferRenewals));
 
 // Vendor-owned resources — mounted at /vendor alongside the other vendor
 // routers (automation, account, etc.), consistent with this codebase's
@@ -48,7 +54,9 @@ regularDeliveriesVendorRouter.use(authenticate, requireRole("VENDOR"));
 regularDeliveriesVendorRouter.post("/subscription-offers", asyncHandler(createSubscriptionOffer));
 regularDeliveriesVendorRouter.get("/subscription-offers", asyncHandler(listVendorSubscriptionOffers));
 regularDeliveriesVendorRouter.get("/subscribers", asyncHandler(listVendorSubscribers));
+regularDeliveriesVendorRouter.get("/subscribers/:id", asyncHandler(getVendorSubscriberDetail));
 regularDeliveriesVendorRouter.get("/renewals", asyncHandler(listVendorRenewals));
+regularDeliveriesVendorRouter.get("/insights", asyncHandler(getVendorRegularDeliveryInsights));
 
 // Renewal actions (vendor stock confirmation, buyer decisions) — mounted
 // at /renewals. Per-route auth since the action taken determines the role.

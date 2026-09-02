@@ -30,13 +30,20 @@ export const renewalsService = {
     const now = new Date();
     const due = await prisma.buyerSubscription.findMany({
       where: { status: "ACTIVE", nextRenewalAt: { lte: now } },
-      include: { items: { include: { product: true } } },
+      include: { items: { include: { product: true } }, offer: { select: { renewalsPaused: true } } },
     });
 
     let created = 0;
     let skipped = 0;
     for (const sub of due) {
       if (!sub.nextRenewalAt) continue;
+      if (sub.offer.renewalsPaused) {
+        // Vendor has paused this offer's renewals — leave nextRenewalAt as
+        // is so the subscription is picked up again the moment it resumes,
+        // rather than silently drifting the buyer's cycle forward.
+        skipped++;
+        continue;
+      }
       try {
         await this.createRenewalForCycle(sub.id, sub.nextRenewalAt);
         created++;

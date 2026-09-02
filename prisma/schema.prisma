@@ -1512,6 +1512,12 @@ model SubscriptionOffer {
   substitutionPolicy String?
   renewalCutoffHours Int                        @default(24)
   isActive           Boolean                    @default(true)
+  // Distinct from isActive (unpublish removes the listing for new
+  // subscribers). Pausing renewals keeps existing subscribers listed and
+  // subscribed, it just stops new renewal cycles from being generated —
+  // e.g. a vendor going away for two weeks without losing subscribers.
+  renewalsPaused     Boolean                    @default(false)
+  renewalsPausedAt   DateTime?
   vendor             Vendor                     @relation(fields: [vendorId], references: [id], onDelete: Cascade)
   products           SubscriptionOfferProduct[]
   subscriptions      BuyerSubscription[]

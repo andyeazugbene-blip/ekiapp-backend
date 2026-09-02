@@ -317,12 +317,40 @@ describe("renewalsService.convertPaidRenewalToOrder", () => {
 describe("renewalsService.generateDueRenewals", () => {
   it("treats a unique-constraint violation as an already-created renewal, not an error", async () => {
     m.buyerSubscription.findMany.mockResolvedValue([
-      { id: "sub-1", nextRenewalAt: new Date("2026-06-01T00:00:00.000Z") },
+      { id: "sub-1", nextRenewalAt: new Date("2026-06-01T00:00:00.000Z"), offer: { renewalsPaused: false } },
     ] as never);
     m.buyerSubscription.findUniqueOrThrow.mockRejectedValue(Object.assign(new Error("dup"), { code: "P2002" }));
 
     const result = await renewalsService.generateDueRenewals();
 
     expect(result).toEqual({ created: 0, skipped: 1 });
+  });
+
+  it("skips a subscription whose offer has paused renewals, without touching nextRenewalAt", async () => {
+    m.buyerSubscription.findMany.mockResolvedValue([
+      { id: "sub-paused", nextRenewalAt: new Date("2026-06-01T00:00:00.000Z"), offer: { renewalsPaused: true } },
+    ] as never);
+
+    const result = await renewalsService.generateDueRenewals();
+
+    expect(result).toEqual({ created: 0, skipped: 1 });
+    expect(m.buyerSubscription.findUniqueOrThrow).not.toHaveBeenCalled();
+    expect(m.buyerSubscription.update).not.toHaveBeenCalled();
+  });
+
+  it("processes a subscription normally when its offer's renewals are not paused", async () => {
+    m.buyerSubscription.findMany.mockResolvedValue([
+      { id: "sub-2", nextRenewalAt: new Date("2026-06-01T00:00:00.000Z"), offer: { renewalsPaused: false } },
+    ] as never);
+    m.buyerSubscription.findUniqueOrThrow.mockResolvedValue({
+      id: "sub-2", items: [{ productId: "p1", quantity: 1, product: { currency: "GBP", priceInCents: 500, isActive: true, stock: 10 } }],
+    } as never);
+    m.renewalItem.findMany.mockResolvedValue([] as never);
+    m.renewal.create.mockResolvedValue({ id: "renewal-x", items: [] } as never);
+    m.renewal.update.mockResolvedValue({} as never);
+
+    const result = await renewalsService.generateDueRenewals();
+
+    expect(result).toEqual({ created: 1, skipped: 0 });
   });
 });

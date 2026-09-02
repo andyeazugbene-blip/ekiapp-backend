@@ -18,6 +18,8 @@ const mockUpdateOffer = vi.fn();
 const mockPublishOffer = vi.fn();
 const mockUnpublishOffer = vi.fn();
 const mockGetPublicOffer = vi.fn();
+const mockPauseRenewals = vi.fn();
+const mockResumeRenewals = vi.fn();
 
 vi.mock("../modules/regular-deliveries/subscription-offers.service", () => ({
   subscriptionOffersService: {
@@ -27,6 +29,8 @@ vi.mock("../modules/regular-deliveries/subscription-offers.service", () => ({
     publish: (...a: unknown[]) => mockPublishOffer(...a),
     unpublish: (...a: unknown[]) => mockUnpublishOffer(...a),
     getPublic: (...a: unknown[]) => mockGetPublicOffer(...a),
+    pauseRenewals: (...a: unknown[]) => mockPauseRenewals(...a),
+    resumeRenewals: (...a: unknown[]) => mockResumeRenewals(...a),
   },
 }));
 
@@ -81,6 +85,8 @@ vi.mock("../modules/regular-deliveries/renewals.service", () => ({
 const mockVendorFindUnique = vi.fn();
 const mockOfferFindMany = vi.fn();
 const mockSubscriptionFindMany = vi.fn();
+const mockSubscriptionFindUnique = vi.fn();
+const mockSubscriptionCount = vi.fn();
 const mockRenewalFindMany = vi.fn();
 const mockAddressFindUnique = vi.fn();
 const mockPaymentMethodFindUnique = vi.fn();
@@ -92,7 +98,13 @@ vi.mock("../lib/prisma", async () => {
       get(target, prop) {
         if (prop === "vendor") return { findUnique: (...a: unknown[]) => mockVendorFindUnique(...a) };
         if (prop === "subscriptionOffer") return { findMany: (...a: unknown[]) => mockOfferFindMany(...a) };
-        if (prop === "buyerSubscription") return { findMany: (...a: unknown[]) => mockSubscriptionFindMany(...a) };
+        if (prop === "buyerSubscription") {
+          return {
+            findMany: (...a: unknown[]) => mockSubscriptionFindMany(...a),
+            findUnique: (...a: unknown[]) => mockSubscriptionFindUnique(...a),
+            count: (...a: unknown[]) => mockSubscriptionCount(...a),
+          };
+        }
         if (prop === "renewal") return { findMany: (...a: unknown[]) => mockRenewalFindMany(...a) };
         return (target as any)[prop];
       },
@@ -206,6 +218,59 @@ describe("Vendor subscription-offer routes", () => {
     const res = await request(app).get("/api/subscription-offers/offer-42");
     expect(res.status).toBe(200);
     expect(mockGetPublicOffer).toHaveBeenCalledWith("offer-42");
+  });
+
+  it("POST /api/subscription-offers/:id/pause-renewals — reads id from the URL, requires vendor auth", async () => {
+    const unauth = await request(app).post("/api/subscription-offers/offer-42/pause-renewals");
+    expect(unauth.status).toBe(401);
+
+    const res = await request(app).post("/api/subscription-offers/offer-42/pause-renewals").set("Authorization", `Bearer ${vendorToken()}`);
+    expect(res.status).toBe(200);
+    expect(mockPauseRenewals).toHaveBeenCalledWith("vendor-db-1", "offer-42");
+  });
+
+  it("POST /api/subscription-offers/:id/resume-renewals — reads id from the URL", async () => {
+    const res = await request(app).post("/api/subscription-offers/offer-42/resume-renewals").set("Authorization", `Bearer ${vendorToken()}`);
+    expect(res.status).toBe(200);
+    expect(mockResumeRenewals).toHaveBeenCalledWith("vendor-db-1", "offer-42");
+  });
+});
+
+describe("Vendor subscriber detail and insights routes", () => {
+  it("GET /api/vendor/subscribers/:id — 401 without token, 404 when the subscription belongs to another vendor's offer", async () => {
+    const unauth = await request(app).get("/api/vendor/subscribers/sub-1");
+    expect(unauth.status).toBe(401);
+
+    mockSubscriptionFindUnique.mockResolvedValue({ id: "sub-1", offer: { vendorId: "some-other-vendor" } } as never);
+    const res = await request(app).get("/api/vendor/subscribers/sub-1").set("Authorization", `Bearer ${vendorToken()}`);
+    expect(res.status).toBe(404);
+  });
+
+  it("GET /api/vendor/subscribers/:id — 200 when the subscription belongs to this vendor", async () => {
+    mockSubscriptionFindUnique.mockResolvedValue({ id: "sub-1", offer: { vendorId: "vendor-db-1" }, renewals: [] } as never);
+    const res = await request(app).get("/api/vendor/subscribers/sub-1").set("Authorization", `Bearer ${vendorToken()}`);
+    expect(res.status).toBe(200);
+    expect(res.body.subscription.id).toBe("sub-1");
+  });
+
+  it("GET /api/vendor/insights — 401 without token, 200 for a vendor with real aggregated counts", async () => {
+    const unauth = await request(app).get("/api/vendor/insights");
+    expect(unauth.status).toBe(401);
+
+    mockSubscriptionCount.mockResolvedValue(0);
+    mockRenewalFindMany.mockResolvedValue([]);
+    const res = await request(app).get("/api/vendor/insights").set("Authorization", `Bearer ${vendorToken()}`);
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual(
+      expect.objectContaining({
+        activeSubscribers: 0,
+        pausedSubscribers: 0,
+        cancelledLast30Days: 0,
+        paidRenewalsLast30Days: 0,
+        revenueLast30Days: [],
+        upcomingRenewalsNext7Days: 0,
+      }),
+    );
   });
 });
 

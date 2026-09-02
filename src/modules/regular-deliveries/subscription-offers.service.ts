@@ -83,6 +83,19 @@ export const subscriptionOffersService = {
     return prisma.subscriptionOffer.update({ where: { id: offerId }, data: { isActive: false } });
   },
 
+  /** Stops new renewal cycles from being generated for this offer's subscribers, without unpublishing or cancelling anyone. */
+  async pauseRenewals(vendorId: string, offerId: string) {
+    const offer = await prisma.subscriptionOffer.findUnique({ where: { id: offerId } });
+    if (!offer || offer.vendorId !== vendorId) throw new AppError("Offer not found", 404);
+    return prisma.subscriptionOffer.update({ where: { id: offerId }, data: { renewalsPaused: true, renewalsPausedAt: new Date() } });
+  },
+
+  async resumeRenewals(vendorId: string, offerId: string) {
+    const offer = await prisma.subscriptionOffer.findUnique({ where: { id: offerId } });
+    if (!offer || offer.vendorId !== vendorId) throw new AppError("Offer not found", 404);
+    return prisma.subscriptionOffer.update({ where: { id: offerId }, data: { renewalsPaused: false, renewalsPausedAt: null } });
+  },
+
   async listForVendor(vendorId: string) {
     return prisma.subscriptionOffer.findMany({
       where: { vendorId },
