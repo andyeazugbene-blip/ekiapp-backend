@@ -89,6 +89,8 @@ const mockGetMyContribution = vi.fn();
 const mockVerifyContribution = vi.fn();
 const mockReleaseSupplierPayment = vi.fn();
 const mockHoldSupplierPayment = vi.fn();
+const mockGetLedgerSummaryForAdmin = vi.fn();
+const mockGetCampaignLedger = vi.fn();
 
 vi.mock("../modules/community-buy/campaign-contributions.service", () => ({
   campaignContributionsService: {
@@ -100,6 +102,8 @@ vi.mock("../modules/community-buy/campaign-contributions.service", () => ({
     releaseSupplierPayment: (...a: unknown[]) => mockReleaseSupplierPayment(...a),
     holdSupplierPayment: (...a: unknown[]) => mockHoldSupplierPayment(...a),
     listRefundsForAdmin: vi.fn().mockResolvedValue([]),
+    getLedgerSummaryForAdmin: (...a: unknown[]) => mockGetLedgerSummaryForAdmin(...a),
+    getCampaignLedger: (...a: unknown[]) => mockGetCampaignLedger(...a),
   },
 }));
 
@@ -488,5 +492,21 @@ describe("Admin routes — permission-gated, id handling", () => {
     const res = await request(app).post("/api/admin/community-campaigns/camp-88/supplier-payment/hold").set("Authorization", `Bearer ${adminToken()}`).send({ reason: "payout account changed" });
     expect(res.status).toBe(200);
     expect(mockHoldSupplierPayment).toHaveBeenCalledWith("admin-1", "camp-88", "payout account changed");
+  });
+
+  it("GET /api/admin/community-buy/ledger — 401 without token, 200 for admin", async () => {
+    mockGetLedgerSummaryForAdmin.mockResolvedValue([]);
+    const noAuth = await request(app).get("/api/admin/community-buy/ledger");
+    expect(noAuth.status).toBe(401);
+    const res = await request(app).get("/api/admin/community-buy/ledger").set("Authorization", `Bearer ${adminToken()}`);
+    expect(res.status).toBe(200);
+    expect(res.body.items).toEqual([]);
+  });
+
+  it("GET /api/admin/community-campaigns/:id/ledger — id parsed correctly", async () => {
+    mockGetCampaignLedger.mockResolvedValue({ campaign: { id: "camp-1" }, entries: [], totals: { totalContributed: 0, totalRefunded: 0, totalPaidToSupplier: 0, netPosition: 0 } });
+    const res = await request(app).get("/api/admin/community-campaigns/camp-1/ledger").set("Authorization", `Bearer ${adminToken()}`);
+    expect(res.status).toBe(200);
+    expect(mockGetCampaignLedger).toHaveBeenCalledWith("camp-1");
   });
 });

@@ -363,3 +363,11 @@ export async function adminUpdateMarketConfiguration(request: Request, response:
   await recordAudit({ actorId: adminId, action: "community_market_config.update", entityType: "MarketConfiguration", entityId: countryCode, metadata: request.body });
   response.json({ config });
 }
+
+export async function adminGetLedgerSummary(_request: Request, response: Response): Promise<void> {
+  response.json({ items: await campaignContributionsService.getLedgerSummaryForAdmin() });
+}
+
+export async function adminGetCampaignLedger(request: Request, response: Response): Promise<void> {
+  response.json(await campaignContributionsService.getCampaignLedger(requireIdParam(request)));
+}

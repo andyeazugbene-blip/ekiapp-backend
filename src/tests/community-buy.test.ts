@@ -3,8 +3,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("../lib/prisma", () => ({
   prisma: {
     communityCampaign: { findMany: vi.fn(), update: vi.fn(), updateMany: vi.fn(), findUnique: vi.fn(), findUniqueOrThrow: vi.fn(), create: vi.fn() },
-    campaignContribution: { findMany: vi.fn(), update: vi.fn(), findUnique: vi.fn(), findUniqueOrThrow: vi.fn(), create: vi.fn() },
-    campaignRefund: { create: vi.fn(), findMany: vi.fn(), update: vi.fn() },
+    campaignContribution: { findMany: vi.fn(), update: vi.fn(), findUnique: vi.fn(), findUniqueOrThrow: vi.fn(), create: vi.fn(), groupBy: vi.fn() },
+    campaignRefund: { create: vi.fn(), findMany: vi.fn(), update: vi.fn(), groupBy: vi.fn() },
     campaignParticipant: { findMany: vi.fn(), upsert: vi.fn() },
     campaignExtensionRequest: { create: vi.fn(), findUnique: vi.fn(), update: vi.fn(), findMany: vi.fn() },
     campaignSupplierPayment: { findUnique: vi.fn(), create: vi.fn(), update: vi.fn(), findMany: vi.fn() },
@@ -322,5 +322,95 @@ describe("marketConfigurationService.isCommunityBuyPaymentsEnabled", () => {
     } as never);
 
     expect(await marketConfigurationService.isCommunityBuyPaymentsEnabled("GB")).toBe(false);
+  });
+});
+
+describe("campaignContributionsService — financial ledger (read-only aggregation, doc §12)", () => {
+  it("getLedgerSummaryForAdmin returns an empty list when nothing has ever moved money", async () => {
+    m.campaignContribution.groupBy.mockResolvedValue([] as never);
+    m.campaignRefund.groupBy.mockResolvedValue([] as never);
+    m.campaignSupplierPayment.findMany.mockResolvedValue([] as never);
+
+    const summary = await campaignContributionsService.getLedgerSummaryForAdmin();
+    expect(summary).toEqual([]);
+  });
+
+  it("getLedgerSummaryForAdmin computes netPosition as contributed minus refunded minus paid to supplier", async () => {
+    m.campaignContribution.groupBy.mockResolvedValue([
+      { campaignId: "camp-1", _sum: { amount: 10000 }, _count: { id: 4 } },
+    ] as never);
+    m.campaignRefund.groupBy.mockResolvedValue([
+      { contributionId: "contrib-1", _sum: { amount: 2500 } },
+    ] as never);
+    m.campaignContribution.findMany.mockResolvedValue([{ id: "contrib-1", campaignId: "camp-1" }] as never);
+    m.campaignSupplierPayment.findMany.mockResolvedValue([{ campaignId: "camp-1", amount: 5000 }] as never);
+    m.communityCampaign.findMany.mockResolvedValue([
+      { id: "camp-1", title: "Rice bulk buy", currency: "GBP", status: "COMPLETED", fundingOutcome: "GOAL_REACHED" },
+    ] as never);
+
+    const summary = await campaignContributionsService.getLedgerSummaryForAdmin();
+    expect(summary).toEqual([
+      expect.objectContaining({
+        campaignId: "camp-1",
+        totalContributed: 10000,
+        totalRefunded: 2500,
+        totalPaidToSupplier: 5000,
+        netPosition: 2500,
+        contributionCount: 4,
+      }),
+    ]);
+  });
+
+  it("getCampaignLedger throws 404 for a campaign that doesn't exist", async () => {
+    m.communityCampaign.findUnique.mockResolvedValue(null);
+    await expect(campaignContributionsService.getCampaignLedger("nope")).rejects.toMatchObject({ statusCode: 404 });
+  });
+
+  it("getCampaignLedger returns itemized entries sorted chronologically with matching totals", async () => {
+    m.communityCampaign.findUnique.mockResolvedValue({
+      id: "camp-2", title: "Spice bulk buy", currency: "GBP", status: "REFUNDING", fundingOutcome: "BELOW_MINIMUM",
+    } as never);
+    m.campaignContribution.findMany.mockResolvedValue([
+      {
+        id: "contrib-a", amount: 3000, quantity: 2, isOrganiserTopUp: false,
+        updatedAt: new Date("2026-01-01T00:00:00Z"),
+        participant: { user: { name: "Amina" } },
+      },
+    ] as never);
+    m.campaignRefund.findMany.mockResolvedValue([
+      {
+        id: "refund-a", amount: 3000,
+        updatedAt: new Date("2026-01-02T00:00:00Z"),
+        contribution: { participant: { user: { name: "Amina" } } },
+      },
+    ] as never);
+    m.campaignSupplierPayment.findUnique.mockResolvedValue(null);
+
+    const ledger = await campaignContributionsService.getCampaignLedger("camp-2");
+
+    expect(ledger.entries.map((e: any) => e.type)).toEqual(["CONTRIBUTION", "REFUND"]);
+    expect(ledger.entries[0].direction).toBe("CREDIT");
+    expect(ledger.entries[1].direction).toBe("DEBIT");
+    expect(ledger.totals).toEqual({
+      totalContributed: 3000,
+      totalRefunded: 3000,
+      totalPaidToSupplier: 0,
+      netPosition: 0,
+    });
+  });
+
+  it("getCampaignLedger includes the supplier payment only when it has actually been PAID, not merely created", async () => {
+    m.communityCampaign.findUnique.mockResolvedValue({
+      id: "camp-3", title: "Oil bulk buy", currency: "GBP", status: "FULFILLING", fundingOutcome: "GOAL_REACHED",
+    } as never);
+    m.campaignContribution.findMany.mockResolvedValue([] as never);
+    m.campaignRefund.findMany.mockResolvedValue([] as never);
+    m.campaignSupplierPayment.findUnique.mockResolvedValue({
+      id: "sp-1", amount: 8000, status: "PROCESSING", updatedAt: new Date("2026-01-03T00:00:00Z"),
+    } as never);
+
+    const ledger = await campaignContributionsService.getCampaignLedger("camp-3");
+    expect(ledger.entries).toHaveLength(0);
+    expect(ledger.totals.totalPaidToSupplier).toBe(0);
   });
 });

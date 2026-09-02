@@ -348,4 +348,167 @@ export const campaignContributionsService = {
       orderBy: { createdAt: "desc" },
     });
   },
+
+  // ─── Financial ledger (read-only) — doc §12 Ledger Structure ───────────
+  // Every row here is derived directly from money that has actually moved
+  // (a PAID contribution, a REFUNDED refund, a PAID supplier payment) —
+  // never invented, projected, or estimated. Eki holds no custody of these
+  // funds; this is a reconciliation view over Stripe-settled events.
+
+  /** One row per campaign that has had at least one financial event, for the admin ledger overview list. */
+  async getLedgerSummaryForAdmin() {
+    const [contributions, refunds, supplierPayments] = await Promise.all([
+      prisma.campaignContribution.groupBy({
+        by: ["campaignId"],
+        where: { status: "PAID" },
+        _sum: { amount: true },
+        _count: { id: true },
+      }),
+      prisma.campaignRefund.groupBy({
+        by: ["contributionId"],
+        where: { status: "REFUNDED" },
+        _sum: { amount: true },
+      }),
+      prisma.campaignSupplierPayment.findMany({
+        where: { status: "PAID" },
+        select: { campaignId: true, amount: true },
+      }),
+    ]);
+
+    // Refunds group by contributionId, not campaignId — resolve back to campaign.
+    const refundedContributionIds = refunds.map((r) => r.contributionId);
+    const refundedContributions = refundedContributionIds.length
+      ? await prisma.campaignContribution.findMany({
+          where: { id: { in: refundedContributionIds } },
+          select: { id: true, campaignId: true },
+        })
+      : [];
+    const campaignIdByContributionId = new Map(refundedContributions.map((c) => [c.id, c.campaignId]));
+    const refundedByCampaign = new Map<string, number>();
+    for (const r of refunds) {
+      const campaignId = campaignIdByContributionId.get(r.contributionId);
+      if (!campaignId) continue;
+      refundedByCampaign.set(campaignId, (refundedByCampaign.get(campaignId) ?? 0) + (r._sum.amount ?? 0));
+    }
+
+    const supplierPaidByCampaign = new Map<string, number>();
+    for (const p of supplierPayments) {
+      supplierPaidByCampaign.set(p.campaignId, (supplierPaidByCampaign.get(p.campaignId) ?? 0) + p.amount);
+    }
+
+    const campaignIds = new Set<string>([
+      ...contributions.map((c) => c.campaignId),
+      ...refundedByCampaign.keys(),
+      ...supplierPaidByCampaign.keys(),
+    ]);
+    if (campaignIds.size === 0) return [];
+
+    const campaigns = await prisma.communityCampaign.findMany({
+      where: { id: { in: [...campaignIds] } },
+      select: { id: true, title: true, currency: true, status: true, fundingOutcome: true },
+    });
+    const campaignById = new Map(campaigns.map((c) => [c.id, c]));
+    const contributedByCampaign = new Map(contributions.map((c) => [c.campaignId, { total: c._sum.amount ?? 0, count: c._count.id }]));
+
+    return [...campaignIds].map((campaignId) => {
+      const campaign = campaignById.get(campaignId);
+      const totalContributed = contributedByCampaign.get(campaignId)?.total ?? 0;
+      const totalRefunded = refundedByCampaign.get(campaignId) ?? 0;
+      const totalPaidToSupplier = supplierPaidByCampaign.get(campaignId) ?? 0;
+      return {
+        campaignId,
+        title: campaign?.title ?? "(deleted campaign)",
+        currency: campaign?.currency ?? "GBP",
+        status: campaign?.status ?? null,
+        fundingOutcome: campaign?.fundingOutcome ?? null,
+        contributionCount: contributedByCampaign.get(campaignId)?.count ?? 0,
+        totalContributed,
+        totalRefunded,
+        totalPaidToSupplier,
+        netPosition: totalContributed - totalRefunded - totalPaidToSupplier,
+      };
+    });
+  },
+
+  /** Itemized ledger for one campaign — every PAID contribution, REFUNDED refund, and PAID supplier payment, in order. */
+  async getCampaignLedger(campaignId: string) {
+    const campaign = await prisma.communityCampaign.findUnique({
+      where: { id: campaignId },
+      select: { id: true, title: true, currency: true, status: true, fundingOutcome: true },
+    });
+    if (!campaign) throw new AppError("Campaign not found", 404);
+
+    const [contributions, refunds, supplierPayment] = await Promise.all([
+      prisma.campaignContribution.findMany({
+        where: { campaignId, status: "PAID" },
+        include: { participant: { include: { user: { select: { name: true, email: true } } } } },
+        orderBy: { createdAt: "asc" },
+      }),
+      prisma.campaignRefund.findMany({
+        where: { status: "REFUNDED", contribution: { campaignId } },
+        include: { contribution: { include: { participant: { include: { user: { select: { name: true, email: true } } } } } } },
+        orderBy: { createdAt: "asc" },
+      }),
+      prisma.campaignSupplierPayment.findUnique({ where: { campaignId } }),
+    ]);
+
+    type LedgerEntry = {
+      id: string;
+      type: "CONTRIBUTION" | "REFUND" | "SUPPLIER_PAYMENT";
+      direction: "CREDIT" | "DEBIT";
+      amount: number;
+      occurredAt: Date;
+      description: string;
+    };
+
+    const entries: LedgerEntry[] = [];
+    for (const c of contributions) {
+      entries.push({
+        id: c.id,
+        type: "CONTRIBUTION",
+        direction: "CREDIT",
+        amount: c.amount,
+        occurredAt: c.updatedAt,
+        description: c.isOrganiserTopUp
+          ? `Organiser top-up · ${c.participant.user.name}`
+          : `Contribution (${c.quantity} share${c.quantity === 1 ? "" : "s"}) · ${c.participant.user.name}`,
+      });
+    }
+    for (const r of refunds) {
+      entries.push({
+        id: r.id,
+        type: "REFUND",
+        direction: "DEBIT",
+        amount: r.amount,
+        occurredAt: r.updatedAt,
+        description: `Refund · ${r.contribution.participant.user.name}`,
+      });
+    }
+    if (supplierPayment && supplierPayment.status === "PAID") {
+      entries.push({
+        id: supplierPayment.id,
+        type: "SUPPLIER_PAYMENT",
+        direction: "DEBIT",
+        amount: supplierPayment.amount,
+        occurredAt: supplierPayment.updatedAt,
+        description: "Supplier payment released",
+      });
+    }
+    entries.sort((a, b) => a.occurredAt.getTime() - b.occurredAt.getTime());
+
+    const totalContributed = contributions.reduce((sum, c) => sum + c.amount, 0);
+    const totalRefunded = refunds.reduce((sum, r) => sum + r.amount, 0);
+    const totalPaidToSupplier = supplierPayment?.status === "PAID" ? supplierPayment.amount : 0;
+
+    return {
+      campaign,
+      entries,
+      totals: {
+        totalContributed,
+        totalRefunded,
+        totalPaidToSupplier,
+        netPosition: totalContributed - totalRefunded - totalPaidToSupplier,
+      },
+    };
+  },
 };

@@ -119,6 +119,8 @@ import { adminListSubscriptionExceptions } from "../regular-deliveries/regular-d
 import {
   adminApproveCampaign,
   adminApproveExtension,
+  adminGetCampaignLedger,
+  adminGetLedgerSummary,
   adminHoldSupplierPayment,
   adminListCampaignsForReview,
   adminListExtensionRequests,
@@ -217,6 +219,8 @@ adminRouter.post("/community-campaigns/:id/supplier-payment/release", asyncHandl
 adminRouter.post("/community-campaigns/:id/supplier-payment/hold", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(adminHoldSupplierPayment));
 adminRouter.get("/community-buy/markets", asyncHandler(requireAdminPermission("community_buy.read")), asyncHandler(adminListMarketConfigurations));
 adminRouter.patch("/community-buy/markets/:id", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(adminUpdateMarketConfiguration));
+adminRouter.get("/community-buy/ledger", asyncHandler(requireAdminPermission("community_buy.read")), asyncHandler(adminGetLedgerSummary));
+adminRouter.get("/community-campaigns/:id/ledger", asyncHandler(requireAdminPermission("community_buy.read")), asyncHandler(adminGetCampaignLedger));
 
 // Listings
 adminRouter.get("/users", asyncHandler(requireAdminPermission("users.read")), asyncHandler(listUsers));
