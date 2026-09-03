@@ -233,7 +233,7 @@ describe("campaignContributionsService.createContributionIntent", () => {
       id: "camp-11", status: "LIVE", deadline: new Date(Date.now() + 100000), country: "GH", currency: "GHS", pricePerShareMinor: 1000, maximumShares: 6, confirmedShares: 0,
     } as never);
     m.marketConfiguration.findUnique.mockResolvedValue({
-      countryCode: "GH", communityBuyEnabled: true, communityBuyPaymentsEnabled: true,
+      countryCode: "GH", communityBuyEnabled: true, communityBuyPaymentsEnabled: true, communityBuyPaymentMode: "PAY_NOW_REFUND_ON_FAILURE",
     } as never);
 
     await expect(
@@ -248,7 +248,7 @@ describe("campaignContributionsService.createContributionIntent", () => {
       id: "camp-12", status: "LIVE", deadline: new Date(Date.now() + 100000), country: "GB", currency: "GBP", pricePerShareMinor: 1000, maximumShares: 6, confirmedShares: 5,
     } as never);
     m.marketConfiguration.findUnique.mockResolvedValue({
-      countryCode: "GB", communityBuyEnabled: true, communityBuyPaymentsEnabled: true,
+      countryCode: "GB", communityBuyEnabled: true, communityBuyPaymentsEnabled: true, communityBuyPaymentMode: "PAY_NOW_REFUND_ON_FAILURE",
     } as never);
     m.communityCampaign.findUniqueOrThrow.mockResolvedValue({
       id: "camp-12", currency: "GBP", pricePerShareMinor: 1000, maximumShares: 6, confirmedShares: 5,
@@ -391,6 +391,54 @@ describe("campaignContributionsService.verifyContribution — concurrency-safe c
   });
 });
 
+describe("campaignContributionsService.confirmContributionIfPaid — webhook-callable confirmation (architecture doc §13)", () => {
+  it("confirms a contribution with NO userId argument — this is what makes it callable from the real Stripe webhook, not just the mobile app's post-payment callback", async () => {
+    m.campaignContribution.findUnique.mockResolvedValue({
+      id: "contrib-30", campaignId: "camp-20", quantity: 2, status: "PAYMENT_PROCESSING", stripePaymentIntentId: "pi_webhook_1", currency: "GBP", amount: 2000,
+      participant: { userId: "buyer-webhook-1" },
+    } as never);
+    vi.mocked(stripe.paymentIntents.retrieve).mockResolvedValue({ status: "succeeded" } as never);
+
+    const ledgerAccount = { findUnique: vi.fn().mockResolvedValue(null), create: vi.fn().mockResolvedValue({ id: "acct-1" }) };
+    const ledgerEntry = { create: vi.fn().mockResolvedValue({ id: "entry-1" }) };
+    const txCampaign = { findUniqueOrThrow: vi.fn().mockResolvedValue({ id: "camp-20", maximumShares: 10, confirmedShares: 3, termsLockedAt: new Date() }), updateMany: vi.fn().mockResolvedValue({ count: 1 }), update: vi.fn() };
+    m.$transaction.mockImplementationOnce(async (cb: any) => cb({ communityCampaign: txCampaign, campaignContribution: { update: vi.fn() }, ledgerAccount, ledgerEntry }));
+    m.campaignContribution.findUniqueOrThrow.mockResolvedValue({ id: "contrib-30", status: "PAID" } as never);
+
+    const result = await campaignContributionsService.confirmContributionIfPaid("contrib-30");
+
+    expect(result.status).toBe("PAID");
+    // Real ledger posting: a balanced 2-leg entry (provider cash debit / escrow credit) for the captured amount.
+    expect(ledgerEntry.create).toHaveBeenCalledTimes(2);
+    const legs = ledgerEntry.create.mock.calls.map((c: any) => c[0].data);
+    expect(legs.find((l: any) => l.direction === "DEBIT")?.amount).toBe(2000);
+    expect(legs.find((l: any) => l.direction === "CREDIT")?.amount).toBe(2000);
+  });
+
+  it("12/23. idempotent — an already-PAID contribution (e.g. the mobile app already confirmed it) short-circuits cleanly when the webhook fires too, no double-processing", async () => {
+    m.campaignContribution.findUnique.mockResolvedValue({
+      id: "contrib-31", campaignId: "camp-21", quantity: 1, status: "PAID", stripePaymentIntentId: "pi_webhook_2", currency: "GBP", amount: 1000,
+      participant: { userId: "buyer-webhook-2" },
+    } as never);
+
+    const result = await campaignContributionsService.confirmContributionIfPaid("contrib-31");
+
+    expect(result.status).toBe("PAID");
+    expect(stripe.paymentIntents.retrieve).not.toHaveBeenCalled(); // never even re-queries Stripe once already resolved
+    expect(m.$transaction).not.toHaveBeenCalled();
+  });
+
+  it("a contribution the mobile app already queued for refund is left alone — never re-confirmed as PAID by a late webhook", async () => {
+    m.campaignContribution.findUnique.mockResolvedValue({
+      id: "contrib-32", campaignId: "camp-22", quantity: 1, status: "REFUND_PENDING", stripePaymentIntentId: "pi_webhook_3", currency: "GBP", amount: 1000,
+      participant: { userId: "buyer-webhook-3" },
+    } as never);
+
+    const result = await campaignContributionsService.confirmContributionIfPaid("contrib-32");
+    expect(result.status).toBe("REFUND_PENDING");
+  });
+});
+
 describe("marketConfigurationService.isCommunityBuyPaymentsEnabled", () => {
   it("defaults to false — a brand new market never accepts contributions until an admin explicitly enables it", async () => {
     m.marketConfiguration.count.mockResolvedValue(1); // defaults already seeded elsewhere
@@ -409,6 +457,36 @@ describe("marketConfigurationService.isCommunityBuyPaymentsEnabled", () => {
     } as never);
 
     expect(await marketConfigurationService.isCommunityBuyPaymentsEnabled("GB")).toBe(false);
+  });
+
+  // Client mandate: "if a market has no explicit approved payment mode,
+  // disable Community Buy payment there." Only PAY_NOW_REFUND_ON_FAILURE
+  // is actually implemented — everything else must stay blocked too.
+  it("blocks payments when both flags are on but no payment mode is set (null) — the flags alone are not an approval", async () => {
+    m.marketConfiguration.count.mockResolvedValue(1);
+    m.marketConfiguration.findUnique.mockResolvedValue({
+      countryCode: "GB", communityBuyEnabled: true, communityBuyPaymentsEnabled: true, communityBuyPaymentMode: null,
+    } as never);
+
+    expect(await marketConfigurationService.isCommunityBuyPaymentsEnabled("GB")).toBe(false);
+  });
+
+  it("blocks payments when the mode is set to an unimplemented mode (AUTHORISE_THEN_CAPTURE) — never silently routed through the wrong flow", async () => {
+    m.marketConfiguration.count.mockResolvedValue(1);
+    m.marketConfiguration.findUnique.mockResolvedValue({
+      countryCode: "GB", communityBuyEnabled: true, communityBuyPaymentsEnabled: true, communityBuyPaymentMode: "AUTHORISE_THEN_CAPTURE",
+    } as never);
+
+    expect(await marketConfigurationService.isCommunityBuyPaymentsEnabled("GB")).toBe(false);
+  });
+
+  it("allows payments only when the mode is explicitly PAY_NOW_REFUND_ON_FAILURE — the one mode that's actually implemented", async () => {
+    m.marketConfiguration.count.mockResolvedValue(1);
+    m.marketConfiguration.findUnique.mockResolvedValue({
+      countryCode: "GB", communityBuyEnabled: true, communityBuyPaymentsEnabled: true, communityBuyPaymentMode: "PAY_NOW_REFUND_ON_FAILURE",
+    } as never);
+
+    expect(await marketConfigurationService.isCommunityBuyPaymentsEnabled("GB")).toBe(true);
   });
 });
 

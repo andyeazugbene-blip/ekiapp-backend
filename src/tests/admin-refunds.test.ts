@@ -11,6 +11,10 @@ vi.mock("../lib/prisma", () => ({
     order: { findUnique: vi.fn(), update: vi.fn() },
     paystackTransaction: { update: vi.fn() },
     auditLog: { create: vi.fn() },
+    // Four-eyes gate (admin-approvals.service.ts) checks for a configured
+    // rule before every refund now — null (no rule) means it stays
+    // ungated, exactly matching this file's pre-four-eyes behavior.
+    adminApprovalRule: { findUnique: vi.fn().mockResolvedValue(null) },
     $transaction: vi.fn(),
   },
 }));
@@ -293,5 +297,27 @@ describe("adminRefundOrder — provider branching", () => {
       statusCode: 502,
       message: expect.stringContaining("Stripe refund failed"),
     });
+  });
+
+  it("four-eyes: a configured threshold gates a large refund — creates a pending approval instead of executing", async () => {
+    mockedPrisma.order.findUnique.mockResolvedValue({
+      id: "ord-8",
+      status: "PAID",
+      totalAmount: 100000,
+      payment: { id: "pay-8", stripePaymentIntentId: "pi_large", status: "SUCCEEDED", amount: 100000, provider: "stripe" },
+      paystackTransaction: null,
+    } as never);
+    mockedPrisma.adminApprovalRule.findUnique.mockResolvedValueOnce({ actionType: "order.refund.large", thresholdAmount: 50000, enabled: true } as never);
+    const mockedApproval = { findFirst: vi.fn().mockResolvedValue(null), create: vi.fn().mockResolvedValue({ id: "appr-refund-1", status: "PENDING" }) };
+    (mockedPrisma as unknown as { adminApproval: typeof mockedApproval }).adminApproval = mockedApproval;
+
+    const req = createMockReq("ord-8", { amount: 100000, reason: "requested_by_customer" });
+    const res = createMockRes();
+
+    await adminRefundOrder(req, res as unknown as Response);
+
+    expect(res.statusCode).toBe(202);
+    expect((res.data as { pendingApproval?: unknown }).pendingApproval).toBeTruthy();
+    expect(mockedStripeRefundCreate).not.toHaveBeenCalled(); // gated — never actually charged/refunded
   });
 });

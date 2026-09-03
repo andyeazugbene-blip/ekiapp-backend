@@ -1,3 +1,5 @@
+import { LedgerAccountType, LedgerDirection, LedgerOwnerType } from "@prisma/client";
+
 import { prisma } from "../../lib/prisma";
 import { stripe } from "../../lib/stripe";
 import { logger } from "../../lib/logger";
@@ -6,6 +8,7 @@ import { resolveStripeCurrency } from "../../shared/currency";
 import { notificationsService } from "../notifications/notifications.service";
 import { marketConfigurationService } from "./market-configuration.service";
 import { supportCaseService } from "./support-case.service";
+import { ledgerService } from "../ledger/ledger.service";
 
 /**
  * Pay-now / refund-on-failure contribution flow — Eki Diaspora App doc §9.
@@ -161,6 +164,29 @@ export const campaignContributionsService = {
       include: { participant: true },
     });
     if (!contribution || contribution.participant.userId !== userId) throw new AppError("Contribution not found", 404);
+    return this.confirmContributionIfPaid(contributionId);
+  },
+
+  /**
+   * The actual server-side confirmation logic — deliberately takes no
+   * userId. Originally this was folded into verifyContribution() and only
+   * ever ran when the mobile app called back after the Stripe payment
+   * sheet closed, which means a charge that succeeded but whose callback
+   * never fired (app closed, network drop) stayed stuck at
+   * PAYMENT_PROCESSING forever undetected — exactly what architecture doc
+   * §13 ("never trust frontend redirects as payment confirmation") warns
+   * against. Extracted so the real Stripe webhook (stripe.service.ts) can
+   * also drive this — server-initiated, not dependent on the client ever
+   * calling back. Still re-reads the PaymentIntent from Stripe itself
+   * before marking PAID, exactly as before.
+   */
+  async confirmContributionIfPaid(contributionId: string) {
+    const contribution = await prisma.campaignContribution.findUnique({
+      where: { id: contributionId },
+      include: { participant: true },
+    });
+    if (!contribution) throw new AppError("Contribution not found", 404);
+    const userId = contribution.participant.userId;
     if (contribution.status === "PAID" || contribution.status === "REFUND_PENDING" || contribution.status === "REFUNDED") {
       return contribution; // Idempotent — already resolved one way or the other.
     }
@@ -184,6 +210,24 @@ export const campaignContributionsService = {
       if (claim.count !== 1) return false;
 
       await tx.campaignContribution.update({ where: { id: contributionId }, data: { status: "PAID" } });
+
+      // Additive bookkeeping — money is genuinely captured by Stripe at
+      // this point but doesn't belong to any vendor/supplier yet (the
+      // campaign may still fail, or the supplier order hasn't been placed).
+      // COMMUNITY_BUY_ESCROW is the platform-owned holding account until
+      // the campaign resolves; see docs/decisions/0006 for the
+      // engineering-default chart-of-accounts caveat.
+      await ledgerService.postEntriesSafely(tx, {
+        currency: contribution.currency,
+        businessRefType: "CommunityContribution",
+        businessRefId: contribution.id,
+        providerRef: contribution.stripePaymentIntentId ?? undefined,
+        description: `Community Buy contribution captured for campaign ${campaign.id}`,
+        legs: [
+          { accountType: LedgerAccountType.PROVIDER_CASH, ownerType: LedgerOwnerType.PLATFORM, direction: LedgerDirection.DEBIT, amount: contribution.amount },
+          { accountType: LedgerAccountType.COMMUNITY_BUY_ESCROW, ownerType: LedgerOwnerType.PLATFORM, direction: LedgerDirection.CREDIT, amount: contribution.amount },
+        ],
+      });
 
       // First confirmed contribution locks the campaign's financial terms —
       // doc Screen 102 / spec §8.10.
@@ -332,6 +376,14 @@ export const campaignContributionsService = {
         data: { status: "REFUNDED", stripeRefundId: stripeRefund.id, failureReason: null },
       });
       await prisma.campaignContribution.update({ where: { id: refund.contributionId }, data: { status: "REFUNDED" } });
+      await ledgerService.reverseEntries(prisma, {
+        businessRefType: "CommunityContribution",
+        businessRefId: refund.contributionId,
+        providerRef: stripeRefund.id,
+        description: `Refund reverses Community Buy contribution ${refund.contributionId}`,
+      }).catch((error) => {
+        logger.error("Ledger reversal failed for Community Buy refund (non-fatal — refund already completed)", { refundId, errorMessage: error instanceof Error ? error.message : String(error) });
+      });
       await notificationsService.enqueue({
         userId: refund.contribution.participant.userId,
         type: "COMMUNITY_CAMPAIGN_UPDATE",
@@ -390,6 +442,14 @@ export const campaignContributionsService = {
           data: { status: "REFUNDED", stripeRefundId: stripeRefund.id },
         });
         await prisma.campaignContribution.update({ where: { id: refund.contributionId }, data: { status: "REFUNDED" } });
+        await ledgerService.reverseEntries(prisma, {
+          businessRefType: "CommunityContribution",
+          businessRefId: refund.contributionId,
+          providerRef: stripeRefund.id,
+          description: `Refund reverses Community Buy contribution ${refund.contributionId}`,
+        }).catch((ledgerError) => {
+          logger.error("Ledger reversal failed for Community Buy refund (non-fatal — refund already completed)", { refundId: refund.id, errorMessage: ledgerError instanceof Error ? ledgerError.message : String(ledgerError) });
+        });
         await notificationsService.enqueue({
           userId: contribution.participant.userId,
           type: "COMMUNITY_CAMPAIGN_UPDATE",

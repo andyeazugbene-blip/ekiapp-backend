@@ -4,6 +4,7 @@ import { AppError } from "../../shared/errors/app-error";
 import { recordAudit } from "../../shared/utils/audit";
 import { adminApprovalsService } from "./admin-approvals.service";
 import { campaignContributionsService } from "../community-buy/campaign-contributions.service";
+import { executeOrderRefund } from "./admin-refunds.controller";
 
 function requireUserId(request: Request): string {
   if (!request.user) throw new AppError("Unauthorized", 401);
@@ -35,6 +36,8 @@ export async function adminDecideApproval(request: Request, response: Response):
   if (approve) {
     if (approval.actionType === "community_buy.supplier_payment_release") {
       await campaignContributionsService.releaseSupplierPayment(adminId, approval.businessRefId);
+    } else if (approval.actionType === "order.refund.large") {
+      await executeOrderRefund(approval.businessRefId, adminId, approval.amount ?? undefined, "Four-eyes approved refund");
     } else {
       throw new AppError(`No execution wired for approved actionType "${approval.actionType}"`, 500, undefined, "APPROVAL_EXECUTION_NOT_WIRED");
     }

@@ -2079,6 +2079,20 @@ model MarketConfiguration {
   deliveryMethods                 String[] @default([])
   legalTermsVersion               String?
 
+  // Client mandate (2026-09): "Eki does not hold customer funds... payment
+  // mode must be country-configurable... if a market has no explicit
+  // approved payment mode, disable Community Buy payment there." The
+  // existing contribution flow (campaign-contributions.service.ts) already
+  // implements exactly one of the three architecture-defined modes —
+  // PAY_NOW_REFUND_ON_FAILURE, referenced in that file as "doc §9" — which
+  // was already live before this field existed. Adding this field makes
+  // that choice explicit and auditable per market instead of an implicit
+  // global assumption; it does not change any charge behavior. The other
+  // two modes (AUTHORISE_THEN_CAPTURE, PLEDGE_THEN_CHARGE) are NOT
+  // implemented — a market set to either is treated as unsupported and
+  // payments stay blocked, same as null.
+  communityBuyPaymentMode      CommunityBuyPaymentMode?
+
   createdAt                    DateTime @default(now())
   updatedAt                    DateTime @updatedAt
 }
@@ -2087,6 +2101,12 @@ enum MarketPaymentMode {
   DISABLED
   TEST
   LIVE
+}
+
+enum CommunityBuyPaymentMode {
+  PAY_NOW_REFUND_ON_FAILURE
+  AUTHORISE_THEN_CAPTURE
+  PLEDGE_THEN_CHARGE
 }
 
 enum SupplierReleasePolicy {

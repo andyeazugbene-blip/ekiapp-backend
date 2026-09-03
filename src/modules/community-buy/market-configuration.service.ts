@@ -1,4 +1,4 @@
-import type { MarketPaymentMode, SupplierReleasePolicy } from "@prisma/client";
+import type { CommunityBuyPaymentMode, MarketPaymentMode, SupplierReleasePolicy } from "@prisma/client";
 
 import { prisma } from "../../lib/prisma";
 
@@ -64,6 +64,7 @@ export const marketConfigurationService = {
     supplierReleasePolicy: SupplierReleasePolicy;
     deliveryMethods: string[];
     legalTermsVersion: string | null;
+    communityBuyPaymentMode: CommunityBuyPaymentMode | null;
   }>) {
     await this.ensureDefaults();
     return prisma.marketConfiguration.update({ where: { countryCode }, data });
@@ -75,9 +76,20 @@ export const marketConfigurationService = {
     return config?.paymentMode === "LIVE" && Boolean(config.paymentProvider);
   },
 
+  /**
+   * Client mandate: "if a market has no explicit approved payment mode,
+   * disable Community Buy payment there." Only PAY_NOW_REFUND_ON_FAILURE
+   * is actually implemented (campaign-contributions.service.ts) — a market
+   * explicitly set to AUTHORISE_THEN_CAPTURE or PLEDGE_THEN_CHARGE is
+   * correctly blocked too, not silently routed through the wrong flow.
+   */
   async isCommunityBuyPaymentsEnabled(countryCode: string): Promise<boolean> {
     const config = await this.get(countryCode);
-    return Boolean(config?.communityBuyEnabled && config?.communityBuyPaymentsEnabled);
+    return Boolean(
+      config?.communityBuyEnabled
+      && config?.communityBuyPaymentsEnabled
+      && config.communityBuyPaymentMode === "PAY_NOW_REFUND_ON_FAILURE",
+    );
   },
 };
 
