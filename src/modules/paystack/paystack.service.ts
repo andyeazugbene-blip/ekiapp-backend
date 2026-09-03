@@ -243,6 +243,24 @@ export const paystackService = {
       throw error;
     }
 
+    // Amount-tampering guard — mirrors the equivalent check on the Stripe
+    // webhook path (stripe.service.ts: "Webhook: amount mismatch"), which
+    // this Paystack path never had. Compares the platform's own
+    // authoritative amount (set at checkout time, before any client input
+    // could influence it) against what Paystack actually confirms was
+    // charged, before marking anything paid.
+    const confirmedAmount = typeof paystackData === "object" && paystackData !== null && "amount" in paystackData
+      ? Number((paystackData as { amount: unknown }).amount)
+      : NaN;
+    if (confirmedAmount !== tx.amount) {
+      logger.error("Paystack webhook: amount mismatch", { reference, expected: tx.amount, got: confirmedAmount });
+      await prisma.webhookEvent.updateMany({
+        where: { stripeEventId: `paystack:${reference}` },
+        data: { status: "IGNORED", processedAt: new Date() },
+      });
+      return;
+    }
+
     await prisma.$transaction(async (db) => {
       // Mark transaction SUCCESS (conditional — mirrors the Stripe webhook's
       // updateMany guard so a replayed/out-of-order event can't reprocess).

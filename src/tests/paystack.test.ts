@@ -7,7 +7,7 @@ vi.mock("../lib/prisma", () => ({
     paystackTransaction: { findUnique: vi.fn(), update: vi.fn() },
     order: { update: vi.fn(), findUnique: vi.fn() },
     vendor: { findUnique: vi.fn() },
-    webhookEvent: { create: vi.fn() },
+    webhookEvent: { create: vi.fn(), updateMany: vi.fn() },
     $transaction: vi.fn(),
   },
 }));
@@ -130,7 +130,7 @@ describe("Paystack Webhook Idempotency", () => {
     };
     dbTransaction.mockImplementation(async (cb: (db: unknown) => Promise<void>) => cb(fakeDb));
 
-    await paystackService.handleChargeSuccess(reference, { status: "success" });
+    await paystackService.handleChargeSuccess(reference, { status: "success", amount: 5000 });
 
     expect(fakeDb.webhookEvent.updateMany).toHaveBeenCalledWith(
       expect.objectContaining({ where: { stripeEventId: `paystack:${reference}` }, data: expect.objectContaining({ status: "PROCESSED" }) }),
@@ -153,7 +153,7 @@ describe("Paystack Webhook Idempotency", () => {
     };
     dbTransaction.mockImplementation(async (cb: (db: unknown) => Promise<void>) => cb(fakeDb));
 
-    await paystackService.handleChargeSuccess(reference, { status: "success" });
+    await paystackService.handleChargeSuccess(reference, { status: "success", amount: 5000 });
 
     expect(fakeDb.order.updateMany).toHaveBeenCalledWith(
       expect.objectContaining({ where: { id: "order-1", status: "PENDING" } }),
@@ -177,7 +177,7 @@ describe("Paystack Webhook Idempotency", () => {
     };
     dbTransaction.mockImplementation(async (cb: (db: unknown) => Promise<void>) => cb(fakeDb));
 
-    await paystackService.handleChargeSuccess(reference, { status: "success" });
+    await paystackService.handleChargeSuccess(reference, { status: "success", amount: 5000 });
 
     expect(ledgerPost).toHaveBeenCalledWith(
       fakeDb,
@@ -189,6 +189,26 @@ describe("Paystack Webhook Idempotency", () => {
           expect.objectContaining({ accountType: "PLATFORM_FEE_REVENUE", amount: 500 }),
         ]),
       }),
+    );
+  });
+
+  // Real gap found by audit: this check existed on the Stripe webhook path
+  // ("Webhook: amount mismatch") but had no Paystack equivalent — a
+  // tampered/mismatched charge amount would have been trusted and marked
+  // PAYMENT_SECURED without ever comparing it to the platform's own
+  // authoritative tx.amount.
+  it("rejects a Paystack charge whose confirmed amount doesn't match the platform's authoritative amount — never marks it secured", async () => {
+    const reference = "ref-amount-mismatch";
+    txFindUnique.mockResolvedValue({ id: "tx-1", orderId: "order-1", reference, status: "PENDING", amount: 5000 });
+    webhookCreate.mockResolvedValue({});
+    const webhookUpdateMany = prisma.webhookEvent.updateMany as unknown as ReturnType<typeof vi.fn>;
+    webhookUpdateMany.mockResolvedValue({ count: 1 });
+
+    await paystackService.handleChargeSuccess(reference, { status: "success", amount: 4000 });
+
+    expect(dbTransaction).not.toHaveBeenCalled();
+    expect(webhookUpdateMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { stripeEventId: `paystack:${reference}` }, data: expect.objectContaining({ status: "IGNORED" }) }),
     );
   });
 });
