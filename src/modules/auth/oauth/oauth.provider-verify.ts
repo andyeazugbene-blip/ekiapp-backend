@@ -1,5 +1,5 @@
+import crypto from "crypto";
 import jwt from "jsonwebtoken";
-import jwksClient from "jwks-rsa";
 
 import { AppError } from "../../../shared/errors/app-error";
 import { logger } from "../../../lib/logger";
@@ -10,6 +10,15 @@ import { logger } from "../../../lib/logger";
  * this (login-only) flow. This is the ONLY source of truth for provider
  * identity: providerUserId and email below come exclusively from the
  * verified token payload, never from any other field the client sends.
+ *
+ * Deliberately hand-rolled instead of using the `jwks-rsa` package: that
+ * package's CommonJS code does `require("jose")`, and the resolved `jose`
+ * version is ESM-only in this dependency tree — `ERR_REQUIRE_ESM` at
+ * module load, which crashed every route in production (not just these
+ * two) the first time this shipped. Node's own `crypto.createPublicKey`
+ * has understood the JWK format natively since Node 12, so a JWKS client
+ * needs nothing beyond `fetch` (already used elsewhere in this codebase,
+ * e.g. lib/paystack.ts) and `crypto` — no extra dependency, no ESM risk.
  */
 
 export interface VerifiedProviderIdentity {
@@ -18,25 +27,55 @@ export interface VerifiedProviderIdentity {
   emailVerified: boolean;
 }
 
+interface Jwk {
+  kid: string;
+  kty: string;
+  n: string;
+  e: string;
+  [key: string]: unknown;
+}
+
+interface JwksCache {
+  keys: Map<string, crypto.KeyObject>;
+  fetchedAt: number;
+}
+
+const CACHE_TTL_MS = 3600_000;
+
 const GOOGLE_JWKS_URI = "https://www.googleapis.com/oauth2/v3/certs";
 const GOOGLE_ISSUERS = new Set(["https://accounts.google.com", "accounts.google.com"]);
 
 const APPLE_JWKS_URI = "https://appleid.apple.com/auth/keys";
 const APPLE_ISSUER = "https://appleid.apple.com";
 
-const googleJwks = jwksClient({ jwksUri: GOOGLE_JWKS_URI, cache: true, cacheMaxAge: 3600_000, rateLimit: true });
-const appleJwks = jwksClient({ jwksUri: APPLE_JWKS_URI, cache: true, cacheMaxAge: 3600_000, rateLimit: true });
+const googleCache: JwksCache = { keys: new Map(), fetchedAt: 0 };
+const appleCache: JwksCache = { keys: new Map(), fetchedAt: 0 };
 
-function getSigningKey(client: jwksClient.JwksClient, kid: string): Promise<string> {
-  return new Promise((resolve, reject) => {
-    client.getSigningKey(kid, (err, key) => {
-      if (err || !key) {
-        reject(err ?? new Error("No signing key found"));
-        return;
-      }
-      resolve(key.getPublicKey());
-    });
-  });
+async function refreshJwks(uri: string, cache: JwksCache): Promise<void> {
+  const res = await fetch(uri);
+  if (!res.ok) throw new Error(`JWKS fetch failed with status ${res.status}`);
+  const body = (await res.json()) as { keys: Jwk[] };
+  const next = new Map<string, crypto.KeyObject>();
+  for (const jwk of body.keys) {
+    if (jwk.kty !== "RSA" || !jwk.kid) continue;
+    try {
+      next.set(jwk.kid, crypto.createPublicKey({ key: jwk as unknown as crypto.JsonWebKey, format: "jwk" }));
+    } catch {
+      // Skip a single malformed key rather than fail the whole refresh.
+    }
+  }
+  cache.keys = next;
+  cache.fetchedAt = Date.now();
+}
+
+async function getSigningKey(uri: string, cache: JwksCache, kid: string): Promise<crypto.KeyObject> {
+  const stale = Date.now() - cache.fetchedAt > CACHE_TTL_MS;
+  if (stale || !cache.keys.has(kid)) {
+    await refreshJwks(uri, cache);
+  }
+  const key = cache.keys.get(kid);
+  if (!key) throw new Error(`No signing key found for kid "${kid}"`);
+  return key;
 }
 
 function decodeHeaderKid(token: string): string {
@@ -59,9 +98,9 @@ export async function verifyGoogleIdToken(idToken: string, allowedAudiences: str
     throw new AppError("Google Sign-In is not configured", 503, undefined, "OAUTH_PROVIDER_NOT_CONFIGURED");
   }
   const kid = decodeHeaderKid(idToken);
-  let publicKey: string;
+  let publicKey: crypto.KeyObject;
   try {
-    publicKey = await getSigningKey(googleJwks, kid);
+    publicKey = await getSigningKey(GOOGLE_JWKS_URI, googleCache, kid);
   } catch (error) {
     logger.warn("Google JWKS key fetch failed", { errorMessage: error instanceof Error ? error.message : String(error) });
     throw new AppError("Could not verify Google identity", 401, undefined, "OAUTH_VERIFY_FAILED");
@@ -102,9 +141,9 @@ export async function verifyAppleIdentityToken(identityToken: string, bundleId: 
     throw new AppError("Apple Sign-In is not configured", 503, undefined, "OAUTH_PROVIDER_NOT_CONFIGURED");
   }
   const kid = decodeHeaderKid(identityToken);
-  let publicKey: string;
+  let publicKey: crypto.KeyObject;
   try {
-    publicKey = await getSigningKey(appleJwks, kid);
+    publicKey = await getSigningKey(APPLE_JWKS_URI, appleCache, kid);
   } catch (error) {
     logger.warn("Apple JWKS key fetch failed", { errorMessage: error instanceof Error ? error.message : String(error) });
     throw new AppError("Could not verify Apple identity", 401, undefined, "OAUTH_VERIFY_FAILED");

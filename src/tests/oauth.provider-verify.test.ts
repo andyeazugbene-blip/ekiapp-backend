@@ -15,27 +15,29 @@ const OTHER_KEYPAIR = crypto.generateKeyPairSync("rsa", {
   privateKeyEncoding: { type: "pkcs8", format: "pem" },
 });
 
-let signingKeyBehavior: "ok" | "fetch_error" = "ok";
+const publicJwk = crypto.createPublicKey(publicKey).export({ format: "jwk" }) as { n: string; e: string };
+const TEST_KID = "test-kid";
+const JWKS_RESPONSE = { keys: [{ kid: TEST_KID, kty: "RSA", n: publicJwk.n, e: publicJwk.e, alg: "RS256", use: "sig" }] };
 
-vi.mock("jwks-rsa", () => ({
-  default: () => ({
-    getSigningKey: (_kid: string, cb: (err: unknown, key: unknown) => void) => {
-      if (signingKeyBehavior === "fetch_error") {
-        cb(new Error("JWKS endpoint unreachable"), null);
-        return;
-      }
-      cb(null, { getPublicKey: () => publicKey });
-    },
-  }),
-}));
+let fetchBehavior: "ok" | "fetch_error" | "http_error" = "ok";
+
+const fetchMock = vi.fn(async () => {
+  if (fetchBehavior === "fetch_error") throw new Error("network unreachable");
+  if (fetchBehavior === "http_error") return { ok: false, status: 500, json: async () => ({}) } as Response;
+  return { ok: true, status: 200, json: async () => JWKS_RESPONSE } as Response;
+});
+vi.stubGlobal("fetch", fetchMock);
 
 import { verifyAppleIdentityToken, verifyGoogleIdToken } from "../modules/auth/oauth/oauth.provider-verify";
 
 function signToken(payload: Record<string, unknown>, key = privateKey): string {
-  return jwt.sign(payload, key, { algorithm: "RS256", header: { kid: "test-kid" } });
+  return jwt.sign(payload, key, { algorithm: "RS256", header: { kid: TEST_KID } });
 }
 
-beforeEach(() => { signingKeyBehavior = "ok"; });
+beforeEach(() => {
+  fetchBehavior = "ok";
+  fetchMock.mockClear();
+});
 
 describe("verifyGoogleIdToken", () => {
   const GOOGLE_CLIENT_IDS = ["ios-client-id.apps.googleusercontent.com"];
@@ -77,9 +79,18 @@ describe("verifyGoogleIdToken", () => {
   });
 
   it("8. provider error — JWKS endpoint unreachable surfaces as a clean 401, not a raw crash", async () => {
-    signingKeyBehavior = "fetch_error";
-    const token = signToken({ iss: "https://accounts.google.com", aud: "ios-client-id.apps.googleusercontent.com", sub: "sub-1", exp: Math.floor(Date.now() / 1000) + 3600 });
-    await expect(verifyGoogleIdToken(token, GOOGLE_CLIENT_IDS)).rejects.toMatchObject({ statusCode: 401, code: "OAUTH_VERIFY_FAILED" });
+    fetchBehavior = "fetch_error";
+    // A kid not already in the (module-level, cross-test) cache forces a real fetch attempt.
+    const token = signToken({ iss: "https://accounts.google.com", aud: "ios-client-id.apps.googleusercontent.com", sub: "sub-1", exp: Math.floor(Date.now() / 1000) + 3600 }, privateKey);
+    const uncachedKidToken = jwt.sign(jwt.decode(token) as object, privateKey, { algorithm: "RS256", header: { kid: "uncached-kid-1" } });
+    await expect(verifyGoogleIdToken(uncachedKidToken, GOOGLE_CLIENT_IDS)).rejects.toMatchObject({ statusCode: 401, code: "OAUTH_VERIFY_FAILED" });
+  });
+
+  it("8b. provider error — JWKS endpoint returns a non-200 surfaces as a clean 401", async () => {
+    fetchBehavior = "http_error";
+    const token = signToken({ iss: "https://accounts.google.com", aud: "ios-client-id.apps.googleusercontent.com", sub: "sub-1", exp: Math.floor(Date.now() / 1000) + 3600 }, privateKey);
+    const uncachedKidToken = jwt.sign(jwt.decode(token) as object, privateKey, { algorithm: "RS256", header: { kid: "uncached-kid-2" } });
+    await expect(verifyGoogleIdToken(uncachedKidToken, GOOGLE_CLIENT_IDS)).rejects.toMatchObject({ statusCode: 401, code: "OAUTH_VERIFY_FAILED" });
   });
 
   it("fails closed (503) when Google Sign-In has no configured client IDs at all", async () => {
@@ -89,6 +100,14 @@ describe("verifyGoogleIdToken", () => {
 
   it("9d. rejects a structurally malformed token (not a JWT at all)", async () => {
     await expect(verifyGoogleIdToken("not-a-real-jwt", GOOGLE_CLIENT_IDS)).rejects.toMatchObject({ statusCode: 400, code: "OAUTH_TOKEN_MALFORMED" });
+  });
+
+  it("caches the JWKS response — a second verification for the same kid doesn't re-fetch", async () => {
+    const token = signToken({ iss: "https://accounts.google.com", aud: "ios-client-id.apps.googleusercontent.com", sub: "sub-cache", exp: Math.floor(Date.now() / 1000) + 3600 });
+    await verifyGoogleIdToken(token, GOOGLE_CLIENT_IDS);
+    const callsAfterFirst = fetchMock.mock.calls.length;
+    await verifyGoogleIdToken(token, GOOGLE_CLIENT_IDS);
+    expect(fetchMock.mock.calls.length).toBe(callsAfterFirst);
   });
 });
 
