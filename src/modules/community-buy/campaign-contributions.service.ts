@@ -1,27 +1,61 @@
 import { LedgerAccountType, LedgerDirection, LedgerOwnerType } from "@prisma/client";
+import type Stripe from "stripe";
 
 import { prisma } from "../../lib/prisma";
 import { stripe } from "../../lib/stripe";
 import { logger } from "../../lib/logger";
 import { AppError } from "../../shared/errors/app-error";
 import { resolveStripeCurrency } from "../../shared/currency";
+import { calculatePlatformFee } from "../../shared/pricing";
 import { notificationsService } from "../notifications/notifications.service";
 import { marketConfigurationService } from "./market-configuration.service";
 import { supportCaseService } from "./support-case.service";
 import { ledgerService } from "../ledger/ledger.service";
 
 /**
- * Pay-now / refund-on-failure contribution flow — Eki Diaspora App doc §9.
- * Gated entirely behind MarketConfiguration.communityBuyPaymentsEnabled,
- * which defaults to false for every market (see market-configuration.service.ts).
+ * PLEDGE_THEN_CHARGE contribution flow — client mandate (2026-09): "Eki
+ * never takes the fund upfront but participants are to give their payment
+ * details so at end of the campaign payment go to the owner and Eki takes
+ * its processing fee." Replaces the earlier pay-now/refund-on-failure model
+ * (doc §9) end to end:
+ *
+ *   pledge()        -> saves a payment method reference + records the
+ *                       pledge (status PLEDGED), claims capacity
+ *                       atomically. NO Stripe charge happens here — only a
+ *                       SetupIntent, already completed by the buyer through
+ *                       the existing generic buyer/payment-methods flow
+ *                       (payment-methods.service.ts, built for Regular
+ *                       Deliveries — reused as-is, not duplicated).
+ *   [campaign closes, GOAL_REACHED or MINIMUM_REACHED]
+ *   chargeAllPledgesForCampaign() -> the ONLY place money is ever captured:
+ *                       an off-session PaymentIntent per pledge, confirmed
+ *                       synchronously (mirrors renewals.service.ts's
+ *                       attemptPayment — the same "charge a saved card
+ *                       while the buyer isn't present" pattern already
+ *                       proven for Regular Deliveries).
+ *   releaseSupplierPayment() -> admin-triggered (four-eyes gated in
+ *                       community-buy.controller.ts), transfers the
+ *                       collected total minus Eki's configured processing
+ *                       fee to the supplier's Stripe Connect account.
+ *
+ * A campaign that never reaches its minimum never has any PAID
+ * contribution to begin with (nothing was ever charged) — so
+ * createRefundRecordsForFailedCampaign() (community-campaigns.service.ts)
+ * naturally creates zero refunds for it, per the client's explicit rule:
+ * "never invent refunds simply because a campaign failed." The refund
+ * machinery below stays for the cases that genuinely need it: an
+ * overcapacity race caught after a charge already succeeded, or an
+ * admin-approved goodwill/dispute refund.
  */
 
-interface ContributionIntentResult {
+const MAX_CHARGE_ATTEMPTS = 3;
+
+interface PledgeResult {
   contributionId: string;
-  clientSecret: string;
   quantity: number;
   amount: number;
   currency: string;
+  status: string;
 }
 
 async function assertCapacityAvailable(campaign: { maximumShares: number | null; confirmedShares: number }, quantity: number): Promise<void> {
@@ -53,34 +87,70 @@ function assertContributableCampaign(campaign: { pricePerShareMinor: number | nu
   }
 }
 
-async function startContributionIntent(
+async function requirePaymentMethod(userId: string, paymentMethodId: string) {
+  const paymentMethod = await prisma.buyerPaymentMethod.findUnique({ where: { id: paymentMethodId } });
+  if (!paymentMethod || paymentMethod.buyerId !== userId) {
+    throw new AppError("Payment method not found. Save a card before pledging.", 404, undefined, "PAYMENT_METHOD_NOT_FOUND");
+  }
+  return paymentMethod;
+}
+
+async function createPledge(
   campaignId: string,
   campaign: { pricePerShareMinor: number; currency: string },
   participantId: string,
   quantity: number,
   isOrganiserTopUp: boolean,
-  receiptEmail: string | undefined,
-): Promise<ContributionIntentResult> {
+  paymentMethodId: string,
+): Promise<PledgeResult> {
   const amount = quantity * campaign.pricePerShareMinor;
 
-  const contribution = await prisma.campaignContribution.create({
-    data: { campaignId, participantId, amount, currency: campaign.currency, quantity, isOrganiserTopUp, status: "INITIATED" },
+  // Atomic capacity claim — the pledge itself is the only commitment point
+  // in this model (no Stripe call to arbitrate a race), so two concurrent
+  // pledges for the last slot are decided entirely by this guarded UPDATE.
+  const claimed = await prisma.$transaction(async (tx) => {
+    const fresh = await tx.communityCampaign.findUniqueOrThrow({ where: { id: campaignId } });
+    const maximum = fresh.maximumShares ?? 0;
+    const maxConfirmedBefore = maximum - quantity;
+
+    const claim = await tx.communityCampaign.updateMany({
+      where: { id: campaignId, confirmedShares: { lte: maxConfirmedBefore } },
+      data: { confirmedShares: { increment: quantity } },
+    });
+    if (claim.count !== 1) return null;
+
+    const contribution = await tx.campaignContribution.create({
+      data: { campaignId, participantId, amount, currency: campaign.currency, quantity, isOrganiserTopUp, status: "PLEDGED", paymentMethodId },
+    });
+
+    // First confirmed pledge locks the campaign's financial terms —
+    // doc Screen 102 / spec §8.10.
+    if (!fresh.termsLockedAt) {
+      await tx.communityCampaign.update({ where: { id: campaignId }, data: { termsLockedAt: new Date() } });
+    }
+    return contribution;
   });
 
-  const intent = await stripe.paymentIntents.create({
-    amount,
-    currency: resolveStripeCurrency(campaign.currency),
-    receipt_email: receiptEmail,
-    metadata: { kind: "community_buy_contribution", contributionId: contribution.id, campaignId, quantity: String(quantity), isOrganiserTopUp: String(isOrganiserTopUp) },
+  if (!claimed) {
+    const fresh = await prisma.communityCampaign.findUniqueOrThrow({ where: { id: campaignId } });
+    throw new AppError(
+      `Only ${Math.max(0, (fresh.maximumShares ?? 0) - fresh.confirmedShares)} share(s) remain available.`,
+      409,
+      undefined,
+      "CAPACITY_UNAVAILABLE",
+    );
+  }
+
+  const contribution = await prisma.campaignContribution.findUniqueOrThrow({ where: { id: claimed.id }, include: { participant: true } });
+  await notificationsService.enqueue({
+    userId: contribution.participant.userId,
+    type: "COMMUNITY_CAMPAIGN_UPDATE",
+    title: "Pledge recorded",
+    body: "Your payment method is saved. You will only be charged if this campaign succeeds.",
+    data: { type: "community_campaign_update", event: "pledge_recorded", campaignId },
   });
 
-  await prisma.campaignContribution.update({
-    where: { id: contribution.id },
-    data: { status: "PAYMENT_PROCESSING", stripePaymentIntentId: intent.id },
-  });
-
-  if (!intent.client_secret) throw new AppError("Failed to start contribution payment", 502);
-  return { contributionId: contribution.id, clientSecret: intent.client_secret, quantity, amount, currency: campaign.currency };
+  return { contributionId: claimed.id, quantity, amount, currency: campaign.currency, status: "PLEDGED" };
 }
 
 export const campaignContributionsService = {
@@ -95,7 +165,13 @@ export const campaignContributionsService = {
     });
   },
 
-  async createContributionIntent(userId: string, campaignId: string, quantity: number): Promise<ContributionIntentResult> {
+  /**
+   * Participant pledges a quantity against an already-saved payment method
+   * (see buyer/payment-methods routes — the same SetupIntent flow Regular
+   * Deliveries uses). No money moves here; only a pledge record and a
+   * capacity claim.
+   */
+  async pledge(userId: string, campaignId: string, quantity: number, paymentMethodId: string): Promise<PledgeResult> {
     const campaign = await prisma.communityCampaign.findUnique({ where: { id: campaignId } });
     if (!campaign || campaign.status !== "LIVE") throw new AppError("Campaign not found or not live", 404);
     if (new Date() >= campaign.deadline) throw new AppError("This campaign is no longer accepting contributions", 409);
@@ -110,6 +186,7 @@ export const campaignContributionsService = {
 
     assertContributableCampaign(campaign, quantity);
     await assertCapacityAvailable(campaign, quantity);
+    const paymentMethod = await requirePaymentMethod(userId, paymentMethodId);
 
     const participant = await prisma.campaignParticipant.upsert({
       where: { campaignId_userId: { campaignId, userId } },
@@ -117,17 +194,16 @@ export const campaignContributionsService = {
       create: { campaignId, userId },
     });
 
-    const buyer = await prisma.user.findUnique({ where: { id: userId }, select: { email: true } });
-    return startContributionIntent(campaignId, campaign, participant.id, quantity, false, buyer?.email);
+    return createPledge(campaignId, campaign, participant.id, quantity, false, paymentMethod.id);
   },
 
-  /** Doc Screen 106 — organiser purchases the shortfall through the same checkout, only while the campaign is in RESCUE_WINDOW. */
-  async createOrganiserTopUp(userId: string, campaignId: string, quantity: number): Promise<ContributionIntentResult> {
+  /** Doc Screen 106 — organiser pledges the shortfall through the same flow, only while the campaign is in RESCUE_WINDOW. */
+  async pledgeOrganiserTopUp(userId: string, campaignId: string, quantity: number, paymentMethodId: string): Promise<PledgeResult> {
     const organiser = await prisma.organiserProfile.findUnique({ where: { userId } });
     const campaign = await prisma.communityCampaign.findUnique({ where: { id: campaignId } });
     if (!campaign || !organiser || campaign.organiserId !== organiser.id) throw new AppError("Campaign not found", 404);
     if (campaign.status !== "RESCUE_WINDOW") {
-      throw new AppError("A top-up can only be purchased while the campaign is in its rescue window", 409);
+      throw new AppError("A top-up can only be pledged while the campaign is in its rescue window", 409);
     }
 
     const paymentsEnabled = await marketConfigurationService.isCommunityBuyPaymentsEnabled(campaign.country);
@@ -137,6 +213,7 @@ export const campaignContributionsService = {
 
     assertContributableCampaign(campaign, quantity);
     await assertCapacityAvailable(campaign, quantity);
+    const paymentMethod = await requirePaymentMethod(userId, paymentMethodId);
 
     const participant = await prisma.campaignParticipant.upsert({
       where: { campaignId_userId: { campaignId, userId } },
@@ -144,140 +221,184 @@ export const campaignContributionsService = {
       create: { campaignId, userId },
     });
 
-    const buyer = await prisma.user.findUnique({ where: { id: userId }, select: { email: true } });
-    return startContributionIntent(campaignId, campaign, participant.id, quantity, true, buyer?.email);
+    return createPledge(campaignId, campaign, participant.id, quantity, true, paymentMethod.id);
   },
 
   /**
-   * Server-side verification — never trusts the mobile app's redirect.
-   * Re-reads the PaymentIntent directly from Stripe before marking a
-   * contribution PAID. Capacity is claimed atomically at this point, not
-   * at intent-creation time — a guarded UPDATE that never lets
-   * confirmedShares exceed maximumShares even under concurrent final-slot
-   * confirmations. If capacity was lost between intent creation and this
-   * confirmation, the (already-captured) payment is immediately queued
-   * for refund instead of being silently over-counted.
+   * The only place a Community Buy pledge is ever actually charged.
+   * Off-session, confirmed synchronously — the result is read directly off
+   * the returned PaymentIntent, never inferred from a client redirect
+   * (there is no client present at all at this point). Idempotent per
+   * attempt via "{contributionId}:{attemptNumber}", capped at
+   * MAX_CHARGE_ATTEMPTS — mirrors renewals.service.ts's attemptPayment.
    */
-  async verifyContribution(userId: string, contributionId: string) {
-    const contribution = await prisma.campaignContribution.findUnique({
+  async attemptCharge(contributionId: string) {
+    const contribution = await prisma.campaignContribution.findUniqueOrThrow({
       where: { id: contributionId },
-      include: { participant: true },
+      include: { participant: true, paymentMethod: true },
     });
-    if (!contribution || contribution.participant.userId !== userId) throw new AppError("Contribution not found", 404);
-    return this.confirmContributionIfPaid(contributionId);
-  },
-
-  /**
-   * The actual server-side confirmation logic — deliberately takes no
-   * userId. Originally this was folded into verifyContribution() and only
-   * ever ran when the mobile app called back after the Stripe payment
-   * sheet closed, which means a charge that succeeded but whose callback
-   * never fired (app closed, network drop) stayed stuck at
-   * PAYMENT_PROCESSING forever undetected — exactly what architecture doc
-   * §13 ("never trust frontend redirects as payment confirmation") warns
-   * against. Extracted so the real Stripe webhook (stripe.service.ts) can
-   * also drive this — server-initiated, not dependent on the client ever
-   * calling back. Still re-reads the PaymentIntent from Stripe itself
-   * before marking PAID, exactly as before.
-   */
-  async confirmContributionIfPaid(contributionId: string) {
-    const contribution = await prisma.campaignContribution.findUnique({
-      where: { id: contributionId },
-      include: { participant: true },
-    });
-    if (!contribution) throw new AppError("Contribution not found", 404);
-    const userId = contribution.participant.userId;
-    if (contribution.status === "PAID" || contribution.status === "REFUND_PENDING" || contribution.status === "REFUNDED") {
-      return contribution; // Idempotent — already resolved one way or the other.
+    if (contribution.status === "PAID") return contribution; // idempotent — already charged.
+    if (contribution.status !== "PLEDGED" && contribution.status !== "CHARGE_FAILED") {
+      throw new AppError("This pledge is not ready to be charged", 409);
     }
-    if (!contribution.stripePaymentIntentId) throw new AppError("No payment was started for this contribution", 409);
-
-    const intent = await stripe.paymentIntents.retrieve(contribution.stripePaymentIntentId);
-    if (intent.status !== "succeeded") {
-      return contribution; // Still processing or failed — caller can poll again.
+    if (!contribution.paymentMethod) {
+      return this.markChargeFailedTerminal(contribution, "No saved payment method on this pledge");
     }
 
-    const claimed = await prisma.$transaction(async (tx) => {
-      const campaign = await tx.communityCampaign.findUniqueOrThrow({ where: { id: contribution.campaignId } });
-      const maximum = campaign.maximumShares ?? 0;
-      const maxConfirmedBefore = maximum - contribution.quantity;
+    const priorAttempts = await prisma.campaignChargeAttempt.count({ where: { contributionId } });
+    if (priorAttempts >= MAX_CHARGE_ATTEMPTS) {
+      return this.markChargeFailedTerminal(contribution, "Maximum charge attempts exhausted");
+    }
+    const attemptNumber = priorAttempts + 1;
+    const idempotencyKey = `${contributionId}:${attemptNumber}`;
 
-      const claim = await tx.communityCampaign.updateMany({
-        where: { id: campaign.id, confirmedShares: { lte: maxConfirmedBefore } },
-        data: { confirmedShares: { increment: contribution.quantity } },
+    const attempt = await prisma.campaignChargeAttempt.create({ data: { contributionId, attemptNumber, status: "PENDING", idempotencyKey } });
+    await prisma.campaignContribution.update({ where: { id: contributionId }, data: { status: "PAYMENT_PROCESSING" } });
+
+    let intent: Stripe.PaymentIntent;
+    try {
+      if (resolveStripeCurrency(contribution.currency) !== contribution.currency.toLowerCase()) {
+        throw new Error(`Card payments are not currently available in ${contribution.currency.toUpperCase()}.`);
+      }
+      intent = await stripe.paymentIntents.create(
+        {
+          amount: contribution.amount,
+          currency: resolveStripeCurrency(contribution.currency),
+          customer: contribution.paymentMethod.stripeCustomerId,
+          payment_method: contribution.paymentMethod.stripePaymentMethodId,
+          off_session: true,
+          confirm: true,
+          metadata: { kind: "community_buy_pledge_charge", contributionId, campaignId: contribution.campaignId },
+        },
+        { idempotencyKey },
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      await prisma.campaignChargeAttempt.update({
+        where: { id: attempt.id },
+        data: { status: "FAILED", failureCode: (error as Stripe.StripeRawError)?.code, failureMessage: message },
       });
+      return this.handleChargeAttemptFailure(contribution, message, attemptNumber >= MAX_CHARGE_ATTEMPTS);
+    }
 
-      if (claim.count !== 1) return false;
+    if (intent.status === "succeeded") {
+      await prisma.campaignChargeAttempt.update({ where: { id: attempt.id }, data: { status: "SUCCEEDED", stripePaymentIntentId: intent.id } });
+      return this.markChargeSucceeded(contribution, intent.id);
+    }
 
-      await tx.campaignContribution.update({ where: { id: contributionId }, data: { status: "PAID" } });
+    // requires_action / processing / anything else — an off-session charge
+    // with no buyer present can't complete extra authentication.
+    await prisma.campaignChargeAttempt.update({
+      where: { id: attempt.id },
+      data: { status: "FAILED", stripePaymentIntentId: intent.id, failureCode: intent.status, failureMessage: "Payment requires additional authentication" },
+    });
+    return this.handleChargeAttemptFailure(contribution, `Unexpected status: ${intent.status}`, attemptNumber >= MAX_CHARGE_ATTEMPTS);
+  },
 
+  async markChargeSucceeded(contribution: { id: string; campaignId: string; currency: string; amount: number; participant: { userId: string } }, stripePaymentIntentId: string) {
+    await prisma.$transaction(async (tx) => {
+      await tx.campaignContribution.update({ where: { id: contribution.id }, data: { status: "PAID", stripePaymentIntentId } });
       // Additive bookkeeping — money is genuinely captured by Stripe at
-      // this point but doesn't belong to any vendor/supplier yet (the
-      // campaign may still fail, or the supplier order hasn't been placed).
+      // this point but doesn't belong to the supplier yet.
       // COMMUNITY_BUY_ESCROW is the platform-owned holding account until
-      // the campaign resolves; see docs/decisions/0006 for the
-      // engineering-default chart-of-accounts caveat.
+      // releaseSupplierPayment() transfers it out net of Eki's fee.
       await ledgerService.postEntriesSafely(tx, {
         currency: contribution.currency,
         businessRefType: "CommunityContribution",
         businessRefId: contribution.id,
-        providerRef: contribution.stripePaymentIntentId ?? undefined,
-        description: `Community Buy contribution captured for campaign ${campaign.id}`,
+        providerRef: stripePaymentIntentId,
+        description: `Community Buy pledge charged for campaign ${contribution.campaignId}`,
         legs: [
           { accountType: LedgerAccountType.PROVIDER_CASH, ownerType: LedgerOwnerType.PLATFORM, direction: LedgerDirection.DEBIT, amount: contribution.amount },
           { accountType: LedgerAccountType.COMMUNITY_BUY_ESCROW, ownerType: LedgerOwnerType.PLATFORM, direction: LedgerDirection.CREDIT, amount: contribution.amount },
         ],
       });
-
-      // First confirmed contribution locks the campaign's financial terms —
-      // doc Screen 102 / spec §8.10.
-      if (!campaign.termsLockedAt) {
-        await tx.communityCampaign.update({ where: { id: campaign.id }, data: { termsLockedAt: new Date() } });
-      }
-      return true;
     });
-
-    if (!claimed) {
-      // Capacity was gone by the time this payment confirmed (concurrent
-      // final-slot race). The charge already succeeded — do not keep the
-      // money for a share that was never actually available. Refund it
-      // through the exact same idempotent refund path as a failed campaign.
-      logger.warn("Community Buy contribution paid after capacity was already full — queuing refund", {
-        contributionId,
-        campaignId: contribution.campaignId,
-      });
-      await prisma.$transaction(async (tx) => {
-        await tx.campaignContribution.update({ where: { id: contributionId }, data: { status: "REFUND_PENDING" } });
-        await tx.campaignRefund.create({
-          data: {
-            contributionId,
-            amount: contribution.amount,
-            currency: contribution.currency,
-            status: "REFUND_PENDING",
-            idempotencyKey: `refund:${contributionId}`,
-          },
-        }).catch((error: any) => {
-          if (error?.code !== "P2002") throw error;
-        });
-      });
-      await notificationsService.enqueue({
-        userId,
-        type: "COMMUNITY_CAMPAIGN_UPDATE",
-        title: "This campaign filled up",
-        body: "All shares were taken just before your payment completed. You have not been charged — a refund is on its way.",
-        data: { type: "community_campaign_update", event: "capacity_refund", campaignId: contribution.campaignId },
-      });
-      return prisma.campaignContribution.findUniqueOrThrow({ where: { id: contributionId } });
-    }
-
     await notificationsService.enqueue({
-      userId,
+      userId: contribution.participant.userId,
       type: "COMMUNITY_CAMPAIGN_UPDATE",
-      title: "Contribution confirmed",
-      body: "Your contribution has been confirmed.",
-      data: { type: "community_campaign_update", event: "contribution_confirmed", campaignId: contribution.campaignId },
+      title: "Payment confirmed",
+      body: "This campaign succeeded — your saved card has been charged.",
+      data: { type: "community_campaign_update", event: "pledge_charged", campaignId: contribution.campaignId },
     });
-    return prisma.campaignContribution.findUniqueOrThrow({ where: { id: contributionId } });
+    return prisma.campaignContribution.findUniqueOrThrow({ where: { id: contribution.id } });
+  },
+
+  async handleChargeAttemptFailure(contribution: { id: string; campaignId: string; participant: { userId: string } }, reason: string, exhausted: boolean) {
+    if (exhausted) return this.markChargeFailedTerminal(contribution, reason);
+    await prisma.campaignContribution.update({ where: { id: contribution.id }, data: { status: "CHARGE_FAILED" } });
+    await notificationsService.enqueue({
+      userId: contribution.participant.userId,
+      type: "COMMUNITY_CAMPAIGN_UPDATE",
+      title: "We couldn't collect your Community Buy payment",
+      body: "Retry from the app to keep your place in this campaign.",
+      data: { type: "community_campaign_update", event: "pledge_charge_failed", campaignId: contribution.campaignId },
+    });
+    return prisma.campaignContribution.findUniqueOrThrow({ where: { id: contribution.id } });
+  },
+
+  async markChargeFailedTerminal(contribution: { id: string; campaignId: string; participant: { userId: string } }, reason: string) {
+    logger.warn("Community Buy pledge charge failed terminally", { contributionId: contribution.id, campaignId: contribution.campaignId, reason });
+    await prisma.campaignContribution.update({ where: { id: contribution.id }, data: { status: "CHARGE_FAILED" } });
+    await notificationsService.enqueue({
+      userId: contribution.participant.userId,
+      type: "COMMUNITY_CAMPAIGN_UPDATE",
+      title: "Payment could not be collected",
+      body: "We couldn't collect payment for your Community Buy pledge after several attempts. Contact support to resolve this.",
+      data: { type: "community_campaign_update", event: "pledge_charge_failed_final", campaignId: contribution.campaignId },
+    });
+    return prisma.campaignContribution.findUniqueOrThrow({ where: { id: contribution.id } });
+  },
+
+  /**
+   * Participant-triggered retry (e.g. after updating their card) — mirrors
+   * renewalsService.retryPayment. attemptCharge() itself enforces the
+   * MAX_CHARGE_ATTEMPTS cap, so this can never bypass it.
+   */
+  async retryCharge(userId: string, contributionId: string) {
+    const contribution = await prisma.campaignContribution.findUnique({ where: { id: contributionId }, include: { participant: true } });
+    if (!contribution || contribution.participant.userId !== userId) throw new AppError("Contribution not found", 404);
+    if (contribution.status !== "CHARGE_FAILED") throw new AppError("This pledge is not in a retryable state", 409);
+    const result = await this.attemptCharge(contributionId);
+    await this.syncSupplierPaymentAmount(contribution.campaignId);
+    return result;
+  },
+
+  /**
+   * Called once, right after a campaign succeeds (community-campaigns.
+   * service.ts) — charges every PLEDGED contribution for that campaign.
+   * Individual failures don't roll back others; each is independent
+   * (client requirement: "each contribution handled independently").
+   */
+  async chargeAllPledgesForCampaign(campaignId: string): Promise<{ total: number; charged: number; failed: number }> {
+    const pledged = await prisma.campaignContribution.findMany({ where: { campaignId, status: "PLEDGED" } });
+    let charged = 0;
+    let failed = 0;
+    for (const contribution of pledged) {
+      try {
+        const result = await this.attemptCharge(contribution.id);
+        if (result.status === "PAID") charged++;
+        else failed++;
+      } catch (error) {
+        failed++;
+        logger.error("Community Buy charge attempt threw unexpectedly", { contributionId: contribution.id, campaignId, error: String(error) });
+      }
+    }
+    await this.syncSupplierPaymentAmount(campaignId);
+    return { total: pledged.length, charged, failed };
+  },
+
+  /**
+   * Keeps CampaignSupplierPayment.amount in sync with what has actually
+   * been collected — Eki can never transfer money it never received.
+   * releaseSupplierPayment() also recomputes this live as a final
+   * safety net, so a stale value here can never cause a bad transfer.
+   */
+  async syncSupplierPaymentAmount(campaignId: string): Promise<void> {
+    const existing = await prisma.campaignSupplierPayment.findUnique({ where: { campaignId } });
+    if (!existing) return;
+    const paidAgg = await prisma.campaignContribution.aggregate({ where: { campaignId, status: "PAID" }, _sum: { amount: true } });
+    await prisma.campaignSupplierPayment.update({ where: { campaignId }, data: { amount: paidAgg._sum.amount ?? 0 } });
   },
 
   async getMyContribution(userId: string, contributionId: string) {
@@ -313,11 +434,13 @@ export const campaignContributionsService = {
       .filter((p) => p.contributions.length > 0)
       .map((p) => {
         const paid = p.contributions.filter((c) => c.status === "PAID");
+        const pledged = p.contributions.filter((c) => c.status === "PLEDGED" || c.status === "PAYMENT_PROCESSING" || c.status === "CHARGE_FAILED");
         const refunds = p.contributions.map((c) => c.refund).filter((r): r is NonNullable<typeof r> => r != null);
         return {
           campaign: p.campaign,
           totalQuantity: paid.reduce((sum, c) => sum + c.quantity, 0),
           totalPaid: paid.reduce((sum, c) => sum + c.amount, 0),
+          totalPledged: pledged.reduce((sum, c) => sum + c.amount, 0),
           latestContribution: p.contributions[0],
           refundStatus: refunds.find((r) => r.status === "REFUND_FAILED")?.status
             ?? refunds.find((r) => r.status === "REFUND_PENDING" || r.status === "REFUND_PROCESSING")?.status
@@ -328,11 +451,11 @@ export const campaignContributionsService = {
   },
 
   // ─── Refunds — doc §10 ──────────────────────────────────────────────────
-  // Refund *records* are created eagerly at campaign-failure time
-  // (community-campaigns.service.ts) or on a capacity-lost race
-  // (verifyContribution above); this submits each pending one to Stripe
-  // with its own idempotency key, so a retried sweep can never
-  // double-refund the same contribution.
+  // Under PLEDGE_THEN_CHARGE, a failed campaign never has a PAID
+  // contribution to refund in the first place (see file header). This
+  // machinery now only ever fires for a charge that succeeded and later
+  // genuinely needs reversing (overcapacity race, admin-approved goodwill
+  // refund) — never invented just because a campaign failed.
 
   /** Admin visibility — every refund record with enough context to audit outcomes, newest first. */
   async listRefundsForAdmin(limit = 200) {
@@ -485,8 +608,19 @@ export const campaignContributionsService = {
     return payment;
   },
 
+  /**
+   * The actual settlement — client mandate: "owner receives the campaign
+   * funds through the approved Stripe flow, while Eki takes its configured
+   * processing fee." Always recomputes the collected total live from PAID
+   * contributions (never trusts the stored estimate) and requires an
+   * explicit per-market fee before it will move a single cent — no
+   * invented default percentage.
+   */
   async releaseSupplierPayment(adminId: string, campaignId: string) {
-    const payment = await prisma.campaignSupplierPayment.findUnique({ where: { campaignId }, include: { campaign: { include: { supplier: { include: { vendor: true } } } } } });
+    const payment = await prisma.campaignSupplierPayment.findUnique({
+      where: { campaignId },
+      include: { campaign: { include: { supplier: { include: { vendor: true } } } } },
+    });
     if (!payment) throw new AppError("No supplier payment record exists for this campaign", 404);
     if (payment.status === "PAID") return payment;
     if (payment.status !== "NOT_RELEASED" && payment.status !== "ON_HOLD") {
@@ -494,14 +628,71 @@ export const campaignContributionsService = {
     }
     // Doc Screen 131: never release if the payout account changed after
     // campaign approval without reverification.
-    const currentStripeAccountId = payment.campaign.supplier.vendor.stripeAccountId;
-    if (payment.payoutStripeAccountIdAtApproval && currentStripeAccountId !== payment.payoutStripeAccountIdAtApproval) {
+    const vendor = payment.campaign.supplier.vendor;
+    if (payment.payoutStripeAccountIdAtApproval && vendor.stripeAccountId !== payment.payoutStripeAccountIdAtApproval) {
       throw new AppError("The supplier's payout account has changed since approval — reverification is required before release", 409, undefined, "PAYOUT_ACCOUNT_CHANGED");
     }
-    return prisma.campaignSupplierPayment.update({
+    if (!vendor.stripeAccountId || !vendor.stripePayoutsEnabled) {
+      throw new AppError("This supplier's payout account is not ready to receive transfers", 409, undefined, "PAYOUTS_NOT_ENABLED");
+    }
+
+    const paidAgg = await prisma.campaignContribution.aggregate({ where: { campaignId, status: "PAID" }, _sum: { amount: true } });
+    const totalPaid = paidAgg._sum.amount ?? 0;
+    if (totalPaid <= 0) {
+      throw new AppError("No contributions have been successfully charged for this campaign yet", 409, undefined, "NOTHING_COLLECTED_YET");
+    }
+
+    const config = await marketConfigurationService.get(payment.campaign.country);
+    if (config?.communityBuyFeeBps == null) {
+      throw new AppError("This market has no configured Community Buy processing fee — set one before releasing supplier payments", 409, undefined, "FEE_NOT_CONFIGURED");
+    }
+    const feeAmount = calculatePlatformFee(totalPaid, config.communityBuyFeeBps);
+    const netAmount = totalPaid - feeAmount;
+
+    await prisma.campaignSupplierPayment.update({
       where: { campaignId },
-      data: { status: "PROCESSING", releasedById: adminId, releasedAt: new Date(), holdReason: null },
+      data: { status: "PROCESSING", amount: totalPaid, feeAmount, netAmount },
     });
+
+    let transfer: Stripe.Transfer;
+    try {
+      transfer = await stripe.transfers.create(
+        {
+          amount: netAmount,
+          currency: resolveStripeCurrency(payment.currency),
+          destination: vendor.stripeAccountId,
+          transfer_group: `community-buy:${campaignId}`,
+          description: `Community Buy settlement for campaign ${campaignId}`,
+        },
+        { idempotencyKey: `community-buy-transfer:${campaignId}` },
+      );
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      await prisma.campaignSupplierPayment.update({ where: { campaignId }, data: { status: "ON_HOLD", holdReason: `Transfer failed: ${message}` } });
+      throw new AppError(`Supplier transfer failed: ${message}`, 502);
+    }
+
+    const updated = await prisma.campaignSupplierPayment.update({
+      where: { campaignId },
+      data: { status: "PAID", releasedById: adminId, releasedAt: new Date(), stripeTransferId: transfer.id, holdReason: null },
+    });
+
+    await ledgerService.postEntriesSafely(prisma, {
+      currency: payment.currency,
+      businessRefType: "CampaignSupplierPayment",
+      businessRefId: payment.id,
+      providerRef: transfer.id,
+      description: `Community Buy settlement for campaign ${campaignId} — supplier net of Eki processing fee`,
+      legs: [
+        { accountType: LedgerAccountType.COMMUNITY_BUY_ESCROW, ownerType: LedgerOwnerType.PLATFORM, direction: LedgerDirection.DEBIT, amount: totalPaid },
+        { accountType: LedgerAccountType.VENDOR_PAYABLE, ownerType: LedgerOwnerType.VENDOR, ownerId: vendor.id, direction: LedgerDirection.CREDIT, amount: netAmount },
+        { accountType: LedgerAccountType.PLATFORM_FEE_REVENUE, ownerType: LedgerOwnerType.PLATFORM, direction: LedgerDirection.CREDIT, amount: feeAmount },
+      ],
+    }).catch((error) => {
+      logger.error("Ledger posting failed for Community Buy supplier settlement (non-fatal — transfer already completed)", { campaignId, errorMessage: error instanceof Error ? error.message : String(error) });
+    });
+
+    return updated;
   },
 
   async holdSupplierPayment(adminId: string, campaignId: string, reason: string) {
@@ -525,7 +716,8 @@ export const campaignContributionsService = {
   // Every row here is derived directly from money that has actually moved
   // (a PAID contribution, a REFUNDED refund, a PAID supplier payment) —
   // never invented, projected, or estimated. Eki holds no custody of these
-  // funds; this is a reconciliation view over Stripe-settled events.
+  // funds beyond the brief escrow window between charge and settlement
+  // transfer; this is a reconciliation view over Stripe-settled events.
 
   /** One row per campaign that has had at least one financial event, for the admin ledger overview list. */
   async getLedgerSummaryForAdmin() {

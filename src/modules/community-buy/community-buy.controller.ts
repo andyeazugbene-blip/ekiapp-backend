@@ -70,11 +70,25 @@ export async function joinCampaign(request: Request, response: Response): Promis
   response.status(201).json({ participant });
 }
 
-export async function createContribution(request: Request, response: Response): Promise<void> {
+function requirePaymentMethodIdBody(request: Request): string {
+  const paymentMethodId = request.body?.paymentMethodId;
+  if (typeof paymentMethodId !== "string" || !paymentMethodId) {
+    throw new AppError("paymentMethodId is required — save a card via /buyer/payment-methods first", 400);
+  }
+  return paymentMethodId;
+}
+
+/**
+ * Pledges a quantity against an already-saved payment method. No money
+ * moves here — see campaign-contributions.service.ts's pledge() and its
+ * file-header comment for the full PLEDGE_THEN_CHARGE flow.
+ */
+export async function pledgeContribution(request: Request, response: Response): Promise<void> {
   const userId = requireUserId(request);
   const quantity = Number(request.body?.quantity);
   if (!Number.isInteger(quantity) || quantity <= 0) throw new AppError("A positive integer quantity is required", 400);
-  const result = await campaignContributionsService.createContributionIntent(userId, requireIdParam(request), quantity);
+  const paymentMethodId = requirePaymentMethodIdBody(request);
+  const result = await campaignContributionsService.pledge(userId, requireIdParam(request), quantity, paymentMethodId);
   response.status(201).json(result);
 }
 
@@ -82,7 +96,8 @@ export async function createOrganiserTopUp(request: Request, response: Response)
   const userId = requireUserId(request);
   const quantity = Number(request.body?.quantity);
   if (!Number.isInteger(quantity) || quantity <= 0) throw new AppError("A positive integer quantity is required", 400);
-  const result = await campaignContributionsService.createOrganiserTopUp(userId, requireIdParam(request), quantity);
+  const paymentMethodId = requirePaymentMethodIdBody(request);
+  const result = await campaignContributionsService.pledgeOrganiserTopUp(userId, requireIdParam(request), quantity, paymentMethodId);
   response.status(201).json(result);
 }
 
@@ -91,9 +106,10 @@ export async function getContribution(request: Request, response: Response): Pro
   response.json({ contribution: await campaignContributionsService.getMyContribution(userId, requireIdParam(request)) });
 }
 
-export async function confirmContributionPayment(request: Request, response: Response): Promise<void> {
+/** Participant retries a charge that failed (but hasn't exhausted its attempts) — e.g. after updating their card. */
+export async function retryContributionCharge(request: Request, response: Response): Promise<void> {
   const userId = requireUserId(request);
-  response.json({ contribution: await campaignContributionsService.verifyContribution(userId, requireIdParam(request)) });
+  response.json({ contribution: await campaignContributionsService.retryCharge(userId, requireIdParam(request)) });
 }
 
 export async function listMyContributions(request: Request, response: Response): Promise<void> {

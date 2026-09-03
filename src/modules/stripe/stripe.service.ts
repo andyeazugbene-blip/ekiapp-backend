@@ -14,7 +14,6 @@ import { stripeIdentityService } from "../verification/stripe-identity.service";
 import { communicationService } from "../communications/communication.service";
 import { ledgerService } from "../ledger/ledger.service";
 import { LedgerAccountType, LedgerDirection, LedgerOwnerType } from "@prisma/client";
-import { campaignContributionsService } from "../community-buy/campaign-contributions.service";
 import { AppError } from "../../shared/errors/app-error";
 import type { StripeWebhookInput, StripeWebhookResult } from "./stripe.types";
 
@@ -84,9 +83,12 @@ class StripeWebhookService {
       return this.handleGiftCardPurchaseSucceeded(event, paymentIntent);
     }
 
-    if (kind === "community_buy_contribution") {
-      return this.handleCommunityBuyContributionSucceeded(event, paymentIntent);
-    }
+    // Community Buy no longer creates a PaymentIntent with this metadata
+    // kind — under PLEDGE_THEN_CHARGE (client mandate 2026-09), pledges are
+    // charged off-session, confirmed synchronously, and read directly off
+    // the API response (see campaign-contributions.service.ts's
+    // attemptCharge — the same pattern renewals.service.ts already uses),
+    // so there's no webhook-driven confirmation path to dispatch to here.
 
     return this.processPaymentSucceeded(event, paymentIntent);
   }
@@ -365,54 +367,6 @@ class StripeWebhookService {
         return { received: true, duplicate: true, eventId: event.id, type: event.type };
       }
       logger.error("Webhook failed: gift_card_purchase", { eventId: event.id, ...serializeError(error) });
-      throw error;
-    }
-  }
-
-  /**
-   * Community Buy contribution capture — architecture doc §13 ("never
-   * trust frontend redirects as payment confirmation"). Previously this
-   * flow depended entirely on the mobile app calling verifyContribution()
-   * back after the Stripe payment sheet closed — a charge that succeeded
-   * but whose client callback never fired (app closed, connection drop)
-   * stayed stuck at PAYMENT_PROCESSING forever, undetected. This gives
-   * the real, server-initiated Stripe webhook the same authority.
-   * confirmContributionIfPaid() re-reads the PaymentIntent from Stripe
-   * itself and manages its own atomic capacity-claim transaction — it
-   * can't be nested inside this handler's dedup transaction, so dedup is
-   * a separate, smaller transaction, matching the pattern already used by
-   * the checkout-outside-transaction Stripe calls elsewhere in this file.
-   */
-  private async handleCommunityBuyContributionSucceeded(event: Stripe.Event, paymentIntent: Stripe.PaymentIntent): Promise<StripeWebhookResult> {
-    const contributionId = paymentIntent.metadata?.contributionId;
-    if (!contributionId) {
-      logger.warn("Community Buy contribution webhook missing metadata", { eventId: event.id });
-      return { received: true, ignored: true, eventId: event.id, type: event.type };
-    }
-
-    try {
-      const dedupeResult = await prisma.$transaction(async (tx) => {
-        if (await this.isDuplicate(tx, event.id, event.type, { orderId: contributionId })) {
-          return { received: true, duplicate: true, eventId: event.id, type: event.type } as StripeWebhookResult;
-        }
-        return null;
-      }, { isolationLevel: "Serializable" });
-      if (dedupeResult) return dedupeResult;
-
-      await campaignContributionsService.confirmContributionIfPaid(contributionId);
-
-      await prisma.webhookEvent.update({
-        where: { stripeEventId: event.id },
-        data: { status: "PROCESSED", processedAt: new Date() },
-      });
-
-      logger.info("Webhook processed: community_buy_contribution succeeded", { eventId: event.id, contributionId });
-      return { received: true, eventId: event.id, type: event.type };
-    } catch (error) {
-      if (this.isUniqueConstraintError(error)) {
-        return { received: true, duplicate: true, eventId: event.id, type: event.type };
-      }
-      logger.error("Webhook failed: community_buy_contribution", { eventId: event.id, ...serializeError(error) });
       throw error;
     }
   }

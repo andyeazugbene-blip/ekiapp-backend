@@ -1579,6 +1579,7 @@ model BuyerPaymentMethod {
   isDefault             Boolean             @default(false)
   buyer                 User                @relation(fields: [buyerId], references: [id], onDelete: Cascade)
   subscriptions         BuyerSubscription[]
+  campaignContributions CampaignContribution[]
   createdAt             DateTime            @default(now())
   updatedAt             DateTime            @updatedAt
 
@@ -1814,6 +1815,12 @@ enum ContributionStatus {
   PAYMENT_PROCESSING
   PAID
   PAYMENT_FAILED
+  // PLEDGE_THEN_CHARGE states (client mandate 2026-09) — a payment method is
+  // saved and the pledge is recorded, but no money moves until the campaign
+  // succeeds. PAYMENT_PROCESSING is reused for "off-session charge attempt
+  // in flight" once the campaign closes (see CampaignChargeAttempt).
+  PLEDGED
+  CHARGE_FAILED
   REFUND_PENDING
   REFUND_PROCESSING
   REFUNDED
@@ -1947,10 +1954,25 @@ enum SupplierPaymentStatus {
 model CampaignSupplierPayment {
   id                       String                 @id @default(cuid())
   campaignId               String                 @unique
+  // Amount starts as the pledged estimate (confirmedShares × price) at
+  // campaign-success time, then is kept in sync with the sum of actually
+  // PAID contributions as charges resolve — see chargeAllPledgesForCampaign
+  // in campaign-contributions.service.ts. releaseSupplierPayment() always
+  // recomputes it live from PAID contributions before transferring, so a
+  // stale value here can never cause an over/under transfer.
   amount                   Int
   currency                 String
   status                   SupplierPaymentStatus  @default(NOT_RELEASED)
   payoutStripeAccountIdAtApproval String?
+  // Eki's processing fee taken out of `amount` at release time (client
+  // mandate 2026-09: "Eki takes its configured processing fee"), and what
+  // the supplier actually received after it — both snapshotted at release,
+  // not estimated earlier, since the market's fee bps could change before
+  // release. stripeTransferId is the real Stripe Connect transfer that
+  // moved netAmount to the supplier's connected account.
+  feeAmount                Int?
+  netAmount                Int?
+  stripeTransferId         String?
   holdReason               String?
   releasedById             String?
   releasedAt               DateTime?
@@ -2023,14 +2045,47 @@ model CampaignContribution {
   isOrganiserTopUp      Boolean             @default(false)
   status                ContributionStatus  @default(INITIATED)
   stripePaymentIntentId String?
+  // Client mandate (2026-09): "Eki never takes the fund upfront... payment
+  // go to the owner [only] at end of campaign" — PLEDGE_THEN_CHARGE model.
+  // The participant's saved card (SetupIntent, collected via the existing
+  // buyer/payment-methods flow — see BuyerPaymentMethod / payment-methods.
+  // service.ts, originally built for Regular Deliveries) is attached at
+  // pledge time; nothing is captured until the campaign succeeds and
+  // chargeAllPledgesForCampaign() runs the actual off-session charge.
+  paymentMethodId       String?
   campaign              CommunityCampaign   @relation(fields: [campaignId], references: [id], onDelete: Restrict)
   participant           CampaignParticipant @relation(fields: [participantId], references: [id], onDelete: Restrict)
+  paymentMethod         BuyerPaymentMethod? @relation(fields: [paymentMethodId], references: [id], onDelete: SetNull)
   refund                CampaignRefund?
+  chargeAttempts        CampaignChargeAttempt[]
   createdAt             DateTime            @default(now())
   updatedAt             DateTime            @updatedAt
 
   @@index([campaignId, status])
   @@index([participantId])
+  @@index([paymentMethodId])
+}
+
+// Idempotent off-session charge attempts for a pledged contribution, taken
+// only once the campaign succeeds — mirrors SubscriptionPaymentAttempt
+// (Regular Deliveries renewals.service.ts), the same pattern already
+// proven for "charge a saved card while the buyer isn't present".
+model CampaignChargeAttempt {
+  id                    String                        @id @default(cuid())
+  contributionId        String
+  attemptNumber         Int
+  status                SubscriptionPaymentAttemptStatus @default(PENDING)
+  // Idempotency key sent to Stripe: "{contributionId}:{attemptNumber}".
+  idempotencyKey        String                        @unique
+  stripePaymentIntentId String?
+  failureCode           String?
+  failureMessage        String?
+  contribution          CampaignContribution          @relation(fields: [contributionId], references: [id], onDelete: Cascade)
+  createdAt             DateTime                      @default(now())
+  updatedAt             DateTime                      @updatedAt
+
+  @@unique([contributionId, attemptNumber])
+  @@index([contributionId])
 }
 
 model CampaignRefund {
@@ -2092,6 +2147,15 @@ model MarketConfiguration {
   // implemented — a market set to either is treated as unsupported and
   // payments stay blocked, same as null.
   communityBuyPaymentMode      CommunityBuyPaymentMode?
+
+  // Client mandate (2026-09): "Community Buy must support Eki's configured
+  // processing/commission fee... do not hardcode an arbitrary fee." Taken
+  // out of the pledged total at supplier-payment release time — see
+  // releaseSupplierPayment() in campaign-contributions.service.ts. Null
+  // means "not configured" and blocks release the same way an unset
+  // communityBuyPaymentMode blocks payments — never falls back to a guessed
+  // percentage.
+  communityBuyFeeBps           Int?
 
   createdAt                    DateTime @default(now())
   updatedAt                    DateTime @updatedAt

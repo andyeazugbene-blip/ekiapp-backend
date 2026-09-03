@@ -3,9 +3,13 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("../lib/prisma", () => ({
   prisma: {
     communityCampaign: { findMany: vi.fn(), update: vi.fn(), updateMany: vi.fn(), findUnique: vi.fn(), findUniqueOrThrow: vi.fn(), create: vi.fn() },
-    campaignContribution: { findMany: vi.fn(), update: vi.fn(), findUnique: vi.fn(), findUniqueOrThrow: vi.fn(), create: vi.fn(), groupBy: vi.fn() },
+    campaignContribution: { findMany: vi.fn(), update: vi.fn(), updateMany: vi.fn(), findUnique: vi.fn(), findUniqueOrThrow: vi.fn(), create: vi.fn(), groupBy: vi.fn(), aggregate: vi.fn(), count: vi.fn() },
+    campaignChargeAttempt: { create: vi.fn(), update: vi.fn(), count: vi.fn() },
     campaignRefund: { create: vi.fn(), findMany: vi.fn(), findUnique: vi.fn(), update: vi.fn(), groupBy: vi.fn() },
     campaignParticipant: { findMany: vi.fn(), findUnique: vi.fn(), upsert: vi.fn() },
+    buyerPaymentMethod: { findUnique: vi.fn() },
+    ledgerAccount: { findUnique: vi.fn(), create: vi.fn() },
+    ledgerEntry: { create: vi.fn(), findMany: vi.fn() },
     notification: { findMany: vi.fn() },
     campaignExtensionRequest: { create: vi.fn(), findUnique: vi.fn(), update: vi.fn(), findMany: vi.fn() },
     campaignSupplierPayment: { findUnique: vi.fn(), create: vi.fn(), update: vi.fn(), findMany: vi.fn() },
@@ -19,7 +23,7 @@ vi.mock("../lib/prisma", () => ({
 }));
 
 vi.mock("../lib/stripe", () => ({
-  stripe: { refunds: { create: vi.fn() }, paymentIntents: { create: vi.fn(), retrieve: vi.fn() } },
+  stripe: { refunds: { create: vi.fn() }, paymentIntents: { create: vi.fn(), retrieve: vi.fn() }, transfers: { create: vi.fn() } },
 }));
 
 vi.mock("../modules/notifications/notifications.service", () => ({
@@ -47,6 +51,18 @@ const mSupportCase = vi.mocked(supportCaseService, true);
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // Safe defaults for the charge-batch machinery that now runs on every
+  // campaign-success path (chargePledgesAfterSuccess) — most tests below
+  // don't care about pledge charging and would otherwise crash iterating
+  // an unmocked (undefined) findMany result. Tests that DO care override
+  // these explicitly.
+  m.campaignContribution.findMany.mockResolvedValue([] as never);
+  m.campaignContribution.aggregate.mockResolvedValue({ _sum: { amount: 0 } } as never);
+  m.campaignChargeAttempt.count.mockResolvedValue(0 as never);
+  m.campaignContribution.updateMany.mockResolvedValue({ count: 0 } as never);
+  m.ledgerAccount.findUnique.mockResolvedValue(null as never);
+  m.ledgerAccount.create.mockImplementation(async ({ data }: any) => ({ id: `acct:${data.type}:${data.ownerId ?? "PLATFORM"}` }) as never);
+  m.ledgerEntry.create.mockResolvedValue({ id: "entry-1" } as never);
 });
 
 describe("communityCampaignsService.closeDueCampaigns — doc §7 deadline evaluation", () => {
@@ -213,8 +229,33 @@ describe("communityCampaignsService rescue-window organiser actions", () => {
   });
 });
 
-describe("campaignContributionsService.createContributionIntent", () => {
-  it("refuses to start a payment when the market has not enabled Community Buy payments", async () => {
+describe("campaignContributionsService.pledge — PLEDGE_THEN_CHARGE (client mandate 2026-09: no upfront capture)", () => {
+  it("client test #1 / #12: saves the payment method reference and records a pledge — no Stripe charge is ever created", async () => {
+    m.communityCampaign.findUnique.mockResolvedValue({
+      id: "camp-10", status: "LIVE", country: "GB", currency: "GBP", deadline: new Date(Date.now() + 100000), pricePerShareMinor: 1000, maximumShares: 6, confirmedShares: 0,
+    } as never);
+    m.marketConfiguration.findUnique.mockResolvedValue({
+      countryCode: "GB", communityBuyEnabled: true, communityBuyPaymentsEnabled: true, communityBuyPaymentMode: "PLEDGE_THEN_CHARGE",
+    } as never);
+    m.buyerPaymentMethod.findUnique.mockResolvedValue({ id: "pm-1", buyerId: "buyer-1", stripeCustomerId: "cus_1", stripePaymentMethodId: "pm_1" } as never);
+    m.campaignParticipant.upsert.mockResolvedValue({ id: "part-1" } as never);
+
+    const txCampaign = { findUniqueOrThrow: vi.fn().mockResolvedValue({ id: "camp-10", maximumShares: 6, confirmedShares: 0, termsLockedAt: null }), updateMany: vi.fn().mockResolvedValue({ count: 1 }), update: vi.fn() };
+    const txContribution = { create: vi.fn().mockResolvedValue({ id: "contrib-10" }) };
+    m.$transaction.mockImplementationOnce(async (cb: any) => cb({ communityCampaign: txCampaign, campaignContribution: txContribution }));
+    m.campaignContribution.findUniqueOrThrow.mockResolvedValue({ id: "contrib-10", status: "PLEDGED", participant: { userId: "buyer-1" } } as never);
+
+    const result = await campaignContributionsService.pledge("buyer-1", "camp-10", 1, "pm-1");
+
+    expect(result.status).toBe("PLEDGED");
+    expect(txContribution.create).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ status: "PLEDGED", paymentMethodId: "pm-1", amount: 1000 }) }),
+    );
+    // The whole point of this model: nothing is captured at pledge time.
+    expect(stripe.paymentIntents.create).not.toHaveBeenCalled();
+  });
+
+  it("refuses to pledge when the market has not enabled Community Buy payments", async () => {
     m.communityCampaign.findUnique.mockResolvedValue({
       id: "camp-10", status: "LIVE", deadline: new Date(Date.now() + 100000), country: "GB", currency: "GBP", pricePerShareMinor: 1000, maximumShares: 6, confirmedShares: 0,
     } as never);
@@ -223,23 +264,35 @@ describe("campaignContributionsService.createContributionIntent", () => {
     } as never);
 
     await expect(
-      campaignContributionsService.createContributionIntent("buyer-1", "camp-10", 1),
+      campaignContributionsService.pledge("buyer-1", "camp-10", 1, "pm-1"),
     ).rejects.toMatchObject({ statusCode: 403 });
     expect(stripe.paymentIntents.create).not.toHaveBeenCalled();
   });
 
-  it("rejects a contribution in a currency Stripe doesn't support, instead of silently charging EUR for the same numeric amount", async () => {
+  it("blocks a market still on the old PAY_NOW_REFUND_ON_FAILURE mode — the client explicitly rejected that model", async () => {
+    m.communityCampaign.findUnique.mockResolvedValue({
+      id: "camp-10b", status: "LIVE", deadline: new Date(Date.now() + 100000), country: "GB", currency: "GBP", pricePerShareMinor: 1000, maximumShares: 6, confirmedShares: 0,
+    } as never);
+    m.marketConfiguration.findUnique.mockResolvedValue({
+      countryCode: "GB", communityBuyEnabled: true, communityBuyPaymentsEnabled: true, communityBuyPaymentMode: "PAY_NOW_REFUND_ON_FAILURE",
+    } as never);
+
+    await expect(
+      campaignContributionsService.pledge("buyer-1", "camp-10b", 1, "pm-1"),
+    ).rejects.toMatchObject({ statusCode: 403 });
+  });
+
+  it("rejects a pledge in a currency Stripe doesn't support, instead of silently charging EUR for the same numeric amount", async () => {
     m.communityCampaign.findUnique.mockResolvedValue({
       id: "camp-11", status: "LIVE", deadline: new Date(Date.now() + 100000), country: "GH", currency: "GHS", pricePerShareMinor: 1000, maximumShares: 6, confirmedShares: 0,
     } as never);
     m.marketConfiguration.findUnique.mockResolvedValue({
-      countryCode: "GH", communityBuyEnabled: true, communityBuyPaymentsEnabled: true, communityBuyPaymentMode: "PAY_NOW_REFUND_ON_FAILURE",
+      countryCode: "GH", communityBuyEnabled: true, communityBuyPaymentsEnabled: true, communityBuyPaymentMode: "PLEDGE_THEN_CHARGE",
     } as never);
 
     await expect(
-      campaignContributionsService.createContributionIntent("buyer-1", "camp-11", 1),
+      campaignContributionsService.pledge("buyer-1", "camp-11", 1, "pm-1"),
     ).rejects.toMatchObject({ statusCode: 400, code: "CURRENCY_NOT_SUPPORTED" });
-    expect(stripe.paymentIntents.create).not.toHaveBeenCalled();
     expect(m.campaignContribution.create).not.toHaveBeenCalled();
   });
 
@@ -248,25 +301,36 @@ describe("campaignContributionsService.createContributionIntent", () => {
       id: "camp-12", status: "LIVE", deadline: new Date(Date.now() + 100000), country: "GB", currency: "GBP", pricePerShareMinor: 1000, maximumShares: 6, confirmedShares: 5,
     } as never);
     m.marketConfiguration.findUnique.mockResolvedValue({
-      countryCode: "GB", communityBuyEnabled: true, communityBuyPaymentsEnabled: true, communityBuyPaymentMode: "PAY_NOW_REFUND_ON_FAILURE",
-    } as never);
-    m.communityCampaign.findUniqueOrThrow.mockResolvedValue({
-      id: "camp-12", currency: "GBP", pricePerShareMinor: 1000, maximumShares: 6, confirmedShares: 5,
+      countryCode: "GB", communityBuyEnabled: true, communityBuyPaymentsEnabled: true, communityBuyPaymentMode: "PLEDGE_THEN_CHARGE",
     } as never);
 
     await expect(
-      campaignContributionsService.createContributionIntent("buyer-1", "camp-12", 2),
+      campaignContributionsService.pledge("buyer-1", "camp-12", 2, "pm-1"),
     ).rejects.toMatchObject({ statusCode: 409, code: "CAPACITY_UNAVAILABLE" });
-    expect(stripe.paymentIntents.create).not.toHaveBeenCalled();
+    expect(m.buyerPaymentMethod.findUnique).not.toHaveBeenCalled();
+  });
+
+  it("rejects a payment method that doesn't belong to this buyer", async () => {
+    m.communityCampaign.findUnique.mockResolvedValue({
+      id: "camp-12b", status: "LIVE", deadline: new Date(Date.now() + 100000), country: "GB", currency: "GBP", pricePerShareMinor: 1000, maximumShares: 6, confirmedShares: 0,
+    } as never);
+    m.marketConfiguration.findUnique.mockResolvedValue({
+      countryCode: "GB", communityBuyEnabled: true, communityBuyPaymentsEnabled: true, communityBuyPaymentMode: "PLEDGE_THEN_CHARGE",
+    } as never);
+    m.buyerPaymentMethod.findUnique.mockResolvedValue({ id: "pm-2", buyerId: "someone-else" } as never);
+
+    await expect(
+      campaignContributionsService.pledge("buyer-1", "camp-12b", 1, "pm-2"),
+    ).rejects.toMatchObject({ statusCode: 404, code: "PAYMENT_METHOD_NOT_FOUND" });
   });
 });
 
-describe("campaignContributionsService.createOrganiserTopUp", () => {
+describe("campaignContributionsService.pledgeOrganiserTopUp", () => {
   it("rejects a top-up when the campaign isn't in its rescue window", async () => {
     m.organiserProfile.findUnique.mockResolvedValue({ id: "org-1", userId: "organiser-user-1" } as never);
     m.communityCampaign.findUnique.mockResolvedValue({ id: "camp-13", organiserId: "org-1", status: "LIVE" } as never);
 
-    await expect(campaignContributionsService.createOrganiserTopUp("organiser-user-1", "camp-13", 1)).rejects.toMatchObject({ statusCode: 409 });
+    await expect(campaignContributionsService.pledgeOrganiserTopUp("organiser-user-1", "camp-13", 1, "pm-1")).rejects.toMatchObject({ statusCode: 409 });
     expect(stripe.paymentIntents.create).not.toHaveBeenCalled();
   });
 });
@@ -349,93 +413,228 @@ describe("campaignContributionsService.escalateRefund — spec §130 escalate (r
   });
 });
 
-describe("campaignContributionsService.verifyContribution — concurrency-safe capacity claim", () => {
-  it("marks PAID and increments confirmedShares when capacity is available", async () => {
-    m.campaignContribution.findUnique.mockResolvedValue({
-      id: "contrib-20", campaignId: "camp-14", quantity: 1, status: "PAYMENT_PROCESSING", stripePaymentIntentId: "pi_1", currency: "GBP", amount: 1000,
+describe("campaignContributionsService.attemptCharge — the only place a pledge is ever charged (client mandate 2026-09)", () => {
+  it("client test #3/#4: charges the saved card off-session and posts the escrow ledger entry when Stripe confirms success", async () => {
+    m.campaignContribution.findUniqueOrThrow.mockResolvedValueOnce({
+      id: "contrib-30", campaignId: "camp-20", quantity: 2, status: "PLEDGED", currency: "GBP", amount: 2000,
       participant: { userId: "buyer-1" },
+      paymentMethod: { stripeCustomerId: "cus_1", stripePaymentMethodId: "pm_1" },
     } as never);
-    vi.mocked(stripe.paymentIntents.retrieve).mockResolvedValue({ status: "succeeded" } as never);
-
-    const txCampaign = { findUniqueOrThrow: vi.fn().mockResolvedValue({ id: "camp-14", maximumShares: 6, confirmedShares: 5, termsLockedAt: new Date() }), updateMany: vi.fn().mockResolvedValue({ count: 1 }), update: vi.fn() };
-    const txContribution = { update: vi.fn() };
-    m.$transaction.mockImplementationOnce(async (cb: any) => cb({ communityCampaign: txCampaign, campaignContribution: txContribution }));
-    m.campaignContribution.findUniqueOrThrow.mockResolvedValue({ id: "contrib-20", status: "PAID" } as never);
-
-    const result = await campaignContributionsService.verifyContribution("buyer-1", "contrib-20");
-
-    expect(txCampaign.updateMany).toHaveBeenCalledWith(
-      expect.objectContaining({ where: { id: "camp-14", confirmedShares: { lte: 5 } }, data: { confirmedShares: { increment: 1 } } }),
-    );
-    expect(txContribution.update).toHaveBeenCalledWith({ where: { id: "contrib-20" }, data: { status: "PAID" } });
-    expect(result.status).toBe("PAID");
-  });
-
-  it("concurrent final slot: when the atomic claim loses the race, the already-captured payment is queued for refund instead of over-counting capacity", async () => {
-    m.campaignContribution.findUnique.mockResolvedValue({
-      id: "contrib-21", campaignId: "camp-15", quantity: 1, status: "PAYMENT_PROCESSING", stripePaymentIntentId: "pi_2", currency: "GBP", amount: 1000,
-      participant: { userId: "buyer-2" },
-    } as never);
-    vi.mocked(stripe.paymentIntents.retrieve).mockResolvedValue({ status: "succeeded" } as never);
-
-    // Another confirmation already claimed the last share inside the transaction.
-    const txCampaign = { findUniqueOrThrow: vi.fn().mockResolvedValue({ id: "camp-15", maximumShares: 6, confirmedShares: 6, termsLockedAt: new Date() }), updateMany: vi.fn().mockResolvedValue({ count: 0 }) };
-    m.$transaction
-      .mockImplementationOnce(async (cb: any) => cb({ communityCampaign: txCampaign, campaignContribution: { update: vi.fn() } }))
-      .mockImplementationOnce(async (cb: any) => cb({ campaignContribution: { update: vi.fn() }, campaignRefund: { create: vi.fn().mockResolvedValue({ id: "refund-x" }) } }));
-    m.campaignContribution.findUniqueOrThrow.mockResolvedValue({ id: "contrib-21", status: "REFUND_PENDING" } as never);
-
-    const result = await campaignContributionsService.verifyContribution("buyer-2", "contrib-21");
-
-    expect(result.status).toBe("REFUND_PENDING");
-  });
-});
-
-describe("campaignContributionsService.confirmContributionIfPaid — webhook-callable confirmation (architecture doc §13)", () => {
-  it("confirms a contribution with NO userId argument — this is what makes it callable from the real Stripe webhook, not just the mobile app's post-payment callback", async () => {
-    m.campaignContribution.findUnique.mockResolvedValue({
-      id: "contrib-30", campaignId: "camp-20", quantity: 2, status: "PAYMENT_PROCESSING", stripePaymentIntentId: "pi_webhook_1", currency: "GBP", amount: 2000,
-      participant: { userId: "buyer-webhook-1" },
-    } as never);
-    vi.mocked(stripe.paymentIntents.retrieve).mockResolvedValue({ status: "succeeded" } as never);
+    m.campaignChargeAttempt.count.mockResolvedValueOnce(0 as never);
+    m.campaignChargeAttempt.create.mockResolvedValueOnce({ id: "attempt-1" } as never);
+    vi.mocked(stripe.paymentIntents.create).mockResolvedValueOnce({ id: "pi_success_1", status: "succeeded" } as never);
 
     const ledgerAccount = { findUnique: vi.fn().mockResolvedValue(null), create: vi.fn().mockResolvedValue({ id: "acct-1" }) };
     const ledgerEntry = { create: vi.fn().mockResolvedValue({ id: "entry-1" }) };
-    const txCampaign = { findUniqueOrThrow: vi.fn().mockResolvedValue({ id: "camp-20", maximumShares: 10, confirmedShares: 3, termsLockedAt: new Date() }), updateMany: vi.fn().mockResolvedValue({ count: 1 }), update: vi.fn() };
-    m.$transaction.mockImplementationOnce(async (cb: any) => cb({ communityCampaign: txCampaign, campaignContribution: { update: vi.fn() }, ledgerAccount, ledgerEntry }));
-    m.campaignContribution.findUniqueOrThrow.mockResolvedValue({ id: "contrib-30", status: "PAID" } as never);
+    const txContribution = { update: vi.fn() };
+    m.$transaction.mockImplementationOnce(async (cb: any) => cb({ campaignContribution: txContribution, ledgerAccount, ledgerEntry }));
+    m.campaignContribution.findUniqueOrThrow.mockResolvedValueOnce({ id: "contrib-30", status: "PAID" } as never);
 
-    const result = await campaignContributionsService.confirmContributionIfPaid("contrib-30");
+    const result = await campaignContributionsService.attemptCharge("contrib-30");
 
+    expect(stripe.paymentIntents.create).toHaveBeenCalledWith(
+      expect.objectContaining({ amount: 2000, currency: "gbp", customer: "cus_1", payment_method: "pm_1", off_session: true, confirm: true }),
+      { idempotencyKey: "contrib-30:1" },
+    );
     expect(result.status).toBe("PAID");
-    // Real ledger posting: a balanced 2-leg entry (provider cash debit / escrow credit) for the captured amount.
     expect(ledgerEntry.create).toHaveBeenCalledTimes(2);
     const legs = ledgerEntry.create.mock.calls.map((c: any) => c[0].data);
     expect(legs.find((l: any) => l.direction === "DEBIT")?.amount).toBe(2000);
     expect(legs.find((l: any) => l.direction === "CREDIT")?.amount).toBe(2000);
   });
 
-  it("12/23. idempotent — an already-PAID contribution (e.g. the mobile app already confirmed it) short-circuits cleanly when the webhook fires too, no double-processing", async () => {
-    m.campaignContribution.findUnique.mockResolvedValue({
-      id: "contrib-31", campaignId: "camp-21", quantity: 1, status: "PAID", stripePaymentIntentId: "pi_webhook_2", currency: "GBP", amount: 1000,
-      participant: { userId: "buyer-webhook-2" },
-    } as never);
+  it("client test #6: charging an already-PAID contribution again is a no-op — never double-charges", async () => {
+    m.campaignContribution.findUniqueOrThrow.mockResolvedValueOnce({ id: "contrib-31", status: "PAID", participant: { userId: "buyer-1" } } as never);
 
-    const result = await campaignContributionsService.confirmContributionIfPaid("contrib-31");
+    const result = await campaignContributionsService.attemptCharge("contrib-31");
 
     expect(result.status).toBe("PAID");
-    expect(stripe.paymentIntents.retrieve).not.toHaveBeenCalled(); // never even re-queries Stripe once already resolved
-    expect(m.$transaction).not.toHaveBeenCalled();
+    expect(stripe.paymentIntents.create).not.toHaveBeenCalled();
   });
 
-  it("a contribution the mobile app already queued for refund is left alone — never re-confirmed as PAID by a late webhook", async () => {
-    m.campaignContribution.findUnique.mockResolvedValue({
-      id: "contrib-32", campaignId: "camp-22", quantity: 1, status: "REFUND_PENDING", stripePaymentIntentId: "pi_webhook_3", currency: "GBP", amount: 1000,
-      participant: { userId: "buyer-webhook-3" },
+  it("client test #5: a declined charge with attempts remaining moves to CHARGE_FAILED (retryable), not a terminal state", async () => {
+    m.campaignContribution.findUniqueOrThrow.mockResolvedValueOnce({
+      id: "contrib-32", campaignId: "camp-21", quantity: 1, status: "PLEDGED", currency: "GBP", amount: 1000,
+      participant: { userId: "buyer-2" },
+      paymentMethod: { stripeCustomerId: "cus_2", stripePaymentMethodId: "pm_2" },
+    } as never);
+    m.campaignChargeAttempt.count.mockResolvedValueOnce(0 as never);
+    m.campaignChargeAttempt.create.mockResolvedValueOnce({ id: "attempt-2" } as never);
+    vi.mocked(stripe.paymentIntents.create).mockRejectedValueOnce(Object.assign(new Error("Your card was declined."), { code: "card_declined" }));
+    m.campaignContribution.findUniqueOrThrow.mockResolvedValueOnce({ id: "contrib-32", status: "CHARGE_FAILED" } as never);
+
+    const result = await campaignContributionsService.attemptCharge("contrib-32");
+
+    expect(result.status).toBe("CHARGE_FAILED");
+    expect(m.campaignContribution.update).toHaveBeenCalledWith({ where: { id: "contrib-32" }, data: { status: "CHARGE_FAILED" } });
+  });
+
+  it("client test #5: after MAX_CHARGE_ATTEMPTS (3) prior attempts, refuses to try again and marks the pledge terminally failed", async () => {
+    m.campaignContribution.findUniqueOrThrow.mockResolvedValueOnce({
+      id: "contrib-33", campaignId: "camp-22", status: "CHARGE_FAILED",
+      participant: { userId: "buyer-3" },
+      paymentMethod: { stripeCustomerId: "cus_3", stripePaymentMethodId: "pm_3" },
+    } as never);
+    m.campaignChargeAttempt.count.mockResolvedValueOnce(3 as never);
+    m.campaignContribution.findUniqueOrThrow.mockResolvedValueOnce({ id: "contrib-33", status: "CHARGE_FAILED" } as never);
+
+    const result = await campaignContributionsService.attemptCharge("contrib-33");
+
+    expect(result.status).toBe("CHARGE_FAILED");
+    expect(stripe.paymentIntents.create).not.toHaveBeenCalled();
+    expect(m.campaignChargeAttempt.create).not.toHaveBeenCalled();
+  });
+
+  it("client test #9: no saved payment method at campaign end -> terminal failure without ever calling Stripe", async () => {
+    m.campaignContribution.findUniqueOrThrow.mockResolvedValueOnce({
+      id: "contrib-34", campaignId: "camp-23", status: "PLEDGED",
+      participant: { userId: "buyer-4" },
+      paymentMethod: null,
+    } as never);
+    m.campaignContribution.findUniqueOrThrow.mockResolvedValueOnce({ id: "contrib-34", status: "CHARGE_FAILED" } as never);
+
+    const result = await campaignContributionsService.attemptCharge("contrib-34");
+
+    expect(result.status).toBe("CHARGE_FAILED");
+    expect(stripe.paymentIntents.create).not.toHaveBeenCalled();
+  });
+
+  it("client test #8: a contribution mid-charge (PAYMENT_PROCESSING) is not PLEDGED or CHARGE_FAILED, so a second concurrent attempt is rejected rather than double-firing", async () => {
+    m.campaignContribution.findUniqueOrThrow.mockResolvedValueOnce({ id: "contrib-35", status: "PAYMENT_PROCESSING", participant: { userId: "buyer-5" } } as never);
+
+    await expect(campaignContributionsService.attemptCharge("contrib-35")).rejects.toMatchObject({ statusCode: 409 });
+    expect(stripe.paymentIntents.create).not.toHaveBeenCalled();
+  });
+});
+
+describe("campaignContributionsService.chargeAllPledgesForCampaign — client test #10: each contribution handled independently", () => {
+  it("charges every pledge independently — one succeeding and one failing don't affect each other — then syncs the supplier payment total", async () => {
+    m.campaignContribution.findMany.mockResolvedValueOnce([
+      { id: "contrib-40" }, { id: "contrib-41" },
+    ] as never);
+
+    // contrib-40 succeeds
+    m.campaignContribution.findUniqueOrThrow
+      .mockResolvedValueOnce({
+        id: "contrib-40", campaignId: "camp-30", quantity: 1, status: "PLEDGED", currency: "GBP", amount: 1000,
+        participant: { userId: "buyer-a" }, paymentMethod: { stripeCustomerId: "cus_a", stripePaymentMethodId: "pm_a" },
+      } as never)
+      .mockResolvedValueOnce({ id: "contrib-40", status: "PAID" } as never)
+      // contrib-41 fails (no payment method)
+      .mockResolvedValueOnce({
+        id: "contrib-41", campaignId: "camp-30", status: "PLEDGED",
+        participant: { userId: "buyer-b" }, paymentMethod: null,
+      } as never)
+      .mockResolvedValueOnce({ id: "contrib-41", status: "CHARGE_FAILED" } as never);
+
+    m.campaignChargeAttempt.count.mockResolvedValueOnce(0 as never);
+    m.campaignChargeAttempt.create.mockResolvedValueOnce({ id: "attempt-40" } as never);
+    vi.mocked(stripe.paymentIntents.create).mockResolvedValueOnce({ id: "pi_40", status: "succeeded" } as never);
+    const ledgerAccount = { findUnique: vi.fn().mockResolvedValue(null), create: vi.fn().mockResolvedValue({ id: "acct-1" }) };
+    const ledgerEntry = { create: vi.fn().mockResolvedValue({ id: "entry-1" }) };
+    m.$transaction.mockImplementationOnce(async (cb: any) => cb({ campaignContribution: { update: vi.fn() }, ledgerAccount, ledgerEntry }));
+
+    m.campaignSupplierPayment.findUnique.mockResolvedValueOnce({ campaignId: "camp-30" } as never);
+    m.campaignContribution.aggregate.mockResolvedValueOnce({ _sum: { amount: 1000 } } as never);
+
+    const result = await campaignContributionsService.chargeAllPledgesForCampaign("camp-30");
+
+    expect(result).toEqual({ total: 2, charged: 1, failed: 1 });
+    expect(m.campaignSupplierPayment.update).toHaveBeenCalledWith({ where: { campaignId: "camp-30" }, data: { amount: 1000 } });
+  });
+
+  it("client test #2/#11: a campaign that never reaches this point (never charged) has no PAID contributions — never invents a refund", async () => {
+    // createRefundRecordsForFailedCampaign only ever looks at status: PAID.
+    m.campaignContribution.findMany.mockResolvedValueOnce([]); // no PAID contributions exist for a pledge-only failed campaign
+    const created = await communityCampaignsService.createRefundRecordsForFailedCampaign("camp-31");
+    expect(created).toBe(0);
+    expect(stripe.refunds.create).not.toHaveBeenCalled();
+  });
+});
+
+describe("campaignContributionsService.retryCharge", () => {
+  it("rejects a retry on a pledge that isn't CHARGE_FAILED", async () => {
+    m.campaignContribution.findUnique.mockResolvedValueOnce({ id: "contrib-50", status: "PLEDGED", participant: { userId: "buyer-6" } } as never);
+    await expect(campaignContributionsService.retryCharge("buyer-6", "contrib-50")).rejects.toMatchObject({ statusCode: 409 });
+  });
+
+  it("rejects a retry from someone who isn't the pledge's own participant", async () => {
+    m.campaignContribution.findUnique.mockResolvedValueOnce({ id: "contrib-51", status: "CHARGE_FAILED", participant: { userId: "buyer-7" } } as never);
+    await expect(campaignContributionsService.retryCharge("someone-else", "contrib-51")).rejects.toMatchObject({ statusCode: 404 });
+  });
+});
+
+describe("campaignContributionsService.releaseSupplierPayment — owner settlement + Eki processing fee (client mandate 2026-09)", () => {
+  it("client test #4: transfers the collected total minus the configured fee to the supplier's Stripe account, and posts a balanced 3-leg ledger entry", async () => {
+    m.campaignSupplierPayment.findUnique.mockResolvedValueOnce({
+      id: "payment-1", campaignId: "camp-40", currency: "GBP", status: "NOT_RELEASED", payoutStripeAccountIdAtApproval: null,
+      campaign: { country: "GB", supplier: { vendor: { id: "vendor-1", stripeAccountId: "acct_1", stripePayoutsEnabled: true } } },
+    } as never);
+    m.campaignContribution.aggregate.mockResolvedValueOnce({ _sum: { amount: 10000 } } as never); // 100.00 collected
+    m.marketConfiguration.findUnique.mockResolvedValue({ countryCode: "GB", communityBuyFeeBps: 500 } as never); // 5%
+    vi.mocked(stripe.transfers.create).mockResolvedValueOnce({ id: "tr_1" } as never);
+    m.campaignSupplierPayment.update.mockResolvedValue({ id: "payment-1", status: "PAID" } as never);
+
+    await campaignContributionsService.releaseSupplierPayment("admin-1", "camp-40");
+
+    expect(stripe.transfers.create).toHaveBeenCalledWith(
+      expect.objectContaining({ amount: 9500, currency: "gbp", destination: "acct_1" }),
+      { idempotencyKey: "community-buy-transfer:camp-40" },
+    );
+    expect(m.campaignSupplierPayment.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ status: "PAID", stripeTransferId: "tr_1" }) }),
+    );
+    // Real ledger posting: which account TYPE each leg touched, and the
+    // amount/direction on each entry — a balanced 3-leg entry for the
+    // Eki processing fee split (escrow debit = vendor credit + fee credit).
+    const accountTypesTouched = m.ledgerAccount.create.mock.calls.map((c: any) => c[0].data.type);
+    expect(accountTypesTouched).toEqual(expect.arrayContaining(["COMMUNITY_BUY_ESCROW", "VENDOR_PAYABLE", "PLATFORM_FEE_REVENUE"]));
+    const entries = m.ledgerEntry.create.mock.calls.map((c: any) => c[0].data);
+    expect(entries).toHaveLength(3);
+    expect(entries.filter((e: any) => e.direction === "DEBIT").reduce((s: number, e: any) => s + e.amount, 0)).toBe(10000);
+    expect(entries.filter((e: any) => e.direction === "CREDIT").reduce((s: number, e: any) => s + e.amount, 0)).toBe(10000);
+    expect(entries.some((e: any) => e.amount === 9500)).toBe(true); // vendor net
+    expect(entries.some((e: any) => e.amount === 500)).toBe(true); // Eki fee
+  });
+
+  it("refuses to release when the market has no configured processing fee — never invents a default percentage", async () => {
+    m.campaignSupplierPayment.findUnique.mockResolvedValueOnce({
+      id: "payment-2", campaignId: "camp-41", currency: "GBP", status: "NOT_RELEASED", payoutStripeAccountIdAtApproval: null,
+      campaign: { country: "GB", supplier: { vendor: { id: "vendor-2", stripeAccountId: "acct_2", stripePayoutsEnabled: true } } },
+    } as never);
+    m.campaignContribution.aggregate.mockResolvedValueOnce({ _sum: { amount: 5000 } } as never);
+    m.marketConfiguration.findUnique.mockResolvedValue({ countryCode: "GB", communityBuyFeeBps: null } as never);
+
+    await expect(campaignContributionsService.releaseSupplierPayment("admin-1", "camp-41")).rejects.toMatchObject({ statusCode: 409, code: "FEE_NOT_CONFIGURED" });
+    expect(stripe.transfers.create).not.toHaveBeenCalled();
+  });
+
+  it("refuses to release when nothing has actually been charged yet — never transfers money Eki never collected", async () => {
+    m.campaignSupplierPayment.findUnique.mockResolvedValueOnce({
+      id: "payment-3", campaignId: "camp-42", currency: "GBP", status: "NOT_RELEASED", payoutStripeAccountIdAtApproval: null,
+      campaign: { country: "GB", supplier: { vendor: { id: "vendor-3", stripeAccountId: "acct_3", stripePayoutsEnabled: true } } },
+    } as never);
+    m.campaignContribution.aggregate.mockResolvedValueOnce({ _sum: { amount: 0 } } as never);
+
+    await expect(campaignContributionsService.releaseSupplierPayment("admin-1", "camp-42")).rejects.toMatchObject({ statusCode: 409, code: "NOTHING_COLLECTED_YET" });
+    expect(stripe.transfers.create).not.toHaveBeenCalled();
+  });
+
+  it("refuses to release when the supplier's payout account isn't ready", async () => {
+    m.campaignSupplierPayment.findUnique.mockResolvedValueOnce({
+      id: "payment-4", campaignId: "camp-43", currency: "GBP", status: "NOT_RELEASED", payoutStripeAccountIdAtApproval: null,
+      campaign: { country: "GB", supplier: { vendor: { id: "vendor-4", stripeAccountId: null, stripePayoutsEnabled: false } } },
     } as never);
 
-    const result = await campaignContributionsService.confirmContributionIfPaid("contrib-32");
-    expect(result.status).toBe("REFUND_PENDING");
+    await expect(campaignContributionsService.releaseSupplierPayment("admin-1", "camp-43")).rejects.toMatchObject({ statusCode: 409, code: "PAYOUTS_NOT_ENABLED" });
+    expect(stripe.transfers.create).not.toHaveBeenCalled();
+  });
+
+  it("is idempotent — releasing an already-PAID payment returns it unchanged without transferring again", async () => {
+    m.campaignSupplierPayment.findUnique.mockResolvedValueOnce({ id: "payment-5", campaignId: "camp-44", status: "PAID" } as never);
+    const result = await campaignContributionsService.releaseSupplierPayment("admin-1", "camp-44");
+    expect(result.status).toBe("PAID");
+    expect(stripe.transfers.create).not.toHaveBeenCalled();
   });
 });
 
@@ -480,10 +679,19 @@ describe("marketConfigurationService.isCommunityBuyPaymentsEnabled", () => {
     expect(await marketConfigurationService.isCommunityBuyPaymentsEnabled("GB")).toBe(false);
   });
 
-  it("allows payments only when the mode is explicitly PAY_NOW_REFUND_ON_FAILURE — the one mode that's actually implemented", async () => {
+  it("blocks payments when the mode is still the old PAY_NOW_REFUND_ON_FAILURE — client mandate 2026-09 explicitly rejected that model", async () => {
     m.marketConfiguration.count.mockResolvedValue(1);
     m.marketConfiguration.findUnique.mockResolvedValue({
       countryCode: "GB", communityBuyEnabled: true, communityBuyPaymentsEnabled: true, communityBuyPaymentMode: "PAY_NOW_REFUND_ON_FAILURE",
+    } as never);
+
+    expect(await marketConfigurationService.isCommunityBuyPaymentsEnabled("GB")).toBe(false);
+  });
+
+  it("allows payments only when the mode is explicitly PLEDGE_THEN_CHARGE — the one mode that's actually implemented", async () => {
+    m.marketConfiguration.count.mockResolvedValue(1);
+    m.marketConfiguration.findUnique.mockResolvedValue({
+      countryCode: "GB", communityBuyEnabled: true, communityBuyPaymentsEnabled: true, communityBuyPaymentMode: "PLEDGE_THEN_CHARGE",
     } as never);
 
     expect(await marketConfigurationService.isCommunityBuyPaymentsEnabled("GB")).toBe(true);

@@ -4,6 +4,7 @@ import { AppError } from "../../shared/errors/app-error";
 import { notificationsService } from "../notifications/notifications.service";
 import { automationService } from "../automation/automation.service";
 import { marketConfigurationService } from "./market-configuration.service";
+import { campaignContributionsService } from "./campaign-contributions.service";
 
 export interface CreateCampaignInput {
   supplierId: string;
@@ -372,6 +373,7 @@ export const communityCampaignsService = {
         succeeded++;
         await this.notifyOutcome(campaign.id, "succeeded");
         await this.createSupplierOrder(campaign);
+        await this.chargePledgesAfterSuccess(campaign.id);
       } else {
         rescued++;
         const rescueEndsAt = new Date(Date.now() + (campaign.rescueDurationMinutes ?? 2880) * 60 * 1000);
@@ -456,6 +458,7 @@ export const communityCampaignsService = {
         rescued++;
         await this.notifyOutcome(campaign.id, "succeeded");
         await this.createSupplierOrder(campaign);
+        await this.chargePledgesAfterSuccess(campaign.id);
       } else {
         await prisma.communityCampaign.update({
           where: { id: campaign.id },
@@ -464,9 +467,41 @@ export const communityCampaignsService = {
         failed++;
         await this.notifyOutcome(campaign.id, "failed");
         await this.createRefundRecordsForFailedCampaign(campaign.id);
+        await this.cancelPledgesForFailedCampaign(campaign.id);
       }
     }
     return { rescued, failed };
+  },
+
+  /**
+   * The only point money is ever captured (client mandate 2026-09) —
+   * charges every PLEDGED contribution now that the campaign has actually
+   * succeeded. Failures here don't undo the success outcome; they're
+   * handled per-contribution (retry / support case), never by rolling
+   * back the campaign or inventing a refund for a pledge that was simply
+   * never charged.
+   */
+  async chargePledgesAfterSuccess(campaignId: string): Promise<void> {
+    const result = await campaignContributionsService.chargeAllPledgesForCampaign(campaignId);
+    if (result.failed > 0) {
+      logger.warn("Community Buy: some pledges failed to charge after campaign success", { campaignId, ...result });
+    }
+  },
+
+  /**
+   * A campaign that never reached its minimum has, by construction, no
+   * PAID contribution (nothing is ever charged before success — see
+   * campaign-contributions.service.ts header) — so
+   * createRefundRecordsForFailedCampaign() above correctly creates zero
+   * refunds. Any contribution still sitting at PLEDGED for this dead
+   * campaign is closed out here so it stops showing as "awaiting outcome"
+   * in the participant's app.
+   */
+  async cancelPledgesForFailedCampaign(campaignId: string): Promise<void> {
+    await prisma.campaignContribution.updateMany({
+      where: { campaignId, status: "PLEDGED" },
+      data: { status: "CANCELLED" },
+    });
   },
 
   /** Organiser ends the campaign during its rescue window instead of waiting it out — doc Screen 105. */
@@ -479,19 +514,25 @@ export const communityCampaignsService = {
       where: { id: campaignId },
       data: { status: "FAILED", fundingOutcome: "BELOW_MINIMUM", closedAt: new Date() },
     });
+    // Under PLEDGE_THEN_CHARGE, a campaign can only reach FAILED before it
+    // was ever charged (charging happens exclusively on success — see
+    // chargePledgesAfterSuccess) — so createRefundRecordsForFailedCampaign
+    // correctly finds nothing to refund here. It stays wired in as a
+    // harmless no-op safety net, not the primary path any more.
     await this.createRefundRecordsForFailedCampaign(campaignId);
-    await notifyCampaign(userId, "cancelled", "Campaign ended", `${campaign.title} has been ended. Refunds are being processed for anyone who contributed.`, campaignId);
+    await this.cancelPledgesForFailedCampaign(campaignId);
+    await notifyCampaign(userId, "cancelled", "Campaign ended", `${campaign.title} has been ended. No participant was charged — pledges have been cancelled.`, campaignId);
     const participants = await prisma.campaignParticipant.findMany({ where: { campaignId }, select: { userId: true } });
     for (const p of participants) {
-      await notifyCampaign(p.userId, "cancelled", "Campaign ended", `${campaign.title} has ended. Any contribution you made will be refunded.`, campaignId);
+      await notifyCampaign(p.userId, "cancelled", "Campaign ended", `${campaign.title} has ended. Your saved payment method was never charged — your pledge is cancelled.`, campaignId);
       await automationService.scheduleAutomation({
         type: "CAMPAIGN_REFUND_UPDATE",
         recipientUserId: p.userId,
         subjectKey: `${campaignId}:cancelled`,
         requiresMarketingConsent: false,
         title: "Campaign ended",
-        body: `${campaign.title} has ended. Your refund is being processed.`,
-        data: { campaign_title: campaign.title, refund_status: "processing" },
+        body: `${campaign.title} has ended. You were not charged.`,
+        data: { campaign_title: campaign.title, refund_status: "not_applicable" },
       });
     }
     return updated;

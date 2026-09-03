@@ -5,10 +5,9 @@ import { asyncHandler } from "../../shared/utils/async-handler";
 import {
   applyAsOrganiser,
   applyAsSupplier,
-  confirmContributionPayment,
   confirmFulfilmentInventory,
   confirmSupplierCommitment,
-  createContribution,
+  pledgeContribution,
   createSupportCase,
   createOrganiserCampaign,
   createOrganiserTopUp,
@@ -41,6 +40,7 @@ import {
   organiserConfirmFulfilmentCompletion,
   publishOrganiserCampaign,
   requestCampaignExtension,
+  retryContributionCharge,
   setFulfilmentPlan,
   startFulfilmentPacking,
   submitOrganiserCampaign,
@@ -57,9 +57,13 @@ communityBuyRouter.get("/support-cases", authenticate, asyncHandler(listMySuppor
 communityBuyRouter.get("/support-cases/:id", authenticate, asyncHandler(getMySupportCase));
 communityBuyRouter.get("/campaigns/:id", asyncHandler(getCampaign));
 communityBuyRouter.get("/campaigns/:id/updates", authenticate, asyncHandler(getCampaignUpdates));
-communityBuyRouter.post("/campaigns/:id/contributions", authenticate, asyncHandler(createContribution));
+// Pledge — saves quantity + a reference to an already-collected payment
+// method (see /buyer/payment-methods for the SetupIntent flow itself).
+// No money moves until the campaign succeeds; see community-buy.
+// controller.ts's pledgeContribution and its file-header comment.
+communityBuyRouter.post("/campaigns/:id/contributions", authenticate, asyncHandler(pledgeContribution));
 communityBuyRouter.get("/contributions/:id", authenticate, asyncHandler(getContribution));
-communityBuyRouter.post("/contributions/:id/payment", authenticate, asyncHandler(confirmContributionPayment));
+communityBuyRouter.post("/contributions/:id/retry-charge", authenticate, asyncHandler(retryContributionCharge));
 
 // Buyers/organisers join a live campaign — kept on the same router since
 // it's participant-facing, not an organiser-only action.

@@ -101,11 +101,11 @@ vi.mock("../modules/community-buy/community-campaigns.service", () => ({
 }));
 
 const mockJoin = vi.fn();
-const mockCreateContributionIntent = vi.fn();
+const mockPledge = vi.fn();
 const mockCreateOrganiserTopUp = vi.fn();
 const mockGetMyContribution = vi.fn();
 const mockGetMyPaymentForCampaign = vi.fn();
-const mockVerifyContribution = vi.fn();
+const mockRetryCharge = vi.fn();
 const mockReleaseSupplierPayment = vi.fn();
 const mockHoldSupplierPayment = vi.fn();
 const mockGetLedgerSummaryForAdmin = vi.fn();
@@ -122,11 +122,11 @@ vi.mock("../modules/community-buy/campaign-contributions.service", () => ({
   campaignContributionsService: {
     join: (...a: unknown[]) => mockJoin(...a),
     listMyContributions: (...a: unknown[]) => mockListMyContributions(...a),
-    createContributionIntent: (...a: unknown[]) => mockCreateContributionIntent(...a),
-    createOrganiserTopUp: (...a: unknown[]) => mockCreateOrganiserTopUp(...a),
+    pledge: (...a: unknown[]) => mockPledge(...a),
+    pledgeOrganiserTopUp: (...a: unknown[]) => mockCreateOrganiserTopUp(...a),
     getMyContribution: (...a: unknown[]) => mockGetMyContribution(...a),
     getMyPaymentForCampaign: (...a: unknown[]) => mockGetMyPaymentForCampaign(...a),
-    verifyContribution: (...a: unknown[]) => mockVerifyContribution(...a),
+    retryCharge: (...a: unknown[]) => mockRetryCharge(...a),
     releaseSupplierPayment: (...a: unknown[]) => mockReleaseSupplierPayment(...a),
     holdSupplierPayment: (...a: unknown[]) => mockHoldSupplierPayment(...a),
     listRefundsForAdmin: vi.fn().mockResolvedValue([]),
@@ -261,7 +261,7 @@ beforeEach(() => {
   mockListLive.mockResolvedValue([]);
   mockGetCampaign.mockResolvedValue({ id: "camp-1", status: "LIVE", paidTotal: 0, progressPct: 0 });
   mockJoin.mockResolvedValue({ id: "participant-1" });
-  mockCreateContributionIntent.mockResolvedValue({ contributionId: "contrib-1", clientSecret: "pi_test_secret" });
+  mockPledge.mockResolvedValue({ contributionId: "contrib-1", status: "PLEDGED" });
   mockCreateCampaign.mockResolvedValue({ id: "camp-2", status: "DRAFT" });
   mockUpdateCampaign.mockResolvedValue({ id: "camp-2", status: "DRAFT" });
   mockSubmitCampaign.mockResolvedValue({ id: "camp-2", status: "UNDER_REVIEW" });
@@ -326,27 +326,36 @@ describe("Participant routes", () => {
     const res = await request(app)
       .post("/api/community-buy/campaigns/camp-99/contributions")
       .set("Authorization", `Bearer ${buyerToken()}`)
-      .send({ quantity: 0 });
+      .send({ quantity: 0, paymentMethodId: "pm-1" });
     expect(res.status).toBe(400);
-    expect(mockCreateContributionIntent).not.toHaveBeenCalled();
+    expect(mockPledge).not.toHaveBeenCalled();
   });
 
   it("POST /api/community-buy/campaigns/:id/contributions — 400 for a non-integer quantity", async () => {
     const res = await request(app)
       .post("/api/community-buy/campaigns/camp-99/contributions")
       .set("Authorization", `Bearer ${buyerToken()}`)
-      .send({ quantity: 2.5 });
+      .send({ quantity: 2.5, paymentMethodId: "pm-1" });
     expect(res.status).toBe(400);
-    expect(mockCreateContributionIntent).not.toHaveBeenCalled();
+    expect(mockPledge).not.toHaveBeenCalled();
   });
 
-  it("POST /api/community-buy/campaigns/:id/contributions — 201 for a valid quantity", async () => {
+  it("POST /api/community-buy/campaigns/:id/contributions — 400 when paymentMethodId is missing (no upfront capture — a saved card is required to pledge)", async () => {
     const res = await request(app)
       .post("/api/community-buy/campaigns/camp-99/contributions")
       .set("Authorization", `Bearer ${buyerToken()}`)
       .send({ quantity: 2 });
+    expect(res.status).toBe(400);
+    expect(mockPledge).not.toHaveBeenCalled();
+  });
+
+  it("POST /api/community-buy/campaigns/:id/contributions — 201 for a valid quantity + payment method", async () => {
+    const res = await request(app)
+      .post("/api/community-buy/campaigns/camp-99/contributions")
+      .set("Authorization", `Bearer ${buyerToken()}`)
+      .send({ quantity: 2, paymentMethodId: "pm-1" });
     expect(res.status).toBe(201);
-    expect(mockCreateContributionIntent).toHaveBeenCalledWith("buyer-1", "camp-99", 2);
+    expect(mockPledge).toHaveBeenCalledWith("buyer-1", "camp-99", 2, "pm-1");
   });
 
   it("GET /api/community-buy/my-contributions — 401 without token, 200 for a buyer, and is NOT swallowed by /campaigns/:id", async () => {
@@ -516,19 +525,25 @@ describe("Organiser routes — role/id handling", () => {
     expect(mockEndRescueAndRefund).toHaveBeenCalledWith("buyer-1", "camp-77");
   });
 
-  it("POST /api/organiser/campaigns/:id/rescue/top-up — quantity validated, id parsed correctly", async () => {
+  it("POST /api/organiser/campaigns/:id/rescue/top-up — quantity + payment method validated, id parsed correctly", async () => {
     const bad = await request(app)
       .post("/api/organiser/campaigns/camp-77/rescue/top-up")
       .set("Authorization", `Bearer ${buyerToken()}`)
-      .send({ quantity: 0 });
+      .send({ quantity: 0, paymentMethodId: "pm-1" });
     expect(bad.status).toBe(400);
+
+    const noPaymentMethod = await request(app)
+      .post("/api/organiser/campaigns/camp-77/rescue/top-up")
+      .set("Authorization", `Bearer ${buyerToken()}`)
+      .send({ quantity: 3 });
+    expect(noPaymentMethod.status).toBe(400);
 
     const res = await request(app)
       .post("/api/organiser/campaigns/camp-77/rescue/top-up")
       .set("Authorization", `Bearer ${buyerToken()}`)
-      .send({ quantity: 3 });
+      .send({ quantity: 3, paymentMethodId: "pm-1" });
     expect(res.status).toBe(201);
-    expect(mockCreateOrganiserTopUp).toHaveBeenCalledWith("buyer-1", "camp-77", 3);
+    expect(mockCreateOrganiserTopUp).toHaveBeenCalledWith("buyer-1", "camp-77", 3, "pm-1");
   });
 
   it("POST /api/organiser/campaigns/:id/rescue/extension-request — requires requestedDeadline and reason", async () => {
