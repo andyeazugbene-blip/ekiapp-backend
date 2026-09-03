@@ -238,6 +238,8 @@ model Vendor {
   payoutRequests              PayoutRequest[]
   bankAccounts                VendorBankAccount[]
   promoCodes                  PromoCode[]
+  bundles                     Bundle[]
+  flashSales                  FlashSale[]
   supplierProfile             SupplierProfile?
   subscriptionOffers          SubscriptionOffer[]
   automationSettings          VendorAutomationSetting[]
@@ -312,6 +314,8 @@ model Product {
   subscriptionOfferProducts SubscriptionOfferProduct[]
   subscriptionItems         SubscriptionItem[]
   renewalItems              RenewalItem[]
+  bundleItems               BundleItem[]
+  flashSales                FlashSale[]
   createdAt                 DateTime                   @default(now())
   updatedAt                 DateTime                   @updatedAt
 
@@ -834,6 +838,8 @@ model PromoCode {
   isActive       Boolean           @default(true)
   vendor         Vendor            @relation(fields: [vendorId], references: [id], onDelete: Restrict)
   redemptions    PromoRedemption[]
+  bundle         Bundle?
+  flashSale      FlashSale?
   createdAt      DateTime          @default(now())
   updatedAt      DateTime          @updatedAt
 
@@ -841,6 +847,65 @@ model PromoCode {
   @@index([vendorId, isActive])
   @@index([code, isActive])
   @@index([isActive, validFrom, validUntil])
+}
+
+// ─── Bundle / Flash Sale — real structured data (client mandate 2026-09) ──
+// Previously these rode entirely on PromoCode, distinguished only by a
+// string prefix on `code` ("BUNDLE"/"FLASH") with the actual name/price/
+// currency/dates never persisted anywhere — only the derived discount
+// amount survived, so list views had no way to show the real bundle price
+// or sale price back to the vendor (they were hardcoded to 0). These models
+// are now the source of truth for that real data. Checkout-time
+// application is unchanged and still goes through the same, already-
+// proven PromoCode redemption path (promoCodeId) — this is additive
+// structure, not a rewrite of the working discount-redemption mechanism.
+model Bundle {
+  id               String       @id @default(cuid())
+  vendorId         String
+  name             String
+  bundlePriceMinor Int
+  currency         String
+  isActive         Boolean      @default(true)
+  promoCodeId      String?      @unique
+  vendor           Vendor       @relation(fields: [vendorId], references: [id], onDelete: Restrict)
+  promoCode        PromoCode?   @relation(fields: [promoCodeId], references: [id], onDelete: SetNull)
+  items            BundleItem[]
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+
+  @@index([vendorId, isActive])
+}
+
+model BundleItem {
+  id        String  @id @default(cuid())
+  bundleId  String
+  productId String
+  bundle    Bundle  @relation(fields: [bundleId], references: [id], onDelete: Cascade)
+  product   Product @relation(fields: [productId], references: [id], onDelete: Restrict)
+
+  @@unique([bundleId, productId])
+  @@index([productId])
+}
+
+model FlashSale {
+  id             String     @id @default(cuid())
+  vendorId       String
+  productId      String
+  salePriceMinor Int
+  currency       String
+  startsAt       DateTime
+  endsAt         DateTime
+  isActive       Boolean    @default(true)
+  promoCodeId    String?    @unique
+  vendor         Vendor     @relation(fields: [vendorId], references: [id], onDelete: Restrict)
+  product        Product    @relation(fields: [productId], references: [id], onDelete: Restrict)
+  promoCode      PromoCode? @relation(fields: [promoCodeId], references: [id], onDelete: SetNull)
+  createdAt      DateTime   @default(now())
+  updatedAt      DateTime   @updatedAt
+
+  @@index([vendorId, isActive])
+  @@index([productId])
+  @@index([startsAt, endsAt])
 }
 
 model PromoRedemption {

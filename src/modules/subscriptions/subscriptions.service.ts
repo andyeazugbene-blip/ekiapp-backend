@@ -712,9 +712,9 @@ export const subscriptionsService = {
         403,
       );
     }
-    const currentCount = await prisma.promoCode.count({
-      where: { vendorId, code: { startsWith: "BUNDLE" } },
-    });
+    // Counts the real Bundle table now that bundles are structured data of
+    // their own, not a PromoCode identified by a "BUNDLE"-prefixed code.
+    const currentCount = await prisma.bundle.count({ where: { vendorId } });
     if (currentCount >= maxBundles) {
       throw new AppError(
         `Your ${limits.name} vendor services allow a maximum of ${maxBundles} bundles.`,

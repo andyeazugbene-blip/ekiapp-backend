@@ -18,7 +18,7 @@ import { ordersRouter } from "../modules/orders/orders.routes";
 import { paymentsRouter } from "../modules/payments/payments.routes";
 import { payoutRequestsRouter } from "../modules/payouts/payouts.routes";
 import { productsRouter } from "../modules/products/products.routes";
-import { promosRouter } from "../modules/promos/promos.routes";
+import { promosRouter, bundlesRouter, flashSalesRouter } from "../modules/promos/promos.routes";
 import { publicStoresRouter } from "../modules/public-stores/public-stores.routes";
 import {
   buyerPaymentMethodsRouter,
@@ -107,6 +107,8 @@ apiRouter.use("/shipments", shipmentsRouter);
 apiRouter.use("/wallet", buyerWalletRouter);
 apiRouter.use("/promo-codes", promosRouter);
 apiRouter.use("/promos", promosRouter);
+apiRouter.use("/bundles", bundlesRouter);
+apiRouter.use("/flash-sales", flashSalesRouter);
 apiRouter.use("/referrals", referralsRouter);
 apiRouter.use("/subscriptions", subscriptionsRouter);
 apiRouter.use("/vendor", vendorAccountRouter);
