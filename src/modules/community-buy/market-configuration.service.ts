@@ -3,14 +3,30 @@ import type { CommunityBuyPaymentMode, MarketPaymentMode, SupplierReleasePolicy 
 import { prisma } from "../../lib/prisma";
 
 /**
- * Every market Community Buy could plausibly launch in first (per the
- * client's own spec §10 and §8.2: UK, USA, Canada, and country-by-country
- * European markets). All flags default OFF — see the schema-level note on
- * MarketConfiguration. Turning any of these on for a given country is a
- * deliberate admin action, gated on the legal/payment-provider review the
- * client's spec requires (§8.4), not something this codebase decides.
+ * Every market approved for the current launch scope (client mandate
+ * 2026-09, section 5: "GB, US, CA and the approved European markets such
+ * as France, Spain, Portugal, Switzerland, Belgium, Italy and Croatia" —
+ * explicit, not silently added or removed). All flags default OFF — see
+ * the schema-level note on MarketConfiguration. Turning any of these on
+ * for a given country is a deliberate admin action, gated on the legal/
+ * payment-provider review the client's spec requires (§8.4), not
+ * something this codebase decides. Africa is deliberately absent: the
+ * client requires it built-but-not-launched, and this list controls
+ * exactly what a fresh/QA database seeds — omission here, not a code
+ * gate, is what keeps Africa unavailable (see market-controls admin UI).
  */
-const INITIAL_MARKETS = ["GB", "US", "CA"];
+const INITIAL_MARKETS: { countryCode: string; currency: string }[] = [
+  { countryCode: "GB", currency: "GBP" },
+  { countryCode: "US", currency: "USD" },
+  { countryCode: "CA", currency: "CAD" },
+  { countryCode: "FR", currency: "EUR" },
+  { countryCode: "ES", currency: "EUR" },
+  { countryCode: "PT", currency: "EUR" },
+  { countryCode: "CH", currency: "CHF" },
+  { countryCode: "BE", currency: "EUR" },
+  { countryCode: "IT", currency: "EUR" },
+  { countryCode: "HR", currency: "EUR" },
+];
 
 async function ensure(countryCode: string, currency: string) {
   await prisma.marketConfiguration.upsert({
@@ -21,12 +37,22 @@ async function ensure(countryCode: string, currency: string) {
 }
 
 export const marketConfigurationService = {
+  /**
+   * Cheap fast-path for the hot call sites (get()/list(), including the
+   * per-pledge isCommunityBuyPaymentsEnabled check) — only pays for the
+   * upsert loop on a genuinely empty table (fresh QA/test DB). Any market
+   * added to INITIAL_MARKETS *after* a real environment already has rows
+   * (e.g. the European markets added alongside GB/US/CA already existing
+   * in production) is seeded once via a migration backfill instead —
+   * see prisma/migrations/20260903190000_expand_approved_markets — not
+   * by paying N extra upserts on every single request forever.
+   */
   async ensureDefaults(): Promise<void> {
     const existing = await prisma.marketConfiguration.count();
     if (existing > 0) return;
-    await ensure("GB", "GBP");
-    await ensure("US", "USD");
-    await ensure("CA", "CAD");
+    for (const market of INITIAL_MARKETS) {
+      await ensure(market.countryCode, market.currency);
+    }
   },
 
   async get(countryCode: string) {
