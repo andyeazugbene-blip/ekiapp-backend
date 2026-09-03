@@ -1,6 +1,7 @@
 import type { Request, Response } from "express";
 
 import { AppError } from "../../shared/errors/app-error";
+import { recordAudit } from "../../shared/utils/audit";
 import { payoutsService } from "./payouts.service";
 import {
   validateCreatePayoutRequestInput,
@@ -47,10 +48,10 @@ export async function adminApprovePayoutRequest(
   request: Request,
   response: Response,
 ): Promise<void> {
-  const payoutRequest = await payoutsService.adminApprove(
-    requireUserId(request),
-    requireIdParam(request),
-  );
+  const adminId = requireUserId(request);
+  const id = requireIdParam(request);
+  const payoutRequest = await payoutsService.adminApprove(adminId, id);
+  await recordAudit({ actorId: adminId, action: "payout_request.approve", entityType: "PayoutRequest", entityId: id, metadata: { amount: payoutRequest.amount, vendorId: payoutRequest.vendorId } });
   response.status(200).json({ payoutRequest });
 }
 
@@ -59,11 +60,10 @@ export async function adminRejectPayoutRequest(
   response: Response,
 ): Promise<void> {
   const input = validateRejectPayoutRequestInput(request.body);
-  const payoutRequest = await payoutsService.adminReject(
-    requireUserId(request),
-    requireIdParam(request),
-    input,
-  );
+  const adminId = requireUserId(request);
+  const id = requireIdParam(request);
+  const payoutRequest = await payoutsService.adminReject(adminId, id, input);
+  await recordAudit({ actorId: adminId, action: "payout_request.reject", entityType: "PayoutRequest", entityId: id, metadata: { reason: input.reason } });
   response.status(200).json({ payoutRequest });
 }
 
@@ -73,11 +73,10 @@ export async function adminMarkPayoutRequestPaid(
 ): Promise<void> {
   const body = request.body || {};
   const transferProof = typeof body.transferProof === "string" ? body.transferProof.trim() : undefined;
-  const payoutRequest = await payoutsService.adminMarkPaid(
-    requireUserId(request),
-    requireIdParam(request),
-    transferProof,
-  );
+  const adminId = requireUserId(request);
+  const id = requireIdParam(request);
+  const payoutRequest = await payoutsService.adminMarkPaid(adminId, id, transferProof);
+  await recordAudit({ actorId: adminId, action: "payout_request.mark_paid", entityType: "PayoutRequest", entityId: id, metadata: { amount: payoutRequest.amount, vendorId: payoutRequest.vendorId, hasTransferProof: Boolean(transferProof) } });
   response.status(200).json({ payoutRequest });
 }
 export async function adminGetPayoutRequest(

@@ -522,4 +522,21 @@ export const authService = {
       token: signToken(updated),
     };
   },
+
+  /**
+   * Server-side session revocation for logout — there was no logout route
+   * at all before this; the client just discarded its token locally, which
+   * left it valid until natural JWT expiry. This is the same tokenVersion-
+   * increment mechanism already used for password reset / role changes
+   * (see above) — the only revocation primitive this JWT architecture has,
+   * since no per-device/per-token session table exists. That means logout
+   * invalidates every outstanding token for this user, not just the
+   * calling device — a deliberate, documented trade-off, not an oversight.
+   */
+  async logout(userId: string): Promise<void> {
+    await prisma.user.update({
+      where: { id: userId },
+      data: { tokenVersion: { increment: 1 } },
+    });
+  },
 };

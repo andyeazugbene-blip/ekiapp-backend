@@ -97,3 +97,9 @@ export async function switchRole(request: Request, response: Response): Promise<
   const result = await authService.switchRole(request.user.id);
   response.status(200).json(result);
 }
+
+export async function logout(request: Request, response: Response): Promise<void> {
+  if (!request.user) throw new AppError("Unauthorized", 401);
+  await authService.logout(request.user.id);
+  response.status(200).json({ message: "Logged out" });
+}

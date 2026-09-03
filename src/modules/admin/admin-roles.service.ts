@@ -211,13 +211,20 @@ export const adminRolesService = {
     await prisma.adminRoleAssignment.delete({ where: { id: assignmentId } });
   },
 
+  /**
+   * Fail-closed: an ADMIN-role user with no explicit AdminRoleAssignment
+   * gets NO permissions, not full access. admin-bootstrap.ts is
+   * responsible for granting the real bootstrap admin an explicit
+   * "Super Administrator" assignment — a misprovisioned account (assigned
+   * to no role by mistake) must never silently become a super-admin.
+   */
   async userPermissions(userId: string): Promise<string[]> {
     const assignments = await prisma.adminRoleAssignment.findMany({
       where: { userId },
       include: { role: true },
     });
 
-    if (assignments.length === 0) return ["admin.*"];
+    if (assignments.length === 0) return [];
     return [...new Set(assignments.flatMap((assignment) => assignment.role.permissions))];
   },
 
