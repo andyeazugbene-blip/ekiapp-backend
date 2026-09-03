@@ -24,6 +24,12 @@ import {
   adminRejectPayoutRequest,
 } from "../payouts/payouts.controller";
 import {
+  adminListPendingApprovals,
+  adminDecideApproval,
+  adminListApprovalRules,
+  adminUpsertApprovalRule,
+} from "./admin-approvals.controller";
+import {
   createPromoCode as adminCreatePromoCode,
   listPromoCodes as adminListPromoCodes,
   updatePromoCode as adminUpdatePromoCode,
@@ -222,14 +228,22 @@ adminRouter.post("/community-buy/organisers/:id/verify", asyncHandler(requireAdm
 adminRouter.get("/community-buy/suppliers/pending", asyncHandler(requireAdminPermission("community_buy.read")), asyncHandler(adminListPendingSuppliers));
 adminRouter.post("/community-buy/suppliers/:id/verify", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(adminVerifySupplier));
 adminRouter.get("/community-buy/refunds", asyncHandler(requireAdminPermission("community_buy.read")), asyncHandler(adminListRefunds));
-adminRouter.post("/community-buy/refunds/:id/requery", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(adminRequeryRefund));
-adminRouter.post("/community-buy/refunds/:id/escalate", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(adminEscalateRefund));
+adminRouter.post("/community-buy/refunds/:id/requery", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(require2fa), asyncHandler(adminRequeryRefund));
+adminRouter.post("/community-buy/refunds/:id/escalate", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(require2fa), asyncHandler(adminEscalateRefund));
 adminRouter.get("/community-buy/extension-requests", asyncHandler(requireAdminPermission("community_buy.read")), asyncHandler(adminListExtensionRequests));
 adminRouter.post("/community-buy/extension-requests/:id/approve", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(adminApproveExtension));
 adminRouter.post("/community-buy/extension-requests/:id/reject", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(adminRejectExtension));
 adminRouter.get("/community-buy/supplier-payments", asyncHandler(requireAdminPermission("community_buy.read")), asyncHandler(adminListSupplierPayments));
-adminRouter.post("/community-campaigns/:id/supplier-payment/release", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(adminReleaseSupplierPayment));
-adminRouter.post("/community-campaigns/:id/supplier-payment/hold", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(adminHoldSupplierPayment));
+adminRouter.post("/community-campaigns/:id/supplier-payment/release", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(require2fa), asyncHandler(adminReleaseSupplierPayment));
+adminRouter.post("/community-campaigns/:id/supplier-payment/hold", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(require2fa), asyncHandler(adminHoldSupplierPayment));
+
+// Four-eyes approvals (architecture doc §7) — generic across gated action
+// types. roles.mutate reused as the permission gate since deciding an
+// approval is itself a role/authority-level action, not tied to one module.
+adminRouter.get("/approvals", asyncHandler(requireAdminPermission("roles.read")), asyncHandler(adminListPendingApprovals));
+adminRouter.post("/approvals/:id/decide", asyncHandler(requireAdminPermission("roles.mutate")), asyncHandler(require2fa), asyncHandler(adminDecideApproval));
+adminRouter.get("/approval-rules", asyncHandler(requireAdminPermission("roles.read")), asyncHandler(adminListApprovalRules));
+adminRouter.put("/approval-rules/:actionType", asyncHandler(requireAdminPermission("roles.mutate")), asyncHandler(require2fa), asyncHandler(adminUpsertApprovalRule));
 adminRouter.get("/community-buy/markets", asyncHandler(requireAdminPermission("community_buy.read")), asyncHandler(adminListMarketConfigurations));
 adminRouter.patch("/community-buy/markets/:id", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(adminUpdateMarketConfiguration));
 adminRouter.get("/community-buy/ledger", asyncHandler(requireAdminPermission("community_buy.read")), asyncHandler(adminGetLedgerSummary));

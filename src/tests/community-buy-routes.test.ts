@@ -183,12 +183,28 @@ vi.mock("../modules/community-buy/market-configuration.service", () => ({
 }));
 
 const mockVendorFindUnique = vi.fn();
+// Four-eyes gate on supplier-payment release (see admin-approvals.service.ts)
+// looks up the payment amount before deciding whether to release directly
+// or create a pending approval.
+const mockCampaignSupplierPaymentFindUnique = vi.fn().mockResolvedValue({ amount: 50000 });
+// With requiresApproval defaulting to false, release proceeds exactly as
+// this file's pre-existing tests expect.
+const mockRequiresApproval = vi.fn().mockResolvedValue(false);
+const mockRequestApproval = vi.fn();
+
+vi.mock("../modules/admin/admin-approvals.service", () => ({
+  adminApprovalsService: {
+    requiresApproval: (...a: unknown[]) => mockRequiresApproval(...a),
+    requestApproval: (...a: unknown[]) => mockRequestApproval(...a),
+  },
+}));
 vi.mock("../lib/prisma", async () => {
   const actual = await vi.importActual<typeof import("../lib/prisma")>("../lib/prisma");
   return {
     prisma: new Proxy(actual.prisma, {
       get(target, prop) {
         if (prop === "vendor") return { findUnique: (...a: unknown[]) => mockVendorFindUnique(...a) };
+        if (prop === "campaignSupplierPayment") return { findUnique: (...a: unknown[]) => mockCampaignSupplierPaymentFindUnique(...a) };
         return (target as any)[prop];
       },
     }),
@@ -733,6 +749,14 @@ describe("Admin routes — permission-gated, id handling", () => {
     const res = await request(app).post("/api/admin/community-buy/extension-requests/ext-9/reject").set("Authorization", `Bearer ${adminToken()}`).send({ notes: "not enough evidence" });
     expect(res.status).toBe(200);
     expect(mockRejectExtension).toHaveBeenCalledWith("admin-1", "ext-9", "not enough evidence");
+  });
+
+  it("POST /api/admin/community-campaigns/:id/supplier-payment/release — gated by a configured four-eyes rule creates a pending approval instead of releasing", async () => {
+    mockRequiresApproval.mockResolvedValueOnce(true);
+    mockRequestApproval.mockResolvedValueOnce({ id: "appr-1", status: "PENDING" });
+    const res = await request(app).post("/api/admin/community-campaigns/camp-88/supplier-payment/release").set("Authorization", `Bearer ${adminToken()}`);
+    expect(res.status).toBe(202);
+    expect(mockReleaseSupplierPayment).not.toHaveBeenCalled();
   });
 
   it("POST /api/admin/community-campaigns/:id/supplier-payment/release — id parsed correctly", async () => {

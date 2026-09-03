@@ -1,3 +1,5 @@
+import type { MarketPaymentMode, SupplierReleasePolicy } from "@prisma/client";
+
 import { prisma } from "../../lib/prisma";
 
 /**
@@ -43,9 +45,34 @@ export const marketConfigurationService = {
     organiserApplicationsEnabled: boolean;
     supplierApplicationsEnabled: boolean;
     regularDeliveriesEnabled: boolean;
+    // Architecture doc §8 fields — schema-ready, added in the A→Z pass.
+    // paymentProvider/identityProvider are free-text on purpose: this
+    // codebase supports exactly "stripe"/"paystack" and "stripe_identity"
+    // today, but hardcoding an enum here would need a migration for every
+    // future provider. Validate against the known set at the call site
+    // that reads it, not here.
+    paymentMode: MarketPaymentMode;
+    paymentProvider: string | null;
+    identityProvider: string | null;
+    acceptedIdentityDocuments: string[];
+    campaignMinDurationHours: number | null;
+    campaignMaxDurationHours: number | null;
+    campaignMinValueAmount: number | null;
+    campaignMaxValueAmount: number | null;
+    refundTermsVersion: string | null;
+    organiserFeeBps: number | null;
+    supplierReleasePolicy: SupplierReleasePolicy;
+    deliveryMethods: string[];
+    legalTermsVersion: string | null;
   }>) {
     await this.ensureDefaults();
     return prisma.marketConfiguration.update({ where: { countryCode }, data });
+  },
+
+  /** Feature-evaluation helper (architecture doc §8) — a market with paymentMode DISABLED must never accept a Community Buy payment, regardless of the communityBuyPaymentsEnabled flag above (that flag is the product toggle; this is the rail-readiness gate). */
+  async isPaymentRailLive(countryCode: string): Promise<boolean> {
+    const config = await this.get(countryCode);
+    return config?.paymentMode === "LIVE" && Boolean(config.paymentProvider);
   },
 
   async isCommunityBuyPaymentsEnabled(countryCode: string): Promise<boolean> {

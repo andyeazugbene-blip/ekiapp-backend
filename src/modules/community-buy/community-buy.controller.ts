@@ -9,6 +9,7 @@ import { campaignContributionsService } from "./campaign-contributions.service";
 import { campaignFulfilmentService } from "./campaign-fulfilment.service";
 import { marketConfigurationService } from "./market-configuration.service";
 import { supportCaseService } from "./support-case.service";
+import { adminApprovalsService } from "../admin/admin-approvals.service";
 
 // ─── Public market availability (used by the mobile app to decide whether
 // to show Regular Deliveries / Community Buy entry points at all — the
@@ -493,6 +494,27 @@ export async function adminListSupplierPayments(_request: Request, response: Res
 export async function adminReleaseSupplierPayment(request: Request, response: Response): Promise<void> {
   const adminId = requireUserId(request);
   const id = requireIdParam(request);
+
+  // Four-eyes gate (architecture doc §7) — the monetary threshold is
+  // configurable via AdminApprovalRule, never hardcoded here. With no rule
+  // row for this actionType, requiresApproval() returns false and release
+  // proceeds exactly as it always has.
+  const existingPayment = await prisma.campaignSupplierPayment.findUnique({ where: { campaignId: id }, select: { amount: true } });
+  const gated = await adminApprovalsService.requiresApproval("community_buy.supplier_payment_release", existingPayment?.amount ?? null);
+  if (gated) {
+    const approval = await adminApprovalsService.requestApproval({
+      actionType: "community_buy.supplier_payment_release",
+      businessRefType: "CampaignSupplierPayment",
+      businessRefId: id,
+      amount: existingPayment?.amount ?? null,
+      requestedById: adminId,
+      reason: "Supplier payment release requested",
+    });
+    await recordAudit({ actorId: adminId, action: "community_supplier_payment.release_requested", entityType: "CampaignSupplierPayment", entityId: id });
+    response.status(202).json({ pendingApproval: approval, message: "This release requires a second admin's approval before it executes." });
+    return;
+  }
+
   const payment = await campaignContributionsService.releaseSupplierPayment(adminId, id);
   await recordAudit({ actorId: adminId, action: "community_supplier_payment.release", entityType: "CampaignSupplierPayment", entityId: id });
   response.json({ payment });

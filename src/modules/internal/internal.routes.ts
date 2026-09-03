@@ -8,6 +8,10 @@ import { automationDetectors } from "../automation/automation.detectors";
 import { renewalsService } from "../regular-deliveries/renewals.service";
 import { communityCampaignsService } from "../community-buy/community-campaigns.service";
 import { campaignContributionsService } from "../community-buy/campaign-contributions.service";
+import { escrowService } from "../paystack/escrow.service";
+import { escrowHealthService } from "../paystack/escrow-health.service";
+import { sendEmail } from "../../lib/email";
+import { emailTemplates } from "../../lib/email-templates";
 
 export const internalRouter = Router();
 
@@ -102,6 +106,86 @@ async function runCommunityBuySweep() {
   };
 }
 
+// Paystack domestic escrow: auto-cancel+refund orders where the vendor
+// never confirmed within the timeout window, and auto-release payouts for
+// dispatched orders past the buyer-confirmation window with no dispute.
+//
+// These previously only ran via BullMQ workers (src/workers/escrow-*.ts)
+// started from startWorkers() in src/server.ts — which is NEVER invoked on
+// Vercel (the deployed entrypoint is src/app.ts, per vercel.json). Real
+// vendor money was sitting in escrow with no automatic release or timeout
+// mechanism running in production at all. Folding the same service calls
+// into this cron sweep is the smallest safe fix: 15-minute responsiveness
+// becomes once-daily, which is still correct for 24h/48h windows and is
+// infinitely better than never running.
+async function runEscrowSweep() {
+  const cancelled = await escrowService.processVendorTimeouts();
+  const released = await escrowService.processAutoReleases();
+  return { vendorTimeoutsCancelled: cancelled, autoReleased: released };
+}
+
+// Same dead-worker problem as runEscrowSweep — alerts ops when outstanding
+// escrow balance exceeds a threshold. Alert-only, no money movement.
+async function runEscrowBalanceCheck() {
+  await escrowHealthService.checkAndAlert();
+  return { checked: true };
+}
+
+// Restores stock + fails PENDING orders whose payment never completed
+// within 30 minutes. Same dead-worker gap as the escrow jobs above — without
+// this, abandoned checkouts permanently held decremented stock in production.
+async function runCartCleanup() {
+  const cutoff = new Date(Date.now() - 30 * 60 * 1000);
+  const staleOrders = await prisma.order.findMany({
+    where: { status: "PENDING", createdAt: { lt: cutoff }, payment: { status: "PENDING" } },
+    include: { items: { select: { productId: true, quantity: true } }, payment: { select: { id: true } } },
+  });
+  let restored = 0;
+  for (const order of staleOrders) {
+    try {
+      await prisma.$transaction(async (tx) => {
+        for (const item of order.items) {
+          await tx.product.update({ where: { id: item.productId }, data: { stock: { increment: item.quantity } } });
+        }
+        await tx.order.update({ where: { id: order.id }, data: { status: "FAILED" } });
+        if (order.payment) await tx.payment.update({ where: { id: order.payment.id }, data: { status: "FAILED" } });
+      });
+      restored++;
+    } catch (err) {
+      logger.error("Cart cleanup: failed to restore order", { orderId: order.id, error: String(err) });
+    }
+  }
+  return { staleOrdersFound: staleOrders.length, ordersRestored: restored };
+}
+
+// Low-stock vendor email nudges — same dead-worker gap (src/workers/stock-alerts.worker.ts
+// only ran under startWorkers(), never invoked on Vercel).
+const LOW_STOCK_THRESHOLD = 5;
+async function runStockAlerts() {
+  const lowStockProducts = await prisma.product.findMany({
+    where: { isActive: true, stock: { lte: LOW_STOCK_THRESHOLD } },
+    select: {
+      title: true,
+      stock: true,
+      vendorId: true,
+      vendor: { select: { storeName: true, contactEmail: true, user: { select: { email: true } } } },
+    },
+  });
+  const vendorMap = new Map<string, { storeName: string; email: string; products: { title: string; stock: number }[] }>();
+  for (const product of lowStockProducts) {
+    const email = product.vendor.contactEmail ?? product.vendor.user.email;
+    const existing = vendorMap.get(product.vendorId);
+    if (existing) existing.products.push({ title: product.title, stock: product.stock });
+    else vendorMap.set(product.vendorId, { storeName: product.vendor.storeName, email, products: [{ title: product.title, stock: product.stock }] });
+  }
+  let sent = 0;
+  for (const data of vendorMap.values()) {
+    const template = emailTemplates.lowStockAlert({ storeName: data.storeName, products: data.products });
+    if (await sendEmail({ to: data.email, subject: template.subject, html: template.html })) sent++;
+  }
+  return { vendorsNotified: sent, lowStockProducts: lowStockProducts.length };
+}
+
 // ─── HTTP handlers ──────────────────────────────────────────────────────
 // GET for Vercel Cron (which only issues GET requests); POST kept for any
 // external/manual trigger using the original x-job-secret header.
@@ -126,6 +210,10 @@ const jobs: [string, string, () => Promise<Record<string, unknown>>][] = [
   ["automation-sweep", "automation sweep", runAutomationSweep],
   ["renewals-sweep", "renewals sweep", runRenewalsSweep],
   ["community-buy-sweep", "Community Buy sweep", runCommunityBuySweep],
+  ["escrow-sweep", "escrow timeout/auto-release sweep", runEscrowSweep],
+  ["escrow-balance-check", "escrow balance check", runEscrowBalanceCheck],
+  ["cart-cleanup", "cart cleanup", runCartCleanup],
+  ["stock-alerts", "low-stock vendor alerts", runStockAlerts],
 ];
 
 for (const [path, name, run] of jobs) {

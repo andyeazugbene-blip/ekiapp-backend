@@ -3,6 +3,7 @@ import express from "express";
 import helmet from "helmet";
 import path from "path";
 import { bootstrapAdmin } from "./modules/admin/admin-bootstrap";
+import { adminRolesService } from "./modules/admin/admin-roles.service";
 
 // Imported for its init side-effect; Sentry stays disabled if SENTRY_DSN is unset.
 import "./lib/sentry";
@@ -231,7 +232,14 @@ app.get("/apple-app-site-association", (_req, res) => {
 
 // Bootstrap admin on first request (before error handlers)
 let bootstrapped = false;
-app.use((_req, _res, next) => { if (!bootstrapped) { bootstrapped = true; bootstrapAdmin().catch(() => {}); } next(); });
+app.use((_req, _res, next) => {
+  if (!bootstrapped) {
+    bootstrapped = true;
+    bootstrapAdmin().catch(() => {});
+    adminRolesService.seedDefaultRoles().catch(() => {});
+  }
+  next();
+});
 
 // Error handling
 app.use(notFoundHandler);

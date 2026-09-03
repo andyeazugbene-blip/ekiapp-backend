@@ -157,6 +157,8 @@ model User {
   purchasedGiftCards      PurchasedGiftCard[]
   adminTwoFactor          AdminTwoFactor?
   adminRoleAssignments    AdminRoleAssignment[]
+  approvalsRequested      AdminApproval[]       @relation("AdminApprovalRequestedBy")
+  approvalsDecided        AdminApproval[]       @relation("AdminApprovalDecidedBy")
   organiserProfile        OrganiserProfile?
   buyerSubscriptions      BuyerSubscription[]
   buyerPaymentMethods     BuyerPaymentMethod[]
@@ -2028,6 +2030,183 @@ model MarketConfiguration {
   organiserApplicationsEnabled Boolean  @default(false)
   supplierApplicationsEnabled  Boolean  @default(false)
   regularDeliveriesEnabled     Boolean  @default(false)
+
+  // Architecture doc §8 (Market Controls) — added in the A→Z gap-closure pass.
+  // paymentProvider/identityProvider are read by feature evaluation to reject
+  // an operation the country has no working rail/verifier for (e.g. no pooled
+  // Community Buy payment in a market with paymentMode=DISABLED).
+  paymentMode                 MarketPaymentMode @default(DISABLED)
+  paymentProvider              String?  // "stripe" | "paystack" | null (no provider configured yet)
+  identityProvider              String?  // "stripe_identity" | null
+  acceptedIdentityDocuments     String[] @default([])
+  campaignMinDurationHours       Int?
+  campaignMaxDurationHours       Int?
+  campaignMinValueAmount         Int?
+  campaignMaxValueAmount         Int?
+  refundTermsVersion             String?
+  organiserFeeBps                 Int?
+  supplierReleasePolicy          SupplierReleasePolicy @default(ON_DELIVERY_CONFIRMED)
+  deliveryMethods                 String[] @default([])
+  legalTermsVersion               String?
+
   createdAt                    DateTime @default(now())
   updatedAt                    DateTime @updatedAt
+}
+
+enum MarketPaymentMode {
+  DISABLED
+  TEST
+  LIVE
+}
+
+enum SupplierReleasePolicy {
+  ON_DELIVERY_CONFIRMED
+  ON_FULFILMENT_MARKED
+  MANUAL_ADMIN_RELEASE
+}
+
+// ─── Internal Ledger (architecture doc §3) ────────────────────────────────
+// Double-entry bookkeeping layer, additive to the existing Payment/Order/
+// Wallet records — it does not replace them or change their behavior.
+// Entries are append-only: a correction is a reversing entry, never an
+// update or delete. The chart-of-accounts mapping below (which event posts
+// to which account) is the ENGINEERING DEFAULT and is explicitly flagged in
+// docs as requiring business/finance sign-off — see docs/decisions/0006-ledger-chart-of-accounts.md.
+model LedgerAccount {
+  id        String            @id @default(cuid())
+  type      LedgerAccountType
+  currency  String
+  ownerType LedgerOwnerType
+  ownerId   String? // vendorId / buyerId / supplierId — null for platform-owned accounts
+  entries   LedgerEntry[]
+  createdAt DateTime          @default(now())
+
+  @@unique([type, currency, ownerType, ownerId])
+  @@index([ownerType, ownerId])
+}
+
+enum LedgerAccountType {
+  PROVIDER_CASH
+  PLATFORM_FEE_REVENUE
+  VENDOR_PAYABLE
+  SUPPLIER_PAYABLE
+  BUYER_WALLET_LIABILITY
+  REFUND_CLEARING
+  COMMUNITY_BUY_ESCROW
+}
+
+enum LedgerOwnerType {
+  PLATFORM
+  VENDOR
+  BUYER
+  SUPPLIER
+}
+
+model LedgerEntry {
+  id                String          @id @default(cuid())
+  accountId         String
+  account           LedgerAccount   @relation(fields: [accountId], references: [id])
+  direction         LedgerDirection
+  amount            Int // minor units, always positive; direction carries the sign
+  currency          String
+  businessRefType   String // "Payment" | "Refund" | "Payout" | "Transfer" | "CampaignRefund" | ...
+  businessRefId     String
+  providerRef       String? // Stripe/Paystack charge, refund, or transfer id
+  description       String
+  reversesEntryId   String? // set when this entry reverses a prior one (correction, never edited/deleted)
+  postedAt          DateTime        @default(now())
+
+  @@index([accountId, postedAt])
+  @@index([businessRefType, businessRefId])
+  @@index([providerRef])
+}
+
+enum LedgerDirection {
+  DEBIT
+  CREDIT
+}
+
+model ReconciliationRun {
+  id            String                     @id @default(cuid())
+  provider      String // "stripe" | "paystack"
+  periodStart   DateTime
+  periodEnd     DateTime
+  status        ReconciliationRunStatus    @default(RUNNING)
+  differences   ReconciliationDifference[]
+  totalChecked  Int                        @default(0)
+  startedAt     DateTime                   @default(now())
+  completedAt   DateTime?
+
+  @@index([provider, startedAt])
+}
+
+enum ReconciliationRunStatus {
+  RUNNING
+  COMPLETED
+  FAILED
+}
+
+model ReconciliationDifference {
+  id              String                        @id @default(cuid())
+  runId           String
+  run             ReconciliationRun             @relation(fields: [runId], references: [id], onDelete: Cascade)
+  businessRefType String
+  businessRefId   String
+  providerRef     String?
+  expectedAmount  Int?
+  actualAmount    Int?
+  kind            String // "MISSING_LOCALLY" | "MISSING_AT_PROVIDER" | "AMOUNT_MISMATCH" | "STATUS_MISMATCH"
+  status          ReconciliationDifferenceStatus @default(OPEN)
+  note            String?
+  createdAt       DateTime                      @default(now())
+  resolvedAt      DateTime?
+
+  @@index([runId, status])
+}
+
+enum ReconciliationDifferenceStatus {
+  OPEN
+  RESOLVED
+}
+
+// ─── Admin four-eyes approval (architecture doc §7) ───────────────────────
+// Generic second-admin-approval record for any high-risk admin action.
+// The monetary/severity threshold that decides whether an action REQUIRES
+// this is configurable — see AdminApprovalRule — never hardcoded.
+model AdminApprovalRule {
+  id            String   @id @default(cuid())
+  actionType    String   @unique // e.g. "refund.large", "payout.large", "role.grant_super_admin"
+  thresholdAmount Int?   // minor units; null = always requires approval regardless of amount
+  currency      String?
+  enabled       Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+}
+
+model AdminApproval {
+  id             String               @id @default(cuid())
+  actionType     String
+  businessRefType String
+  businessRefId  String
+  amount         Int?
+  currency       String?
+  requestedById  String
+  requestedBy    User                 @relation("AdminApprovalRequestedBy", fields: [requestedById], references: [id])
+  reason         String
+  status         AdminApprovalStatus  @default(PENDING)
+  decidedById    String?
+  decidedBy      User?                @relation("AdminApprovalDecidedBy", fields: [decidedById], references: [id])
+  decidedAt      DateTime?
+  decisionNote   String?
+  createdAt      DateTime             @default(now())
+
+  @@index([status, actionType])
+  @@index([businessRefType, businessRefId])
+}
+
+enum AdminApprovalStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  CANCELLED
 }

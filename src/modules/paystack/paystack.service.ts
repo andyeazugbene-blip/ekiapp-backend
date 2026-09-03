@@ -9,6 +9,8 @@ import { AppError } from "../../shared/errors/app-error";
 import { notificationsService } from "../notifications/notifications.service";
 import { calculatePlatformFee } from "../../shared/pricing";
 import { resolveVendorCommission } from "../subscriptions/subscription-plan-utils";
+import { ledgerService } from "../ledger/ledger.service";
+import { LedgerAccountType, LedgerDirection, LedgerOwnerType } from "@prisma/client";
 
 export interface InitializeEscrowInput {
   cartId: string;
@@ -242,16 +244,54 @@ export const paystackService = {
     }
 
     await prisma.$transaction(async (db) => {
-      // Mark transaction SUCCESS
-      await db.paystackTransaction.update({
-        where: { id: tx.id },
+      // Mark transaction SUCCESS (conditional — mirrors the Stripe webhook's
+      // updateMany guard so a replayed/out-of-order event can't reprocess).
+      const txUpdate = await db.paystackTransaction.updateMany({
+        where: { id: tx.id, status: { not: "SUCCESS" } },
         data: { status: "SUCCESS", paystackResponse: paystackData as object },
       });
 
-      // Mark order PAYMENT_SECURED
-      await db.order.update({
-        where: { id: tx.orderId },
-        data: { status: "PAYMENT_SECURED" },
+      if (txUpdate.count > 0) {
+        // Only PENDING orders transition — an already-secured/cancelled order
+        // must not be silently overwritten by a replayed webhook.
+        const orderUpdate = await db.order.updateMany({
+          where: { id: tx.orderId, status: "PENDING" },
+          data: { status: "PAYMENT_SECURED" },
+        });
+
+        if (orderUpdate.count > 0) {
+          const securedOrder = await db.order.findUnique({
+            where: { id: tx.orderId },
+            select: { vendorId: true, vendorEarnings: true, platformFeeAmount: true, currency: true },
+          });
+          if (securedOrder?.vendorId && securedOrder.vendorEarnings > 0) {
+            // Additive bookkeeping — money is held in Paystack escrow, not
+            // yet released to the vendor (see escrow.service.ts), but per
+            // this codebase's existing wallet convention (PAYMENT_PENDING_CREDIT
+            // fires at "secured", not at release) the ledger mirrors that.
+            await ledgerService.postEntriesSafely(db, {
+              currency: securedOrder.currency,
+              businessRefType: "Order",
+              businessRefId: tx.orderId,
+              providerRef: reference,
+              description: `Paystack escrow payment secured for order ${tx.orderId}`,
+              legs: [
+                { accountType: LedgerAccountType.PROVIDER_CASH, ownerType: LedgerOwnerType.PLATFORM, direction: LedgerDirection.DEBIT, amount: securedOrder.vendorEarnings + securedOrder.platformFeeAmount },
+                { accountType: LedgerAccountType.VENDOR_PAYABLE, ownerType: LedgerOwnerType.VENDOR, ownerId: securedOrder.vendorId, direction: LedgerDirection.CREDIT, amount: securedOrder.vendorEarnings },
+                { accountType: LedgerAccountType.PLATFORM_FEE_REVENUE, ownerType: LedgerOwnerType.PLATFORM, direction: LedgerDirection.CREDIT, amount: securedOrder.platformFeeAmount },
+              ],
+            });
+          }
+        }
+      }
+
+      // Every code path through here — success, replay, or no-op — must mark
+      // the WebhookEvent PROCESSED. Leaving it stuck at PROCESSING (the prior
+      // behavior) permanently blocks the row from ever being inspected as
+      // resolved and gives no visibility that this event actually completed.
+      await db.webhookEvent.updateMany({
+        where: { stripeEventId: `paystack:${reference}` },
+        data: { status: "PROCESSED", processedAt: new Date() },
       });
     });
 

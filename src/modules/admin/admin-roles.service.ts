@@ -66,9 +66,81 @@ function normalizeName(raw: unknown): string {
   return name;
 }
 
+// Architecture doc §7 — default role set. Built entirely from the existing
+// ADMIN_PERMISSIONS primitives above; no new permission strings invented.
+// Where the spec names a narrower role than any existing permission covers
+// (Campaign Reviewer, Refund Operations, and Supplier Settlement all need
+// "community_buy.mutate" since there's no finer-grained split of that
+// permission yet), the role is genuinely broader than its name suggests —
+// documented here rather than silently pretended away.
+const DEFAULT_ROLES: { name: string; description: string; permissions: AdminPermission[] }[] = [
+  { name: "Super Administrator", description: "Full access to every admin action.", permissions: ["admin.*"] },
+  {
+    name: "Read-Only Auditor",
+    description: "Can view everything, mutate nothing.",
+    permissions: ADMIN_PERMISSIONS.filter((p) => p.endsWith(".read")) as AdminPermission[],
+  },
+  {
+    name: "Customer Support",
+    description: "Handles buyer/vendor support tickets and order-level questions.",
+    permissions: ["users.read", "orders.read", "orders.mutate", "reviews.read", "community_buy.read", "subscriptions.read", "communications.read", "communications.send"],
+  },
+  {
+    name: "Vendor Operations",
+    description: "Manages vendor accounts, products, and delivery zones.",
+    permissions: ["vendors.read", "vendors.mutate", "products.read", "products.mutate", "delivery_zones.read", "delivery_zones.mutate", "subscriptions.read", "subscriptions.mutate"],
+  },
+  {
+    name: "Verification Reviewer",
+    description: "Reviews vendor identity/verification submissions.",
+    permissions: ["verification.read", "verification.mutate"],
+  },
+  {
+    name: "Campaign Reviewer",
+    description: "Approves/rejects Community Buy campaigns and Hot Deal campaigns. NOTE: shares community_buy.mutate with Refund Ops and Supplier Settlement — no finer split exists yet.",
+    permissions: ["campaigns.read", "campaigns.mutate", "community_buy.read", "community_buy.mutate"],
+  },
+  {
+    name: "Payment Operations",
+    description: "Manages payouts and escrow visibility.",
+    permissions: ["payments.mutate", "payouts.read", "payouts.mutate", "escrow.read"],
+  },
+  {
+    name: "Refund Operations",
+    description: "Processes order and Community Buy refunds. NOTE: shares community_buy.mutate — see Campaign Reviewer.",
+    permissions: ["payments.mutate", "disputes.read", "disputes.mutate", "community_buy.read", "community_buy.mutate"],
+  },
+  {
+    name: "Supplier Settlement",
+    description: "Releases/holds Community Buy supplier payments. NOTE: shares community_buy.mutate — see Campaign Reviewer.",
+    permissions: ["community_buy.read", "community_buy.mutate"],
+  },
+  {
+    name: "Risk / Fraud",
+    description: "Suspends accounts, handles disputes, reviews audit trail.",
+    permissions: ["users.read", "users.mutate", "vendors.read", "vendors.mutate", "disputes.read", "disputes.mutate", "security.mutate", "audit.read"],
+  },
+];
+
 export const adminRolesService = {
   permissions() {
     return ADMIN_PERMISSIONS;
+  },
+
+  /**
+   * Idempotent: creates any of the 10 default roles that don't already
+   * exist by name. Never touches an existing role's permissions — an admin
+   * may have already customized one, and this must not silently revert
+   * that. Safe to call on every startup, same pattern as bootstrapAdmin().
+   */
+  async seedDefaultRoles(): Promise<void> {
+    for (const role of DEFAULT_ROLES) {
+      const existing = await prisma.adminRole.findUnique({ where: { name: role.name } });
+      if (existing) continue;
+      await prisma.adminRole.create({
+        data: { name: role.name, description: role.description, permissions: role.permissions, isSystem: true },
+      });
+    }
   },
 
   async listRoles() {

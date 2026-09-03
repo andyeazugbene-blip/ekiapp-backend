@@ -12,6 +12,8 @@ import { enqueueEmail } from "../../lib/email-queue";
 import { emailTemplates } from "../../lib/email-templates";
 import { stripeIdentityService } from "../verification/stripe-identity.service";
 import { communicationService } from "../communications/communication.service";
+import { ledgerService } from "../ledger/ledger.service";
+import { LedgerAccountType, LedgerDirection, LedgerOwnerType } from "@prisma/client";
 import { AppError } from "../../shared/errors/app-error";
 import type { StripeWebhookInput, StripeWebhookResult } from "./stripe.types";
 
@@ -117,7 +119,7 @@ class StripeWebhookService {
             orders: {
               include: {
                 items: { select: { vendorId: true } },
-                payment: { select: { id: true, status: true, vendorEarningsAmount: true, currency: true } },
+                payment: { select: { id: true, status: true, vendorEarningsAmount: true, platformFeeAmount: true, currency: true } },
               },
             },
           },
@@ -189,6 +191,22 @@ class StripeWebhookService {
                 currency: order.payment.currency, description: `Pending credit for order ${order.id}` },
             });
             await tx.wallet.update({ where: { id: w.id }, data: { pendingBalance: { increment: order.payment.vendorEarningsAmount } } });
+
+            // Internal ledger (additive — never affects the wallet logic above).
+            // Chart-of-accounts mapping is the engineering default pending
+            // finance sign-off; see ledger.service.ts.
+            await ledgerService.postEntriesSafely(tx, {
+              currency: order.payment.currency,
+              businessRefType: "Payment",
+              businessRefId: order.payment.id,
+              providerRef: paymentIntent.id,
+              description: `Card payment captured for order ${order.id}`,
+              legs: [
+                { accountType: LedgerAccountType.PROVIDER_CASH, ownerType: LedgerOwnerType.PLATFORM, direction: LedgerDirection.DEBIT, amount: order.payment.vendorEarningsAmount + order.payment.platformFeeAmount },
+                { accountType: LedgerAccountType.VENDOR_PAYABLE, ownerType: LedgerOwnerType.VENDOR, ownerId: vendorId, direction: LedgerDirection.CREDIT, amount: order.payment.vendorEarningsAmount },
+                { accountType: LedgerAccountType.PLATFORM_FEE_REVENUE, ownerType: LedgerOwnerType.PLATFORM, direction: LedgerDirection.CREDIT, amount: order.payment.platformFeeAmount },
+              ],
+            });
           }
         }
 
@@ -908,6 +926,19 @@ class StripeWebhookService {
                       description: `Refund reversal for order ${order.id}`,
                     },
                   });
+
+                  if (order.payment) {
+                    await ledgerService.reverseEntries(tx, {
+                      businessRefType: "Payment",
+                      businessRefId: order.payment.id,
+                      providerRef: paymentIntentId,
+                      description: `Refund reverses payment capture for order ${order.id}`,
+                    }).catch((error) => {
+                      logger.error("Ledger reversal failed (non-fatal — refund still proceeds)", {
+                        orderId: order.id, errorMessage: error instanceof Error ? error.message : String(error),
+                      });
+                    });
+                  }
                 }
               }
             }
