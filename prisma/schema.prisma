@@ -129,7 +129,10 @@ model User {
   id                      String                @id @default(cuid())
   email                   String                @unique
   name                    String
-  password                String
+  // Nullable: an OAuth-only account (Google/Apple) has no Eki password.
+  // authService.login() (email/password) explicitly rejects null rather
+  // than letting bcrypt.compare receive it.
+  password                String?
   phone                   String?               @unique
   avatar                  String?
   country                 String?
@@ -165,12 +168,39 @@ model User {
   automationRuns          AutomationRun[]
   campaignParticipations  CampaignParticipant[]
   communityBuySupportCases CommunityBuySupportCase[]
+  oauthIdentities         OAuthIdentity[]
   createdAt               DateTime              @default(now())
   updatedAt               DateTime              @updatedAt
 
   @@index([role, createdAt])
   @@index([createdAt])
   @@index([isSuspended])
+}
+
+// Google/Apple Sign-In (see docs/decisions/0008-oauth-sign-in.md). One row
+// per linked provider identity — a user can link both Google and Apple to
+// the same Eki account. providerUserId is the provider's stable, opaque
+// subject identifier (Google's `sub` / Apple's `sub`), never the email —
+// Apple's email can be a private-relay address that isn't a real identity.
+model OAuthIdentity {
+  id             String       @id @default(cuid())
+  provider       OAuthProvider
+  providerUserId String
+  userId         String
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  // Email as reported by the provider at link time — informational only,
+  // never re-derived as the identity key. Nullable for Apple private relay.
+  email          String?
+  createdAt      DateTime     @default(now())
+
+  @@unique([provider, providerUserId])
+  @@unique([provider, userId])
+  @@index([userId])
+}
+
+enum OAuthProvider {
+  GOOGLE
+  APPLE
 }
 
 model Vendor {

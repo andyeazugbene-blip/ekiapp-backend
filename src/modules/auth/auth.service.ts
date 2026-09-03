@@ -104,7 +104,7 @@ async function writeAuditLogSafe(data: {
   await auditModel.create({ data }).catch(() => undefined);
 }
 
-function toAuthUser(user: AuthUserRecord): AuthUser {
+export function toAuthUser(user: AuthUserRecord): AuthUser {
   const authUser: AuthUser = {
     id: user.id,
     email: user.email,
@@ -255,7 +255,11 @@ export const authService = {
       throw new AppError("Account temporarily locked. Try again later.", 423);
     }
 
-    const valid = await bcrypt.compare(input.password, user.password);
+    // An OAuth-only account (Google/Apple, no Eki password set) must fail
+    // the same generic "Invalid credentials" as a wrong password — never a
+    // distinct error, which would let an attacker enumerate which accounts
+    // are OAuth-only. bcrypt.compare would otherwise throw on a null hash.
+    const valid = user.password ? await bcrypt.compare(input.password, user.password) : false;
 
     if (!valid) {
       // Increment failed attempts
@@ -289,8 +293,9 @@ export const authService = {
       throw new AppError("Invalid credentials", 401);
     }
 
-    // Successful login: reset failed attempts, clear lockout, and opportunistic rehash
-    const needsRehash = bcrypt.getRounds(user.password) < BCRYPT_ROUNDS;
+    // Successful login: reset failed attempts, clear lockout, and opportunistic rehash.
+    // user.password can't be null here — `valid` was only true above if it was checked against a real hash.
+    const needsRehash = bcrypt.getRounds(user.password as string) < BCRYPT_ROUNDS;
     if (user.failedLoginAttempts > 0 || user.lockedUntil || needsRehash) {
       const data: Record<string, unknown> = { failedLoginAttempts: 0, lockedUntil: null };
       if (needsRehash) {

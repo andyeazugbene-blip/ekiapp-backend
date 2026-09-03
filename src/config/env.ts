@@ -65,4 +65,15 @@ export const env = {
   jwtExpiresIn: process.env.JWT_EXPIRES_IN ?? "7d",
   publicStoreBaseUrl: (process.env.PUBLIC_STORE_BASE_URL ?? "https://culinarytales.app").replace(/\/+$/, ""),
   frontendUrl: (process.env.FRONTEND_URL ?? process.env.PUBLIC_WEB_URL ?? "https://culinarytales.app").replace(/\/+$/, ""),
+  // Google/Apple Sign-In — optional. Each is a client-facing identifier
+  // (not a secret) needed to validate the `aud` claim on a verified
+  // provider token. Absent entirely = that provider's routes return
+  // 503 OAUTH_PROVIDER_NOT_CONFIGURED rather than crashing boot, since
+  // this is an additive feature that must not take down existing auth.
+  googleClientIds: [
+    process.env.GOOGLE_IOS_CLIENT_ID,
+    process.env.GOOGLE_ANDROID_CLIENT_ID,
+    process.env.GOOGLE_WEB_CLIENT_ID,
+  ].filter((v): v is string => Boolean(v && v.trim())),
+  appleBundleId: process.env.APPLE_BUNDLE_ID ?? "",
 } as const;
