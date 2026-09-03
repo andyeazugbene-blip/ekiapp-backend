@@ -104,10 +104,11 @@ export const stripeProvider: PaymentProvider = {
     }
   },
 
-  async reconcileTransactions({ periodStart, periodEnd, localRefs }) {
-    const localSet = new Set(localRefs);
+  async reconcileTransactions({ periodStart, periodEnd, localRecords }) {
+    const localByRef = new Map(localRecords.map((r) => [r.ref, r.amount]));
     const seenAtProvider = new Set<string>();
-    const missingLocally: string[] = [];
+    const missingLocally: { ref: string; amount: number }[] = [];
+    const amountMismatches: { ref: string; localAmount: number; providerAmount: number }[] = [];
     let startingAfter: string | undefined;
     // Stripe's list API paginates 100 at a time — walk the whole period.
     for (;;) {
@@ -119,15 +120,20 @@ export const stripeProvider: PaymentProvider = {
       for (const pi of page.data) {
         if (pi.status !== "succeeded") continue;
         seenAtProvider.add(pi.id);
-        if (!localSet.has(pi.id)) missingLocally.push(pi.id);
+        const localAmount = localByRef.get(pi.id);
+        if (localAmount === undefined) {
+          missingLocally.push({ ref: pi.id, amount: pi.amount });
+        } else if (localAmount !== pi.amount) {
+          amountMismatches.push({ ref: pi.id, localAmount, providerAmount: pi.amount });
+        }
       }
       if (!page.has_more || page.data.length === 0) break;
       startingAfter = page.data[page.data.length - 1]?.id;
     }
     // Only meaningful for refs Stripe would have returned in this period —
-    // a localRef outside [periodStart, periodEnd] will be reported missing
-    // even though it legitimately exists outside the queried window.
-    const missingAtProvider = localRefs.filter((ref) => !seenAtProvider.has(ref));
-    return { missingAtProvider, missingLocally };
+    // a local record outside [periodStart, periodEnd] will be reported
+    // missing even though it legitimately exists outside the queried window.
+    const missingAtProvider = localRecords.filter((r) => !seenAtProvider.has(r.ref)).map((r) => r.ref);
+    return { missingAtProvider, missingLocally, amountMismatches };
   },
 };

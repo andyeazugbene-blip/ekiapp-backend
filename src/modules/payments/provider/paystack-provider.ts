@@ -7,6 +7,7 @@ import type {
   ProviderTransferResult,
   ProviderVerifyResult,
   ProviderWebhookEvent,
+  ReconciliationResult,
 } from "./payment-provider.interface";
 
 function mapVerifyStatus(status: string): ProviderVerifyResult["status"] {
@@ -106,7 +107,7 @@ export const paystackProvider: PaymentProvider = {
     return { providerEventId: `paystack:${parsed.data?.reference ?? "unknown"}`, type: parsed.event, raw: parsed };
   },
 
-  async reconcileTransactions(): Promise<{ missingAtProvider: string[]; missingLocally: string[] }> {
+  async reconcileTransactions(): Promise<ReconciliationResult> {
     // Paystack's list-transactions API isn't wired into lib/paystack.ts yet
     // — real, disclosed gap rather than a fabricated reconciliation result.
     throw new AppError("Transaction reconciliation is not yet implemented for Paystack", 501, undefined, "PROVIDER_NOT_IMPLEMENTED");

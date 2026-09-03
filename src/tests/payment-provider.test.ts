@@ -56,7 +56,7 @@ describe("paystackProvider", () => {
 
   it("verifyTransfer and reconcileTransactions are honestly unimplemented, not faked", async () => {
     await expect(paystackProvider.verifyTransfer("tr_1")).rejects.toThrow(/not yet implemented/);
-    await expect(paystackProvider.reconcileTransactions({ periodStart: new Date(), periodEnd: new Date(), localRefs: [] })).rejects.toThrow(/not yet implemented/);
+    await expect(paystackProvider.reconcileTransactions({ periodStart: new Date(), periodEnd: new Date(), localRecords: [] })).rejects.toThrow(/not yet implemented/);
   });
 });
 

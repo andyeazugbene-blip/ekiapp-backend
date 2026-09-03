@@ -80,6 +80,20 @@ export interface PaymentProvider {
 
   processWebhook(rawBody: string | Buffer, signature: string): ProviderWebhookEvent;
 
-  /** Compares local records against the provider's own transaction list for a period. Returns differences only — never mutates anything. */
-  reconcileTransactions(input: { periodStart: Date; periodEnd: Date; localRefs: string[] }): Promise<{ missingAtProvider: string[]; missingLocally: string[] }>;
+  /**
+   * Compares local records against the provider's own transaction list for
+   * a period. Returns differences only — never mutates anything, on either
+   * side. `localRecords` carries the amount actually recorded locally so a
+   * real amount comparison is possible, not just a presence check.
+   */
+  reconcileTransactions(input: { periodStart: Date; periodEnd: Date; localRecords: { ref: string; amount: MinorAmount }[] }): Promise<ReconciliationResult>;
+}
+
+export interface ReconciliationResult {
+  /** A local ref (e.g. Stripe PaymentIntent id) that never turned up at the provider for this period. */
+  missingAtProvider: string[];
+  /** A provider-side succeeded transaction with no matching local ref. */
+  missingLocally: { ref: string; amount: MinorAmount }[];
+  /** Same ref on both sides, but the amounts disagree. */
+  amountMismatches: { ref: string; localAmount: MinorAmount; providerAmount: MinorAmount }[];
 }

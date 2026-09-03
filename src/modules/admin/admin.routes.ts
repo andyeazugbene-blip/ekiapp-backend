@@ -30,6 +30,14 @@ import {
   adminUpsertApprovalRule,
 } from "./admin-approvals.controller";
 import {
+  adminGetLedgerBalances,
+  adminListReconciliationRuns,
+  adminGetReconciliationRun,
+  adminListOpenDifferences,
+  adminRunReconciliation,
+  adminResolveReconciliationDifference,
+} from "../ledger/ledger.controller";
+import {
   createPromoCode as adminCreatePromoCode,
   listPromoCodes as adminListPromoCodes,
   updatePromoCode as adminUpdatePromoCode,
@@ -248,6 +256,19 @@ adminRouter.get("/community-buy/markets", asyncHandler(requireAdminPermission("c
 adminRouter.patch("/community-buy/markets/:id", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(adminUpdateMarketConfiguration));
 adminRouter.get("/community-buy/ledger", asyncHandler(requireAdminPermission("community_buy.read")), asyncHandler(adminGetLedgerSummary));
 adminRouter.get("/community-campaigns/:id/ledger", asyncHandler(requireAdminPermission("community_buy.read")), asyncHandler(adminGetCampaignLedger));
+
+// Real double-entry ledger + provider reconciliation — distinct from the
+// Community Buy-specific summary above, which reads CampaignContribution/
+// CampaignRefund/CampaignSupplierPayment directly, not LedgerAccount/
+// LedgerEntry. Read-only except the two explicitly-modeled actions the
+// schema itself supports: running a reconciliation and resolving a
+// difference (ReconciliationDifference.status/resolvedAt already exist).
+adminRouter.get("/ledger/balances", asyncHandler(requireAdminPermission("audit.read")), asyncHandler(adminGetLedgerBalances));
+adminRouter.get("/ledger/reconciliation-runs", asyncHandler(requireAdminPermission("audit.read")), asyncHandler(adminListReconciliationRuns));
+adminRouter.get("/ledger/reconciliation-runs/:id", asyncHandler(requireAdminPermission("audit.read")), asyncHandler(adminGetReconciliationRun));
+adminRouter.post("/ledger/reconciliation-runs", asyncHandler(requireAdminPermission("payments.mutate")), asyncHandler(adminRunReconciliation));
+adminRouter.get("/ledger/differences", asyncHandler(requireAdminPermission("audit.read")), asyncHandler(adminListOpenDifferences));
+adminRouter.post("/ledger/differences/:id/resolve", asyncHandler(requireAdminPermission("payments.mutate")), asyncHandler(adminResolveReconciliationDifference));
 adminRouter.get("/community-buy/organisers", asyncHandler(requireAdminPermission("community_buy.read")), asyncHandler(adminListVerifiedOrganisers));
 adminRouter.post("/community-buy/organisers/:id/restrict", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(adminRestrictOrganiser));
 adminRouter.post("/community-buy/organisers/:id/unrestrict", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(adminUnrestrictOrganiser));
