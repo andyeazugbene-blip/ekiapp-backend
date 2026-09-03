@@ -21,10 +21,12 @@ import {
   listVendorSubscribers,
   listVendorSubscriptionOffers,
   pauseBuyerSubscription,
+  pauseSubscriptionOfferProduct,
   pauseSubscriptionOfferRenewals,
   publishSubscriptionOffer,
   removePaymentMethod,
   resumeBuyerSubscription,
+  resumeSubscriptionOfferProduct,
   resumeSubscriptionOfferRenewals,
   retryRenewalPayment,
   skipNextRenewal,
@@ -45,6 +47,8 @@ subscriptionOffersRouter.post("/:id/publish", authenticate, requireRole("VENDOR"
 subscriptionOffersRouter.post("/:id/unpublish", authenticate, requireRole("VENDOR"), asyncHandler(unpublishSubscriptionOffer));
 subscriptionOffersRouter.post("/:id/pause-renewals", authenticate, requireRole("VENDOR"), asyncHandler(pauseSubscriptionOfferRenewals));
 subscriptionOffersRouter.post("/:id/resume-renewals", authenticate, requireRole("VENDOR"), asyncHandler(resumeSubscriptionOfferRenewals));
+subscriptionOffersRouter.post("/:id/products/:productId/pause", authenticate, requireRole("VENDOR"), asyncHandler(pauseSubscriptionOfferProduct));
+subscriptionOffersRouter.post("/:id/products/:productId/resume", authenticate, requireRole("VENDOR"), asyncHandler(resumeSubscriptionOfferProduct));
 
 // Vendor-owned resources — mounted at /vendor alongside the other vendor
 // routers (automation, account, etc.), consistent with this codebase's

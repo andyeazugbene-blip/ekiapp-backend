@@ -5,6 +5,7 @@ import { AppError } from "../../shared/errors/app-error";
 import { resolveStripeCurrency } from "../../shared/currency";
 import { notificationsService } from "../notifications/notifications.service";
 import { marketConfigurationService } from "./market-configuration.service";
+import { supportCaseService } from "./support-case.service";
 
 /**
  * Pay-now / refund-on-failure contribution flow — Eki Diaspora App doc §9.
@@ -303,6 +304,67 @@ export const campaignContributionsService = {
       orderBy: { createdAt: "desc" },
       take: limit,
     });
+  },
+
+  /**
+   * spec §130 "Recheck provider status" — for a refund that failed or is
+   * still pending, re-attempts the Stripe refund with the SAME
+   * idempotencyKey already stored on the record. Stripe's idempotency
+   * guarantee means this can never create a second, duplicate refund: if
+   * one already exists under that key, Stripe just returns it.
+   */
+  async requeryRefund(refundId: string) {
+    const refund = await prisma.campaignRefund.findUnique({
+      where: { id: refundId },
+      include: { contribution: { include: { participant: true } } },
+    });
+    if (!refund) throw new AppError("Refund not found", 404);
+    if (refund.status === "REFUNDED") return refund; // already settled — nothing to recheck
+
+    try {
+      if (!refund.contribution.stripePaymentIntentId) throw new Error("Contribution has no payment intent to refund");
+      const stripeRefund = await stripe.refunds.create(
+        { payment_intent: refund.contribution.stripePaymentIntentId, amount: refund.amount },
+        { idempotencyKey: refund.idempotencyKey },
+      );
+      const updated = await prisma.campaignRefund.update({
+        where: { id: refundId },
+        data: { status: "REFUNDED", stripeRefundId: stripeRefund.id, failureReason: null },
+      });
+      await prisma.campaignContribution.update({ where: { id: refund.contributionId }, data: { status: "REFUNDED" } });
+      await notificationsService.enqueue({
+        userId: refund.contribution.participant.userId,
+        type: "COMMUNITY_CAMPAIGN_UPDATE",
+        title: "Refund completed",
+        body: "Your Community Buy refund has been completed.",
+        data: { type: "community_campaign_update", event: "refund_completed", campaignId: refund.contribution.campaignId },
+      }).catch(() => {});
+      return updated;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      return prisma.campaignRefund.update({ where: { id: refundId }, data: { status: "REFUND_FAILED", failureReason: message } });
+    }
+  },
+
+  /**
+   * spec §130 "Escalate" — reuses the existing Community Buy support-case
+   * system (support-case.service.ts) rather than inventing a parallel
+   * escalation mechanism. The case is opened on behalf of the affected
+   * participant (who genuinely does have a relationship to the campaign)
+   * and immediately marked escalated by the admin.
+   */
+  async escalateRefund(adminId: string, refundId: string, note?: string) {
+    const refund = await prisma.campaignRefund.findUnique({
+      where: { id: refundId },
+      include: { contribution: { include: { participant: true, campaign: true } } },
+    });
+    if (!refund) throw new AppError("Refund not found", 404);
+
+    const supportCase = await supportCaseService.create(refund.contribution.participant.userId, refund.contribution.campaignId, {
+      caseType: "REFUND_ISSUE",
+      description: note?.trim() || `Refund ${refund.id} for ${refund.contribution.campaign.title} needs attention (status: ${refund.status}${refund.failureReason ? `, reason: ${refund.failureReason}` : ""}).`,
+    });
+    return supportCaseService.adminUpdate(adminId, supportCase.id, { escalated: true });
   },
 
   async processPendingRefunds(limit = 50): Promise<{ processed: number; failed: number }> {

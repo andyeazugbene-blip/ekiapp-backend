@@ -45,8 +45,9 @@ export const renewalsService = {
         continue;
       }
       try {
-        await this.createRenewalForCycle(sub.id, sub.nextRenewalAt);
-        created++;
+        const renewal = await this.createRenewalForCycle(sub.id, sub.nextRenewalAt);
+        if (renewal) created++;
+        else skipped++; // every item this subscriber picked is currently vendor-paused
       } catch (error: any) {
         if (error?.code === "P2002") {
           skipped++; // Already exists for this cycle — another run got there first.
@@ -102,11 +103,40 @@ export const renewalsService = {
     return upcoming.length;
   },
 
+  /**
+   * Returns null (no renewal created, no charge) when every item the
+   * subscriber picked is currently vendor-paused (spec §31) — the caller
+   * must not treat that as an error, just nothing due this cycle.
+   */
   async createRenewalForCycle(subscriptionId: string, cycleDate: Date) {
     const sub = await prisma.buyerSubscription.findUniqueOrThrow({
       where: { id: subscriptionId },
-      include: { items: { include: { product: true } } },
+      include: {
+        items: { include: { product: true } },
+        offer: { select: { discountPercent: true, products: { select: { productId: true, pausedAt: true } } } },
+      },
     });
+    // spec §22 "Offer a Regular Delivery discount" — a flat percentage off
+    // the live product price, applied consistently every cycle so it never
+    // itself looks like a vendor price change to the approval-gate below.
+    const discountPercent = sub.offer.discountPercent ?? 0;
+    const applyDiscount = (priceInCents: number) =>
+      discountPercent > 0 ? Math.round(priceInCents * (1 - discountPercent / 100)) : priceInCents;
+
+    // spec §31 "Pause Product Renewals" — a vendor-paused product is
+    // dropped from this cycle only; the subscription itself is untouched.
+    const pausedProductIds = new Set(sub.offer.products.filter((p) => p.pausedAt).map((p) => p.productId));
+    const activeItems = sub.items.filter((item) => !pausedProductIds.has(item.productId));
+    if (activeItems.length === 0) {
+      // Nothing due this cycle — advance to the next one so the
+      // subscription doesn't get stuck retrying a fully-paused cycle
+      // forever (mirrors the SKIPPED/ORDER_CREATED advance below).
+      await prisma.buyerSubscription.update({
+        where: { id: subscriptionId },
+        data: { nextRenewalAt: nextCycleDate(sub.frequency, cycleDate) },
+      });
+      return null;
+    }
 
     // Snapshot current prices. "Previous" price is the last renewal's price
     // for that product if one exists, otherwise the product's current price
@@ -125,13 +155,13 @@ export const renewalsService = {
         subscriptionId,
         cycleDate,
         status: "SCHEDULED",
-        currency: sub.items[0]?.product.currency ?? "GBP",
+        currency: activeItems[0]?.product.currency ?? "GBP",
         items: {
-          create: sub.items.map((item) => ({
+          create: activeItems.map((item) => ({
             productId: item.productId,
             quantity: item.quantity,
-            previousUnitPrice: lastPriceByProduct.get(item.productId) ?? item.product.priceInCents,
-            currentUnitPrice: item.product.priceInCents,
+            previousUnitPrice: lastPriceByProduct.get(item.productId) ?? applyDiscount(item.product.priceInCents),
+            currentUnitPrice: applyDiscount(item.product.priceInCents),
             currency: item.product.currency,
             stockAvailable: item.product.isActive && item.product.stock >= item.quantity,
           })),

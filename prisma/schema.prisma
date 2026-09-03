@@ -1560,7 +1560,19 @@ model SubscriptionOffer {
   description        String?
   frequencies        SubscriptionFrequency[]
   substitutionPolicy String?
+  substitutionMode   OfferSubstitutionMode      @default(ASK_BUYER)
   renewalCutoffHours Int                        @default(24)
+  fulfilmentMethod   FulfilmentMethod           @default(DELIVERY)
+  preparationHours   Int?
+  // Percentage off the live product price applied at each renewal, e.g. 10
+  // means renewals are charged at 90% of the product's current price. Null
+  // means renewals use the plain current product price (spec §22 "Use
+  // current product prices at each renewal").
+  discountPercent    Int?
+  // Copied onto BuyerSubscription.priceChangeApprovalLimitBps at subscribe
+  // time (spec §22 "Maximum price increase without buyer approval") — null
+  // leaves the subscription on the system default (renewals.service.ts).
+  maxPriceIncreaseApprovalBps Int?
   isActive           Boolean                    @default(true)
   // Distinct from isActive (unpublish removes the listing for new
   // subscribers). Pausing renewals keeps existing subscribers listed and
@@ -1577,10 +1589,22 @@ model SubscriptionOffer {
   @@index([vendorId, isActive])
 }
 
+enum OfferSubstitutionMode {
+  NO_SUBSTITUTION
+  ASK_BUYER
+  ALLOW_SIMILAR
+}
+
 model SubscriptionOfferProduct {
   id        String            @id @default(cuid())
   offerId   String
   productId String
+  // spec §31 "Pause Product Renewals" — stops this product from being
+  // included in any subscriber's future renewals without touching the
+  // rest of their subscription or the offer's other products.
+  pausedAt       DateTime?
+  pauseReason    String?
+  pauseExpectedReturnAt DateTime?
   offer     SubscriptionOffer @relation(fields: [offerId], references: [id], onDelete: Cascade)
   product   Product           @relation(fields: [productId], references: [id], onDelete: Cascade)
   createdAt DateTime          @default(now())

@@ -130,6 +130,8 @@ import {
   adminListPendingOrganisers,
   adminListPendingSuppliers,
   adminListRefunds,
+  adminRequeryRefund,
+  adminEscalateRefund,
   adminListSupplierPayments,
   adminListSupportCases,
   adminListVerifiedOrganisers,
@@ -220,6 +222,8 @@ adminRouter.post("/community-buy/organisers/:id/verify", asyncHandler(requireAdm
 adminRouter.get("/community-buy/suppliers/pending", asyncHandler(requireAdminPermission("community_buy.read")), asyncHandler(adminListPendingSuppliers));
 adminRouter.post("/community-buy/suppliers/:id/verify", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(adminVerifySupplier));
 adminRouter.get("/community-buy/refunds", asyncHandler(requireAdminPermission("community_buy.read")), asyncHandler(adminListRefunds));
+adminRouter.post("/community-buy/refunds/:id/requery", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(adminRequeryRefund));
+adminRouter.post("/community-buy/refunds/:id/escalate", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(adminEscalateRefund));
 adminRouter.get("/community-buy/extension-requests", asyncHandler(requireAdminPermission("community_buy.read")), asyncHandler(adminListExtensionRequests));
 adminRouter.post("/community-buy/extension-requests/:id/approve", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(adminApproveExtension));
 adminRouter.post("/community-buy/extension-requests/:id/reject", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(adminRejectExtension));

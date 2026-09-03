@@ -218,7 +218,9 @@ export const communityCampaignsService = {
   /** Admin visibility into how campaigns actually closed — the review queue only ever shows UNDER_REVIEW, so this is the only place an admin can see a FAILED campaign awaiting an organiser decision, or the outcome once one's been made. */
   async listRecentlyClosed(limit = 50) {
     return prisma.communityCampaign.findMany({
-      where: { status: { in: ["SUCCEEDED", "FAILED", "FULFILLING", "CANCELLED"] } },
+      // Includes LIVE/PAUSED so admin risk controls (spec §132 "Pause new
+      // contributions") have a real campaign to act on, not just closed ones.
+      where: { status: { in: ["SUCCEEDED", "FAILED", "FULFILLING", "CANCELLED", "LIVE", "PAUSED"] } },
       include: { organiser: { include: { user: { select: { name: true, email: true } } } }, supplier: { include: { vendor: { select: { storeName: true } } } } },
       orderBy: { updatedAt: "desc" },
       take: limit,

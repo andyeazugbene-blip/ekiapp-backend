@@ -4,7 +4,7 @@ vi.mock("../lib/prisma", () => ({
   prisma: {
     communityCampaign: { findMany: vi.fn(), update: vi.fn(), updateMany: vi.fn(), findUnique: vi.fn(), findUniqueOrThrow: vi.fn(), create: vi.fn() },
     campaignContribution: { findMany: vi.fn(), update: vi.fn(), findUnique: vi.fn(), findUniqueOrThrow: vi.fn(), create: vi.fn(), groupBy: vi.fn() },
-    campaignRefund: { create: vi.fn(), findMany: vi.fn(), update: vi.fn(), groupBy: vi.fn() },
+    campaignRefund: { create: vi.fn(), findMany: vi.fn(), findUnique: vi.fn(), update: vi.fn(), groupBy: vi.fn() },
     campaignParticipant: { findMany: vi.fn(), findUnique: vi.fn(), upsert: vi.fn() },
     notification: { findMany: vi.fn() },
     campaignExtensionRequest: { create: vi.fn(), findUnique: vi.fn(), update: vi.fn(), findMany: vi.fn() },
@@ -30,7 +30,12 @@ vi.mock("../modules/automation/automation.service", () => ({
   automationService: { scheduleAutomation: vi.fn() },
 }));
 
+vi.mock("../modules/community-buy/support-case.service", () => ({
+  supportCaseService: { create: vi.fn(), adminUpdate: vi.fn() },
+}));
+
 import { prisma } from "../lib/prisma";
+import { supportCaseService } from "../modules/community-buy/support-case.service";
 import { stripe } from "../lib/stripe";
 import { communityCampaignsService } from "../modules/community-buy/community-campaigns.service";
 import { campaignContributionsService } from "../modules/community-buy/campaign-contributions.service";
@@ -38,6 +43,7 @@ import { marketConfigurationService } from "../modules/community-buy/market-conf
 import { organiserSupplierService } from "../modules/community-buy/organiser-supplier.service";
 
 const m = vi.mocked(prisma, true);
+const mSupportCase = vi.mocked(supportCaseService, true);
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -262,6 +268,84 @@ describe("campaignContributionsService.createOrganiserTopUp", () => {
 
     await expect(campaignContributionsService.createOrganiserTopUp("organiser-user-1", "camp-13", 1)).rejects.toMatchObject({ statusCode: 409 });
     expect(stripe.paymentIntents.create).not.toHaveBeenCalled();
+  });
+});
+
+describe("campaignContributionsService.requeryRefund — spec §130 recheck provider", () => {
+  it("returns the refund unchanged when it's already REFUNDED — never re-refunds", async () => {
+    m.campaignRefund.findUnique.mockResolvedValue({ id: "refund-1", status: "REFUNDED" } as never);
+
+    const result = await campaignContributionsService.requeryRefund("refund-1");
+
+    expect(result).toEqual({ id: "refund-1", status: "REFUNDED" });
+    expect(stripe.refunds.create).not.toHaveBeenCalled();
+  });
+
+  it("retries the Stripe refund with the SAME idempotency key and marks REFUNDED on success", async () => {
+    m.campaignRefund.findUnique.mockResolvedValue({
+      id: "refund-2",
+      status: "REFUND_FAILED",
+      amount: 500,
+      idempotencyKey: "idem-key-2",
+      contributionId: "contrib-2",
+      contribution: { stripePaymentIntentId: "pi_2", campaignId: "camp-2", participant: { userId: "buyer-2" } },
+    } as never);
+    vi.mocked(stripe.refunds.create).mockResolvedValue({ id: "re_2" } as never);
+    m.campaignRefund.update.mockResolvedValue({ id: "refund-2", status: "REFUNDED" } as never);
+    m.campaignContribution.update.mockResolvedValue({} as never);
+
+    await campaignContributionsService.requeryRefund("refund-2");
+
+    expect(stripe.refunds.create).toHaveBeenCalledWith(
+      { payment_intent: "pi_2", amount: 500 },
+      { idempotencyKey: "idem-key-2" },
+    );
+    expect(m.campaignRefund.update).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: "refund-2" }, data: expect.objectContaining({ status: "REFUNDED", stripeRefundId: "re_2" }) }),
+    );
+  });
+
+  it("marks REFUND_FAILED again (not throw) when the retry still fails", async () => {
+    m.campaignRefund.findUnique.mockResolvedValue({
+      id: "refund-3",
+      status: "REFUND_FAILED",
+      amount: 500,
+      idempotencyKey: "idem-key-3",
+      contributionId: "contrib-3",
+      contribution: { stripePaymentIntentId: "pi_3", campaignId: "camp-3", participant: { userId: "buyer-3" } },
+    } as never);
+    vi.mocked(stripe.refunds.create).mockRejectedValue(new Error("card issuer declined"));
+    m.campaignRefund.update.mockResolvedValue({ id: "refund-3", status: "REFUND_FAILED" } as never);
+
+    const result = await campaignContributionsService.requeryRefund("refund-3");
+
+    expect(result.status).toBe("REFUND_FAILED");
+    expect(m.campaignRefund.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: { status: "REFUND_FAILED", failureReason: "card issuer declined" } }),
+    );
+  });
+});
+
+describe("campaignContributionsService.escalateRefund — spec §130 escalate (reuses support-case system)", () => {
+  it("opens a support case on behalf of the affected participant and marks it escalated", async () => {
+    m.campaignRefund.findUnique.mockResolvedValue({
+      id: "refund-4",
+      status: "REFUND_FAILED",
+      failureReason: "card issuer declined",
+      contributionId: "contrib-4",
+      contribution: { campaignId: "camp-4", participant: { userId: "buyer-4" }, campaign: { title: "Rice Bulk Buy" } },
+    } as never);
+    mSupportCase.create.mockResolvedValue({ id: "case-9" } as never);
+    mSupportCase.adminUpdate.mockResolvedValue({ id: "case-9", escalated: true } as never);
+
+    await campaignContributionsService.escalateRefund("admin-1", "refund-4");
+
+    expect(mSupportCase.create).toHaveBeenCalledWith(
+      "buyer-4",
+      "camp-4",
+      expect.objectContaining({ caseType: "REFUND_ISSUE" }),
+    );
+    expect(mSupportCase.adminUpdate).toHaveBeenCalledWith("admin-1", "case-9", { escalated: true });
   });
 });
 

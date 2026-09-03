@@ -41,6 +41,101 @@ beforeEach(() => {
   vi.clearAllMocks();
 });
 
+describe("renewalsService.createRenewalForCycle — offer discount (spec §22)", () => {
+  it("applies the offer's discount percentage to the renewal's charged price", async () => {
+    m.buyerSubscription.findUniqueOrThrow.mockResolvedValue({
+      id: "sub-3",
+      offer: { discountPercent: 10, products: [] },
+      items: [{ productId: "p1", quantity: 2, product: { currency: "GBP", priceInCents: 1000, isActive: true, stock: 5 } }],
+    } as never);
+    m.renewalItem.findMany.mockResolvedValue([] as never);
+    m.renewal.create.mockImplementation(async (args: any) => ({ id: "renewal-discounted", ...args.data, items: args.data.items.create }));
+    m.renewal.update.mockResolvedValue({} as never);
+
+    const renewal = await renewalsService.createRenewalForCycle("sub-3", new Date("2026-07-01T00:00:00.000Z"));
+
+    // 1000 * (1 - 10/100) = 900
+    expect(renewal.items[0].currentUnitPrice).toBe(900);
+    expect(renewal.items[0].previousUnitPrice).toBe(900); // first renewal — no prior cycle, so previous == current
+  });
+
+  it("charges the plain product price when the offer has no discount", async () => {
+    m.buyerSubscription.findUniqueOrThrow.mockResolvedValue({
+      id: "sub-4",
+      offer: { discountPercent: null, products: [] },
+      items: [{ productId: "p1", quantity: 1, product: { currency: "GBP", priceInCents: 750, isActive: true, stock: 5 } }],
+    } as never);
+    m.renewalItem.findMany.mockResolvedValue([] as never);
+    m.renewal.create.mockImplementation(async (args: any) => ({ id: "renewal-plain", ...args.data, items: args.data.items.create }));
+    m.renewal.update.mockResolvedValue({} as never);
+
+    const renewal = await renewalsService.createRenewalForCycle("sub-4", new Date("2026-07-01T00:00:00.000Z"));
+
+    expect(renewal.items[0].currentUnitPrice).toBe(750);
+  });
+
+  it("applies the same discount consistently across cycles so it never triggers the price-approval gate on its own", async () => {
+    m.buyerSubscription.findUniqueOrThrow.mockResolvedValue({
+      id: "sub-5",
+      offer: { discountPercent: 20, products: [] },
+      items: [{ productId: "p1", quantity: 1, product: { currency: "GBP", priceInCents: 1000, isActive: true, stock: 5 } }],
+    } as never);
+    // A prior renewal already charged the discounted price (800) — the
+    // product's own list price hasn't changed since.
+    m.renewalItem.findMany.mockResolvedValue([{ productId: "p1", currentUnitPrice: 800, createdAt: new Date() }] as never);
+    m.renewal.create.mockImplementation(async (args: any) => ({ id: "renewal-stable", ...args.data, items: args.data.items.create }));
+    m.renewal.update.mockResolvedValue({} as never);
+
+    const renewal = await renewalsService.createRenewalForCycle("sub-5", new Date("2026-08-01T00:00:00.000Z"));
+
+    expect(renewal.items[0].previousUnitPrice).toBe(800);
+    expect(renewal.items[0].currentUnitPrice).toBe(800); // 1000 * 0.8 — unchanged from last cycle
+  });
+});
+
+describe("renewalsService.createRenewalForCycle — per-product pause (spec §31)", () => {
+  it("drops a vendor-paused product from the renewal but keeps the subscriber's other items", async () => {
+    m.buyerSubscription.findUniqueOrThrow.mockResolvedValue({
+      id: "sub-6",
+      frequency: "WEEKLY",
+      offer: {
+        discountPercent: null,
+        products: [{ productId: "p1", pausedAt: new Date("2026-06-01") }, { productId: "p2", pausedAt: null }],
+      },
+      items: [
+        { productId: "p1", quantity: 1, product: { currency: "GBP", priceInCents: 500, isActive: true, stock: 5 } },
+        { productId: "p2", quantity: 1, product: { currency: "GBP", priceInCents: 300, isActive: true, stock: 5 } },
+      ],
+    } as never);
+    m.renewalItem.findMany.mockResolvedValue([] as never);
+    m.renewal.create.mockImplementation(async (args: any) => ({ id: "renewal-partial", ...args.data, items: args.data.items.create }));
+    m.renewal.update.mockResolvedValue({} as never);
+
+    const renewal = await renewalsService.createRenewalForCycle("sub-6", new Date("2026-07-01T00:00:00.000Z"));
+
+    expect(renewal!.items).toHaveLength(1);
+    expect(renewal!.items[0].productId).toBe("p2");
+  });
+
+  it("creates no renewal and advances nextRenewalAt when every item is vendor-paused", async () => {
+    m.buyerSubscription.findUniqueOrThrow.mockResolvedValue({
+      id: "sub-7",
+      frequency: "WEEKLY",
+      offer: { discountPercent: null, products: [{ productId: "p1", pausedAt: new Date("2026-06-01") }] },
+      items: [{ productId: "p1", quantity: 1, product: { currency: "GBP", priceInCents: 500, isActive: true, stock: 5 } }],
+    } as never);
+    m.buyerSubscription.update.mockResolvedValue({} as never);
+
+    const renewal = await renewalsService.createRenewalForCycle("sub-7", new Date("2026-07-01T00:00:00.000Z"));
+
+    expect(renewal).toBeNull();
+    expect(m.renewal.create).not.toHaveBeenCalled();
+    expect(m.buyerSubscription.update).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: "sub-7" }, data: expect.objectContaining({ nextRenewalAt: expect.any(Date) }) }),
+    );
+  });
+});
+
 describe("renewalsService.evaluatePriceChange", () => {
   it("auto-approves a price change within the buyer's limit", async () => {
     m.renewal.findUniqueOrThrow.mockResolvedValue({
@@ -376,7 +471,9 @@ describe("renewalsService.generateDueRenewals", () => {
       { id: "sub-2", nextRenewalAt: new Date("2026-06-01T00:00:00.000Z"), offer: { renewalsPaused: false } },
     ] as never);
     m.buyerSubscription.findUniqueOrThrow.mockResolvedValue({
-      id: "sub-2", items: [{ productId: "p1", quantity: 1, product: { currency: "GBP", priceInCents: 500, isActive: true, stock: 10 } }],
+      id: "sub-2",
+      offer: { discountPercent: null, products: [] },
+      items: [{ productId: "p1", quantity: 1, product: { currency: "GBP", priceInCents: 500, isActive: true, stock: 10 } }],
     } as never);
     m.renewalItem.findMany.mockResolvedValue([] as never);
     m.renewal.create.mockResolvedValue({ id: "renewal-x", items: [] } as never);

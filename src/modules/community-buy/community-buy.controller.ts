@@ -451,6 +451,21 @@ export async function adminListRefunds(_request: Request, response: Response): P
   response.json({ items: await campaignContributionsService.listRefundsForAdmin() });
 }
 
+export async function adminRequeryRefund(request: Request, response: Response): Promise<void> {
+  const adminId = requireUserId(request);
+  const refund = await campaignContributionsService.requeryRefund(requireIdParam(request));
+  await recordAudit({ actorId: adminId, action: "community_refund.requery", entityType: "CampaignRefund", entityId: refund.id, metadata: { status: refund.status } });
+  response.json({ refund });
+}
+
+export async function adminEscalateRefund(request: Request, response: Response): Promise<void> {
+  const adminId = requireUserId(request);
+  const { note } = request.body ?? {};
+  const supportCase = await campaignContributionsService.escalateRefund(adminId, requireIdParam(request), typeof note === "string" ? note : undefined);
+  await recordAudit({ actorId: adminId, action: "community_refund.escalate", entityType: "CampaignRefund", entityId: requireIdParam(request), metadata: { supportCaseId: supportCase.id } });
+  response.json({ supportCase });
+}
+
 export async function adminListExtensionRequests(_request: Request, response: Response): Promise<void> {
   response.json({ items: await communityCampaignsService.listExtensionRequestsForAdmin() });
 }

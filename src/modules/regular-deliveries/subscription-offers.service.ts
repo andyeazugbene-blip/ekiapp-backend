@@ -1,7 +1,8 @@
-import type { SubscriptionFrequency } from "@prisma/client";
+import type { FulfilmentMethod, OfferSubstitutionMode, SubscriptionFrequency } from "@prisma/client";
 
 import { prisma } from "../../lib/prisma";
 import { AppError } from "../../shared/errors/app-error";
+import { notificationsService } from "../notifications/notifications.service";
 
 export interface UpsertSubscriptionOfferInput {
   title: string;
@@ -9,13 +10,37 @@ export interface UpsertSubscriptionOfferInput {
   productIds: string[];
   frequencies: SubscriptionFrequency[];
   substitutionPolicy?: string;
+  substitutionMode?: OfferSubstitutionMode;
   renewalCutoffHours?: number;
+  fulfilmentMethod?: FulfilmentMethod;
+  preparationHours?: number | null;
+  discountPercent?: number | null;
+  maxPriceIncreaseApprovalBps?: number | null;
+}
+
+function validatePricingAndFulfilment(input: Partial<UpsertSubscriptionOfferInput>) {
+  if (input.discountPercent !== undefined && input.discountPercent !== null) {
+    if (!Number.isFinite(input.discountPercent) || input.discountPercent < 0 || input.discountPercent > 90) {
+      throw new AppError("Discount percentage must be between 0 and 90", 400);
+    }
+  }
+  if (input.maxPriceIncreaseApprovalBps !== undefined && input.maxPriceIncreaseApprovalBps !== null) {
+    if (!Number.isFinite(input.maxPriceIncreaseApprovalBps) || input.maxPriceIncreaseApprovalBps < 0 || input.maxPriceIncreaseApprovalBps > 10000) {
+      throw new AppError("Maximum price increase must be between 0 and 10000 basis points (100%)", 400);
+    }
+  }
+  if (input.preparationHours !== undefined && input.preparationHours !== null) {
+    if (!Number.isFinite(input.preparationHours) || input.preparationHours < 0) {
+      throw new AppError("Preparation time must be a positive number of hours", 400);
+    }
+  }
 }
 
 export const subscriptionOffersService = {
   async create(vendorId: string, input: UpsertSubscriptionOfferInput) {
     if (input.productIds.length === 0) throw new AppError("At least one product is required", 400);
     if (input.frequencies.length === 0) throw new AppError("At least one frequency is required", 400);
+    validatePricingAndFulfilment(input);
 
     const products = await prisma.product.findMany({
       where: { id: { in: input.productIds }, vendorId },
@@ -32,7 +57,12 @@ export const subscriptionOffersService = {
         description: input.description,
         frequencies: input.frequencies,
         substitutionPolicy: input.substitutionPolicy,
+        substitutionMode: input.substitutionMode ?? "ASK_BUYER",
         renewalCutoffHours: input.renewalCutoffHours ?? 24,
+        fulfilmentMethod: input.fulfilmentMethod ?? "DELIVERY",
+        preparationHours: input.preparationHours,
+        discountPercent: input.discountPercent,
+        maxPriceIncreaseApprovalBps: input.maxPriceIncreaseApprovalBps,
         products: { create: input.productIds.map((productId) => ({ productId })) },
       },
       include: { products: { include: { product: true } } },
@@ -42,6 +72,7 @@ export const subscriptionOffersService = {
   async update(vendorId: string, offerId: string, input: Partial<UpsertSubscriptionOfferInput>) {
     const offer = await prisma.subscriptionOffer.findUnique({ where: { id: offerId } });
     if (!offer || offer.vendorId !== vendorId) throw new AppError("Offer not found", 404);
+    validatePricingAndFulfilment(input);
 
     if (input.productIds) {
       const products = await prisma.product.findMany({
@@ -64,7 +95,12 @@ export const subscriptionOffersService = {
         ...(input.description !== undefined && { description: input.description }),
         ...(input.frequencies !== undefined && { frequencies: input.frequencies }),
         ...(input.substitutionPolicy !== undefined && { substitutionPolicy: input.substitutionPolicy }),
+        ...(input.substitutionMode !== undefined && { substitutionMode: input.substitutionMode }),
         ...(input.renewalCutoffHours !== undefined && { renewalCutoffHours: input.renewalCutoffHours }),
+        ...(input.fulfilmentMethod !== undefined && { fulfilmentMethod: input.fulfilmentMethod }),
+        ...(input.preparationHours !== undefined && { preparationHours: input.preparationHours }),
+        ...(input.discountPercent !== undefined && { discountPercent: input.discountPercent }),
+        ...(input.maxPriceIncreaseApprovalBps !== undefined && { maxPriceIncreaseApprovalBps: input.maxPriceIncreaseApprovalBps }),
       },
       include: { products: { include: { product: true } } },
     });
@@ -94,6 +130,56 @@ export const subscriptionOffersService = {
     const offer = await prisma.subscriptionOffer.findUnique({ where: { id: offerId } });
     if (!offer || offer.vendorId !== vendorId) throw new AppError("Offer not found", 404);
     return prisma.subscriptionOffer.update({ where: { id: offerId }, data: { renewalsPaused: false, renewalsPausedAt: null } });
+  },
+
+  /**
+   * spec §31 "Pause Product Renewals" — stops just this one product from
+   * being included in any subscriber's future renewals (createRenewalForCycle
+   * in renewals.service.ts filters paused products out at render time), and
+   * notifies buyers who currently have it in an active subscription. The
+   * rest of each affected subscription — its other items, frequency, next
+   * renewal date — is untouched.
+   */
+  async pauseProduct(vendorId: string, offerId: string, productId: string, reason?: string, expectedReturnAt?: Date) {
+    const offer = await prisma.subscriptionOffer.findUnique({ where: { id: offerId } });
+    if (!offer || offer.vendorId !== vendorId) throw new AppError("Offer not found", 404);
+    const link = await prisma.subscriptionOfferProduct.findUnique({ where: { offerId_productId: { offerId, productId } } });
+    if (!link) throw new AppError("Product is not part of this offer", 404);
+
+    const [product, updated] = await Promise.all([
+      prisma.product.findUnique({ where: { id: productId }, select: { title: true } }),
+      prisma.subscriptionOfferProduct.update({
+        where: { offerId_productId: { offerId, productId } },
+        data: { pausedAt: new Date(), pauseReason: reason, pauseExpectedReturnAt: expectedReturnAt },
+      }),
+    ]);
+
+    const affected = await prisma.subscriptionItem.findMany({
+      where: { productId, subscription: { offerId, status: "ACTIVE" } },
+      select: { subscription: { select: { buyerId: true } } },
+      distinct: ["subscriptionId"],
+    });
+    for (const { subscription } of affected) {
+      await notificationsService.enqueue({
+        userId: subscription.buyerId,
+        type: "SUBSCRIPTION_UPDATE",
+        title: "A product in your Regular Delivery is paused",
+        body: `${product?.title ?? "A product"} in ${offer.title} won't be included in your next renewal${reason ? `: ${reason}` : "."}`,
+        data: { type: "subscription_update", event: "product_paused", offerId, productId },
+      });
+    }
+    return updated;
+  },
+
+  async resumeProduct(vendorId: string, offerId: string, productId: string) {
+    const offer = await prisma.subscriptionOffer.findUnique({ where: { id: offerId } });
+    if (!offer || offer.vendorId !== vendorId) throw new AppError("Offer not found", 404);
+    const link = await prisma.subscriptionOfferProduct.findUnique({ where: { offerId_productId: { offerId, productId } } });
+    if (!link) throw new AppError("Product is not part of this offer", 404);
+    return prisma.subscriptionOfferProduct.update({
+      where: { offerId_productId: { offerId, productId } },
+      data: { pausedAt: null, pauseReason: null, pauseExpectedReturnAt: null },
+    });
   },
 
   async listForVendor(vendorId: string) {

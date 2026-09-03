@@ -60,6 +60,10 @@ export const buyerSubscriptionsService = {
         deliveryAddressId: input.deliveryAddressId,
         paymentMethodId: input.paymentMethodId,
         nextRenewalAt: nextCycleDate(input.frequency),
+        // spec §22 — the vendor's configured approval threshold, if any,
+        // becomes this subscription's threshold; null leaves the renewal
+        // evaluator on its own default (renewals.service.ts).
+        priceChangeApprovalLimitBps: offer.maxPriceIncreaseApprovalBps ?? undefined,
         items: { create: input.items },
       },
       include: { items: { include: { product: true } }, offer: true },

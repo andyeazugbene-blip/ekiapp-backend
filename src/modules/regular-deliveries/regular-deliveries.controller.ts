@@ -69,6 +69,31 @@ export async function resumeSubscriptionOfferRenewals(request: Request, response
   response.json({ offer });
 }
 
+function requireProductIdParam(request: Request): string {
+  const id = request.params.productId;
+  if (typeof id !== "string" || id.length === 0) throw new AppError("Invalid productId", 400);
+  return id;
+}
+
+export async function pauseSubscriptionOfferProduct(request: Request, response: Response): Promise<void> {
+  const vendorId = await requireVendorId(requireUserId(request));
+  const { reason, expectedReturnAt } = request.body ?? {};
+  const link = await subscriptionOffersService.pauseProduct(
+    vendorId,
+    requireIdParam(request),
+    requireProductIdParam(request),
+    typeof reason === "string" ? reason : undefined,
+    typeof expectedReturnAt === "string" ? new Date(expectedReturnAt) : undefined,
+  );
+  response.json({ product: link });
+}
+
+export async function resumeSubscriptionOfferProduct(request: Request, response: Response): Promise<void> {
+  const vendorId = await requireVendorId(requireUserId(request));
+  const link = await subscriptionOffersService.resumeProduct(vendorId, requireIdParam(request), requireProductIdParam(request));
+  response.json({ product: link });
+}
+
 export async function getPublicSubscriptionOffer(request: Request, response: Response): Promise<void> {
   const offer = await subscriptionOffersService.getPublic(requireIdParam(request));
   response.json({ offer });
