@@ -128,8 +128,11 @@ export const buyerSubscriptionsService = {
 
     // If a renewal already exists for that cycle (scheduler ran first), mark
     // it skipped instead of silently leaving an orphaned scheduled renewal.
+    // READY_FOR_PAYMENT is included — without it, a renewal already cleared
+    // for payment stayed chargeable, so a buyer who skipped could still be
+    // charged by the next sweep.
     await prisma.renewal.updateMany({
-      where: { subscriptionId: id, cycleDate: sub.nextRenewalAt, status: { in: ["SCHEDULED", "AWAITING_STOCK", "AWAITING_PRICE_APPROVAL"] } },
+      where: { subscriptionId: id, cycleDate: sub.nextRenewalAt, status: { in: ["SCHEDULED", "AWAITING_STOCK", "AWAITING_PRICE_APPROVAL", "READY_FOR_PAYMENT"] } },
       data: { status: "SKIPPED" },
     });
 

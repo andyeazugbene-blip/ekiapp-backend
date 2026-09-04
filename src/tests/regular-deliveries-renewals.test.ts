@@ -4,7 +4,7 @@ vi.mock("../lib/prisma", () => ({
   prisma: {
     buyerSubscription: { findMany: vi.fn(), findUniqueOrThrow: vi.fn(), update: vi.fn() },
     renewal: {
-      create: vi.fn(), update: vi.fn(), findUniqueOrThrow: vi.fn(), findUnique: vi.fn(), findMany: vi.fn(),
+      create: vi.fn(), update: vi.fn(), updateMany: vi.fn(), findUniqueOrThrow: vi.fn(), findUnique: vi.fn(), findMany: vi.fn(),
     },
     renewalItem: { findMany: vi.fn(), update: vi.fn() },
     priceChangeRequest: { create: vi.fn(), update: vi.fn() },
@@ -238,6 +238,7 @@ describe("renewalsService.attemptPayment", () => {
     currency: "GBP",
     items: [{ currentUnitPrice: 1500, quantity: 2 }],
     subscription: {
+      status: "ACTIVE",
       buyerId: "buyer-1",
       frequency: "WEEKLY",
       paymentMethod: { stripeCustomerId: "cus_1", stripePaymentMethodId: "pm_1" },
@@ -246,6 +247,7 @@ describe("renewalsService.attemptPayment", () => {
 
   it("charges off-session with an idempotency key derived from renewalId + attempt number, then hands off to order conversion", async () => {
     m.renewal.findUniqueOrThrow.mockResolvedValue(baseRenewal as never);
+    m.renewal.updateMany.mockResolvedValue({ count: 1 } as never);
     m.subscriptionPaymentAttempt.count.mockResolvedValue(0);
     m.subscriptionPaymentAttempt.create.mockResolvedValue({ id: "attempt-1" } as never);
     mCreateIntent.mockResolvedValue({ id: "pi_1", status: "succeeded" } as never);
@@ -272,6 +274,7 @@ describe("renewalsService.attemptPayment", () => {
 
   it("marks the attempt and renewal FAILED, and triggers payment recovery, when Stripe declines", async () => {
     m.renewal.findUniqueOrThrow.mockResolvedValue(baseRenewal as never);
+    m.renewal.updateMany.mockResolvedValue({ count: 1 } as never);
     m.subscriptionPaymentAttempt.count.mockResolvedValue(1); // this will be attempt #2
     m.subscriptionPaymentAttempt.create.mockResolvedValue({ id: "attempt-2" } as never);
     mCreateIntent.mockRejectedValue(Object.assign(new Error("Your card was declined"), { code: "card_declined" }));
@@ -296,6 +299,7 @@ describe("renewalsService.attemptPayment", () => {
 
   it("cancels the renewal instead of charging once the retry limit is reached", async () => {
     m.renewal.findUniqueOrThrow.mockResolvedValue({ ...baseRenewal, status: "PAYMENT_FAILED" } as never);
+    m.renewal.updateMany.mockResolvedValue({ count: 1 } as never);
     m.subscriptionPaymentAttempt.count.mockResolvedValue(3); // MAX_PAYMENT_ATTEMPTS already used
     m.renewal.update.mockResolvedValue({ id: "renewal-6", subscriptionId: "sub-1" } as never);
     m.buyerSubscription.update.mockResolvedValue({ buyerId: "buyer-1" } as never);
@@ -314,6 +318,7 @@ describe("renewalsService.attemptPayment", () => {
     // amount. This runs unattended from the cron sweep, so it must fail the
     // same way a real card decline does, never submit a mismatched charge.
     m.renewal.findUniqueOrThrow.mockResolvedValue({ ...baseRenewal, currency: "GHS" } as never);
+    m.renewal.updateMany.mockResolvedValue({ count: 1 } as never);
     m.subscriptionPaymentAttempt.count.mockResolvedValue(0);
     m.subscriptionPaymentAttempt.create.mockResolvedValue({ id: "attempt-ghs" } as never);
     m.buyerSubscription.update.mockResolvedValue({ buyerId: "buyer-1" } as never);

@@ -10,8 +10,10 @@ import { communityCampaignsService } from "../community-buy/community-campaigns.
 import { campaignContributionsService } from "../community-buy/campaign-contributions.service";
 import { escrowService } from "../paystack/escrow.service";
 import { escrowHealthService } from "../paystack/escrow-health.service";
+import { reconciliationService } from "../ledger/reconciliation.service";
 import { sendEmail } from "../../lib/email";
 import { emailTemplates } from "../../lib/email-templates";
+import { enqueueEmail } from "../../lib/email-queue";
 
 export const internalRouter = Router();
 
@@ -186,6 +188,41 @@ async function runStockAlerts() {
   return { vendorsNotified: sent, lowStockProducts: lowStockProducts.length };
 }
 
+// Daily Stripe reconciliation — the architecture doc requires this to run
+// on a real schedule, not admin-triggered-only. Covers the previous full
+// UTC day; ReconciliationRun/ReconciliationDifference already existed with
+// zero automatic writer before this. Paystack is intentionally excluded —
+// its provider adapter still throws PROVIDER_NOT_IMPLEMENTED for
+// reconcileTransactions (Stripe is the sole launch provider).
+async function runReconciliationSweep() {
+  const periodEnd = new Date();
+  periodEnd.setUTCHours(0, 0, 0, 0);
+  const periodStart = new Date(periodEnd.getTime() - 24 * 60 * 60 * 1000);
+
+  const run = await reconciliationService.runReconciliation("stripe", periodStart, periodEnd);
+
+  const openDifferences = run.differences?.filter((d) => d.status === "OPEN") ?? [];
+  if (openDifferences.length > 0) {
+    const opsAlertEmail = process.env.OPS_ALERT_EMAIL;
+    if (opsAlertEmail) {
+      await enqueueEmail({
+        to: opsAlertEmail,
+        subject: `⚠️ Reconciliation found ${openDifferences.length} difference(s) for ${periodStart.toISOString().slice(0, 10)}`,
+        html: `
+          <h2>Daily Stripe Reconciliation</h2>
+          <p>Run ${run.id} for ${periodStart.toISOString()} – ${periodEnd.toISOString()} found ${openDifferences.length} unresolved difference(s).</p>
+          <ul>
+            ${openDifferences.map((d) => `<li>${d.kind} · ${d.businessRefType} ${d.businessRefId} · provider ref ${d.providerRef} · expected ${d.expectedAmount ?? "—"} · actual ${d.actualAmount ?? "—"}</li>`).join("")}
+          </ul>
+          <p>Review in Admin → Ledger Reconciliation.</p>
+        `,
+      });
+    }
+  }
+
+  return { runId: run.id, status: run.status, totalChecked: run.totalChecked, differencesFound: run.differences?.length ?? 0 };
+}
+
 // ─── HTTP handlers ──────────────────────────────────────────────────────
 // GET for Vercel Cron (which only issues GET requests); POST kept for any
 // external/manual trigger using the original x-job-secret header.
@@ -214,6 +251,7 @@ const jobs: [string, string, () => Promise<Record<string, unknown>>][] = [
   ["escrow-balance-check", "escrow balance check", runEscrowBalanceCheck],
   ["cart-cleanup", "cart cleanup", runCartCleanup],
   ["stock-alerts", "low-stock vendor alerts", runStockAlerts],
+  ["reconciliation-sweep", "daily Stripe reconciliation", runReconciliationSweep],
 ];
 
 for (const [path, name, run] of jobs) {

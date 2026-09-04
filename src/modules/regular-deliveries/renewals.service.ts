@@ -303,8 +303,33 @@ export const renewalsService = {
     if (renewal.status !== "READY_FOR_PAYMENT" && renewal.status !== "PAYMENT_FAILED") {
       throw new AppError("Renewal is not ready for payment", 409);
     }
+    // A buyer who paused their subscription after this renewal was already
+    // cleared for payment must not still be charged for it — pause() only
+    // flips the subscription record; it doesn't touch an in-flight renewal.
+    if (renewal.subscription.status !== "ACTIVE") {
+      throw new AppError(`Subscription is ${renewal.subscription.status.toLowerCase()}, not active — payment skipped`, 409);
+    }
     const paymentMethod = renewal.subscription.paymentMethod;
     if (!paymentMethod) throw new AppError("No saved payment method on this subscription", 409);
+
+    const subtotal = renewal.items.reduce((sum, i) => sum + i.currentUnitPrice * i.quantity, 0);
+
+    // Atomic claim — mirrors the same fix applied to Community Buy's
+    // attemptCharge(). Without this, two concurrent triggers (e.g. an
+    // overlapping cron sweep and a buyer-initiated retryPayment) can both
+    // pass the status guard above, then race to compute a DIFFERENT
+    // attemptNumber each — which means a DIFFERENT Stripe idempotency key
+    // each, so Stripe does not deduplicate them and the buyer's card can
+    // genuinely be charged twice. Only one concurrent caller can win this
+    // guarded transition; the loser returns immediately instead of racing
+    // to Stripe.
+    const claim = await prisma.renewal.updateMany({
+      where: { id: renewalId, status: { in: ["READY_FOR_PAYMENT", "PAYMENT_FAILED"] } },
+      data: { status: "PAYMENT_PROCESSING", subtotalAmount: subtotal },
+    });
+    if (claim.count !== 1) {
+      return prisma.renewal.findUnique({ where: { id: renewalId } });
+    }
 
     const priorAttempts = await prisma.subscriptionPaymentAttempt.count({ where: { renewalId } });
     if (priorAttempts >= MAX_PAYMENT_ATTEMPTS) {
@@ -314,12 +339,9 @@ export const renewalsService = {
     const attemptNumber = priorAttempts + 1;
     const idempotencyKey = `${renewalId}:${attemptNumber}`;
 
-    const subtotal = renewal.items.reduce((sum, i) => sum + i.currentUnitPrice * i.quantity, 0);
-
     const attempt = await prisma.subscriptionPaymentAttempt.create({
       data: { renewalId, attemptNumber, status: "PENDING", idempotencyKey },
     });
-    await prisma.renewal.update({ where: { id: renewalId }, data: { status: "PAYMENT_PROCESSING", subtotalAmount: subtotal } });
 
     let intent: Stripe.PaymentIntent;
     try {
