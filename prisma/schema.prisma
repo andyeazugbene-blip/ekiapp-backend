@@ -627,6 +627,85 @@ model WebhookEvent {
   @@index([orderId])
 }
 
+enum FulfilmentAlertReason {
+  // A real business date already on CampaignFulfilment.estimatedReadyAt
+  // has passed while prep still isn't done — no invented threshold.
+  PAST_ESTIMATED_READY_DATE
+  // No estimatedReadyAt was ever set, so the only signal available is
+  // "no progress for N hours" — real, but only ever fires when an admin
+  // has configured FULFILMENT_STALE_THRESHOLD_HOURS; see fulfilment-delay
+  // .service.ts. Never an invented default.
+  STALE_NO_PROGRESS
+}
+
+enum FulfilmentAlertStatus {
+  OPEN
+  CONTACTED
+  RESOLVED
+  ESCALATED
+}
+
+/** Admin supplier-fulfilment delay queue (architecture gap closure) — real findings from actual CampaignFulfilment rows. */
+model SupplierFulfilmentAlert {
+  id           String                @id @default(cuid())
+  campaignId   String
+  campaign     CommunityCampaign     @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  reason       FulfilmentAlertReason
+  dedupeKey    String                @unique
+  evidence     Json
+  status       FulfilmentAlertStatus @default(OPEN)
+  note         String?
+  contactedAt  DateTime?
+  resolvedById String?
+  resolvedAt   DateTime?
+  lastSeenAt   DateTime              @default(now())
+  createdAt    DateTime              @default(now())
+  updatedAt    DateTime              @updatedAt
+
+  @@index([status, createdAt])
+  @@index([campaignId])
+}
+
+enum PaymentAnomalyKind {
+  DUPLICATE_PROVIDER_REF
+  MULTIPLE_SUCCESSFUL_ATTEMPTS
+  MISSING_LEDGER_ENTRY
+}
+
+enum PaymentAnomalyStatus {
+  OPEN
+  REVIEWED
+  ESCALATED
+}
+
+/**
+ * Admin duplicate-payment / financial-inconsistency queue (architecture
+ * gap closure) — real findings from actual Payment/Checkout/
+ * SubscriptionPaymentAttempt/CampaignChargeAttempt/LedgerEntry rows, never
+ * fabricated. dedupeKey is a stable, deterministic key per finding (e.g.
+ * "DUPLICATE_PROVIDER_REF:pi_xxx") so re-running the scan updates the same
+ * row's evidence instead of creating duplicates, and a reviewed finding
+ * stays reviewed across re-scans unless explicitly reopened.
+ */
+model PaymentAnomaly {
+  id              String               @id @default(cuid())
+  kind            PaymentAnomalyKind
+  dedupeKey       String               @unique
+  businessRefType String
+  businessRefId   String
+  evidence        Json
+  status          PaymentAnomalyStatus @default(OPEN)
+  reviewedById    String?
+  reviewedAt      DateTime?
+  note            String?
+  lastSeenAt      DateTime             @default(now())
+  createdAt       DateTime             @default(now())
+  updatedAt       DateTime             @updatedAt
+
+  @@index([status, createdAt])
+  @@index([kind])
+}
+
 model PasswordResetToken {
   id        String    @id @default(cuid())
   userId    String
@@ -765,13 +844,26 @@ model BuyerAddress {
 // ─── Phase 4: Audit Log ─────────────────────────────────────────────────────
 
 model AuditLog {
-  id         String   @id @default(cuid())
-  actorId    String
-  action     String
-  entityType String
-  entityId   String?
-  metadata   Json?
-  createdAt  DateTime @default(now())
+  id             String   @id @default(cuid())
+  actorId        String
+  action         String
+  entityType     String
+  entityId       String?
+  metadata       Json?
+  // Architecture-mandated audit fields (gap closure) — all nullable
+  // because they're only populated where the calling code genuinely has
+  // the information; a null here means "not captured for this call",
+  // never a fabricated value. permissionUsed is set automatically by
+  // requireAdminPermission (see middlewares/require-admin-permission.ts);
+  // ipAddress is set automatically by recordAudit() when a request is
+  // passed. beforeState/afterState/reason remain call-site-specific —
+  // only meaningful for the specific mutations that snapshot them.
+  permissionUsed String?
+  beforeState    Json?
+  afterState     Json?
+  reason         String?
+  ipAddress      String?
+  createdAt      DateTime @default(now())
 
   @@index([actorId, createdAt])
   @@index([entityType, entityId])
@@ -1997,6 +2089,7 @@ model CommunityCampaign {
   fulfilment        CampaignFulfilment?
   supportCases      CommunityBuySupportCase[]
   updates           CampaignUpdate[]
+  fulfilmentAlerts  SupplierFulfilmentAlert[]
   createdAt     DateTime               @default(now())
   updatedAt     DateTime               @updatedAt
 

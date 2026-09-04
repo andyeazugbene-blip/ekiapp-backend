@@ -11,6 +11,8 @@ import { campaignContributionsService } from "../community-buy/campaign-contribu
 import { escrowService } from "../paystack/escrow.service";
 import { escrowHealthService } from "../paystack/escrow-health.service";
 import { reconciliationService } from "../ledger/reconciliation.service";
+import { paymentAnomalyService } from "../ledger/payment-anomaly.service";
+import { fulfilmentDelayService } from "../community-buy/fulfilment-delay.service";
 import { sendEmail } from "../../lib/email";
 import { emailTemplates } from "../../lib/email-templates";
 import { enqueueEmail } from "../../lib/email-queue";
@@ -224,6 +226,18 @@ async function runReconciliationSweep() {
   return { runId: run.id, status: run.status, totalChecked: run.totalChecked, differencesFound: run.differences?.length ?? 0 };
 }
 
+// Real-data-only duplicate-payment / financial-inconsistency scan
+// (architecture doc §15.3 / §19 "Duplicate-payment risk").
+async function runPaymentAnomalyScan() {
+  return paymentAnomalyService.scan();
+}
+
+// Real-data-only supplier-fulfilment delay scan (architecture doc §15.3 /
+// §19 "Supplier fulfilment delayed").
+async function runFulfilmentDelayScan() {
+  return fulfilmentDelayService.scan();
+}
+
 // ─── HTTP handlers ──────────────────────────────────────────────────────
 // GET for Vercel Cron (which only issues GET requests); POST kept for any
 // external/manual trigger using the original x-job-secret header.
@@ -253,6 +267,8 @@ const jobs: [string, string, () => Promise<Record<string, unknown>>][] = [
   ["cart-cleanup", "cart cleanup", runCartCleanup],
   ["stock-alerts", "low-stock vendor alerts", runStockAlerts],
   ["reconciliation-sweep", "daily Stripe reconciliation", runReconciliationSweep],
+  ["payment-anomaly-scan", "duplicate-payment / financial-inconsistency scan", runPaymentAnomalyScan],
+  ["fulfilment-delay-scan", "supplier-fulfilment delay scan", runFulfilmentDelayScan],
 ];
 
 for (const [path, name, run] of jobs) {

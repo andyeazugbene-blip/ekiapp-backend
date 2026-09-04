@@ -68,6 +68,21 @@ function getPriceApprovalTimeoutHours(): number | null {
   return hours;
 }
 
+function getFulfilmentStaleThresholdHours(): number | null {
+  // Fallback-only signal for a CampaignFulfilment with no
+  // estimatedReadyAt set at all — the primary delay check compares
+  // against that real business date instead. No client-approved
+  // "how long is too long with no progress" value exists, so this stays
+  // a genuine no-op (CLIENT CONFIGURATION REQUIRED) until set.
+  const raw = process.env.FULFILMENT_STALE_THRESHOLD_HOURS;
+  if (!raw) return null;
+  const hours = Number(raw);
+  if (!Number.isFinite(hours) || hours <= 0) {
+    throw new Error("FULFILMENT_STALE_THRESHOLD_HOURS must be a positive number of hours");
+  }
+  return hours;
+}
+
 export const env = {
   nodeEnv: process.env.NODE_ENV ?? "development",
   port: getPort(),
@@ -93,4 +108,5 @@ export const env = {
   ].filter((v): v is string => Boolean(v && v.trim())),
   appleBundleId: process.env.APPLE_BUNDLE_ID ?? "",
   priceApprovalTimeoutHours: getPriceApprovalTimeoutHours(),
+  fulfilmentStaleThresholdHours: getFulfilmentStaleThresholdHours(),
 } as const;

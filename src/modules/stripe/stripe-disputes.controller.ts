@@ -33,7 +33,8 @@ export async function adminReviewStripeDispute(request: Request, response: Respo
     action: "stripe_dispute.reviewed",
     entityType: "StripeDispute",
     entityId: id,
-    metadata: { note: note.trim() },
+    reason: note.trim(),
+    request,
   });
   response.status(200).json({ dispute });
 }

@@ -36,7 +36,19 @@ import {
   adminListOpenDifferences,
   adminRunReconciliation,
   adminResolveReconciliationDifference,
+  adminScanPaymentAnomalies,
+  adminListPaymentAnomalies,
+  adminReviewPaymentAnomaly,
+  adminEscalatePaymentAnomaly,
 } from "../ledger/ledger.controller";
+import {
+  adminScanFulfilmentDelays,
+  adminListFulfilmentDelays,
+  adminAddFulfilmentDelayNote,
+  adminContactSupplierForDelay,
+  adminResolveFulfilmentDelay,
+  adminEscalateFulfilmentDelay,
+} from "../community-buy/fulfilment-delay.controller";
 import {
   createPromoCode as adminCreatePromoCode,
   listPromoCodes as adminListPromoCodes,
@@ -275,6 +287,20 @@ adminRouter.get("/ledger/reconciliation-runs/:id", asyncHandler(requireAdminPerm
 adminRouter.post("/ledger/reconciliation-runs", asyncHandler(requireAdminPermission("payments.mutate")), asyncHandler(adminRunReconciliation));
 adminRouter.get("/ledger/differences", asyncHandler(requireAdminPermission("audit.read")), asyncHandler(adminListOpenDifferences));
 adminRouter.post("/ledger/differences/:id/resolve", asyncHandler(requireAdminPermission("payments.mutate")), asyncHandler(adminResolveReconciliationDifference));
+
+// Duplicate-payment / financial-inconsistency queue (architecture doc §15.3).
+adminRouter.post("/payment-anomalies/scan", asyncHandler(requireAdminPermission("reports.mutate")), asyncHandler(adminScanPaymentAnomalies));
+adminRouter.get("/payment-anomalies", asyncHandler(requireAdminPermission("reports.read")), asyncHandler(adminListPaymentAnomalies));
+adminRouter.post("/payment-anomalies/:id/review", asyncHandler(requireAdminPermission("reports.mutate")), asyncHandler(adminReviewPaymentAnomaly));
+adminRouter.post("/payment-anomalies/:id/escalate", asyncHandler(requireAdminPermission("reports.mutate")), asyncHandler(adminEscalatePaymentAnomaly));
+
+// Supplier-fulfilment delay queue (architecture doc §15.3).
+adminRouter.post("/fulfilment-delays/scan", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(adminScanFulfilmentDelays));
+adminRouter.get("/fulfilment-delays", asyncHandler(requireAdminPermission("community_buy.read")), asyncHandler(adminListFulfilmentDelays));
+adminRouter.post("/fulfilment-delays/:id/note", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(adminAddFulfilmentDelayNote));
+adminRouter.post("/fulfilment-delays/:id/contact-supplier", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(adminContactSupplierForDelay));
+adminRouter.post("/fulfilment-delays/:id/resolve", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(adminResolveFulfilmentDelay));
+adminRouter.post("/fulfilment-delays/:id/escalate", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(adminEscalateFulfilmentDelay));
 adminRouter.get("/community-buy/organisers", asyncHandler(requireAdminPermission("community_buy.read")), asyncHandler(adminListVerifiedOrganisers));
 adminRouter.post("/community-buy/organisers/:id/restrict", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(adminRestrictOrganiser));
 adminRouter.post("/community-buy/organisers/:id/unrestrict", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(adminUnrestrictOrganiser));

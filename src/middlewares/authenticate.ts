@@ -13,6 +13,10 @@ declare global {
         role: UserRole;
         email: string;
       };
+      // Set by requireAdminPermission — lets recordAudit() capture which
+      // permission actually gated a mutation, without every call site
+      // having to pass it explicitly.
+      usedPermission?: string;
     }
   }
 }

@@ -1,4 +1,5 @@
 import type { Vendor } from "@prisma/client";
+import type { Request } from "express";
 
 import { env } from "../../config/env";
 import { prisma } from "../../lib/prisma";
@@ -41,6 +42,7 @@ export const adminVendorsService = {
     adminId: string,
     vendorId: string,
     reason?: string,
+    request?: Request,
   ): Promise<Vendor> {
     const vendor = await prisma.vendor.findUnique({ where: { id: vendorId } });
     if (!vendor) {
@@ -70,13 +72,16 @@ export const adminVendorsService = {
       action: "vendor.suspend",
       entityType: "Vendor",
       entityId: vendorId,
-      metadata: { reason },
+      reason,
+      beforeState: { isSuspended: vendor.isSuspended, suspendedReason: vendor.suspendedReason },
+      afterState: { isSuspended: updated.isSuspended, suspendedReason: updated.suspendedReason },
+      request,
     });
 
     return updated;
   },
 
-  async unsuspendVendor(adminId: string, vendorId: string): Promise<Vendor> {
+  async unsuspendVendor(adminId: string, vendorId: string, reason?: string, request?: Request): Promise<Vendor> {
     const vendor = await prisma.vendor.findUnique({ where: { id: vendorId } });
     if (!vendor) {
       throw new AppError("Vendor not found", 404);
@@ -98,6 +103,10 @@ export const adminVendorsService = {
       action: "vendor.unsuspend",
       entityType: "Vendor",
       entityId: vendorId,
+      reason,
+      beforeState: { isSuspended: vendor.isSuspended, suspendedReason: vendor.suspendedReason },
+      afterState: { isSuspended: updated.isSuspended, suspendedReason: updated.suspendedReason },
+      request,
     });
 
     return updated;

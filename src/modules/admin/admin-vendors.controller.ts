@@ -28,14 +28,22 @@ export async function suspendVendor(request: Request, response: Response): Promi
     requireUserId(request),
     requireIdParam(request),
     reason,
+    request,
   );
   response.status(200).json({ vendor });
 }
 
 export async function unsuspendVendor(request: Request, response: Response): Promise<void> {
+  const reason =
+    request.body && typeof request.body === "object" && typeof request.body.reason === "string"
+      ? request.body.reason.trim()
+      : undefined;
+
   const vendor = await adminVendorsService.unsuspendVendor(
     requireUserId(request),
     requireIdParam(request),
+    reason,
+    request,
   );
   response.status(200).json({ vendor });
 }

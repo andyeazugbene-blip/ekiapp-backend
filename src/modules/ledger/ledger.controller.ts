@@ -3,6 +3,7 @@ import type { Request, Response } from "express";
 import { AppError } from "../../shared/errors/app-error";
 import { recordAudit } from "../../shared/utils/audit";
 import { reconciliationService } from "./reconciliation.service";
+import { paymentAnomalyService } from "./payment-anomaly.service";
 
 function requireUserId(request: Request): string {
   if (!request.user) throw new AppError("Unauthorized", 401);
@@ -55,6 +56,38 @@ export async function adminResolveReconciliationDifference(request: Request, res
   if (typeof note !== "string" || !note.trim()) throw new AppError("note is required", 400);
   const id = requireIdParam(request);
   const difference = await reconciliationService.resolveDifference(id, note);
-  await recordAudit({ actorId: adminId, action: "reconciliation_difference.resolve", entityType: "ReconciliationDifference", entityId: id, metadata: { note } });
+  await recordAudit({ actorId: adminId, action: "reconciliation_difference.resolve", entityType: "ReconciliationDifference", entityId: id, reason: note, request });
   response.json({ difference });
+}
+
+// ─── Payment anomaly / duplicate-payment queue (architecture doc §15.3) ───
+
+export async function adminScanPaymentAnomalies(request: Request, response: Response): Promise<void> {
+  const adminId = requireUserId(request);
+  const result = await paymentAnomalyService.scan();
+  await recordAudit({ actorId: adminId, action: "payment_anomaly.scan", entityType: "PaymentAnomaly", metadata: { found: result.found }, request });
+  response.json(result);
+}
+
+export async function adminListPaymentAnomalies(request: Request, response: Response): Promise<void> {
+  const status = typeof request.query.status === "string" ? request.query.status : undefined;
+  response.json({ items: await paymentAnomalyService.list(status) });
+}
+
+export async function adminReviewPaymentAnomaly(request: Request, response: Response): Promise<void> {
+  const adminId = requireUserId(request);
+  const note = request.body?.note;
+  if (typeof note !== "string" || !note.trim()) throw new AppError("note is required", 400);
+  const anomaly = await paymentAnomalyService.markReviewed(requireIdParam(request), adminId, note.trim());
+  await recordAudit({ actorId: adminId, action: "payment_anomaly.reviewed", entityType: "PaymentAnomaly", entityId: anomaly.id, reason: note, request });
+  response.json({ anomaly });
+}
+
+export async function adminEscalatePaymentAnomaly(request: Request, response: Response): Promise<void> {
+  const adminId = requireUserId(request);
+  const note = request.body?.note;
+  if (typeof note !== "string" || !note.trim()) throw new AppError("note is required", 400);
+  const anomaly = await paymentAnomalyService.escalate(requireIdParam(request), adminId, note.trim());
+  await recordAudit({ actorId: adminId, action: "payment_anomaly.escalated", entityType: "PaymentAnomaly", entityId: anomaly.id, reason: note, request });
+  response.json({ anomaly });
 }

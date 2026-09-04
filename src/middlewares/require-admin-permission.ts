@@ -8,6 +8,7 @@ export function requireAdminPermission(permission: string) {
     try {
       if (!request.user) throw new AppError("Unauthorized", 401);
       await adminRolesService.assertPermission(request.user.id, permission);
+      request.usedPermission = permission;
       next();
     } catch (error) {
       next(error);
