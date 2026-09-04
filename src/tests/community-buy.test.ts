@@ -71,14 +71,15 @@ describe("communityCampaignsService.closeDueCampaigns — doc §7 deadline evalu
       { id: "camp-1", minimumShares: 3, goalShares: 6, maximumShares: 6, confirmedShares: 6, pricePerShareMinor: 1000, currency: "GBP", supplierId: "sup-1", title: "Six shares" },
     ] as never);
     m.communityCampaign.findUnique.mockResolvedValue({ id: "camp-1", title: "Six shares", organiser: { userId: "organiser-1" }, participants: [] } as never);
+    m.communityCampaign.updateMany.mockResolvedValue({ count: 1 } as never);
     m.campaignSupplierPayment.findUnique.mockResolvedValue(null);
     m.supplierProfile.findUnique.mockResolvedValue({ vendor: { userId: "supplier-user-1", stripeAccountId: "acct_1" } } as never);
 
     const result = await communityCampaignsService.closeDueCampaigns();
 
     expect(result).toEqual({ closed: 1, succeeded: 1, failed: 0, rescued: 0 });
-    expect(m.communityCampaign.update).toHaveBeenCalledWith(
-      expect.objectContaining({ where: { id: "camp-1" }, data: expect.objectContaining({ status: "FULFILLING", fundingOutcome: "GOAL_REACHED" }) }),
+    expect(m.communityCampaign.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: "camp-1", status: "LIVE" }, data: expect.objectContaining({ status: "FULFILLING", fundingOutcome: "GOAL_REACHED" }) }),
     );
     expect(m.campaignSupplierPayment.create).toHaveBeenCalledWith(
       expect.objectContaining({ data: expect.objectContaining({ amount: 6000, currency: "GBP" }) }),
@@ -90,13 +91,14 @@ describe("communityCampaignsService.closeDueCampaigns — doc §7 deadline evalu
       { id: "camp-2", minimumShares: 3, goalShares: 6, maximumShares: 6, confirmedShares: 3, pricePerShareMinor: 1000, currency: "GBP", supplierId: "sup-1", title: "Three shares" },
     ] as never);
     m.communityCampaign.findUnique.mockResolvedValue({ id: "camp-2", title: "Three shares", organiser: { userId: "organiser-1" }, participants: [] } as never);
+    m.communityCampaign.updateMany.mockResolvedValue({ count: 1 } as never);
     m.campaignSupplierPayment.findUnique.mockResolvedValue(null);
     m.supplierProfile.findUnique.mockResolvedValue({ vendor: { userId: "supplier-user-1", stripeAccountId: "acct_1" } } as never);
 
     const result = await communityCampaignsService.closeDueCampaigns();
 
     expect(result.succeeded).toBe(1);
-    expect(m.communityCampaign.update).toHaveBeenCalledWith(
+    expect(m.communityCampaign.updateMany).toHaveBeenCalledWith(
       expect.objectContaining({ data: expect.objectContaining({ status: "FULFILLING", fundingOutcome: "MINIMUM_REACHED" }) }),
     );
     expect(m.campaignSupplierPayment.create).toHaveBeenCalledWith(
@@ -109,6 +111,7 @@ describe("communityCampaignsService.closeDueCampaigns — doc §7 deadline evalu
       { id: "camp-2b", minimumShares: 3, goalShares: 6, maximumShares: 6, confirmedShares: 5, pricePerShareMinor: 1000, currency: "GBP", supplierId: "sup-1", title: "Five shares" },
     ] as never);
     m.communityCampaign.findUnique.mockResolvedValue({ id: "camp-2b", title: "Five shares", organiser: { userId: "organiser-1" }, participants: [] } as never);
+    m.communityCampaign.updateMany.mockResolvedValue({ count: 1 } as never);
     m.campaignSupplierPayment.findUnique.mockResolvedValue(null);
     m.supplierProfile.findUnique.mockResolvedValue({ vendor: { userId: "supplier-user-1", stripeAccountId: "acct_1" } } as never);
 
@@ -124,12 +127,13 @@ describe("communityCampaignsService.closeDueCampaigns — doc §7 deadline evalu
       { id: "camp-3", minimumShares: 3, goalShares: 6, maximumShares: 6, confirmedShares: 2, rescueDurationMinutes: 2880, pricePerShareMinor: 1000, currency: "GBP", supplierId: "sup-1", title: "Two shares" },
     ] as never);
     m.communityCampaign.findUnique.mockResolvedValue({ id: "camp-3", title: "Two shares", minimumShares: 3, confirmedShares: 2, organiser: { userId: "organiser-1" }, participants: [] } as never);
+    m.communityCampaign.updateMany.mockResolvedValue({ count: 1 } as never);
 
     const result = await communityCampaignsService.closeDueCampaigns();
 
     expect(result).toEqual({ closed: 1, succeeded: 0, failed: 0, rescued: 1 });
-    expect(m.communityCampaign.update).toHaveBeenCalledWith(
-      expect.objectContaining({ where: { id: "camp-3" }, data: expect.objectContaining({ status: "RESCUE_WINDOW" }) }),
+    expect(m.communityCampaign.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: "camp-3", status: "LIVE" }, data: expect.objectContaining({ status: "RESCUE_WINDOW" }) }),
     );
     expect(m.campaignSupplierPayment.create).not.toHaveBeenCalled();
   });
@@ -420,6 +424,7 @@ describe("campaignContributionsService.attemptCharge — the only place a pledge
       participant: { userId: "buyer-1" },
       paymentMethod: { stripeCustomerId: "cus_1", stripePaymentMethodId: "pm_1" },
     } as never);
+    m.campaignContribution.updateMany.mockResolvedValueOnce({ count: 1 } as never);
     m.campaignChargeAttempt.count.mockResolvedValueOnce(0 as never);
     m.campaignChargeAttempt.create.mockResolvedValueOnce({ id: "attempt-1" } as never);
     vi.mocked(stripe.paymentIntents.create).mockResolvedValueOnce({ id: "pi_success_1", status: "succeeded" } as never);
@@ -458,6 +463,7 @@ describe("campaignContributionsService.attemptCharge — the only place a pledge
       participant: { userId: "buyer-2" },
       paymentMethod: { stripeCustomerId: "cus_2", stripePaymentMethodId: "pm_2" },
     } as never);
+    m.campaignContribution.updateMany.mockResolvedValueOnce({ count: 1 } as never);
     m.campaignChargeAttempt.count.mockResolvedValueOnce(0 as never);
     m.campaignChargeAttempt.create.mockResolvedValueOnce({ id: "attempt-2" } as never);
     vi.mocked(stripe.paymentIntents.create).mockRejectedValueOnce(Object.assign(new Error("Your card was declined."), { code: "card_declined" }));
@@ -475,6 +481,7 @@ describe("campaignContributionsService.attemptCharge — the only place a pledge
       participant: { userId: "buyer-3" },
       paymentMethod: { stripeCustomerId: "cus_3", stripePaymentMethodId: "pm_3" },
     } as never);
+    m.campaignContribution.updateMany.mockResolvedValueOnce({ count: 1 } as never);
     m.campaignChargeAttempt.count.mockResolvedValueOnce(3 as never);
     m.campaignContribution.findUniqueOrThrow.mockResolvedValueOnce({ id: "contrib-33", status: "CHARGE_FAILED" } as never);
 
@@ -527,6 +534,7 @@ describe("campaignContributionsService.chargeAllPledgesForCampaign — client te
       } as never)
       .mockResolvedValueOnce({ id: "contrib-41", status: "CHARGE_FAILED" } as never);
 
+    m.campaignContribution.updateMany.mockResolvedValueOnce({ count: 1 } as never);
     m.campaignChargeAttempt.count.mockResolvedValueOnce(0 as never);
     m.campaignChargeAttempt.create.mockResolvedValueOnce({ id: "attempt-40" } as never);
     vi.mocked(stripe.paymentIntents.create).mockResolvedValueOnce({ id: "pi_40", status: "succeeded" } as never);

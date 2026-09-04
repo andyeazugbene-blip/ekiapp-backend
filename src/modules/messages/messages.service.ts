@@ -246,7 +246,7 @@ export const messagesService = {
           text: input.initialMessage,
         },
       });
-      pushNotifications.newMessage(input.participantId, requester.vendor?.storeName ?? requester.name);
+      pushNotifications.newMessage(input.participantId, requester.vendor?.storeName ?? requester.name, conversation.id);
       await prisma.notification.create({
         data: {
           userId: input.participantId,
@@ -355,7 +355,7 @@ export const messagesService = {
     const senderName = sender?.vendor?.storeName ?? sender?.name ?? "Eki";
 
     await notificationsServiceSafe(recipientId, conversationId, message.id, senderName);
-    pushNotifications.newMessage(recipientId, senderName);
+    pushNotifications.newMessage(recipientId, senderName, conversationId);
 
     return serializeMessage(message.id);
   },

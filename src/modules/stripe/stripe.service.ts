@@ -997,7 +997,11 @@ class StripeWebhookService {
             })
           : null;
 
-        // Log dispute for manual review. Chargebacks require human investigation.
+        // Log dispute for manual review. Chargebacks require human investigation —
+        // there is no automated hold/reversal here (that would mean inventing an
+        // accounting treatment the client hasn't specified), but a log line alone
+        // is easy to miss in production, so this also pages ops the same way
+        // escrowHealthService.checkAndAlert() already does for escrow balance risk.
         logger.error("Stripe dispute created — manual review required", {
           eventId: event.id,
           disputeId: dispute.id,
@@ -1009,6 +1013,27 @@ class StripeWebhookService {
           reason: dispute.reason,
           status: dispute.status,
         });
+        const opsAlertEmail = process.env.OPS_ALERT_EMAIL;
+        if (opsAlertEmail) {
+          await enqueueEmail({
+            to: opsAlertEmail,
+            subject: `⚠️ Stripe dispute opened: ${(dispute.amount / 100).toLocaleString()} ${dispute.currency.toUpperCase()}`,
+            html: `
+              <h2>Stripe Dispute Alert</h2>
+              <p>A chargeback/dispute was opened and requires manual review.</p>
+              <ul>
+                <li>Dispute ID: ${dispute.id}</li>
+                <li>Amount: ${(dispute.amount / 100).toLocaleString()} ${dispute.currency.toUpperCase()}</li>
+                <li>Reason: ${dispute.reason}</li>
+                <li>Status: ${dispute.status}</li>
+                <li>Checkout ID: ${checkout?.id ?? "unknown"}</li>
+                <li>Buyer ID: ${checkout?.buyerId ?? "unknown"}</li>
+                <li>Payment Intent: ${paymentIntentId ?? "unknown"}</li>
+              </ul>
+              <p>Respond to this dispute directly in the Stripe Dashboard before its evidence deadline.</p>
+            `,
+          });
+        }
 
         await tx.webhookEvent.update({
           where: { stripeEventId: event.id },

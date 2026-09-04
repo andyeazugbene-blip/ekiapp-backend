@@ -205,6 +205,11 @@ vi.mock("../lib/prisma", async () => {
       get(target, prop) {
         if (prop === "vendor") return { findUnique: (...a: unknown[]) => mockVendorFindUnique(...a) };
         if (prop === "campaignSupplierPayment") return { findUnique: (...a: unknown[]) => mockCampaignSupplierPaymentFindUnique(...a) };
+        // require2fa (gates the two supplier-payment routes below) looks
+        // this up for every request — without a mock it falls through to
+        // a real DB call, which this test environment can't make. No admin
+        // in these tests has 2FA enrolled.
+        if (prop === "adminTwoFactor") return { findUnique: vi.fn().mockResolvedValue(null) };
         return (target as any)[prop];
       },
     }),

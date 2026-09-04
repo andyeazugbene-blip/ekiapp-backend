@@ -35,11 +35,11 @@ export const pushNotifications = {
   },
 
   /** Buyer/Vendor: new message */
-  newMessage(userId: string, senderName: string): void {
+  newMessage(userId: string, senderName: string, conversationId: string): void {
     sendPushToUser(userId, {
       title: "New Message 💬",
       body: `${senderName} sent you a message.`,
-      data: { type: "new_message" },
+      data: { type: "new_message", conversationId },
     });
   },
 

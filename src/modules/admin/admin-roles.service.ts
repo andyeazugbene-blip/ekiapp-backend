@@ -43,6 +43,8 @@ export const ADMIN_PERMISSIONS = [
   "roles.read",
   "roles.mutate",
   "audit.read",
+  "reports.read",
+  "reports.mutate",
 ] as const;
 
 export type AdminPermission = (typeof ADMIN_PERMISSIONS)[number];
@@ -117,8 +119,8 @@ const DEFAULT_ROLES: { name: string; description: string; permissions: AdminPerm
   },
   {
     name: "Risk / Fraud",
-    description: "Suspends accounts, handles disputes, reviews audit trail.",
-    permissions: ["users.read", "users.mutate", "vendors.read", "vendors.mutate", "disputes.read", "disputes.mutate", "security.mutate", "audit.read"],
+    description: "Suspends accounts, handles disputes, reviews audit trail, moderates content reports.",
+    permissions: ["users.read", "users.mutate", "vendors.read", "vendors.mutate", "disputes.read", "disputes.mutate", "security.mutate", "audit.read", "reports.read", "reports.mutate"],
   },
 ];
 

@@ -366,21 +366,27 @@ export const communityCampaignsService = {
 
       if (campaign.confirmedShares >= minimum) {
         const outcome = campaign.confirmedShares >= goal ? "GOAL_REACHED" : "MINIMUM_REACHED";
-        await prisma.communityCampaign.update({
-          where: { id: campaign.id },
+        // Atomic claim — guards against two overlapping sweep runs (e.g. a
+        // manual /jobs/community-buy-sweep trigger racing the daily cron)
+        // both deciding the same campaign's outcome and double-firing the
+        // supplier order + charge pass.
+        const claim = await prisma.communityCampaign.updateMany({
+          where: { id: campaign.id, status: "LIVE" },
           data: { status: "FULFILLING", fundingOutcome: outcome, closedAt: new Date() },
         });
+        if (claim.count !== 1) continue;
         succeeded++;
         await this.notifyOutcome(campaign.id, "succeeded");
         await this.createSupplierOrder(campaign);
         await this.chargePledgesAfterSuccess(campaign.id);
       } else {
-        rescued++;
         const rescueEndsAt = new Date(Date.now() + (campaign.rescueDurationMinutes ?? 2880) * 60 * 1000);
-        await prisma.communityCampaign.update({
-          where: { id: campaign.id },
+        const claim = await prisma.communityCampaign.updateMany({
+          where: { id: campaign.id, status: "LIVE" },
           data: { status: "RESCUE_WINDOW", rescueEndsAt },
         });
+        if (claim.count !== 1) continue;
+        rescued++;
         await this.notifyRescueOpened(campaign.id, rescueEndsAt);
       }
     }
@@ -528,7 +534,10 @@ export const communityCampaignsService = {
       await automationService.scheduleAutomation({
         type: "CAMPAIGN_REFUND_UPDATE",
         recipientUserId: p.userId,
-        subjectKey: `${campaignId}:cancelled`,
+        // subjectKey feeds a globally-unique dedupeKey ("{type}:{subjectKey}") —
+        // must include the recipient, or every participant after the first
+        // in this loop collides on the same key and is silently dropped.
+        subjectKey: `${campaignId}:cancelled:${p.userId}`,
         requiresMarketingConsent: false,
         title: "Campaign ended",
         body: `${campaign.title} has ended. You were not charged.`,
@@ -657,7 +666,9 @@ export const communityCampaignsService = {
         await automationService.scheduleAutomation({
           type: "CAMPAIGN_MILESTONE",
           recipientUserId: participant.userId,
-          subjectKey: `${campaignId}:${outcome}`,
+          // Per-participant — see cancelled-notify note above; a shared key
+          // here meant only the first participant in the loop ever got this.
+          subjectKey: `${campaignId}:${outcome}:${participant.userId}`,
           requiresMarketingConsent: false,
           title,
           body,
@@ -684,7 +695,8 @@ export const communityCampaignsService = {
         await automationService.scheduleAutomation({
           type: "CAMPAIGN_DEADLINE",
           recipientUserId: participant.userId,
-          subjectKey: `${campaign.id}:deadline`,
+          // Per-participant — same dedupeKey-collision fix as above.
+          subjectKey: `${campaign.id}:deadline:${participant.userId}`,
           frequencyCapDays: 3,
           requiresMarketingConsent: false,
           title: "Campaign deadline approaching",

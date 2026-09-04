@@ -11,6 +11,9 @@ import { notificationsService } from "../notifications/notifications.service";
 import { marketConfigurationService } from "./market-configuration.service";
 import { supportCaseService } from "./support-case.service";
 import { ledgerService } from "../ledger/ledger.service";
+import { recordAudit } from "../../shared/utils/audit";
+
+const SYSTEM_CRON_ACTOR = "system:cron";
 
 /**
  * PLEDGE_THEN_CHARGE contribution flow — client mandate (2026-09): "Eki
@@ -245,6 +248,21 @@ export const campaignContributionsService = {
       return this.markChargeFailedTerminal(contribution, "No saved payment method on this pledge");
     }
 
+    // Atomic claim — only one concurrent attemptCharge() call for this
+    // contribution can win this guarded transition (e.g. a participant's
+    // manual retry racing the cron sweep's post-success charge pass). A
+    // loser bails out immediately instead of racing the winner to compute
+    // its own attempt number and reaching Stripe with a second, distinct
+    // idempotency key — which unlike a repeated key is NOT deduped by
+    // Stripe and would genuinely double-charge the participant.
+    const claim = await prisma.campaignContribution.updateMany({
+      where: { id: contributionId, status: { in: ["PLEDGED", "CHARGE_FAILED"] } },
+      data: { status: "PAYMENT_PROCESSING" },
+    });
+    if (claim.count !== 1) {
+      return prisma.campaignContribution.findUniqueOrThrow({ where: { id: contributionId } });
+    }
+
     const priorAttempts = await prisma.campaignChargeAttempt.count({ where: { contributionId } });
     if (priorAttempts >= MAX_CHARGE_ATTEMPTS) {
       return this.markChargeFailedTerminal(contribution, "Maximum charge attempts exhausted");
@@ -253,7 +271,6 @@ export const campaignContributionsService = {
     const idempotencyKey = `${contributionId}:${attemptNumber}`;
 
     const attempt = await prisma.campaignChargeAttempt.create({ data: { contributionId, attemptNumber, status: "PENDING", idempotencyKey } });
-    await prisma.campaignContribution.update({ where: { id: contributionId }, data: { status: "PAYMENT_PROCESSING" } });
 
     let intent: Stripe.PaymentIntent;
     try {
@@ -385,6 +402,13 @@ export const campaignContributionsService = {
       }
     }
     await this.syncSupplierPaymentAmount(campaignId);
+    await recordAudit({
+      actorId: SYSTEM_CRON_ACTOR,
+      action: "community_campaign.charge_pledges",
+      entityType: "CommunityCampaign",
+      entityId: campaignId,
+      metadata: { total: pledged.length, charged, failed },
+    });
     return { total: pledged.length, charged, failed };
   },
 
@@ -565,6 +589,13 @@ export const campaignContributionsService = {
           data: { status: "REFUNDED", stripeRefundId: stripeRefund.id },
         });
         await prisma.campaignContribution.update({ where: { id: refund.contributionId }, data: { status: "REFUNDED" } });
+        await recordAudit({
+          actorId: SYSTEM_CRON_ACTOR,
+          action: "community_refund.processed",
+          entityType: "CampaignRefund",
+          entityId: refund.id,
+          metadata: { amount: refund.amount, stripeRefundId: stripeRefund.id },
+        });
         await ledgerService.reverseEntries(prisma, {
           businessRefType: "CommunityContribution",
           businessRefId: refund.contributionId,

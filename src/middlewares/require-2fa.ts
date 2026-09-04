@@ -2,8 +2,10 @@ import type { NextFunction, Request, Response } from "express";
 
 import bcrypt from "bcryptjs";
 import { authenticator } from "otplib";
+import { Prisma } from "@prisma/client";
 
 import { prisma } from "../lib/prisma";
+import { logger } from "../lib/logger";
 import { AppError } from "../shared/errors/app-error";
 
 /**
@@ -24,9 +26,17 @@ export async function require2fa(request: Request, _response: Response, next: Ne
     record = await prisma.adminTwoFactor.findUnique({
       where: { userId: request.user.id },
     });
-  } catch {
-    // Table may not exist yet (migration not deployed). Treat as 2FA not set up.
-    next();
+  } catch (error) {
+    // Only a genuinely-missing table (migration not deployed yet) is safe
+    // to treat as "2FA not set up" — any other DB error (a transient
+    // connection blip, for example) must fail closed instead of silently
+    // waving through a request to a route this gate was meant to protect.
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2021") {
+      next();
+      return;
+    }
+    logger.error("2FA check failed — failing closed", { userId: request.user.id, errorMessage: error instanceof Error ? error.message : String(error) });
+    next(new AppError("Could not verify 2FA status. Try again.", 503));
     return;
   }
 
