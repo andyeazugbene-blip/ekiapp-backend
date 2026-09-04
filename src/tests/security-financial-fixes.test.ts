@@ -36,6 +36,7 @@ vi.mock("../lib/prisma", () => ({
     walletTransaction: { create: vi.fn() },
     webhookEvent: { create: vi.fn(), update: vi.fn(), updateMany: vi.fn() },
     vendor: { findUnique: vi.fn() },
+    stripeDispute: { upsert: vi.fn(), findUnique: vi.fn(), update: vi.fn() },
     $transaction: vi.fn(),
   },
 }));
@@ -750,6 +751,72 @@ describe("Webhook dispatch — regular_delivery_renewal / community_buy_pledge_c
     await stripeWebhookService.handleWebhook({ signature: "valid-sig", rawBody: Buffer.from("body") });
 
     expect(resolveProcessingCharge).toHaveBeenCalledWith("contrib-webhook-2", "pi_pledge_2", false, "Payment failed after processing");
+  });
+});
+
+// ─── charge.dispute.created persists a real StripeDispute row (architecture doc §15.3 "Chargebacks") ──
+
+describe("Webhook dispatch — charge.dispute.created persists a real chargeback record", () => {
+  it("upserts a StripeDispute row with the dispute's real amount/currency/reason/status", async () => {
+    const fakeEvent = {
+      id: "evt_dispute_1",
+      type: "charge.dispute.created",
+      data: {
+        object: {
+          id: "dp_1",
+          payment_intent: "pi_disputed_1",
+          amount: 12345,
+          currency: "gbp",
+          reason: "fraudulent",
+          status: "warning_needs_response",
+        },
+      },
+    };
+    constructEvent.mockReturnValue(fakeEvent);
+
+    const stripeDisputeUpsert = vi.fn().mockResolvedValue({});
+    $transaction.mockImplementationOnce(async (cb: (tx: unknown) => unknown) => cb({
+      webhookEvent: { create: vi.fn().mockResolvedValue({}), update: vi.fn().mockResolvedValue({}) },
+      checkout: { findUnique: vi.fn().mockResolvedValue({ id: "co_disputed_1", buyerId: "buyer-disputed-1" }) },
+      stripeDispute: { upsert: stripeDisputeUpsert },
+    }));
+
+    const result = await stripeWebhookService.handleWebhook({ signature: "valid-sig", rawBody: Buffer.from("body") });
+
+    expect(result.received).toBe(true);
+    expect(stripeDisputeUpsert).toHaveBeenCalledWith({
+      where: { stripeDisputeId: "dp_1" },
+      update: { status: "warning_needs_response" },
+      create: expect.objectContaining({
+        stripeDisputeId: "dp_1",
+        paymentIntentId: "pi_disputed_1",
+        checkoutId: "co_disputed_1",
+        buyerId: "buyer-disputed-1",
+        amount: 12345,
+        currency: "gbp",
+        reason: "fraudulent",
+        status: "warning_needs_response",
+      }),
+    });
+  });
+
+  it("is idempotent — a retried delivery of the same dispute event never creates a second row", async () => {
+    const fakeEvent = {
+      id: "evt_dispute_dup",
+      type: "charge.dispute.created",
+      data: { object: { id: "dp_dup", amount: 500, currency: "usd", reason: "duplicate", status: "needs_response" } },
+    };
+    constructEvent.mockReturnValue(fakeEvent);
+
+    $transaction.mockImplementationOnce(async (cb: (tx: unknown) => unknown) => cb({
+      webhookEvent: {
+        create: vi.fn().mockRejectedValue(new Prisma.PrismaClientKnownRequestError("Unique constraint", { code: "P2002", clientVersion: "6.0.0" })),
+      },
+    }));
+
+    const result = await stripeWebhookService.handleWebhook({ signature: "valid-sig", rawBody: Buffer.from("body") });
+
+    expect(result.duplicate).toBe(true);
   });
 });
 

@@ -1313,6 +1313,36 @@ model Dispute {
   @@index([vendorId])
 }
 
+/**
+ * A real Stripe chargeback (`charge.dispute.created` webhook, architecture
+ * doc §15.3 "Chargebacks" queue) — distinct from the `Dispute` model above,
+ * which is a buyer/vendor order complaint Eki resolves internally. This is
+ * the card network disputing a charge with Stripe directly. Previously this
+ * webhook only logged + emailed ops with no DB row, so there was no queue
+ * an admin could actually open and work from. `status`/`reason` store
+ * Stripe's own string values as-is rather than a locally-maintained enum,
+ * since Stripe's own set of values can grow without needing a migration
+ * here.
+ */
+model StripeDispute {
+  id              String    @id @default(cuid())
+  stripeDisputeId String    @unique
+  paymentIntentId String?
+  checkoutId      String?
+  buyerId         String?
+  amount          Int
+  currency        String
+  reason          String
+  status          String
+  note            String?
+  resolvedAt      DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  @@index([status, createdAt])
+  @@index([buyerId])
+}
+
 // ─── Admin Two-Factor Authentication ────────────────────────────────────────
 
 model AdminTwoFactor {

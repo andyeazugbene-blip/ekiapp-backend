@@ -55,6 +55,10 @@ import {
   adminListDisputes,
   adminResolveDispute,
 } from "../paystack/dispute.controller";
+import {
+  adminListStripeDisputes,
+  adminReviewStripeDispute,
+} from "../stripe/stripe-disputes.controller";
 import { adminAdjustTrustScore } from "../paystack/trust-score.controller";
 import { getEscrowHealth, updateEscrowProvider } from "../paystack/escrow-health.controller";
 import {
@@ -383,6 +387,11 @@ adminRouter.patch("/reports/:id", asyncHandler(requireAdminPermission("reports.m
 adminRouter.get("/disputes", asyncHandler(requireAdminPermission("disputes.read")), asyncHandler(adminListDisputes));
 adminRouter.get("/disputes/:id", asyncHandler(requireAdminPermission("disputes.read")), asyncHandler(adminGetDispute));
 adminRouter.patch("/disputes/:id/resolve", asyncHandler(requireAdminPermission("disputes.mutate")), asyncHandler(adminResolveDispute));
+
+// Real Stripe chargebacks (architecture doc §15.3 "Chargebacks") — distinct
+// from the buyer/vendor Dispute model above.
+adminRouter.get("/stripe-disputes", asyncHandler(requireAdminPermission("disputes.read")), asyncHandler(adminListStripeDisputes));
+adminRouter.patch("/stripe-disputes/:id/review", asyncHandler(requireAdminPermission("disputes.mutate")), asyncHandler(adminReviewStripeDispute));
 
 // Trust score management
 adminRouter.patch("/users/:id/trust-score", asyncHandler(requireAdminPermission("users.mutate")), asyncHandler(adminAdjustTrustScore));

@@ -1148,6 +1148,26 @@ class StripeWebhookService {
           });
         }
 
+        // Real DB row (architecture doc §15.3 "Chargebacks" queue) — the
+        // log line + email above are easy to miss; this is what actually
+        // lets an admin open a queue and work the dispute. Upsert on the
+        // unique Stripe dispute id so a retried/duplicate delivery of this
+        // event can never create a second row for the same chargeback.
+        await tx.stripeDispute.upsert({
+          where: { stripeDisputeId: dispute.id },
+          update: { status: dispute.status },
+          create: {
+            stripeDisputeId: dispute.id,
+            paymentIntentId: paymentIntentId ?? null,
+            checkoutId: checkout?.id ?? null,
+            buyerId: checkout?.buyerId ?? null,
+            amount: dispute.amount,
+            currency: dispute.currency,
+            reason: dispute.reason,
+            status: dispute.status,
+          },
+        });
+
         await tx.webhookEvent.update({
           where: { stripeEventId: event.id },
           data: { status: "PROCESSED", processedAt: new Date() },
