@@ -1,4 +1,5 @@
 import type { Request, Response } from "express";
+import { NotificationType } from "@prisma/client";
 
 import { prisma } from "../../lib/prisma";
 import { stripe } from "../../lib/stripe";
@@ -6,6 +7,7 @@ import { paystack } from "../../lib/paystack";
 import { logger } from "../../lib/logger";
 import { AppError } from "../../shared/errors/app-error";
 import { adminApprovalsService } from "./admin-approvals.service";
+import { notificationsService } from "../notifications/notifications.service";
 
 interface OrderRefundResult {
   refundId: string;
@@ -79,6 +81,18 @@ export async function executeOrderRefund(orderId: string, adminId: string, amoun
 
       const finalAmount = refundAmount ?? order.paystackTransaction.amount;
       await createAuditLog(adminId, orderId, order.paystackTransaction.reference, finalAmount, reason);
+
+      // Paystack has no webhook-driven refund confirmation wired up here
+      // (unlike Stripe's charge.refunded handler) — this synchronous success
+      // is the only confirmation there is, so notify here rather than never.
+      notificationsService.enqueue({
+        userId: order.buyerId,
+        type: NotificationType.ADMIN_BROADCAST,
+        title: "Refund processed",
+        body: "Your refund has been processed.",
+        data: { type: "order_refunded", orderIds: [orderId] },
+      }).catch(() => {});
+
       return { refundId: order.paystackTransaction.reference, amount: finalAmount, status: "reversed", provider: "paystack" };
     } catch (error) {
       logger.error("Paystack refund failed", { orderId, error: error instanceof Error ? error.message : String(error) });

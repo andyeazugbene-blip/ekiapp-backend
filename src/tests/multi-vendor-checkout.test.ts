@@ -134,6 +134,23 @@ describe("Multi-Vendor Checkout Flow", () => {
   });
 });
 
+describe("Multi-Vendor Refund Notification", () => {
+  it("charge.refunded webhook notifies the buyer after the transaction commits — previously order status, ledger, wallet reversal and stock all updated correctly but the buyer was never told their refund happened", () => {
+    const handlerSource = stripeServiceSource.slice(
+      stripeServiceSource.indexOf("private async handleChargeRefunded"),
+      stripeServiceSource.indexOf("private async ", stripeServiceSource.indexOf("private async handleChargeRefunded") + 1),
+    );
+    // Fired from the buyerId/orderIds captured out of the transaction's
+    // return value, not from inside the transaction closure itself —
+    // matches the established sendSuccessNotifications() pattern for the
+    // payment-success path elsewhere in this same file.
+    expect(handlerSource).toMatch(/notificationsService\.enqueue\(\{/);
+    expect(handlerSource).toMatch(/type:\s*"order_refunded"/);
+    expect(handlerSource).toMatch(/refundedBuyerId/);
+    expect(handlerSource).toMatch(/refundedOrderIds/);
+  });
+});
+
 describe("Multi-Vendor Webhook Idempotency", () => {
   it("duplicate webhook does not duplicate vendor orders — two independent guards, both real", () => {
     // Layer 1: WebhookEvent.stripeEventId is DB-unique — a replayed event ID

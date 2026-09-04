@@ -976,7 +976,7 @@ class StripeWebhookService {
     }
 
     try {
-      return await prisma.$transaction(async (tx) => {
+      const result = await prisma.$transaction(async (tx): Promise<StripeWebhookResult & { refundedBuyerId?: string; refundedOrderIds?: string[] }> => {
         if (await this.isDuplicate(tx, event.id, event.type, {})) {
           return { received: true, duplicate: true, eventId: event.id, type: event.type };
         }
@@ -1079,8 +1079,33 @@ class StripeWebhookService {
           eventId: event.id, paymentIntentId, orderCount: checkout.orders.length,
         });
 
-        return { received: true, eventId: event.id, type: event.type };
+        return {
+          received: true,
+          eventId: event.id,
+          type: event.type,
+          refundedBuyerId: checkout.buyerId,
+          refundedOrderIds: checkout.orders.map((o) => o.id),
+        };
       }, { isolationLevel: "Serializable" });
+
+      // Fire AFTER the transaction commits — mirrors sendSuccessNotifications()
+      // above. Previously nothing notified the buyer here at all: order
+      // status, ledger, vendor wallet reversal and stock all updated
+      // correctly, but the buyer had no way to learn their refund actually
+      // happened short of manually reopening the order later.
+      if (result.refundedBuyerId && result.refundedOrderIds && result.refundedOrderIds.length > 0) {
+        notificationsService.enqueue({
+          userId: result.refundedBuyerId,
+          type: NotificationType.ADMIN_BROADCAST,
+          title: "Refund processed",
+          body: result.refundedOrderIds.length > 1
+            ? `Your refund for ${result.refundedOrderIds.length} orders has been processed.`
+            : "Your refund has been processed.",
+          data: { type: "order_refunded", orderIds: result.refundedOrderIds },
+        }).catch(() => {});
+      }
+
+      return result;
     } catch (error) {
       if (this.isUniqueConstraintError(error)) {
         return { received: true, duplicate: true, eventId: event.id, type: event.type };

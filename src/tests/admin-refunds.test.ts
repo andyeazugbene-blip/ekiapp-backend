@@ -32,15 +32,23 @@ vi.mock("../lib/paystack", () => ({
   },
 }));
 
+vi.mock("../modules/notifications/notifications.service", () => ({
+  notificationsService: {
+    enqueue: vi.fn().mockResolvedValue(undefined),
+  },
+}));
+
 import { prisma } from "../lib/prisma";
 import { stripe } from "../lib/stripe";
 import { paystack } from "../lib/paystack";
+import { notificationsService } from "../modules/notifications/notifications.service";
 
 import { adminRefundOrder } from "../modules/admin/admin-refunds.controller";
 
 const mockedPrisma = vi.mocked(prisma, true);
 const mockedStripeRefundCreate = vi.mocked(stripe.refunds.create);
 const mockedPaystackRefund = vi.mocked(paystack.refundTransaction);
+const mockedNotifyEnqueue = vi.mocked(notificationsService.enqueue);
 
 function createMockReq(orderId: string, body: Record<string, unknown> = {}): Request {
   return {
@@ -159,6 +167,7 @@ describe("adminRefundOrder — provider branching", () => {
   it("PAYSTACK: calls paystack.refundTransaction and marks order REFUNDED + tx REVERSED", async () => {
     mockedPrisma.order.findUnique.mockResolvedValue({
       id: "ord-3",
+      buyerId: "buyer-3",
       status: "PAID",
       payment: null,
       paystackTransaction: {
@@ -191,6 +200,34 @@ describe("adminRefundOrder — provider branching", () => {
 
     expect(res.statusCode).toBe(202);
     expect((res.data as Record<string, unknown>).provider).toBe("paystack");
+  });
+
+  it("PAYSTACK: notifies the buyer — Paystack refunds have no webhook confirmation, so the buyer would otherwise never learn their refund happened", async () => {
+    mockedPrisma.order.findUnique.mockResolvedValue({
+      id: "ord-9",
+      buyerId: "buyer-9",
+      status: "PAID",
+      payment: null,
+      paystackTransaction: {
+        reference: "psk-ref-999",
+        status: "SUCCESS",
+        amount: 5000,
+      },
+    } as never);
+
+    mockedPaystackRefund.mockResolvedValue(undefined as never);
+
+    const req = createMockReq("ord-9");
+    const res = createMockRes();
+
+    await adminRefundOrder(req, res as unknown as Response);
+
+    expect(mockedNotifyEnqueue).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: "buyer-9",
+        data: expect.objectContaining({ type: "order_refunded", orderIds: ["ord-9"] }),
+      }),
+    );
   });
 
   it("DUPLICATE: returns 409 when order already REFUNDED", async () => {
