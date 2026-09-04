@@ -206,9 +206,9 @@ import { adminResetUsers } from "./admin-reset.controller";
 export const adminRouter = Router();
 
 // Dev/QA-only database reset+reseed utility — truncates nearly every table.
-// Hard-blocked outside non-production environments (regardless of role) and
-// still requires a real authenticated ADMIN session; never reachable by an
-// unauthenticated request in any environment.
+// Hard-blocked (404) whenever env.nodeEnv === "production", regardless of
+// role, and still requires a real authenticated ADMIN session otherwise;
+// never reachable by an unauthenticated request in any environment.
 adminRouter.post(
   "/reset-users",
   authenticate,

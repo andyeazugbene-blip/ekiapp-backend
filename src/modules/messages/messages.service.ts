@@ -1,5 +1,6 @@
 import { prisma } from "../../lib/prisma";
 import { pushNotifications } from "../../lib/push-notifications";
+import { isBlocked } from "../reports/reports.service";
 import { CURSOR_ORDER_BY } from "../../shared/constants";
 import { AppError } from "../../shared/errors/app-error";
 import type {
@@ -205,6 +206,13 @@ export const messagesService = {
       input.orderId,
     );
 
+    if (await isBlocked(input.participantId, userId)) {
+      throw new AppError("You cannot start a conversation with this user", 403);
+    }
+    if (await isBlocked(userId, input.participantId)) {
+      throw new AppError("You have blocked this user. Unblock them to send messages.", 403);
+    }
+
     const [participantA, participantB] = sortParticipants(userId, input.participantId);
 
     // Check if conversation already exists
@@ -330,6 +338,14 @@ export const messagesService = {
     }
     if (conversation.participantA !== userId && conversation.participantB !== userId) {
       throw new AppError("Forbidden", 403);
+    }
+
+    const recipientIdForBlockCheck = conversation.participantA === userId ? conversation.participantB : conversation.participantA;
+    if (await isBlocked(recipientIdForBlockCheck, userId)) {
+      throw new AppError("You cannot send messages to this user", 403);
+    }
+    if (await isBlocked(userId, recipientIdForBlockCheck)) {
+      throw new AppError("You have blocked this user. Unblock them to send messages.", 403);
     }
 
     const [message] = await prisma.$transaction([

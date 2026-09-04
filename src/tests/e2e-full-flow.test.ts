@@ -1,14 +1,18 @@
 /**
  * COMPREHENSIVE E2E TEST: Full marketplace flow
- * Tests against LIVE backend. Uses debug endpoints to bypass rate limits.
+ * Tests against LIVE backend using real existing accounts. Credentials must
+ * be supplied via env vars — never hardcode a real account password here.
+ * Run explicitly: E2E_VENDOR_EMAIL=... E2E_VENDOR_PASSWORD=... E2E_BUYER_EMAIL=...
+ * E2E_BUYER_PASSWORD=... npm run test:e2e
  */
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
-const BASE = "https://ekiapp-backend.vercel.app";
-const DEBUG_KEY = "eki-debug-2026";
+const BASE = process.env.E2E_BASE_URL ?? "https://ekiapp-backend.vercel.app";
 
-// We use the existing vendor@eki.app / buyer@eki.app accounts
-// to avoid rate limiting from registration.
+const VENDOR_EMAIL = process.env.E2E_VENDOR_EMAIL;
+const VENDOR_PASSWORD = process.env.E2E_VENDOR_PASSWORD;
+const BUYER_EMAIL = process.env.E2E_BUYER_EMAIL;
+const BUYER_PASSWORD = process.env.E2E_BUYER_PASSWORD;
 
 let V_TOKEN: string = "";
 let B_TOKEN: string = "";
@@ -16,12 +20,18 @@ let VENDOR_ID: string = "";
 let BUYER_ID: string = "";
 
 beforeAll(async () => {
+  if (!VENDOR_EMAIL || !VENDOR_PASSWORD || !BUYER_EMAIL || !BUYER_PASSWORD) {
+    throw new Error(
+      "e2e-full-flow.test.ts requires E2E_VENDOR_EMAIL, E2E_VENDOR_PASSWORD, E2E_BUYER_EMAIL, E2E_BUYER_PASSWORD env vars — no credentials are hardcoded in source.",
+    );
+  }
+
   // Login with delays to avoid rate limits
   await sleep(2000);
   const loginRes = await fetch(`${BASE}/api/auth/login`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ email: "vendor@eki.app", password: "Abdou22314" }),
+    body: JSON.stringify({ email: VENDOR_EMAIL, password: VENDOR_PASSWORD }),
   });
   const loginData = await loginRes.json();
   V_TOKEN = loginData.token;
@@ -31,7 +41,7 @@ beforeAll(async () => {
   const bLoginRes = await fetch(`${BASE}/api/auth/login`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ email: "buyer@eki.app", password: "Abdou22314" }),
+    body: JSON.stringify({ email: BUYER_EMAIL, password: BUYER_PASSWORD }),
   });
   const bLoginData = await bLoginRes.json();
   B_TOKEN = bLoginData.token;

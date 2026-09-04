@@ -5,8 +5,13 @@ import { logger } from "../../lib/logger";
 
 export async function adminResetUsers(_req: Request, res: Response): Promise<void> {
   const start = Date.now();
-  const hash = await bcrypt.hash("Abdou22314", 10);
-  const emails = ["vendor@eki.app", "buyer@eki.app", "admin@eki.app"];
+  const seedPassword = process.env.QA_RESET_PASSWORD;
+  if (!seedPassword || seedPassword.length < 12) {
+    throw new Error(
+      "QA_RESET_PASSWORD env var must be set (12+ chars) to run the dev/QA reset — no password is hardcoded in source.",
+    );
+  }
+  const hash = await bcrypt.hash(seedPassword, 10);
 
   // Delete ALL users + all their related data in FK-safe order
   const allTables = ["DeliveryOtp","PaystackTransaction","Dispute","Shipment","WalletTransaction","Payment","OrderItem","Order","Checkout","CartItem","Cart","Product","Vendor","PromoRedemption","PromoCode","PayoutRequest","PayoutMethod","VendorBankAccount","VerificationDocument","VendorSubscription","Wallet","Conversation","Message","Notification","PushToken","Review","BuyerWalletTransaction","BuyerWallet","PurchasedGiftCard","EmailOtp","User"];
@@ -83,10 +88,11 @@ export async function adminResetUsers(_req: Request, res: Response): Promise<voi
   res.json({
     message: "Database seeded successfully",
     accounts: [
-      { email: "vendor@eki.app", password: "Abdou22314", role: "VENDOR", note: "Dual-role, 2 products, 2 orders, promos" },
-      { email: "buyer@eki.app", password: "Abdou22314", role: "BUYER" },
-      { email: "admin@eki.app", password: "Abdou22314", role: "ADMIN" },
+      { email: "vendor@eki.app", role: "VENDOR", note: "Dual-role, 2 products, 2 orders, promos" },
+      { email: "buyer@eki.app", role: "BUYER" },
+      { email: "admin@eki.app", role: "ADMIN" },
     ],
+    note: "Password is whatever QA_RESET_PASSWORD was set to for this call — not echoed here.",
     data: {
       products: ["Dried Fish Pack (500g) - €55", "Egusi Ground (1kg) - €8.50"],
       orders: ["EKI-DEMO-001 (PAID)", "EKI-DEMO-002 (DELIVERED)"],
