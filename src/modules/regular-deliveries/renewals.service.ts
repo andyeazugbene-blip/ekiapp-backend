@@ -248,7 +248,7 @@ export const renewalsService = {
         where: { id: renewalId },
         data: { status: "AWAITING_PRICE_APPROVAL", priceChangeRequestId: request.id },
       });
-      await notifySubscriptionEvent(renewal.subscription.buyerId, "price_approval_required", renewalId);
+      await notifySubscriptionEvent(renewal.subscription.buyerId, "price_approval_required", renewalId, renewal.subscriptionId);
       await automationService.scheduleAutomation({
         type: "PRICE_APPROVAL_REMINDER",
         recipientUserId: renewal.subscription.buyerId,
@@ -550,7 +550,7 @@ export const renewalsService = {
       where: { id: subscriptionId },
       data: { status: "PAYMENT_ATTENTION" },
     });
-    await notifySubscriptionEvent(sub.buyerId, "payment_failed", renewalId);
+    await notifySubscriptionEvent(sub.buyerId, "payment_failed", renewalId, subscriptionId);
     await automationService.scheduleAutomation({
       type: "PAYMENT_RECOVERY",
       recipientUserId: sub.buyerId,
@@ -595,7 +595,7 @@ export const renewalsService = {
         where: { id: renewal.subscriptionId },
         data: { nextRenewalAt: nextCycleDate(renewal.subscription.frequency, renewal.cycleDate) },
       });
-      await notifySubscriptionEvent(renewal.subscription.buyerId, "price_approval_expired", renewal.id);
+      await notifySubscriptionEvent(renewal.subscription.buyerId, "price_approval_expired", renewal.id, renewal.subscriptionId);
     }
     return { configured: true, expired };
   },
@@ -606,7 +606,7 @@ export const renewalsService = {
       where: { id: renewal.subscriptionId },
       data: { status: "PAYMENT_ATTENTION" },
     });
-    await notifySubscriptionEvent(sub.buyerId, "renewal_cancelled", renewalId);
+    await notifySubscriptionEvent(sub.buyerId, "renewal_cancelled", renewalId, renewal.subscriptionId);
   },
 
   async retryPayment(buyerId: string, renewalId: string) {
@@ -735,7 +735,7 @@ export const renewalsService = {
       return { order };
     });
 
-    await notifySubscriptionEvent(renewal.subscription.buyerId, "order_created", renewalId, order.orderNumber);
+    await notifySubscriptionEvent(renewal.subscription.buyerId, "order_created", renewalId, renewal.subscriptionId, order.orderNumber);
     const vendor = await prisma.vendor.findUnique({ where: { id: vendorId }, select: { userId: true } });
     if (vendor) {
       await notificationsService.enqueue({
@@ -750,7 +750,7 @@ export const renewalsService = {
   },
 };
 
-async function notifySubscriptionEvent(buyerId: string, event: string, renewalId: string, orderNumber?: string) {
+async function notifySubscriptionEvent(buyerId: string, event: string, renewalId: string, subscriptionId: string, orderNumber?: string) {
   const titles: Record<string, string> = {
     price_approval_required: "Price change needs your approval",
     payment_failed: "Your Regular Delivery payment failed",
@@ -770,6 +770,6 @@ async function notifySubscriptionEvent(buyerId: string, event: string, renewalId
     type: "SUBSCRIPTION_UPDATE",
     title: titles[event] ?? "Regular Delivery update",
     body: bodies[event] ?? "",
-    data: { type: "subscription_update", event, renewalId },
+    data: { type: "subscription_update", event, renewalId, subscriptionId },
   });
 }

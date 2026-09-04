@@ -26,11 +26,11 @@ export const pushNotifications = {
   },
 
   /** Buyer/Vendor: order status updated */
-  orderStatusUpdate(userId: string, orderNumber: string, status: string): void {
+  orderStatusUpdate(userId: string, orderNumber: string, status: string, orderId: string): void {
     sendPushToUser(userId, {
       title: "Order Update",
       body: `Order ${orderNumber} is now ${status.toLowerCase().replace("_", " ")}.`,
-      data: { type: "order_status", orderNumber, status },
+      data: { type: "order_status", orderNumber, status, orderId },
     });
   },
 
@@ -71,11 +71,11 @@ export const pushNotifications = {
   },
 
   /** Buyer: order delivered by vendor — ready to confirm */
-  orderDelivered(buyerUserId: string, orderNumber: string): void {
+  orderDelivered(buyerUserId: string, orderNumber: string, orderId: string): void {
     sendPushToUser(buyerUserId, {
       title: "Order Delivered! 📦",
       body: `Order ${orderNumber} has been marked as delivered. Please confirm you've received it.`,
-      data: { type: "order_delivered", orderNumber },
+      data: { type: "order_delivered", orderNumber, orderId },
     });
   },
 

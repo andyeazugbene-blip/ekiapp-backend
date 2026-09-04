@@ -412,7 +412,7 @@ export const escrowService = {
         });
 
         // Push notification to vendor
-        pushNotifications.orderStatusUpdate(vendor.userId, order.orderNumber, "completed");
+        pushNotifications.orderStatusUpdate(vendor.userId, order.orderNumber, "completed", orderId);
       }
     }
 
