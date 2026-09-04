@@ -138,6 +138,30 @@ describe("communityCampaignsService.closeDueCampaigns — doc §7 deadline evalu
     expect(m.campaignSupplierPayment.create).not.toHaveBeenCalled();
   });
 
+  // Reliability scenario #13 (architecture doc §18): "campaign closes while
+  // payment is processing" — modeled here as two overlapping sweep runs
+  // (e.g. a manual /jobs/community-buy-sweep trigger racing the daily
+  // cron) both trying to close the same due campaign. The atomic claim
+  // added this pass (updateMany guarded on status: "LIVE") means only one
+  // can win; the loser must not re-run notifyOutcome/createSupplierOrder/
+  // chargePledgesAfterSuccess for a campaign someone else is already
+  // closing.
+  it("scenario #13 — a campaign already claimed by a concurrent close is not processed a second time", async () => {
+    m.communityCampaign.findMany.mockResolvedValue([
+      { id: "camp-race", minimumShares: 3, goalShares: 6, maximumShares: 6, confirmedShares: 6, pricePerShareMinor: 1000, currency: "GBP", supplierId: "sup-1", title: "Racing campaign" },
+    ] as never);
+    // Simulates: another process's updateMany already flipped this
+    // campaign's status away from LIVE between the findMany read above and
+    // this call — the guarded claim sees 0 rows affected.
+    m.communityCampaign.updateMany.mockResolvedValue({ count: 0 } as never);
+
+    const result = await communityCampaignsService.closeDueCampaigns();
+
+    expect(result).toEqual({ closed: 1, succeeded: 0, failed: 0, rescued: 0 });
+    expect(m.campaignSupplierPayment.create).not.toHaveBeenCalled();
+    expect(m.campaignContribution.findMany).not.toHaveBeenCalled(); // chargePledgesAfterSuccess never ran
+  });
+
   it("does not create a duplicate refund record if one already exists (unique constraint)", async () => {
     m.campaignContribution.findMany.mockResolvedValue([{ id: "contrib-2", amount: 500, currency: "GBP" }] as never);
     m.campaignRefund.create.mockRejectedValue({ code: "P2002" });
@@ -644,6 +668,31 @@ describe("campaignContributionsService.releaseSupplierPayment — owner settleme
     expect(result.status).toBe("PAID");
     expect(stripe.transfers.create).not.toHaveBeenCalled();
   });
+
+  // Reliability scenario #20 (architecture doc §18): "supplier payment fails".
+  it("scenario #20 — a failed Stripe transfer puts the payment ON_HOLD with the real failure reason, never silently PAID", async () => {
+    m.campaignSupplierPayment.findUnique.mockResolvedValueOnce({
+      id: "payment-6", campaignId: "camp-45", currency: "GBP", status: "NOT_RELEASED", payoutStripeAccountIdAtApproval: null,
+      campaign: { country: "GB", supplier: { vendor: { id: "vendor-6", stripeAccountId: "acct_6", stripePayoutsEnabled: true } } },
+    } as never);
+    m.campaignContribution.aggregate.mockResolvedValueOnce({ _sum: { amount: 10000 } } as never);
+    m.marketConfiguration.findUnique.mockResolvedValue({ countryCode: "GB", communityBuyFeeBps: 500 } as never);
+    vi.mocked(stripe.transfers.create).mockRejectedValueOnce(new Error("Your Stripe account's balance is insufficient for this transfer."));
+
+    await expect(campaignContributionsService.releaseSupplierPayment("admin-1", "camp-45")).rejects.toMatchObject({ statusCode: 502 });
+
+    expect(m.campaignSupplierPayment.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { campaignId: "camp-45" },
+        data: expect.objectContaining({ status: "ON_HOLD", holdReason: expect.stringContaining("insufficient") }),
+      }),
+    );
+    // Never marked PAID, never posted a ledger entry for money that never actually moved.
+    expect(m.campaignSupplierPayment.update).not.toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ status: "PAID" }) }),
+    );
+    expect(m.ledgerEntry.create).not.toHaveBeenCalled();
+  });
 });
 
 describe("marketConfigurationService.isCommunityBuyPaymentsEnabled", () => {
@@ -780,6 +829,35 @@ describe("campaignContributionsService — financial ledger (read-only aggregati
     });
   });
 
+  // Reliability scenario #25 (architecture doc §18): "campaign state and
+  // financial total disagree". The campaign's operational status is never
+  // trusted as financial truth by itself — netPosition is independently
+  // recomputed from the real contribution/refund/payout rows every time,
+  // so a genuine mismatch (e.g. a campaign marked COMPLETED with money
+  // still unaccounted for) is visible here rather than hidden behind a
+  // status label that says everything is fine.
+  it("scenario #25 — netPosition surfaces a real financial shortfall even when the campaign's own status claims it's COMPLETED", async () => {
+    m.communityCampaign.findUnique.mockResolvedValue({
+      id: "camp-mismatch", title: "Mismatch campaign", currency: "GBP", status: "COMPLETED", fundingOutcome: "GOAL_REACHED",
+    } as never);
+    m.campaignContribution.findMany.mockResolvedValue([
+      { id: "contrib-x", amount: 10000, quantity: 5, isOrganiserTopUp: false, updatedAt: new Date("2026-01-01T00:00:00Z"), participant: { user: { name: "Buyer X" } } },
+    ] as never);
+    m.campaignRefund.findMany.mockResolvedValue([]);
+    // Supplier payment record exists but was never actually released (still
+    // NOT_RELEASED) — a real scenario where "COMPLETED" doesn't match the
+    // real money movement.
+    m.campaignSupplierPayment.findUnique.mockResolvedValue({ id: "sp-1", status: "NOT_RELEASED", amount: 10000, updatedAt: new Date() } as never);
+
+    const ledger = await campaignContributionsService.getCampaignLedger("camp-mismatch");
+
+    // The supplier leg is correctly excluded (never PAID), so netPosition
+    // shows the full 10000 still sitting uncollected-by-supplier — a real,
+    // computed discrepancy signal an admin can act on, not a status label.
+    expect(ledger.totals.totalPaidToSupplier).toBe(0);
+    expect(ledger.totals.netPosition).toBe(10000);
+    expect(ledger.campaign.status).toBe("COMPLETED");
+  });
 });
 
 describe("communityCampaignsService.update — 'Edit Live Campaign'", () => {
