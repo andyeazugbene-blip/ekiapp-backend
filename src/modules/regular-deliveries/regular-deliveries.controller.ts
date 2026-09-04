@@ -99,6 +99,14 @@ export async function getPublicSubscriptionOffer(request: Request, response: Res
   response.json({ offer });
 }
 
+/** GET /subscription-offers/public — real discovery, no purchase/deep-link/subscription required. */
+export async function listPublicSubscriptionOffers(request: Request, response: Response): Promise<void> {
+  const country = typeof request.query.country === "string" ? request.query.country : undefined;
+  const vendorId = typeof request.query.vendorId === "string" ? request.query.vendorId : undefined;
+  const items = await subscriptionOffersService.listPublic({ country, vendorId });
+  response.json({ items });
+}
+
 // ─── Vendor: subscribers & renewals ───────────────────────────────────────
 
 export async function listVendorSubscribers(request: Request, response: Response): Promise<void> {

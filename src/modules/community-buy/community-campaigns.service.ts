@@ -5,6 +5,7 @@ import { notificationsService } from "../notifications/notifications.service";
 import { automationService } from "../automation/automation.service";
 import { marketConfigurationService } from "./market-configuration.service";
 import { campaignContributionsService } from "./campaign-contributions.service";
+import { recordAudit } from "../../shared/utils/audit";
 
 export interface CreateCampaignInput {
   supplierId: string;
@@ -710,12 +711,12 @@ export const communityCampaignsService = {
   },
 
   /**
-   * "Campaign Updates" — reuses the existing Notification records that
-   * notifyCampaign() already writes for every real campaign event
-   * (outcome, rescue window, extension decision, refund progress, etc).
-   * No separate updates model; this is just a scoped read over data that
-   * already exists, restricted to people who actually have a stake in
-   * the campaign.
+   * "Campaign Updates" — two real sources, merged:
+   *  1. CampaignUpdate rows: a genuine organiser/supplier broadcast,
+   *     identical for every participant (see postCampaignUpdate below).
+   *  2. The caller's own per-user Notification rows that notifyCampaign()
+   *     already writes for system events (outcome, rescue window,
+   *     extension decision, refund progress, etc) — unchanged from before.
    */
   async listMyCampaignUpdates(userId: string, campaignId: string) {
     const campaign = await prisma.communityCampaign.findUnique({
@@ -730,10 +731,89 @@ export const communityCampaignsService = {
       : (await prisma.campaignParticipant.findUnique({ where: { campaignId_userId: { campaignId, userId } } })) != null;
     if (!isParticipant) throw new AppError("You don't have access to this campaign's updates", 403);
 
-    return prisma.notification.findMany({
-      where: { userId, type: "COMMUNITY_CAMPAIGN_UPDATE", data: { path: ["campaignId"], equals: campaignId } },
-      orderBy: { createdAt: "desc" },
-      take: 100,
+    const [broadcasts, systemNotifications] = await Promise.all([
+      prisma.campaignUpdate.findMany({ where: { campaignId }, orderBy: { createdAt: "desc" }, take: 100 }),
+      prisma.notification.findMany({
+        where: { userId, type: "COMMUNITY_CAMPAIGN_UPDATE", data: { path: ["campaignId"], equals: campaignId } },
+        orderBy: { createdAt: "desc" },
+        take: 100,
+      }),
+    ]);
+
+    const merged = [
+      ...broadcasts.map((u) => ({
+        id: u.id,
+        source: "broadcast" as const,
+        authorRole: u.authorRole,
+        title: u.title,
+        body: u.message,
+        createdAt: u.createdAt,
+      })),
+      ...systemNotifications.map((n) => ({
+        id: n.id,
+        source: "system" as const,
+        authorRole: "SYSTEM" as const,
+        title: n.title,
+        body: n.body,
+        createdAt: n.createdAt,
+      })),
+    ];
+    merged.sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+    return merged.slice(0, 100);
+  },
+
+  /** Statuses a campaign must have reached before it makes sense to broadcast an update at all — never DRAFT/under-review/rejected/cancelled. */
+  _postableUpdateStatuses: ["LIVE", "PAUSED", "CLOSING", "RESCUE_WINDOW", "SUCCEEDED", "FAILED", "REFUNDING", "FULFILLING", "COMPLETED", "FINANCIALLY_CLOSED"] as const,
+
+  /**
+   * A real organiser or supplier broadcast update (communication content
+   * only — no field here can touch price/minimum/goal/maximum, which stay
+   * exclusively on CommunityCampaign itself). Fans out a personal
+   * Notification to every current participant too, so this shows up
+   * alongside system events in their existing notification feed as well
+   * as the merged updates list above.
+   */
+  async postCampaignUpdate(userId: string, campaignId: string, input: { title: string; message: string }) {
+    const title = input.title?.trim();
+    const message = input.message?.trim();
+    if (!title || title.length > 140) throw new AppError("Title is required and must be 140 characters or fewer", 400);
+    if (!message || message.length > 2000) throw new AppError("Message is required and must be 2000 characters or fewer", 400);
+
+    const campaign = await prisma.communityCampaign.findUnique({
+      where: { id: campaignId },
+      include: {
+        organiser: { select: { userId: true } },
+        supplier: { select: { vendor: { select: { userId: true } } } },
+        participants: { select: { userId: true } },
+      },
     });
+    if (!campaign) throw new AppError("Campaign not found", 404);
+
+    const isOrganiser = campaign.organiser.userId === userId;
+    const isSupplier = campaign.supplier.vendor.userId === userId;
+    if (!isOrganiser && !isSupplier) throw new AppError("Only this campaign's organiser or supplier can post an update", 403);
+
+    if (!(this._postableUpdateStatuses as readonly string[]).includes(campaign.status)) {
+      throw new AppError(`Cannot post an update while the campaign is ${campaign.status}`, 409);
+    }
+
+    const authorRole = isOrganiser ? "ORGANISER" : "SUPPLIER";
+    const update = await prisma.campaignUpdate.create({
+      data: { campaignId, authorUserId: userId, authorRole, title, message },
+    });
+
+    await recordAudit({
+      actorId: userId,
+      action: "community_campaign.update_posted",
+      entityType: "CommunityCampaign",
+      entityId: campaignId,
+      metadata: { updateId: update.id, authorRole, title },
+    });
+
+    for (const participant of campaign.participants) {
+      await notifyCampaign(participant.userId, "organiser_update", title, message, campaignId);
+    }
+
+    return update;
   },
 };

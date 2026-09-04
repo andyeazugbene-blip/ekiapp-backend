@@ -20,6 +20,7 @@ const mockUnpublishOffer = vi.fn();
 const mockGetPublicOffer = vi.fn();
 const mockPauseRenewals = vi.fn();
 const mockResumeRenewals = vi.fn();
+const mockListPublicOffers = vi.fn();
 
 vi.mock("../modules/regular-deliveries/subscription-offers.service", () => ({
   subscriptionOffersService: {
@@ -29,6 +30,7 @@ vi.mock("../modules/regular-deliveries/subscription-offers.service", () => ({
     publish: (...a: unknown[]) => mockPublishOffer(...a),
     unpublish: (...a: unknown[]) => mockUnpublishOffer(...a),
     getPublic: (...a: unknown[]) => mockGetPublicOffer(...a),
+    listPublic: (...a: unknown[]) => mockListPublicOffers(...a),
     pauseRenewals: (...a: unknown[]) => mockPauseRenewals(...a),
     resumeRenewals: (...a: unknown[]) => mockResumeRenewals(...a),
   },
@@ -220,6 +222,17 @@ describe("Vendor subscription-offer routes", () => {
     const res = await request(app).get("/api/subscription-offers/offer-42");
     expect(res.status).toBe(200);
     expect(mockGetPublicOffer).toHaveBeenCalledWith("offer-42");
+  });
+
+  it("GET /api/subscription-offers/public — real discovery, no auth required, and NOT swallowed by the /:id route", async () => {
+    mockListPublicOffers.mockResolvedValueOnce([{ id: "offer-1" }]);
+    const res = await request(app).get("/api/subscription-offers/public?country=GB");
+    expect(res.status).toBe(200);
+    expect(res.body.items).toEqual([{ id: "offer-1" }]);
+    // If "public" were being matched by "/:id" instead, this would have
+    // been called with "public" as the offer id — it must not be.
+    expect(mockGetPublicOffer).not.toHaveBeenCalled();
+    expect(mockListPublicOffers).toHaveBeenCalledWith({ country: "GB", vendorId: undefined });
   });
 
   it("POST /api/subscription-offers/:id/pause-renewals — reads id from the URL, requires vendor auth", async () => {

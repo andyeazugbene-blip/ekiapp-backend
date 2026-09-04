@@ -150,6 +150,7 @@ import {
   adminListRefunds,
   adminRequeryRefund,
   adminEscalateRefund,
+  adminGetSupplierPaymentAggregate,
   adminListSupplierPayments,
   adminListSupportCases,
   adminListVerifiedOrganisers,
@@ -246,6 +247,7 @@ adminRouter.get("/community-buy/extension-requests", asyncHandler(requireAdminPe
 adminRouter.post("/community-buy/extension-requests/:id/approve", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(adminApproveExtension));
 adminRouter.post("/community-buy/extension-requests/:id/reject", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(adminRejectExtension));
 adminRouter.get("/community-buy/supplier-payments", asyncHandler(requireAdminPermission("community_buy.read")), asyncHandler(adminListSupplierPayments));
+adminRouter.get("/community-buy/supplier-payments/aggregate", asyncHandler(requireAdminPermission("community_buy.read")), asyncHandler(adminGetSupplierPaymentAggregate));
 adminRouter.post("/community-campaigns/:id/supplier-payment/release", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(require2fa), asyncHandler(adminReleaseSupplierPayment));
 adminRouter.post("/community-campaigns/:id/supplier-payment/hold", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(require2fa), asyncHandler(adminHoldSupplierPayment));
 

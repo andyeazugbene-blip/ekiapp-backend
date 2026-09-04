@@ -1996,6 +1996,7 @@ model CommunityCampaign {
   supplierPayment   CampaignSupplierPayment?
   fulfilment        CampaignFulfilment?
   supportCases      CommunityBuySupportCase[]
+  updates           CampaignUpdate[]
   createdAt     DateTime               @default(now())
   updatedAt     DateTime               @updatedAt
 
@@ -2004,6 +2005,35 @@ model CommunityCampaign {
   @@index([supplierId])
   @@index([deadline])
   @@index([rescueEndsAt])
+}
+
+enum CampaignUpdateAuthorRole {
+  ORGANISER
+  SUPPLIER
+  SYSTEM
+}
+
+/**
+ * A real, campaign-wide broadcast update an organiser or supplier posts —
+ * visible identically to every participant, unlike the per-user
+ * Notification rows communityCampaignsService already writes for system
+ * events (outcome, rescue window, refund progress), which stay exactly as
+ * they are. Communication content only: no financial field on this model,
+ * so there is nothing here that could ever change price/minimum/goal/
+ * maximum — that stays exclusively on CommunityCampaign itself, editable
+ * only through the existing campaign-edit path.
+ */
+model CampaignUpdate {
+  id           String                   @id @default(cuid())
+  campaignId   String
+  authorUserId String?
+  authorRole   CampaignUpdateAuthorRole
+  title        String
+  message      String
+  campaign     CommunityCampaign        @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  createdAt    DateTime                 @default(now())
+
+  @@index([campaignId, createdAt])
 }
 
 enum FundingOutcome {

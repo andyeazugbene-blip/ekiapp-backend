@@ -3,6 +3,7 @@ import type { FulfilmentMethod, OfferSubstitutionMode, SubscriptionFrequency } f
 import { prisma } from "../../lib/prisma";
 import { AppError } from "../../shared/errors/app-error";
 import { notificationsService } from "../notifications/notifications.service";
+import { marketConfigurationService } from "../community-buy/market-configuration.service";
 
 export interface UpsertSubscriptionOfferInput {
   title: string;
@@ -197,5 +198,45 @@ export const subscriptionOffersService = {
     });
     if (!offer || !offer.isActive) throw new AppError("Offer not found", 404);
     return offer;
+  },
+
+  /**
+   * Real public discovery — a buyer must be able to find a vendor's Regular
+   * Delivery offer without a previous purchase, a deep link, or an
+   * existing subscription (architecture gap: the only way in before this
+   * was a reorder suggestion driven by past-purchase history). Market-aware
+   * (spec rule shared with Community Buy): a country with
+   * regularDeliveriesEnabled off returns nothing, never an error, so
+   * browsing from an unsupported market just shows an empty list.
+   */
+  async listPublic(filters: { country?: string; vendorId?: string }) {
+    if (filters.country) {
+      const config = await marketConfigurationService.get(filters.country);
+      if (!config?.regularDeliveriesEnabled) return [];
+    }
+
+    return prisma.subscriptionOffer.findMany({
+      where: {
+        isActive: true,
+        vendor: {
+          isSuspended: false,
+          ...(filters.country ? { country: { equals: filters.country, mode: "insensitive" } } : {}),
+        },
+        ...(filters.vendorId ? { vendorId: filters.vendorId } : {}),
+        // At least one real, orderable, non-paused product — an offer with
+        // nothing currently available to subscribe to isn't discoverable.
+        products: { some: { pausedAt: null, product: { isActive: true, stock: { gt: 0 } } } },
+      },
+      include: {
+        // Public-safe vendor fields only — no contact/payout/verification data.
+        vendor: { select: { id: true, storeName: true, avatar: true, country: true, city: true } },
+        products: {
+          where: { pausedAt: null },
+          include: { product: { select: { id: true, title: true, priceInCents: true, currency: true, images: true, stock: true, isActive: true } } },
+        },
+      },
+      orderBy: { createdAt: "desc" },
+      take: 100,
+    });
   },
 };

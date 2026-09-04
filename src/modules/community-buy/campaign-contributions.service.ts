@@ -1,4 +1,4 @@
-import { LedgerAccountType, LedgerDirection, LedgerOwnerType } from "@prisma/client";
+import { LedgerAccountType, LedgerDirection, LedgerOwnerType, Prisma } from "@prisma/client";
 import type Stripe from "stripe";
 
 import { prisma } from "../../lib/prisma";
@@ -801,6 +801,78 @@ export const campaignContributionsService = {
       include: { campaign: { select: { id: true, title: true, confirmedShares: true } } },
       orderBy: { createdAt: "desc" },
     });
+  },
+
+  /**
+   * Real cross-campaign/cross-supplier aggregate view (admin ops). Every
+   * number here comes from actual CampaignSupplierPayment rows — nothing
+   * projected or invented. Currencies are never summed together: every
+   * total is keyed by currency, so a GBP total and a USD total never merge
+   * into one meaningless number.
+   */
+  async getSupplierPaymentAggregate(filters: { from?: Date; to?: Date; status?: string; supplierId?: string; campaignId?: string } = {}) {
+    const where: Prisma.CampaignSupplierPaymentWhereInput = {};
+    if (filters.from || filters.to) {
+      where.createdAt = {};
+      if (filters.from) where.createdAt.gte = filters.from;
+      if (filters.to) where.createdAt.lte = filters.to;
+    }
+    if (filters.status) where.status = filters.status as never;
+    if (filters.campaignId) where.campaignId = filters.campaignId;
+    if (filters.supplierId) where.campaign = { supplierId: filters.supplierId };
+
+    const payments = await prisma.campaignSupplierPayment.findMany({
+      where,
+      include: {
+        campaign: {
+          select: {
+            id: true, title: true, supplierId: true,
+            supplier: { select: { vendor: { select: { storeName: true } } } },
+          },
+        },
+      },
+      orderBy: { createdAt: "desc" },
+    });
+
+    type CurrencyTotals = { currency: string; count: number; totalAmount: number; totalReleased: number; totalPending: number; totalHeld: number; totalFailed: number; totalProcessing: number };
+    const byCurrency = new Map<string, CurrencyTotals>();
+    const byCampaign = new Map<string, { campaignId: string; campaignTitle: string; currency: string; amount: number; status: string; releasedAt: Date | null }>();
+    const bySupplier = new Map<string, { supplierId: string; supplierName: string; currency: string; count: number; totalAmount: number; totalReleased: number }>();
+
+    for (const p of payments) {
+      const cur = byCurrency.get(p.currency) ?? { currency: p.currency, count: 0, totalAmount: 0, totalReleased: 0, totalPending: 0, totalHeld: 0, totalFailed: 0, totalProcessing: 0 };
+      cur.count += 1;
+      cur.totalAmount += p.amount;
+      if (p.status === "PAID") cur.totalReleased += p.netAmount ?? p.amount;
+      else if (p.status === "NOT_RELEASED") cur.totalPending += p.amount;
+      else if (p.status === "ON_HOLD") cur.totalHeld += p.amount;
+      else if (p.status === "FAILED") cur.totalFailed += p.amount;
+      else if (p.status === "PROCESSING") cur.totalProcessing += p.amount;
+      byCurrency.set(p.currency, cur);
+
+      byCampaign.set(p.campaignId, {
+        campaignId: p.campaignId, campaignTitle: p.campaign.title, currency: p.currency,
+        amount: p.amount, status: p.status, releasedAt: p.releasedAt,
+      });
+
+      const supplierKey = `${p.campaign.supplierId}:${p.currency}`;
+      const sup = bySupplier.get(supplierKey) ?? {
+        supplierId: p.campaign.supplierId,
+        supplierName: p.campaign.supplier.vendor.storeName,
+        currency: p.currency, count: 0, totalAmount: 0, totalReleased: 0,
+      };
+      sup.count += 1;
+      sup.totalAmount += p.amount;
+      if (p.status === "PAID") sup.totalReleased += p.netAmount ?? p.amount;
+      bySupplier.set(supplierKey, sup);
+    }
+
+    return {
+      totalsByCurrency: Array.from(byCurrency.values()),
+      byCampaign: Array.from(byCampaign.values()),
+      bySupplier: Array.from(bySupplier.values()),
+      payments,
+    };
   },
 
   // ─── Financial ledger (read-only) — doc §12 Ledger Structure ───────────

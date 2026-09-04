@@ -11,6 +11,7 @@ vi.mock("../lib/prisma", () => ({
     ledgerAccount: { findUnique: vi.fn(), create: vi.fn() },
     ledgerEntry: { create: vi.fn(), findMany: vi.fn() },
     notification: { findMany: vi.fn() },
+    campaignUpdate: { create: vi.fn(), findMany: vi.fn() },
     campaignExtensionRequest: { create: vi.fn(), findUnique: vi.fn(), update: vi.fn(), findMany: vi.fn() },
     campaignSupplierPayment: { findUnique: vi.fn(), create: vi.fn(), update: vi.fn(), findMany: vi.fn() },
     campaignFulfilment: { upsert: vi.fn(), findUnique: vi.fn(), update: vi.fn() },
@@ -856,6 +857,73 @@ describe("marketConfigurationService.isCommunityBuyPaymentsEnabled", () => {
   });
 });
 
+describe("campaignContributionsService.getSupplierPaymentAggregate — real cross-campaign/cross-supplier totals", () => {
+  const rows = [
+    { id: "sp-1", campaignId: "camp-1", currency: "GBP", amount: 10000, netAmount: 9500, status: "PAID", releasedAt: new Date("2026-01-05"), campaign: { id: "camp-1", title: "Campaign One", supplierId: "sup-1", supplier: { vendor: { storeName: "Store A" } } } },
+    { id: "sp-2", campaignId: "camp-2", currency: "GBP", amount: 5000, netAmount: null, status: "NOT_RELEASED", releasedAt: null, campaign: { id: "camp-2", title: "Campaign Two", supplierId: "sup-1", supplier: { vendor: { storeName: "Store A" } } } },
+    { id: "sp-3", campaignId: "camp-3", currency: "USD", amount: 20000, netAmount: null, status: "ON_HOLD", releasedAt: null, campaign: { id: "camp-3", title: "Campaign Three", supplierId: "sup-2", supplier: { vendor: { storeName: "Store B" } } } },
+    { id: "sp-4", campaignId: "camp-4", currency: "GBP", amount: 3000, netAmount: null, status: "FAILED", releasedAt: null, campaign: { id: "camp-4", title: "Campaign Four", supplierId: "sup-2", supplier: { vendor: { storeName: "Store B" } } } },
+  ];
+
+  it("never mixes currencies into one total — GBP and USD stay in separate buckets", async () => {
+    m.campaignSupplierPayment.findMany.mockResolvedValue(rows as never);
+
+    const result = await campaignContributionsService.getSupplierPaymentAggregate();
+
+    const gbp = result.totalsByCurrency.find((c) => c.currency === "GBP")!;
+    const usd = result.totalsByCurrency.find((c) => c.currency === "USD")!;
+    expect(gbp.totalAmount).toBe(10000 + 5000 + 3000);
+    expect(usd.totalAmount).toBe(20000);
+    // USD's held total never leaks into GBP's.
+    expect(gbp.totalHeld).toBe(0);
+    expect(usd.totalHeld).toBe(20000);
+  });
+
+  it("buckets by real status — released uses the actual netAmount, not the gross amount", async () => {
+    m.campaignSupplierPayment.findMany.mockResolvedValue(rows as never);
+
+    const result = await campaignContributionsService.getSupplierPaymentAggregate();
+    const gbp = result.totalsByCurrency.find((c) => c.currency === "GBP")!;
+
+    expect(gbp.totalReleased).toBe(9500); // net, not the 10000 gross
+    expect(gbp.totalPending).toBe(5000);
+    expect(gbp.totalFailed).toBe(3000);
+  });
+
+  it("aggregates real totals per supplier, keyed by currency so a supplier's GBP and USD totals never merge", async () => {
+    m.campaignSupplierPayment.findMany.mockResolvedValue(rows as never);
+
+    const result = await campaignContributionsService.getSupplierPaymentAggregate();
+
+    const supplier1 = result.bySupplier.find((s) => s.supplierId === "sup-1" && s.currency === "GBP")!;
+    expect(supplier1.totalAmount).toBe(15000);
+    expect(supplier1.totalReleased).toBe(9500);
+    expect(supplier1.count).toBe(2);
+  });
+
+  it("passes date/status/supplier/campaign filters through to the real query — never filters in-memory only", async () => {
+    m.campaignSupplierPayment.findMany.mockResolvedValue([] as never);
+    const from = new Date("2026-01-01");
+    const to = new Date("2026-02-01");
+
+    await campaignContributionsService.getSupplierPaymentAggregate({ from, to, status: "PAID", supplierId: "sup-1" });
+
+    expect(m.campaignSupplierPayment.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ createdAt: { gte: from, lte: to }, status: "PAID", campaign: { supplierId: "sup-1" } }),
+      }),
+    );
+  });
+
+  it("returns real zeroed totals, not an error, when nothing has moved money yet", async () => {
+    m.campaignSupplierPayment.findMany.mockResolvedValue([] as never);
+    const result = await campaignContributionsService.getSupplierPaymentAggregate();
+    expect(result.totalsByCurrency).toEqual([]);
+    expect(result.byCampaign).toEqual([]);
+    expect(result.bySupplier).toEqual([]);
+  });
+});
+
 describe("campaignContributionsService — financial ledger (read-only aggregation, doc §12)", () => {
   it("getLedgerSummaryForAdmin returns an empty list when nothing has ever moved money", async () => {
     m.campaignContribution.groupBy.mockResolvedValue([] as never);
@@ -1251,7 +1319,8 @@ describe("communityCampaignsService.listMyCampaignUpdates — 'Campaign Updates'
   it("returns updates for a participant, scoped to their own notifications for this campaign", async () => {
     m.communityCampaign.findUnique.mockResolvedValue({ organiser: { userId: "organiser-user" } } as never);
     m.campaignParticipant.findUnique.mockResolvedValue({ id: "participant-1" } as never);
-    m.notification.findMany.mockResolvedValue([{ id: "notif-1", title: "Campaign succeeded!" }] as never);
+    m.campaignUpdate.findMany.mockResolvedValue([] as never);
+    m.notification.findMany.mockResolvedValue([{ id: "notif-1", title: "Campaign succeeded!", body: "Great news", createdAt: new Date("2026-01-01") }] as never);
 
     const result = await communityCampaignsService.listMyCampaignUpdates("user-1", "camp-x");
 
@@ -1261,14 +1330,90 @@ describe("communityCampaignsService.listMyCampaignUpdates — 'Campaign Updates'
       }),
     );
     expect(result).toHaveLength(1);
+    expect(result[0]).toEqual(expect.objectContaining({ source: "system", authorRole: "SYSTEM", title: "Campaign succeeded!" }));
   });
 
   it("allows the organiser without requiring a separate participant row", async () => {
     m.communityCampaign.findUnique.mockResolvedValue({ organiser: { userId: "user-1" } } as never);
+    m.campaignUpdate.findMany.mockResolvedValue([] as never);
     m.notification.findMany.mockResolvedValue([] as never);
 
     await communityCampaignsService.listMyCampaignUpdates("user-1", "camp-x");
 
     expect(m.campaignParticipant.findUnique).not.toHaveBeenCalled();
+  });
+
+  it("merges real organiser/supplier broadcasts with system notifications, newest first", async () => {
+    m.communityCampaign.findUnique.mockResolvedValue({ organiser: { userId: "user-1" } } as never);
+    m.campaignUpdate.findMany.mockResolvedValue([
+      { id: "upd-1", authorRole: "ORGANISER", title: "We hit our goal!", message: "Thanks everyone", createdAt: new Date("2026-02-01") },
+    ] as never);
+    m.notification.findMany.mockResolvedValue([
+      { id: "notif-1", title: "Campaign succeeded!", body: "Great news", createdAt: new Date("2026-01-01") },
+    ] as never);
+
+    const result = await communityCampaignsService.listMyCampaignUpdates("user-1", "camp-x");
+
+    expect(result).toHaveLength(2);
+    expect(result[0]).toEqual(expect.objectContaining({ source: "broadcast", authorRole: "ORGANISER", title: "We hit our goal!" }));
+    expect(result[1]).toEqual(expect.objectContaining({ source: "system", title: "Campaign succeeded!" }));
+  });
+});
+
+describe("communityCampaignsService.postCampaignUpdate — real organiser/supplier broadcast", () => {
+  const baseCampaign = {
+    status: "LIVE",
+    organiser: { userId: "organiser-1" },
+    supplier: { vendor: { userId: "supplier-user-1" } },
+    participants: [{ userId: "buyer-1" }, { userId: "buyer-2" }],
+  };
+
+  it("rejects an empty title or message", async () => {
+    await expect(communityCampaignsService.postCampaignUpdate("organiser-1", "camp-1", { title: "", message: "hi" })).rejects.toMatchObject({ statusCode: 400 });
+    await expect(communityCampaignsService.postCampaignUpdate("organiser-1", "camp-1", { title: "Hi", message: "" })).rejects.toMatchObject({ statusCode: 400 });
+  });
+
+  it("rejects a poster who is neither this campaign's organiser nor its supplier", async () => {
+    m.communityCampaign.findUnique.mockResolvedValue(baseCampaign as never);
+    await expect(
+      communityCampaignsService.postCampaignUpdate("random-user", "camp-1", { title: "Hi", message: "hello" }),
+    ).rejects.toMatchObject({ statusCode: 403 });
+    expect(m.campaignUpdate.create).not.toHaveBeenCalled();
+  });
+
+  it("rejects posting while the campaign hasn't gone live yet (still DRAFT)", async () => {
+    m.communityCampaign.findUnique.mockResolvedValue({ ...baseCampaign, status: "DRAFT" } as never);
+    await expect(
+      communityCampaignsService.postCampaignUpdate("organiser-1", "camp-1", { title: "Hi", message: "hello" }),
+    ).rejects.toMatchObject({ statusCode: 409 });
+  });
+
+  it("lets the organiser post a real update, persists it, and notifies every participant — no financial field accepted", async () => {
+    m.communityCampaign.findUnique.mockResolvedValue(baseCampaign as never);
+    m.campaignUpdate.create.mockResolvedValue({ id: "upd-1", campaignId: "camp-1", authorRole: "ORGANISER", title: "Update", message: "Body" } as never);
+
+    const result = await communityCampaignsService.postCampaignUpdate("organiser-1", "camp-1", { title: "Update", message: "Body" });
+
+    expect(m.campaignUpdate.create).toHaveBeenCalledWith({
+      data: { campaignId: "camp-1", authorUserId: "organiser-1", authorRole: "ORGANISER", title: "Update", message: "Body" },
+    });
+    // The create() call above only ever accepts title/message — there is no
+    // code path here that can write price/minimum/goal/maximum.
+    expect(result.authorRole).toBe("ORGANISER");
+    expect(notificationsService.enqueue).toHaveBeenCalledTimes(2);
+    expect(notificationsService.enqueue).toHaveBeenCalledWith(expect.objectContaining({ userId: "buyer-1", title: "Update" }));
+    expect(notificationsService.enqueue).toHaveBeenCalledWith(expect.objectContaining({ userId: "buyer-2", title: "Update" }));
+  });
+
+  it("lets the supplier post a real update too", async () => {
+    m.communityCampaign.findUnique.mockResolvedValue(baseCampaign as never);
+    m.campaignUpdate.create.mockResolvedValue({ id: "upd-2", authorRole: "SUPPLIER" } as never);
+
+    const result = await communityCampaignsService.postCampaignUpdate("supplier-user-1", "camp-1", { title: "Shipping soon", message: "On its way" });
+
+    expect(m.campaignUpdate.create).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ authorRole: "SUPPLIER" }) }),
+    );
+    expect(result.authorRole).toBe("SUPPLIER");
   });
 });

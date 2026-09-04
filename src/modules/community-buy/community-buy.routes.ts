@@ -38,6 +38,7 @@ import {
   markFulfilmentDispatched,
   markFulfilmentReady,
   organiserConfirmFulfilmentCompletion,
+  postCampaignUpdate,
   publishOrganiserCampaign,
   requestCampaignExtension,
   retryContributionCharge,
@@ -57,6 +58,10 @@ communityBuyRouter.get("/support-cases", authenticate, asyncHandler(listMySuppor
 communityBuyRouter.get("/support-cases/:id", authenticate, asyncHandler(getMySupportCase));
 communityBuyRouter.get("/campaigns/:id", asyncHandler(getCampaign));
 communityBuyRouter.get("/campaigns/:id/updates", authenticate, asyncHandler(getCampaignUpdates));
+// Organiser or supplier posts a real broadcast update — authorization
+// (must be this campaign's organiser or supplier) is enforced in the
+// service, not here, since either role is valid.
+communityBuyRouter.post("/campaigns/:id/updates", authenticate, asyncHandler(postCampaignUpdate));
 // Pledge — saves quantity + a reference to an already-collected payment
 // method (see /buyer/payment-methods for the SetupIntent flow itself).
 // No money moves until the campaign succeeds; see community-buy.

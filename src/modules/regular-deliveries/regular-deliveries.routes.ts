@@ -17,6 +17,7 @@ import {
   getVendorSubscriberDetail,
   listBuyerSubscriptions,
   listPaymentMethods,
+  listPublicSubscriptionOffers,
   listVendorRenewals,
   listVendorSubscribers,
   listVendorSubscriptionOffers,
@@ -41,6 +42,9 @@ import {
 // swallow every request reaching this router regardless of which route
 // actually matches.
 export const subscriptionOffersRouter = Router();
+// Must be registered BEFORE "/:id" — otherwise Express would match
+// "/public" as an :id param and this route would never be reached.
+subscriptionOffersRouter.get("/public", asyncHandler(listPublicSubscriptionOffers));
 subscriptionOffersRouter.get("/:id", asyncHandler(getPublicSubscriptionOffer));
 subscriptionOffersRouter.patch("/:id", authenticate, requireRole("VENDOR"), asyncHandler(updateSubscriptionOffer));
 subscriptionOffersRouter.post("/:id/publish", authenticate, requireRole("VENDOR"), asyncHandler(publishSubscriptionOffer));

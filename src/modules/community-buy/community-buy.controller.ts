@@ -122,6 +122,17 @@ export async function getCampaignUpdates(request: Request, response: Response): 
   response.json({ items: await communityCampaignsService.listMyCampaignUpdates(userId, requireIdParam(request)) });
 }
 
+/** POST /campaigns/:id/updates — organiser or supplier posts a real broadcast update. */
+export async function postCampaignUpdate(request: Request, response: Response): Promise<void> {
+  const userId = requireUserId(request);
+  const { title, message } = request.body ?? {};
+  if (typeof title !== "string" || typeof message !== "string") {
+    throw new AppError("title and message are required", 400);
+  }
+  const update = await communityCampaignsService.postCampaignUpdate(userId, requireIdParam(request), { title, message });
+  response.status(201).json({ update });
+}
+
 // ─── Organiser ──────────────────────────────────────────────────────────
 
 export async function applyAsOrganiser(request: Request, response: Response): Promise<void> {
@@ -505,6 +516,19 @@ export async function adminRejectExtension(request: Request, response: Response)
 
 export async function adminListSupplierPayments(_request: Request, response: Response): Promise<void> {
   response.json({ items: await campaignContributionsService.listSupplierPaymentsForAdmin() });
+}
+
+/** GET /admin/community-buy/supplier-payments/aggregate — real cross-campaign/cross-supplier totals, never mixing currencies. */
+export async function adminGetSupplierPaymentAggregate(request: Request, response: Response): Promise<void> {
+  const { from, to, status, supplierId, campaignId } = request.query;
+  const result = await campaignContributionsService.getSupplierPaymentAggregate({
+    from: typeof from === "string" && from ? new Date(from) : undefined,
+    to: typeof to === "string" && to ? new Date(to) : undefined,
+    status: typeof status === "string" && status ? status : undefined,
+    supplierId: typeof supplierId === "string" && supplierId ? supplierId : undefined,
+    campaignId: typeof campaignId === "string" && campaignId ? campaignId : undefined,
+  });
+  response.json(result);
 }
 
 export async function adminReleaseSupplierPayment(request: Request, response: Response): Promise<void> {
