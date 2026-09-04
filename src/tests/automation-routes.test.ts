@@ -153,6 +153,15 @@ describe("Automation routes — PATCH :id param handling", () => {
     expect(mockSetVendorAutomation).not.toHaveBeenCalled();
   });
 
+  it("PATCH /api/vendor/automations/:id — 400 for a real but buyer-facing CAMPAIGN_* type (a vendor has no toggle for these)", async () => {
+    const res = await request(app)
+      .patch("/api/vendor/automations/CAMPAIGN_MILESTONE")
+      .set("Authorization", `Bearer ${vendorToken()}`)
+      .send({ enabled: false });
+    expect(res.status).toBe(400);
+    expect(mockSetVendorAutomation).not.toHaveBeenCalled();
+  });
+
   it("PATCH /api/vendor/automations/:id — 400 when enabled is not a boolean", async () => {
     const res = await request(app)
       .patch("/api/vendor/automations/CART_RECOVERY")

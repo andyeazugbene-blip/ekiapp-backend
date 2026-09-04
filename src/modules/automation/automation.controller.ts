@@ -4,12 +4,12 @@ import type { AutomationType } from "@prisma/client";
 import { prisma } from "../../lib/prisma";
 import { AppError } from "../../shared/errors/app-error";
 import { automationService, CONFIGURABLE_TYPES, DEFAULT_CONFIG } from "./automation.service";
+import { VENDOR_TOGGLEABLE_AUTOMATION_TYPES } from "./automation.types";
 
-const VALID_TYPES: AutomationType[] = [
-  "FIRST_SALE", "CART_RECOVERY", "BUYER_WIN_BACK", "REVIEW_REQUEST", "LOW_STOCK_ALERT",
-  "BUYER_REFERRAL", "PAYMENT_RECOVERY", "RENEWAL_REMINDER", "PRICE_APPROVAL_REMINDER",
-  "CAMPAIGN_MILESTONE", "CAMPAIGN_DEADLINE", "CAMPAIGN_REFUND_UPDATE",
-];
+// The three CAMPAIGN_* types are buyer-facing, campaign-lifecycle-triggered
+// notifications with no vendor on/off concept — a vendor can only toggle
+// the types listVendorAutomations() actually shows them.
+const VALID_TYPES: AutomationType[] = VENDOR_TOGGLEABLE_AUTOMATION_TYPES;
 
 function requireUserId(request: Request): string {
   if (!request.user) throw new AppError("Unauthorized", 401);

@@ -3,7 +3,7 @@ import type { AutomationType } from "@prisma/client";
 import { prisma } from "../../lib/prisma";
 import { logger } from "../../lib/logger";
 import { communicationService } from "../communications/communication.service";
-import { MARKETING_AUTOMATION_TYPES, type ScheduleAutomationInput } from "./automation.types";
+import { MARKETING_AUTOMATION_TYPES, VENDOR_TOGGLEABLE_AUTOMATION_TYPES, type ScheduleAutomationInput } from "./automation.types";
 
 // Server-time quiet hours (UTC). A per-user-timezone version would need a
 // timezone field on User, which doesn't exist yet — documented limitation,
@@ -242,7 +242,7 @@ export const automationService = {
   async listVendorAutomations(vendorId: string) {
     const settings = await prisma.vendorAutomationSetting.findMany({ where: { vendorId } });
     const settingByType = new Map(settings.map((s) => [s.type, s]));
-    const types = Object.keys(DEFAULT_TEMPLATES) as AutomationType[];
+    const types = VENDOR_TOGGLEABLE_AUTOMATION_TYPES;
     return types.map((type) => {
       const setting = settingByType.get(type);
       return {

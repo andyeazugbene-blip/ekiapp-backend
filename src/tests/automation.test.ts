@@ -167,6 +167,28 @@ describe("automationService — per-vendor tunable config (CART_RECOVERY, BUYER_
     expect(firstSale?.config).toBeNull();
   });
 
+  it("listVendorAutomations never returns a buyer-facing CAMPAIGN_* type — regression for the real-device 'This automation is not available' bug (tapping a CAMPAIGN_* card in Automation Center navigated to a type the frontend's own vendor-type allowlist rejects)", async () => {
+    m.vendorAutomationSetting.findMany.mockResolvedValue([]);
+    const items = await automationService.listVendorAutomations("vendor-1");
+    const types = items.map((i) => i.type);
+    expect(types).not.toContain("CAMPAIGN_MILESTONE");
+    expect(types).not.toContain("CAMPAIGN_DEADLINE");
+    expect(types).not.toContain("CAMPAIGN_REFUND_UPDATE");
+    expect(types.sort()).toEqual(
+      [
+        "FIRST_SALE",
+        "CART_RECOVERY",
+        "BUYER_WIN_BACK",
+        "REVIEW_REQUEST",
+        "LOW_STOCK_ALERT",
+        "BUYER_REFERRAL",
+        "PAYMENT_RECOVERY",
+        "RENEWAL_REMINDER",
+        "PRICE_APPROVAL_REMINDER",
+      ].sort(),
+    );
+  });
+
   it("setVendorAutomation persists config for a configurable type", async () => {
     m.vendorAutomationSetting.upsert.mockResolvedValue({} as never);
     await automationService.setVendorAutomation("vendor-1", "BUYER_WIN_BACK", true, { inactivityDays: 90 });

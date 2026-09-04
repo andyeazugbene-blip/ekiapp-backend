@@ -32,3 +32,23 @@ export const MARKETING_AUTOMATION_TYPES: AutomationType[] = [
   "REVIEW_REQUEST",
   "BUYER_REFERRAL",
 ];
+
+// Automations a vendor can see/toggle from the Automation Center. The three
+// CAMPAIGN_* types are buyer-facing, campaign-lifecycle-triggered
+// notifications with no vendor on/off concept — mirrors the frontend's
+// VENDOR_AUTOMATION_TYPES in services/automationService.ts exactly. Before
+// this list existed, listVendorAutomations() returned all AutomationType
+// keys (including CAMPAIGN_*), so tapping one of those three cards in the
+// Automation Center opened a detail screen for a type the frontend's own
+// validity check rejected, showing "This automation is not available."
+export const VENDOR_TOGGLEABLE_AUTOMATION_TYPES: AutomationType[] = [
+  "FIRST_SALE",
+  "CART_RECOVERY",
+  "BUYER_WIN_BACK",
+  "REVIEW_REQUEST",
+  "LOW_STOCK_ALERT",
+  "BUYER_REFERRAL",
+  "PAYMENT_RECOVERY",
+  "RENEWAL_REMINDER",
+  "PRICE_APPROVAL_REMINDER",
+];
