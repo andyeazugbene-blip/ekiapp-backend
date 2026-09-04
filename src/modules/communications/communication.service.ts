@@ -90,17 +90,32 @@ function interpolate(text: string, variables: Record<string, string>): string {
   return text.replace(/\{\{(\w+)\}\}/g, (_, key) => variables[key] ?? "");
 }
 
+// Interpolated variables (store names, buyer names, referral codes) come
+// from real user-editable fields, not fixed template text — wrapEmailHtml
+// embeds them in raw HTML, so they must be escaped there or a store/buyer
+// name containing HTML would inject into an email sent to someone else.
+function escapeHtml(text: string): string {
+  return text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
 // ─── Simple HTML wrapper for communication emails ───────────────────────────
 
 function wrapEmailHtml(title: string, body: string): string {
+  const safeTitle = escapeHtml(title);
+  const safeBody = escapeHtml(body);
   return `
 <!DOCTYPE html>
 <html>
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width"></head>
 <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f9fafb; padding: 40px 20px;">
   <div style="max-width: 560px; margin: 0 auto; background: #ffffff; border-radius: 12px; padding: 32px; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
-    <h2 style="color: #111827; margin: 0 0 16px;">${title}</h2>
-    <p style="color: #374151; line-height: 1.6;">${body}</p>
+    <h2 style="color: #111827; margin: 0 0 16px;">${safeTitle}</h2>
+    <p style="color: #374151; line-height: 1.6;">${safeBody}</p>
     <hr style="border: none; border-top: 1px solid #e5e7eb; margin: 24px 0;">
     <p style="font-size: 12px; color: #9ca3af; text-align: center;">Eki Marketplace</p>
   </div>
