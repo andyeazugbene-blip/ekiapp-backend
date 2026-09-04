@@ -262,11 +262,17 @@ describe("Checkout with deliveryCountry resolves zone", () => {
 // ─── 7. Checkout rejects overweight vendor group ─────────────────────────
 
 describe("Checkout rejects overweight vendor group", () => {
-  it("MAX_VENDOR_WEIGHT_GRAMS is 30000 (30kg) — enforced in service", () => {
-    // This is a service-level check. The validation layer doesn't know about weight.
-    // The service throws AppError when totalWeight > 30000g per vendor group.
-    // Verified by reading the service code — the constant is 30_000.
-    expect(true).toBe(true); // Structural verification
+  it("MAX_VENDOR_WEIGHT_GRAMS is 30000 (30kg) — real exported constant, and the service actually throws on it", async () => {
+    const { MAX_VENDOR_WEIGHT_GRAMS } = await import("../shared/constants");
+    expect(MAX_VENDOR_WEIGHT_GRAMS).toBe(30_000);
+
+    const fs = await import("fs");
+    const path = await import("path");
+    const paymentsServiceSource = fs.readFileSync(
+      path.join(__dirname, "..", "modules", "payments", "payments.service.ts"),
+      "utf8",
+    );
+    expect(paymentsServiceSource).toMatch(/if \(totalWeight > MAX_VENDOR_WEIGHT_GRAMS\)/);
   });
 });
 
@@ -306,10 +312,23 @@ describe("walletAmount cannot make buyer wallet negative", () => {
 // ─── 9. Full wallet payment returns clientSecret: "wallet_paid" ──────────
 
 describe("Full wallet payment returns wallet_paid", () => {
-  it("service returns clientSecret 'wallet_paid' when stripeAmount is 0 — verified by code inspection", () => {
-    // The payments service checks: if (stripeAmount === 0) return { ..., clientSecret: "wallet_paid" }
-    // This is a structural guarantee in the service code.
-    expect(true).toBe(true);
+  it("service returns clientSecret 'wallet_paid' when stripeAmount is 0 — real string in the real code path", async () => {
+    const fs = await import("fs");
+    const path = await import("path");
+    const paymentsServiceSource = fs.readFileSync(
+      path.join(__dirname, "..", "modules", "payments", "payments.service.ts"),
+      "utf8",
+    );
+    expect(paymentsServiceSource).toMatch(/clientSecret: "wallet_paid"/);
+    // And confirm it's genuinely gated on stripeAmount === 0, not returned
+    // unconditionally: the nearest preceding `if (stripeAmount === 0)`
+    // guard must open before this return and have no intervening
+    // function boundary (a closing `},` at zero indentation) between them.
+    const walletPaidIndex = paymentsServiceSource.indexOf('clientSecret: "wallet_paid"');
+    const lastGuardIndex = paymentsServiceSource.lastIndexOf("if (stripeAmount === 0)", walletPaidIndex);
+    expect(lastGuardIndex).toBeGreaterThan(-1);
+    const between = paymentsServiceSource.slice(lastGuardIndex, walletPaidIndex);
+    expect(between).not.toMatch(/\n {2}\},\n/); // no top-level function close in between
   });
 });
 

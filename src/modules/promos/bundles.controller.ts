@@ -24,7 +24,8 @@ export async function createBundle(request: Request, response: Response): Promis
   if (!Number.isInteger(bundlePriceMinor)) throw new AppError("bundlePriceMinor must be an integer", 400);
   const currency = typeof body.currency === "string" ? body.currency : "";
 
-  const bundle = await bundlesService.create(requireUserId(request), { name: body.name, productIds: body.productIds, bundlePriceMinor, currency });
+  const quantityAvailable = body.quantityAvailable == null ? null : Number(body.quantityAvailable);
+  const bundle = await bundlesService.create(requireUserId(request), { name: body.name, productIds: body.productIds, bundlePriceMinor, currency, quantityAvailable });
   response.status(201).json({ bundle });
 }
 

@@ -1,18 +1,37 @@
 import { describe, it, expect } from "vitest";
+import fs from "fs";
+import path from "path";
 
 /**
  * Milestone 2: Multi-Vendor Cart & Checkout Tests
  *
  * These verify the correctness of the multi-vendor architecture at the logic level.
  * Integration tests with a real DB would be added in CI.
+ *
+ * Where a claim is about a structural invariant (a schema field's absence,
+ * an exact unique constraint, an atomic-guard pattern in a specific
+ * service) rather than a runtime value, the assertion reads the real
+ * source/schema file and checks for the real pattern — a genuine
+ * regression test that fails if the safety mechanism is removed, not a
+ * live-DB integration test (those need real infrastructure this repo's
+ * test environment doesn't have — see the header note above).
  */
 
+const schemaSource = fs.readFileSync(path.join(__dirname, "..", "..", "prisma", "schema.prisma"), "utf8");
+const paymentsServiceSource = fs.readFileSync(path.join(__dirname, "..", "modules", "payments", "payments.service.ts"), "utf8");
+const stripeServiceSource = fs.readFileSync(path.join(__dirname, "..", "modules", "stripe", "stripe.service.ts"), "utf8");
+const ordersServiceSource = fs.readFileSync(path.join(__dirname, "..", "modules", "orders", "orders.service.ts"), "utf8");
+
+function extractModel(source: string, modelName: string): string {
+  const match = source.match(new RegExp(`model ${modelName} \\{[\\s\\S]*?\\n\\}`));
+  if (!match) throw new Error(`model ${modelName} not found in schema.prisma`);
+  return match[0];
+}
+
 describe("Multi-Vendor Cart", () => {
-  it("cart no longer enforces single-vendor restriction", () => {
-    // Cart model no longer has vendorId field
-    // addItem does NOT check cart.vendorId !== product.vendorId
-    // Items from vendor A and vendor B can coexist in one cart
-    expect(true).toBe(true);
+  it("cart no longer enforces single-vendor restriction — Cart has no vendorId field", () => {
+    const cartModel = extractModel(schemaSource, "Cart");
+    expect(cartModel).not.toMatch(/vendorId/);
   });
 
   it("cart items are grouped by vendor at checkout", () => {
@@ -116,17 +135,22 @@ describe("Multi-Vendor Checkout Flow", () => {
 });
 
 describe("Multi-Vendor Webhook Idempotency", () => {
-  it("duplicate webhook does not duplicate vendor orders", () => {
-    // WebhookEvent unique constraint on stripeEventId
-    // Checkout.status conditional update: PENDING → SUCCEEDED (count=0 = duplicate)
-    // Both layers prevent double-processing
-    expect(true).toBe(true);
+  it("duplicate webhook does not duplicate vendor orders — two independent guards, both real", () => {
+    // Layer 1: WebhookEvent.stripeEventId is DB-unique — a replayed event ID
+    // fails to insert the processing marker.
+    const webhookEventModel = extractModel(schemaSource, "WebhookEvent");
+    expect(webhookEventModel).toMatch(/stripeEventId\s+String\s+@unique/);
+    // Layer 2: even if layer 1 were bypassed, the checkout transition itself
+    // is a guarded conditional update (count=0 on a second call), not an
+    // unconditional write.
+    expect(stripeServiceSource).toMatch(
+      /checkout\.updateMany\(\{\s*where:\s*\{\s*id:\s*checkoutId,\s*status:\s*PaymentStatus\.PENDING/,
+    );
   });
 
-  it("duplicate webhook does not double-credit vendor wallets", () => {
-    // WalletTransaction unique constraint: [vendorId, orderId, paymentId, type]
-    // Even if the outer idempotency fails, the unique constraint catches it
-    expect(true).toBe(true);
+  it("duplicate webhook does not double-credit vendor wallets — WalletTransaction has a real composite unique constraint", () => {
+    const walletTransactionModel = extractModel(schemaSource, "WalletTransaction");
+    expect(walletTransactionModel).toMatch(/@@unique\(\[vendorId, orderId, paymentId, type\]\)/);
   });
 
   it("each vendor receives correct pending wallet credit", () => {
@@ -140,80 +164,86 @@ describe("Multi-Vendor Webhook Idempotency", () => {
 });
 
 describe("Multi-Vendor Stock Safety", () => {
-  it("stock is decremented atomically for ALL items before Stripe call", () => {
-    // For each item in ALL vendor groups:
-    // product.updateMany({ where: { id, isActive: true, stock: { gte: qty } }, data: { stock: { decrement: qty } } })
-    // If ANY item fails (count !== 1), entire transaction rolls back
-    expect(true).toBe(true);
+  it("stock is decremented atomically for ALL items, inside the same transaction that creates the orders", () => {
+    // The guarded decrement (real invariant that makes overselling
+    // impossible: only succeeds if stock >= requested quantity) must live
+    // inside prisma.$transaction, not as a standalone pre-check — otherwise
+    // a failure partway through would leave earlier vendors' stock
+    // decremented with no order ever created for them.
+    const transactionBlock = paymentsServiceSource.match(/prisma\.\$transaction\(async \(tx\) => \{[\s\S]*?\n {4}\}\);/);
+    expect(transactionBlock).not.toBeNull();
+    const body = transactionBlock![0];
+    expect(body).toMatch(/stock: \{ gte: item\.quantity \}/);
+    expect(body).toMatch(/stock: \{ decrement: item\.quantity \}/);
+    expect(body).toMatch(/if \(result\.count !== 1\)/);
   });
 
-  it("if one vendor item is out of stock, entire checkout fails", () => {
-    // All stock decrements are in one transaction
-    // If item from vendor B fails, vendor A stock is also rolled back
-    expect(true).toBe(true);
+  it("if one vendor item is out of stock, entire checkout fails — the insufficient-stock throw happens inside the transaction, not after it", () => {
+    const transactionBlock = paymentsServiceSource.match(/prisma\.\$transaction\(async \(tx\) => \{[\s\S]*?\n {4}\}\);/);
+    expect(transactionBlock).not.toBeNull();
+    expect(transactionBlock![0]).toMatch(/throw new AppError\(`Insufficient stock for/);
   });
 
-  it("failed payment restores stock for ALL vendor groups", () => {
-    // payment_intent.payment_failed webhook:
-    // For each order in checkout → for each item → product.stock += quantity
-    expect(true).toBe(true);
+  it("failed payment restores stock for ALL vendor groups — the payment_intent.payment_failed handler increments stock back", () => {
+    expect(stripeServiceSource).toMatch(/stock: \{ increment: item\.quantity \}/);
   });
 
-  it("concurrent checkouts cannot oversell (guarded decrement)", () => {
-    // Two buyers try to buy the last item simultaneously:
-    // Buyer A: updateMany({ where: { stock: { gte: 1 } }, data: { stock: { decrement: 1 } } }) → count=1 ✓
-    // Buyer B: updateMany({ where: { stock: { gte: 1 } }, data: { stock: { decrement: 1 } } }) → count=0 ✗ (stock is now 0)
-    // Buyer B gets 409 "Insufficient stock"
-    expect(true).toBe(true);
+  it("concurrent checkouts cannot oversell — the decrement is a guarded conditional update, not a read-then-write", () => {
+    // A real read-then-write (findUnique + check + update) would race; the
+    // actual code uses updateMany's WHERE clause as the atomic guard so
+    // Postgres itself serializes concurrent decrements against the same row.
+    expect(paymentsServiceSource).toMatch(/tx\.product\.updateMany\(\{\s*where: \{ id: item\.productId, isActive: true, stock: \{ gte: item\.quantity \} \}/);
   });
 });
 
 describe("Concurrency (200 simultaneous checkouts)", () => {
-  it("short DB transactions prevent connection exhaustion", () => {
-    // Transaction contains ONLY: stock decrement + order/payment creation
-    // NO Stripe network calls inside transaction
-    // Transaction duration: ~50-100ms (DB only)
-    // 200 concurrent = 200 short transactions, not 200 long-held connections
-    expect(true).toBe(true);
+  it("Stripe calls are outside the DB transaction — no long-held connection during the network round-trip", () => {
+    // Real risk being guarded against: if stripe.paymentIntents.create()
+    // ran INSIDE prisma.$transaction, every concurrent checkout would hold
+    // a DB connection/lock for the full 1-3s Stripe round-trip, exhausting
+    // the pool under load. Confirm the Stripe call is textually AFTER the
+    // transaction closes, not nested inside it.
+    const transactionIndex = paymentsServiceSource.indexOf("prisma.$transaction(async (tx) => {");
+    const transactionReturnIndex = paymentsServiceSource.indexOf("return { checkoutId: checkout.id, orderIds };", transactionIndex);
+    const stripeCallIndex = paymentsServiceSource.indexOf("stripe.paymentIntents.create(", transactionIndex);
+    expect(transactionIndex).toBeGreaterThan(-1);
+    expect(transactionReturnIndex).toBeGreaterThan(transactionIndex);
+    expect(stripeCallIndex).toBeGreaterThan(transactionReturnIndex);
   });
 
-  it("Stripe calls are outside transactions (no lock contention)", () => {
-    // After transaction commits: stripe.paymentIntents.create(...)
-    // This can take 1-3 seconds but doesn't hold any DB locks
-    expect(true).toBe(true);
+  it("idempotency keys prevent duplicate Stripe charges on checkout retry", () => {
+    expect(paymentsServiceSource).toMatch(/idempotencyKey: `pi:checkout:\$\{checkoutId\}`/);
   });
 
-  it("idempotency keys prevent duplicate Stripe charges", () => {
-    // idempotencyKey: `pi:checkout:${checkoutId}`
-    // If the same checkout is retried, Stripe returns the same PI
-    expect(true).toBe(true);
+  it("unique constraints prevent duplicate orders on retry — all three real constraints present", () => {
+    const checkoutModel = extractModel(schemaSource, "Checkout");
+    expect(checkoutModel).toMatch(/stripePaymentIntentId\s+String\?\s+@unique/);
+    expect(extractModel(schemaSource, "WebhookEvent")).toMatch(/stripeEventId\s+String\s+@unique/);
+    expect(extractModel(schemaSource, "WalletTransaction")).toMatch(/@@unique\(\[vendorId, orderId, paymentId, type\]\)/);
   });
 
-  it("unique constraints prevent duplicate orders on retry", () => {
-    // Checkout.stripePaymentIntentId is unique
-    // WebhookEvent.stripeEventId is unique
-    // WalletTransaction [vendorId, orderId, paymentId, type] is unique
-    expect(true).toBe(true);
-  });
-
-  it("conditional updates prevent race conditions on wallet credits", () => {
-    // Checkout.updateMany({ where: { status: PENDING } }) → count=0 means already processed
-    // wallet.update uses increment (atomic, no read-check-write)
-    expect(true).toBe(true);
+  it("conditional updates prevent race conditions on wallet credits — increment is atomic, not read-check-write", () => {
+    expect(stripeServiceSource).toMatch(/pendingBalance: \{ increment:/);
   });
 });
 
 describe("Multi-Vendor Order Visibility", () => {
-  it("vendor can only see orders containing their items", () => {
-    // GET /vendors/me/orders filters by vendorId on OrderItem
-    // Vendor A cannot see Vendor B's order from the same checkout
-    expect(true).toBe(true);
+  it("vendor can only see orders containing their items — listVendorOrders filters by Order.vendorId, scoped to the requesting vendor's own row", () => {
+    expect(ordersServiceSource).toMatch(/async listVendorOrders\(/);
+    // Real scoping chain: resolve the vendor row for the authenticated user
+    // first, then filter orders by THAT vendor's id — never a client-
+    // supplied vendorId, so vendor A can't pass vendor B's id to see their orders.
+    const fnBody = ordersServiceSource.slice(
+      ordersServiceSource.indexOf("async listVendorOrders("),
+      ordersServiceSource.indexOf("async getVendorOrder("),
+    );
+    expect(fnBody).toMatch(/vendor\.findUnique\(\{\s*where: \{ userId \}/);
+    expect(fnBody).toMatch(/where: \{\s*vendorId: vendor\.id/);
   });
 
-  it("buyer sees all split orders under one checkout", () => {
-    // GET /orders/me returns all orders for buyerId
-    // Each order has checkoutId linking them together
-    // Frontend can group by checkoutId for display
-    expect(true).toBe(true);
+  it("buyer sees all split orders under one checkout — Checkout.orders is a real relation buyers can traverse", () => {
+    const checkoutModel = extractModel(schemaSource, "Checkout");
+    expect(checkoutModel).toMatch(/orders\s+Order\[\]/);
+    expect(checkoutModel).toMatch(/buyerId\s+String/);
   });
 });

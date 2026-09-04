@@ -92,11 +92,10 @@ afterAll(async () => {
 });
 
 describe("🧪 REAL E2E: Wallet & Notification Flow", () => {
-  it("1. Buyer wallet exists and has 0 balance", async () => {
+  it("1. Buyer wallet is lazily created — no row exists for a brand-new buyer who has never topped up", async () => {
     const w = await prisma.buyerWallet.findUnique({ where: { buyerId } });
-    // Wallet may not exist yet — that's fine
     console.log(`   Buyer wallet: ${w ? `exists balance=${w.balance}` : "not yet created"}`);
-    expect(true).toBe(true);
+    expect(w).toBeNull();
   });
 
   it("2. Vendor wallet exists with 0 balance", async () => {

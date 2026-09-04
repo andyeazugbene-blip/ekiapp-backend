@@ -75,6 +75,61 @@ describe("bundlesService.create — real structured data, no upfront money captu
     expect(result.currency).toBe("GBP");
     expect(result.shareUrl).toContain("queen-foods");
   });
+
+  it("rejects a quantityAvailable that isn't a positive whole number", async () => {
+    m.vendor.findUnique.mockResolvedValue(vendor as never);
+    m.product.findMany.mockResolvedValue([
+      { id: "p1", priceInCents: 1000, currency: "GBP" },
+      { id: "p2", priceInCents: 1000, currency: "GBP" },
+    ] as never);
+    await expect(
+      bundlesService.create("user-1", { name: "Duo pack", productIds: ["p1", "p2"], bundlePriceMinor: 500, currency: "GBP", quantityAvailable: 0 }),
+    ).rejects.toMatchObject({ statusCode: 400 });
+    await expect(
+      bundlesService.create("user-1", { name: "Duo pack", productIds: ["p1", "p2"], bundlePriceMinor: 500, currency: "GBP", quantityAvailable: 2.5 }),
+    ).rejects.toMatchObject({ statusCode: 400 });
+  });
+
+  it("a real quantityAvailable becomes the linked PromoCode's maxUses — the same already-proven limit enforcement, not a second mechanism", async () => {
+    m.vendor.findUnique.mockResolvedValue(vendor as never);
+    m.product.findMany.mockResolvedValue([
+      { id: "p1", priceInCents: 1000, currency: "GBP" },
+      { id: "p2", priceInCents: 1000, currency: "GBP" },
+    ] as never);
+    const promoCreate = vi.fn().mockResolvedValue({ id: "promo-1", code: "BUNDLE202609ABCD" });
+    const bundleCreate = vi.fn().mockResolvedValue({
+      id: "bundle-1", name: "Duo pack", bundlePriceMinor: 1500, currency: "GBP",
+      items: [{ product: { priceInCents: 1000 } }, { product: { priceInCents: 1000 } }],
+      promoCode: { code: "BUNDLE202609ABCD", maxUses: 10, usedCount: 0 },
+    });
+    m.$transaction.mockImplementationOnce(async (cb: any) => cb({ promoCode: { create: promoCreate }, bundle: { create: bundleCreate } }));
+
+    const result = await bundlesService.create("user-1", { name: "Duo pack", productIds: ["p1", "p2"], bundlePriceMinor: 1500, currency: "GBP", quantityAvailable: 10 });
+
+    expect(promoCreate).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ maxUses: 10 }) }));
+    expect(result.quantityAvailable).toBe(10);
+    expect(result.quantitySold).toBe(0);
+  });
+
+  it("an unset quantityAvailable means unlimited — maxUses stays null", async () => {
+    m.vendor.findUnique.mockResolvedValue(vendor as never);
+    m.product.findMany.mockResolvedValue([
+      { id: "p1", priceInCents: 1000, currency: "GBP" },
+      { id: "p2", priceInCents: 1000, currency: "GBP" },
+    ] as never);
+    const promoCreate = vi.fn().mockResolvedValue({ id: "promo-1", code: "BUNDLE202609ABCD" });
+    const bundleCreate = vi.fn().mockResolvedValue({
+      id: "bundle-1", name: "Duo pack", bundlePriceMinor: 1500, currency: "GBP",
+      items: [{ product: { priceInCents: 1000 } }, { product: { priceInCents: 1000 } }],
+      promoCode: { code: "BUNDLE202609ABCD", maxUses: null, usedCount: 0 },
+    });
+    m.$transaction.mockImplementationOnce(async (cb: any) => cb({ promoCode: { create: promoCreate }, bundle: { create: bundleCreate } }));
+
+    const result = await bundlesService.create("user-1", { name: "Duo pack", productIds: ["p1", "p2"], bundlePriceMinor: 1500, currency: "GBP" });
+
+    expect(promoCreate).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ maxUses: null }) }));
+    expect(result.quantityAvailable).toBeNull();
+  });
 });
 
 describe("bundlesService.listMine — real prices returned, never 0", () => {
@@ -92,6 +147,30 @@ describe("bundlesService.listMine — real prices returned, never 0", () => {
 
     expect(bundles[0].bundlePriceMinor).toBe(1500);
     expect(bundles[0].regularPriceMinor).toBe(2000);
+  });
+});
+
+describe("bundlesService.listPublic — sold-out bundles never shown for sale", () => {
+  it("excludes a bundle whose maxUses has been reached, includes one that hasn't", async () => {
+    m.bundle.findMany.mockResolvedValue([
+      {
+        id: "bundle-sold-out", vendorId: "vendor-1", name: "Gone", bundlePriceMinor: 1000, currency: "GBP",
+        vendor: { storeName: "Queen Foods", storeSlug: "queen-foods" },
+        items: [{ productId: "p1", product: { priceInCents: 1000 } }],
+        promoCode: { code: "BUNDLE1", maxUses: 5, usedCount: 5 },
+      },
+      {
+        id: "bundle-available", vendorId: "vendor-1", name: "Available", bundlePriceMinor: 1000, currency: "GBP",
+        vendor: { storeName: "Queen Foods", storeSlug: "queen-foods" },
+        items: [{ productId: "p2", product: { priceInCents: 1000 } }],
+        promoCode: { code: "BUNDLE2", maxUses: 5, usedCount: 2 },
+      },
+    ] as never);
+
+    const items = await bundlesService.listPublic();
+
+    expect(items.map((b) => b.id)).toEqual(["bundle-available"]);
+    expect(items[0].quantityAvailable).toBe(3);
   });
 });
 

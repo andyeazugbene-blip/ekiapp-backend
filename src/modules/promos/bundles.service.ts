@@ -32,7 +32,7 @@ function shareUrl(storeSlug: string, code: string): string {
 }
 
 export const bundlesService = {
-  async create(userId: string, input: { name: string; productIds: string[]; bundlePriceMinor: number; currency: string }) {
+  async create(userId: string, input: { name: string; productIds: string[]; bundlePriceMinor: number; currency: string; quantityAvailable?: number | null }) {
     const vendor = await requireVendor(userId);
     await subscriptionsService.enforceBundleLimit(vendor.id);
 
@@ -42,6 +42,14 @@ export const bundlesService = {
     if (productIds.length < 2) throw new AppError("A bundle needs at least 2 products", 400);
     if (!Number.isInteger(input.bundlePriceMinor) || input.bundlePriceMinor <= 0) {
       throw new AppError("Bundle price must be a positive amount", 400);
+    }
+    // Optional — an unset/null quantity means unlimited (no maxUses on the
+    // linked PromoCode). When set, reuses PromoCode's real, already-proven
+    // maxUses/usedCount enforcement (an atomic guarded UPDATE at redemption
+    // time in promos.service.ts) rather than inventing a second, parallel
+    // stock-tracking mechanism for the same underlying limit.
+    if (input.quantityAvailable != null && (!Number.isInteger(input.quantityAvailable) || input.quantityAvailable <= 0)) {
+      throw new AppError("Bundle quantity available must be a positive whole number", 400);
     }
 
     const products = await prisma.product.findMany({ where: { vendorId: vendor.id, id: { in: productIds } } });
@@ -59,7 +67,7 @@ export const bundlesService = {
 
     return prisma.$transaction(async (tx) => {
       const promo = await tx.promoCode.create({
-        data: { vendorId: vendor.id, code, type: "FIXED_AMOUNT", value: discountValue, isActive: true },
+        data: { vendorId: vendor.id, code, type: "FIXED_AMOUNT", value: discountValue, isActive: true, maxUses: input.quantityAvailable ?? null },
       });
       const bundle = await tx.bundle.create({
         data: {
@@ -70,9 +78,15 @@ export const bundlesService = {
           promoCodeId: promo.id,
           items: { create: productIds.map((productId) => ({ productId })) },
         },
-        include: { items: { include: { product: { select: { id: true, title: true, priceInCents: true, currency: true, images: true } } } }, promoCode: { select: { code: true } } },
+        include: { items: { include: { product: { select: { id: true, title: true, priceInCents: true, currency: true, images: true } } } }, promoCode: { select: { code: true, maxUses: true, usedCount: true } } },
       });
-      return { ...bundle, regularPriceMinor: regularTotal, shareUrl: shareUrl(vendor.storeSlug, code) };
+      return {
+        ...bundle,
+        regularPriceMinor: regularTotal,
+        shareUrl: shareUrl(vendor.storeSlug, code),
+        quantityAvailable: bundle.promoCode?.maxUses ?? null,
+        quantitySold: bundle.promoCode?.usedCount ?? 0,
+      };
     });
   },
 
@@ -80,13 +94,15 @@ export const bundlesService = {
     const vendor = await requireVendor(userId);
     const bundles = await prisma.bundle.findMany({
       where: { vendorId: vendor.id },
-      include: { items: { include: { product: { select: { id: true, title: true, priceInCents: true, currency: true, images: true } } } }, promoCode: { select: { code: true, usedCount: true } } },
+      include: { items: { include: { product: { select: { id: true, title: true, priceInCents: true, currency: true, images: true } } } }, promoCode: { select: { code: true, maxUses: true, usedCount: true } } },
       orderBy: { createdAt: "desc" },
     });
     return bundles.map((b) => ({
       ...b,
       regularPriceMinor: b.items.reduce((sum, i) => sum + i.product.priceInCents, 0),
       shareUrl: shareUrl(vendor.storeSlug, b.promoCode?.code ?? ""),
+      quantityAvailable: b.promoCode?.maxUses ?? null,
+      quantitySold: b.promoCode?.usedCount ?? 0,
     }));
   },
 
@@ -112,27 +128,30 @@ export const bundlesService = {
     await prisma.bundle.delete({ where: { id: bundleId } });
   },
 
-  /** Public storefront read — real active bundles only, from the real table, not a prefix scan. */
+  /** Public storefront read — real active, not-sold-out bundles only, from the real table, not a prefix scan. */
   async listPublic() {
     const bundles = await prisma.bundle.findMany({
       where: { isActive: true },
       include: {
         vendor: { select: { storeName: true, storeSlug: true } },
         items: { include: { product: { select: { id: true, title: true, priceInCents: true, currency: true, images: true } } } },
-        promoCode: { select: { code: true } },
+        promoCode: { select: { code: true, maxUses: true, usedCount: true } },
       },
       orderBy: { createdAt: "desc" },
     });
-    return bundles.map((b) => ({
-      id: b.id,
-      vendorId: b.vendorId,
-      storeName: b.vendor.storeName,
-      name: b.name,
-      bundlePriceMinor: b.bundlePriceMinor,
-      regularPriceMinor: b.items.reduce((sum, i) => sum + i.product.priceInCents, 0),
-      currency: b.currency,
-      productIds: b.items.map((i) => i.productId),
-      shareUrl: shareUrl(b.vendor.storeSlug, b.promoCode?.code ?? ""),
-    }));
+    return bundles
+      .filter((b) => b.promoCode?.maxUses == null || b.promoCode.usedCount < b.promoCode.maxUses)
+      .map((b) => ({
+        id: b.id,
+        vendorId: b.vendorId,
+        storeName: b.vendor.storeName,
+        name: b.name,
+        quantityAvailable: b.promoCode?.maxUses != null ? Math.max(0, b.promoCode.maxUses - b.promoCode.usedCount) : null,
+        bundlePriceMinor: b.bundlePriceMinor,
+        regularPriceMinor: b.items.reduce((sum, i) => sum + i.product.priceInCents, 0),
+        currency: b.currency,
+        productIds: b.items.map((i) => i.productId),
+        shareUrl: shareUrl(b.vendor.storeSlug, b.promoCode?.code ?? ""),
+      }));
   },
 };
