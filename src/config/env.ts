@@ -52,6 +52,22 @@ function getPlatformFeeBps(): number {
   return platformFeeBps;
 }
 
+function getPriceApprovalTimeoutHours(): number | null {
+  // spec §18.11 "Buyer does not approve price" — the architecture doc
+  // requires this be handled but never states how long a buyer has to
+  // respond. That's a genuine product decision, not something to invent
+  // here — absent entirely, expirePriceApprovalTimeouts() stays a real
+  // no-op (CLIENT CONFIGURATION REQUIRED) rather than silently applying a
+  // made-up business value.
+  const raw = process.env.PRICE_APPROVAL_TIMEOUT_HOURS;
+  if (!raw) return null;
+  const hours = Number(raw);
+  if (!Number.isFinite(hours) || hours <= 0) {
+    throw new Error("PRICE_APPROVAL_TIMEOUT_HOURS must be a positive number of hours");
+  }
+  return hours;
+}
+
 export const env = {
   nodeEnv: process.env.NODE_ENV ?? "development",
   port: getPort(),
@@ -76,4 +92,5 @@ export const env = {
     process.env.GOOGLE_WEB_CLIENT_ID,
   ].filter((v): v is string => Boolean(v && v.trim())),
   appleBundleId: process.env.APPLE_BUNDLE_ID ?? "",
+  priceApprovalTimeoutHours: getPriceApprovalTimeoutHours(),
 } as const;

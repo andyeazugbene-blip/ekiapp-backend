@@ -13,6 +13,8 @@ import { emailTemplates } from "../../lib/email-templates";
 import { stripeIdentityService } from "../verification/stripe-identity.service";
 import { communicationService } from "../communications/communication.service";
 import { ledgerService } from "../ledger/ledger.service";
+import { renewalsService } from "../regular-deliveries/renewals.service";
+import { campaignContributionsService } from "../community-buy/campaign-contributions.service";
 import { LedgerAccountType, LedgerDirection, LedgerOwnerType } from "@prisma/client";
 import { AppError } from "../../shared/errors/app-error";
 import type { StripeWebhookInput, StripeWebhookResult } from "./stripe.types";
@@ -83,12 +85,20 @@ class StripeWebhookService {
       return this.handleGiftCardPurchaseSucceeded(event, paymentIntent);
     }
 
-    // Community Buy no longer creates a PaymentIntent with this metadata
-    // kind — under PLEDGE_THEN_CHARGE (client mandate 2026-09), pledges are
-    // charged off-session, confirmed synchronously, and read directly off
-    // the API response (see campaign-contributions.service.ts's
-    // attemptCharge — the same pattern renewals.service.ts already uses),
-    // so there's no webhook-driven confirmation path to dispatch to here.
+    // Regular Delivery renewals and Community Buy pledges are charged
+    // off-session and confirmed synchronously (see attemptPayment() /
+    // attemptCharge()) — the success path is normally read directly off
+    // that API response, not this webhook. This only matters for the rarer
+    // "processing" outcome (a delayed-notification payment method, e.g. a
+    // bank debit) that those two flows leave genuinely unresolved: this is
+    // the sole path that later confirms it once Stripe knows the outcome.
+    if (kind === "regular_delivery_renewal") {
+      return this.handleRenewalPaymentResolved(event, paymentIntent, true);
+    }
+
+    if (kind === "community_buy_pledge_charge") {
+      return this.handlePledgeChargeResolved(event, paymentIntent, true);
+    }
 
     return this.processPaymentSucceeded(event, paymentIntent);
   }
@@ -371,6 +381,96 @@ class StripeWebhookService {
     }
   }
 
+  // ─── Regular Delivery Renewal / Community Buy Pledge — "processing" resolution ──
+
+  /**
+   * Resolves a Regular Delivery renewal charge that attemptPayment() left
+   * as Stripe status "processing" (a delayed-notification payment method).
+   * The synchronous confirm() call already handles every other outcome —
+   * this is purely the async follow-up for that one case, gated by the
+   * same WebhookEvent idempotency key as every other handler here.
+   */
+  private async handleRenewalPaymentResolved(event: Stripe.Event, paymentIntent: Stripe.PaymentIntent, succeeded: boolean): Promise<StripeWebhookResult> {
+    const renewalId = paymentIntent.metadata?.renewalId;
+    if (!renewalId) {
+      logger.warn("Renewal payment webhook missing renewalId", { eventId: event.id });
+      return { received: true, ignored: true, eventId: event.id, type: event.type };
+    }
+
+    try {
+      const isDup = await prisma.$transaction(async (tx) => {
+        if (await this.isDuplicate(tx, event.id, event.type, {})) return true;
+        await tx.webhookEvent.update({ where: { stripeEventId: event.id }, data: { status: "PROCESSED", processedAt: new Date() } });
+        return false;
+      }, { isolationLevel: "Serializable" });
+
+      if (isDup) {
+        return { received: true, duplicate: true, eventId: event.id, type: event.type };
+      }
+
+      const outcome = await renewalsService.resolveProcessingPayment(
+        renewalId,
+        paymentIntent.id,
+        succeeded,
+        succeeded ? undefined : "Payment failed after processing",
+      );
+
+      logger.info("Webhook processed: regular_delivery_renewal resolved", {
+        eventId: event.id, renewalId, succeeded, handled: outcome.handled,
+      });
+      return { received: true, eventId: event.id, type: event.type };
+    } catch (error) {
+      if (this.isUniqueConstraintError(error)) {
+        return { received: true, duplicate: true, eventId: event.id, type: event.type };
+      }
+      logger.error("Webhook failed: regular_delivery_renewal resolution", { eventId: event.id, ...serializeError(error) });
+      throw error;
+    }
+  }
+
+  /**
+   * Resolves a Community Buy pledge charge that attemptCharge() left as
+   * Stripe status "processing" — the pledge equivalent of
+   * handleRenewalPaymentResolved above.
+   */
+  private async handlePledgeChargeResolved(event: Stripe.Event, paymentIntent: Stripe.PaymentIntent, succeeded: boolean): Promise<StripeWebhookResult> {
+    const contributionId = paymentIntent.metadata?.contributionId;
+    if (!contributionId) {
+      logger.warn("Pledge charge webhook missing contributionId", { eventId: event.id });
+      return { received: true, ignored: true, eventId: event.id, type: event.type };
+    }
+
+    try {
+      const isDup = await prisma.$transaction(async (tx) => {
+        if (await this.isDuplicate(tx, event.id, event.type, {})) return true;
+        await tx.webhookEvent.update({ where: { stripeEventId: event.id }, data: { status: "PROCESSED", processedAt: new Date() } });
+        return false;
+      }, { isolationLevel: "Serializable" });
+
+      if (isDup) {
+        return { received: true, duplicate: true, eventId: event.id, type: event.type };
+      }
+
+      const outcome = await campaignContributionsService.resolveProcessingCharge(
+        contributionId,
+        paymentIntent.id,
+        succeeded,
+        succeeded ? undefined : "Payment failed after processing",
+      );
+
+      logger.info("Webhook processed: community_buy_pledge_charge resolved", {
+        eventId: event.id, contributionId, succeeded, handled: outcome.handled,
+      });
+      return { received: true, eventId: event.id, type: event.type };
+    } catch (error) {
+      if (this.isUniqueConstraintError(error)) {
+        return { received: true, duplicate: true, eventId: event.id, type: event.type };
+      }
+      logger.error("Webhook failed: community_buy_pledge_charge resolution", { eventId: event.id, ...serializeError(error) });
+      throw error;
+    }
+  }
+
   // ─── Payment Failed / Canceled ──────────────────────────────────────────
 
   private async handleCheckoutSessionCompleted(event: Stripe.Event): Promise<StripeWebhookResult> {
@@ -558,6 +658,19 @@ class StripeWebhookService {
         }
         throw error;
       }
+    }
+
+    // Regular Delivery renewal / Community Buy pledge left "processing":
+    // resolve the still-PENDING attempt to FAILED and re-open retry.
+    // (A normal off-session decline never reaches here — it's caught
+    // synchronously in attemptPayment()/attemptCharge() — so this only
+    // fires for the delayed-payment-method case those flows leave open.)
+    if (kind === "regular_delivery_renewal") {
+      return this.handleRenewalPaymentResolved(event, paymentIntent, false);
+    }
+
+    if (kind === "community_buy_pledge_charge") {
+      return this.handlePledgeChargeResolved(event, paymentIntent, false);
     }
 
     // Gift card purchase canceled/failed: nothing to reverse (payment never completed)

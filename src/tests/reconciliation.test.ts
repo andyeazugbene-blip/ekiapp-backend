@@ -98,6 +98,40 @@ describe("reconciliationService.runReconciliation — real comparison, no fabric
     });
   });
 
+  it("reliability scenario #1 (architecture doc §18) — a checkout whose webhook never arrives stays PENDING forever, so reconciliation is the only thing that ever surfaces the money Stripe actually captured", async () => {
+    // The webhook never arrived: the checkout is still PENDING in our DB, so
+    // gatherStripeLocalRecords (which only selects status: "SUCCEEDED")
+    // never includes it — exactly what "lost webhook" looks like locally.
+    m.reconciliationRun.create.mockResolvedValue({ id: "run-lost-webhook" } as never);
+    m.checkout.findMany.mockResolvedValue([]); // nothing SUCCEEDED locally
+    // But Stripe genuinely captured the payment — the provider's own
+    // transaction list for the period includes it.
+    stripeReconcile.mockResolvedValue({
+      missingAtProvider: [],
+      missingLocally: [{ ref: "pi_lost_webhook", amount: 4500 }],
+      amountMismatches: [],
+    });
+    m.reconciliationDifference.createMany.mockResolvedValue({ count: 1 } as never);
+    m.reconciliationRun.update.mockResolvedValue({ id: "run-lost-webhook", status: "COMPLETED", differences: [] } as never);
+
+    const result = await reconciliationService.runReconciliation("stripe", new Date("2026-01-01"), new Date("2026-01-15"));
+
+    // Real detection, not a fabricated clean run: the run completes (it
+    // didn't crash), but it surfaces the real discrepancy for ops to act on.
+    expect(m.reconciliationDifference.createMany).toHaveBeenCalledWith({
+      data: [
+        expect.objectContaining({
+          runId: "run-lost-webhook",
+          kind: "MISSING_LOCALLY",
+          providerRef: "pi_lost_webhook",
+          actualAmount: 4500,
+          businessRefType: "Unknown", // no local record exists to attribute it to — that IS the finding
+        }),
+      ],
+    });
+    expect(result).toBeDefined();
+  });
+
   it("marks the run FAILED (and still rethrows) when the provider call itself throws — never silently swallows a real error", async () => {
     m.reconciliationRun.create.mockResolvedValue({ id: "run-3" } as never);
     stripeReconcile.mockRejectedValue(new Error("Stripe API unavailable"));

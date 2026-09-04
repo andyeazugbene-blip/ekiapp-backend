@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../lib/prisma", () => ({
   prisma: {
@@ -8,7 +8,8 @@ vi.mock("../lib/prisma", () => ({
     },
     renewalItem: { findMany: vi.fn(), update: vi.fn() },
     priceChangeRequest: { create: vi.fn(), update: vi.fn() },
-    subscriptionPaymentAttempt: { count: vi.fn(), create: vi.fn(), update: vi.fn() },
+    subscriptionPaymentAttempt: { count: vi.fn(), create: vi.fn(), update: vi.fn(), updateMany: vi.fn(), findFirst: vi.fn() },
+    subscriptionOffer: { findUnique: vi.fn() },
     vendor: { findUnique: vi.fn() },
     deliveryZone: { findFirst: vi.fn() },
     order: { findUnique: vi.fn() },
@@ -18,6 +19,10 @@ vi.mock("../lib/prisma", () => ({
 
 vi.mock("../lib/stripe", () => ({
   stripe: { paymentIntents: { create: vi.fn() } },
+}));
+
+vi.mock("../config/env", () => ({
+  env: { priceApprovalTimeoutHours: null as number | null },
 }));
 
 vi.mock("../modules/notifications/notifications.service", () => ({
@@ -30,6 +35,7 @@ vi.mock("../modules/automation/automation.service", () => ({
 
 import { prisma } from "../lib/prisma";
 import { stripe } from "../lib/stripe";
+import { env } from "../config/env";
 import { automationService } from "../modules/automation/automation.service";
 import { notificationsService } from "../modules/notifications/notifications.service";
 import { renewalsService } from "../modules/regular-deliveries/renewals.service";
@@ -487,5 +493,201 @@ describe("renewalsService.generateDueRenewals", () => {
     const result = await renewalsService.generateDueRenewals();
 
     expect(result).toEqual({ created: 1, skipped: 0 });
+  });
+});
+
+// ─── Reliability scenario #4 (architecture doc §18): "payment remains processing" ──
+
+describe("renewalsService.attemptPayment — Stripe status \"processing\" (reliability scenario #4)", () => {
+  const baseRenewal = {
+    id: "renewal-proc",
+    status: "READY_FOR_PAYMENT",
+    subscriptionId: "sub-proc",
+    currency: "GBP",
+    items: [{ currentUnitPrice: 1000, quantity: 1 }],
+    subscription: {
+      status: "ACTIVE",
+      buyerId: "buyer-proc",
+      frequency: "WEEKLY",
+      paymentMethod: { stripeCustomerId: "cus_proc", stripePaymentMethodId: "pm_proc" },
+    },
+  };
+
+  it("leaves the attempt PENDING and never marks the renewal FAILED for a delayed-notification payment method still in flight", async () => {
+    m.renewal.findUniqueOrThrow.mockResolvedValue(baseRenewal as never);
+    m.renewal.updateMany.mockResolvedValue({ count: 1 } as never);
+    m.subscriptionPaymentAttempt.count.mockResolvedValue(0);
+    m.subscriptionPaymentAttempt.create.mockResolvedValue({ id: "attempt-proc" } as never);
+    mCreateIntent.mockResolvedValue({ id: "pi_proc", status: "processing" } as never);
+    m.renewal.findUnique.mockResolvedValue({ id: "renewal-proc", status: "PAYMENT_PROCESSING" } as never);
+
+    await renewalsService.attemptPayment("renewal-proc");
+
+    // Records the PaymentIntent id but does NOT flip status to FAILED —
+    // the outcome is genuinely unknown, not a decline.
+    expect(m.subscriptionPaymentAttempt.update).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: "attempt-proc" }, data: { stripePaymentIntentId: "pi_proc" } }),
+    );
+    expect(m.renewal.update).not.toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ status: "PAYMENT_FAILED" }) }),
+    );
+    // The failure-recovery side effects must not fire for an unresolved outcome.
+    expect(notificationsService.enqueue).not.toHaveBeenCalled();
+    expect(automationService.scheduleAutomation).not.toHaveBeenCalled();
+  });
+
+  it("blocks a second attempt while still processing — no new Stripe idempotency key can be issued for the same renewal", async () => {
+    // Once claimed, a re-fetch reads the renewal back as PAYMENT_PROCESSING
+    // (neither READY_FOR_PAYMENT nor PAYMENT_FAILED) — attemptPayment's own
+    // status guard rejects a second call outright. Without this, a second
+    // call would compute a NEW attemptNumber (and therefore a new, undeduped
+    // Stripe idempotency key) that could genuinely double-charge the buyer
+    // if the first, still-processing payment later settles as succeeded.
+    m.renewal.findUniqueOrThrow.mockResolvedValue({ ...baseRenewal, status: "PAYMENT_PROCESSING" } as never);
+
+    await expect(renewalsService.attemptPayment("renewal-proc")).rejects.toMatchObject({ statusCode: 409 });
+    expect(mCreateIntent).not.toHaveBeenCalled();
+    expect(m.renewal.updateMany).not.toHaveBeenCalled();
+  });
+});
+
+// ─── Reliability scenario #5 (architecture doc §18): "payment succeeds after the app shows pending" ──
+
+describe("renewalsService.resolveProcessingPayment — reliability scenario #5", () => {
+  it("converts the renewal to an order exactly once when the webhook later confirms success — provider truth wins", async () => {
+    m.subscriptionPaymentAttempt.findFirst.mockResolvedValue({ id: "attempt-5", status: "PENDING" } as never);
+    m.renewal.findUnique.mockResolvedValue({ id: "renewal-5", status: "PAYMENT_PROCESSING", subscriptionId: "sub-5" } as never);
+    m.subscriptionPaymentAttempt.updateMany.mockResolvedValue({ count: 1 } as never);
+    const convertSpy = vi.spyOn(renewalsService, "convertPaidRenewalToOrder").mockResolvedValue({ id: "order-5" } as never);
+
+    const result = await renewalsService.resolveProcessingPayment("renewal-5", "pi_proc_5", true);
+
+    expect(result.handled).toBe(true);
+    expect(m.subscriptionPaymentAttempt.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: "attempt-5", status: "PENDING" }, data: { status: "SUCCEEDED" } }),
+    );
+    expect(convertSpy).toHaveBeenCalledTimes(1);
+    expect(convertSpy).toHaveBeenCalledWith("renewal-5", "pi_proc_5");
+    convertSpy.mockRestore();
+  });
+
+  it("is idempotent — a concurrent duplicate resolution that loses the atomic claim never converts a second order", async () => {
+    m.subscriptionPaymentAttempt.findFirst.mockResolvedValue({ id: "attempt-5b", status: "PENDING" } as never);
+    m.renewal.findUnique.mockResolvedValue({ id: "renewal-5b", status: "PAYMENT_PROCESSING", subscriptionId: "sub-5b" } as never);
+    m.subscriptionPaymentAttempt.updateMany.mockResolvedValue({ count: 0 } as never); // someone else already won
+    const convertSpy = vi.spyOn(renewalsService, "convertPaidRenewalToOrder").mockResolvedValue({ id: "order-5b" } as never);
+
+    const result = await renewalsService.resolveProcessingPayment("renewal-5b", "pi_proc_5b", true);
+
+    expect(result.handled).toBe(false);
+    expect(convertSpy).not.toHaveBeenCalled();
+    convertSpy.mockRestore();
+  });
+
+  it("is a no-op once the attempt is already resolved — a genuinely duplicate webhook cannot re-run the outcome", async () => {
+    m.subscriptionPaymentAttempt.findFirst.mockResolvedValue({ id: "attempt-5c", status: "SUCCEEDED" } as never);
+    const convertSpy = vi.spyOn(renewalsService, "convertPaidRenewalToOrder");
+
+    const result = await renewalsService.resolveProcessingPayment("renewal-5c", "pi_proc_5c", true);
+
+    expect(result.handled).toBe(false);
+    expect(convertSpy).not.toHaveBeenCalled();
+    expect(m.subscriptionPaymentAttempt.updateMany).not.toHaveBeenCalled();
+    convertSpy.mockRestore();
+  });
+
+  it("marks the renewal PAYMENT_FAILED and re-opens retry when the delayed payment ultimately fails", async () => {
+    m.subscriptionPaymentAttempt.findFirst.mockResolvedValue({ id: "attempt-5d", status: "PENDING" } as never);
+    m.renewal.findUnique.mockResolvedValue({ id: "renewal-5d", status: "PAYMENT_PROCESSING", subscriptionId: "sub-5d" } as never);
+    m.subscriptionPaymentAttempt.updateMany.mockResolvedValue({ count: 1 } as never);
+    m.buyerSubscription.update.mockResolvedValue({ buyerId: "buyer-5d" } as never);
+
+    const result = await renewalsService.resolveProcessingPayment("renewal-5d", "pi_proc_5d", false, "Bank debit failed");
+
+    expect(result.handled).toBe(true);
+    expect(m.renewal.update).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: "renewal-5d" }, data: expect.objectContaining({ status: "PAYMENT_FAILED", failureReason: "Bank debit failed" }) }),
+    );
+  });
+});
+
+// ─── Reliability scenario #10 (architecture doc §18): "vendor does not confirm stock" ──
+
+describe("renewalsService.confirmStock — reliability scenario #10", () => {
+  it("rejects confirmation when an item is out of stock — the renewal never advances toward payment, so the buyer is never charged for it", async () => {
+    m.vendor.findUnique.mockResolvedValue({ id: "vendor-10" } as never);
+    m.renewal.findUnique.mockResolvedValue({
+      id: "renewal-10",
+      status: "AWAITING_STOCK",
+      subscription: { offerId: "offer-10" },
+      items: [{ id: "item-10", productId: "p10", quantity: 1, stockAvailable: true, product: { isActive: true, stock: 0 } }],
+    } as never);
+    m.subscriptionOffer.findUnique.mockResolvedValue({ vendorId: "vendor-10" } as never);
+    m.renewalItem.update.mockResolvedValue({} as never);
+    m.renewalItem.findMany.mockResolvedValue([{ id: "item-10", stockAvailable: false }] as never);
+
+    await expect(renewalsService.confirmStock("vendor-user-10", "renewal-10")).rejects.toMatchObject({ statusCode: 409 });
+
+    // Stays recoverable: no stock-confirmed timestamp, no price evaluation,
+    // no Stripe charge. The vendor can restock and confirm again later.
+    expect(m.renewal.update).not.toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ stockConfirmedAt: expect.anything() }) }),
+    );
+    expect(mCreateIntent).not.toHaveBeenCalled();
+  });
+});
+
+// ─── Reliability scenario #11 (architecture doc §18): "buyer does not approve price" ──
+
+describe("renewalsService.expirePriceApprovalTimeouts — reliability scenario #11", () => {
+  afterEach(() => {
+    (env as unknown as { priceApprovalTimeoutHours: number | null }).priceApprovalTimeoutHours = null;
+  });
+
+  it("is a genuine no-op when no timeout duration is configured — CLIENT CONFIGURATION REQUIRED, never an invented default", async () => {
+    const result = await renewalsService.expirePriceApprovalTimeouts();
+
+    expect(result).toEqual({ configured: false, expired: 0 });
+    expect(m.renewal.findMany).not.toHaveBeenCalled();
+  });
+
+  it("expires a renewal whose price-change request is older than the configured timeout and advances the subscription to its next cycle", async () => {
+    (env as unknown as { priceApprovalTimeoutHours: number | null }).priceApprovalTimeoutHours = 48;
+    m.renewal.findMany.mockResolvedValue([
+      { id: "renewal-11", subscriptionId: "sub-11", cycleDate: new Date("2026-06-01"), subscription: { buyerId: "buyer-11", frequency: "WEEKLY" } },
+    ] as never);
+    m.renewal.updateMany.mockResolvedValue({ count: 1 } as never);
+    m.buyerSubscription.update.mockResolvedValue({} as never);
+
+    const result = await renewalsService.expirePriceApprovalTimeouts();
+
+    expect(result).toEqual({ configured: true, expired: 1 });
+    expect(m.renewal.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { status: "AWAITING_PRICE_APPROVAL", priceChangeRequest: { createdAt: { lte: expect.any(Date) } } },
+      }),
+    );
+    expect(m.renewal.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: "renewal-11", status: "AWAITING_PRICE_APPROVAL" }, data: { status: "EXPIRED" } }),
+    );
+    expect(m.buyerSubscription.update).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: "sub-11" }, data: expect.objectContaining({ nextRenewalAt: expect.any(Date) }) }),
+    );
+    expect(notificationsService.enqueue).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: "buyer-11", data: expect.objectContaining({ event: "price_approval_expired" }) }),
+    );
+  });
+
+  it("does not expire a renewal that loses the atomic claim to a concurrent sweep", async () => {
+    (env as unknown as { priceApprovalTimeoutHours: number | null }).priceApprovalTimeoutHours = 48;
+    m.renewal.findMany.mockResolvedValue([
+      { id: "renewal-11b", subscriptionId: "sub-11b", cycleDate: new Date("2026-06-01"), subscription: { buyerId: "buyer-11b", frequency: "WEEKLY" } },
+    ] as never);
+    m.renewal.updateMany.mockResolvedValue({ count: 0 } as never);
+
+    const result = await renewalsService.expirePriceApprovalTimeouts();
+
+    expect(result).toEqual({ configured: true, expired: 0 });
+    expect(m.buyerSubscription.update).not.toHaveBeenCalled();
   });
 });

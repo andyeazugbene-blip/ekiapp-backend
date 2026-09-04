@@ -1,5 +1,6 @@
 import type Stripe from "stripe";
 
+import { env } from "../../config/env";
 import { prisma } from "../../lib/prisma";
 import { stripe } from "../../lib/stripe";
 import { logger } from "../../lib/logger";
@@ -385,14 +386,71 @@ export const renewalsService = {
       return this.convertPaidRenewalToOrder(renewalId, intent.id);
     }
 
-    // requires_action / processing / anything else — an off-session charge
-    // with no buyer present can't complete extra authentication. Treat as
-    // failed and let the controlled retry/recovery flow handle it.
+    if (intent.status === "processing") {
+      // Delayed-notification payment method (e.g. a bank debit) — genuinely
+      // unresolved, not a failure. The renewal stays claimed in
+      // PAYMENT_PROCESSING (set above) and the attempt stays PENDING, so
+      // the status guard at the top of this method blocks any concurrent
+      // or later attemptPayment()/retryPayment() call for this renewal —
+      // reopening retry here would let a second, distinct Stripe
+      // idempotency key double-charge the buyer if this one later settles
+      // as succeeded (spec §18.4/§18.5). The eventual payment_intent
+      // webhook resolves it — see stripe.service.ts's handler for
+      // metadata.kind === "regular_delivery_renewal".
+      await prisma.subscriptionPaymentAttempt.update({
+        where: { id: attempt.id },
+        data: { stripePaymentIntentId: intent.id },
+      });
+      return prisma.renewal.findUnique({ where: { id: renewalId } });
+    }
+
+    // requires_action / anything else — an off-session charge with no
+    // buyer present can't complete extra authentication. Treat as failed
+    // and let the controlled retry/recovery flow handle it.
     await prisma.subscriptionPaymentAttempt.update({
       where: { id: attempt.id },
       data: { status: "FAILED", stripePaymentIntentId: intent.id, failureCode: intent.status, failureMessage: "Payment requires additional authentication" },
     });
     return this.handlePaymentFailure(renewal.subscriptionId, renewalId, `Unexpected status: ${intent.status}`);
+  },
+
+  /**
+   * Resolves a renewal payment whose PaymentIntent was left "processing" by
+   * attemptPayment() above, once Stripe's webhook reports the real outcome.
+   * Idempotent: a SUCCEEDED/non-PENDING attempt or a renewal already past
+   * PAYMENT_PROCESSING means this already ran (or was never the winner of
+   * the atomic claim), so it's a safe no-op.
+   */
+  async resolveProcessingPayment(renewalId: string, stripePaymentIntentId: string, succeeded: boolean, failureMessage?: string) {
+    const attempt = await prisma.subscriptionPaymentAttempt.findFirst({
+      where: { renewalId, stripePaymentIntentId },
+    });
+    if (!attempt || attempt.status !== "PENDING") return { handled: false as const };
+
+    const renewal = await prisma.renewal.findUnique({ where: { id: renewalId } });
+    if (!renewal || renewal.status !== "PAYMENT_PROCESSING") return { handled: false as const };
+
+    if (succeeded) {
+      // Same atomic-claim pattern as attemptPayment()'s claim above — the
+      // conditional updateMany's count, not the findFirst read above, is
+      // what actually proves this call won the transition, so a concurrent
+      // duplicate resolution can never post the order/ledger twice.
+      const claim = await prisma.subscriptionPaymentAttempt.updateMany({
+        where: { id: attempt.id, status: "PENDING" },
+        data: { status: "SUCCEEDED" },
+      });
+      if (claim.count !== 1) return { handled: false as const };
+      const order = await this.convertPaidRenewalToOrder(renewalId, stripePaymentIntentId);
+      return { handled: true as const, order };
+    }
+
+    const claim = await prisma.subscriptionPaymentAttempt.updateMany({
+      where: { id: attempt.id, status: "PENDING" },
+      data: { status: "FAILED", failureMessage: failureMessage ?? "Payment failed after processing" },
+    });
+    if (claim.count !== 1) return { handled: false as const };
+    await this.handlePaymentFailure(renewal.subscriptionId, renewalId, failureMessage ?? "Payment failed after processing");
+    return { handled: true as const };
   },
 
   async handlePaymentFailure(subscriptionId: string, renewalId: string, reason: string) {
@@ -411,6 +469,44 @@ export const renewalsService = {
       body: "Retry now to keep your subscription active.",
     });
     return prisma.renewal.findUnique({ where: { id: renewalId } });
+  },
+
+  /**
+   * spec §18.11 "Buyer does not approve price": a renewal stuck in
+   * AWAITING_PRICE_APPROVAL forever would block that cycle indefinitely.
+   * The architecture doc defines the EXPIRED renewal status for exactly
+   * this and requires it be tested, but names no duration a buyer has to
+   * respond — see getPriceApprovalTimeoutHours() in config/env.ts. Until
+   * PRICE_APPROVAL_TIMEOUT_HOURS is set, this is a genuine no-op: it never
+   * expires a renewal on an invented default.
+   */
+  async expirePriceApprovalTimeouts(): Promise<{ configured: boolean; expired: number }> {
+    if (env.priceApprovalTimeoutHours == null) {
+      return { configured: false, expired: 0 };
+    }
+    const cutoff = new Date(Date.now() - env.priceApprovalTimeoutHours * 60 * 60 * 1000);
+    const stale = await prisma.renewal.findMany({
+      where: { status: "AWAITING_PRICE_APPROVAL", priceChangeRequest: { createdAt: { lte: cutoff } } },
+      include: { subscription: true },
+    });
+
+    let expired = 0;
+    for (const renewal of stale) {
+      // Atomic claim — same pattern as attemptPayment()'s claim: only one
+      // concurrent sweep run can win this transition for a given renewal.
+      const claim = await prisma.renewal.updateMany({
+        where: { id: renewal.id, status: "AWAITING_PRICE_APPROVAL" },
+        data: { status: "EXPIRED" },
+      });
+      if (claim.count !== 1) continue;
+      expired++;
+      await prisma.buyerSubscription.update({
+        where: { id: renewal.subscriptionId },
+        data: { nextRenewalAt: nextCycleDate(renewal.subscription.frequency, renewal.cycleDate) },
+      });
+      await notifySubscriptionEvent(renewal.subscription.buyerId, "price_approval_expired", renewal.id);
+    }
+    return { configured: true, expired };
   },
 
   async cancelAfterRetriesExhausted(renewalId: string) {
@@ -568,12 +664,14 @@ async function notifySubscriptionEvent(buyerId: string, event: string, renewalId
     price_approval_required: "Price change needs your approval",
     payment_failed: "Your Regular Delivery payment failed",
     renewal_cancelled: "Your Regular Delivery was cancelled",
+    price_approval_expired: "Your Regular Delivery was skipped",
     order_created: "Your Regular Delivery order was created",
   };
   const bodies: Record<string, string> = {
     price_approval_required: "Review the updated price on your upcoming delivery.",
     payment_failed: "We couldn't collect payment for your upcoming delivery. Retry from the app.",
     renewal_cancelled: "We couldn't collect payment after several attempts. Your subscription needs attention.",
+    price_approval_expired: "We didn't hear back about the price change in time, so this delivery was skipped.",
     order_created: orderNumber ? `Order ${orderNumber} has been created and is being prepared.` : "Your order was created.",
   };
   await notificationsService.enqueue({

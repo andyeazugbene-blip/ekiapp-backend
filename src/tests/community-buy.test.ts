@@ -4,7 +4,7 @@ vi.mock("../lib/prisma", () => ({
   prisma: {
     communityCampaign: { findMany: vi.fn(), update: vi.fn(), updateMany: vi.fn(), findUnique: vi.fn(), findUniqueOrThrow: vi.fn(), create: vi.fn() },
     campaignContribution: { findMany: vi.fn(), update: vi.fn(), updateMany: vi.fn(), findUnique: vi.fn(), findUniqueOrThrow: vi.fn(), create: vi.fn(), groupBy: vi.fn(), aggregate: vi.fn(), count: vi.fn() },
-    campaignChargeAttempt: { create: vi.fn(), update: vi.fn(), count: vi.fn() },
+    campaignChargeAttempt: { create: vi.fn(), update: vi.fn(), count: vi.fn(), updateMany: vi.fn(), findFirst: vi.fn() },
     campaignRefund: { create: vi.fn(), findMany: vi.fn(), findUnique: vi.fn(), update: vi.fn(), groupBy: vi.fn() },
     campaignParticipant: { findMany: vi.fn(), findUnique: vi.fn(), upsert: vi.fn() },
     buyerPaymentMethod: { findUnique: vi.fn() },
@@ -40,6 +40,7 @@ vi.mock("../modules/community-buy/support-case.service", () => ({
 
 import { prisma } from "../lib/prisma";
 import { supportCaseService } from "../modules/community-buy/support-case.service";
+import { notificationsService } from "../modules/notifications/notifications.service";
 import { stripe } from "../lib/stripe";
 import { communityCampaignsService } from "../modules/community-buy/community-campaigns.service";
 import { campaignContributionsService } from "../modules/community-buy/campaign-contributions.service";
@@ -535,6 +536,106 @@ describe("campaignContributionsService.attemptCharge — the only place a pledge
 
     await expect(campaignContributionsService.attemptCharge("contrib-35")).rejects.toMatchObject({ statusCode: 409 });
     expect(stripe.paymentIntents.create).not.toHaveBeenCalled();
+  });
+
+  // ─── Reliability scenario #4 (architecture doc §18): "payment remains processing" ──
+
+  it("scenario #4 — a Stripe \"processing\" outcome leaves the attempt PENDING, never FAILED, for a delayed-notification payment method still in flight", async () => {
+    m.campaignContribution.findUniqueOrThrow.mockResolvedValueOnce({
+      id: "contrib-36", campaignId: "camp-24", quantity: 1, status: "PLEDGED", currency: "GBP", amount: 1500,
+      participant: { userId: "buyer-6" },
+      paymentMethod: { stripeCustomerId: "cus_6", stripePaymentMethodId: "pm_6" },
+    } as never);
+    m.campaignContribution.updateMany.mockResolvedValueOnce({ count: 1 } as never);
+    m.campaignChargeAttempt.count.mockResolvedValueOnce(0 as never);
+    m.campaignChargeAttempt.create.mockResolvedValueOnce({ id: "attempt-36" } as never);
+    vi.mocked(stripe.paymentIntents.create).mockResolvedValueOnce({ id: "pi_processing_36", status: "processing" } as never);
+    m.campaignContribution.findUniqueOrThrow.mockResolvedValueOnce({ id: "contrib-36", status: "PAYMENT_PROCESSING" } as never);
+
+    const result = await campaignContributionsService.attemptCharge("contrib-36");
+
+    expect(result.status).toBe("PAYMENT_PROCESSING");
+    expect(m.campaignChargeAttempt.update).toHaveBeenCalledWith({
+      where: { id: "attempt-36" },
+      data: { stripePaymentIntentId: "pi_processing_36" },
+    });
+    expect(m.campaignContribution.update).not.toHaveBeenCalled();
+    expect(notificationsService.enqueue).not.toHaveBeenCalled();
+  });
+
+  it("scenario #4 — blocks a second attempt while still processing, so a retry can never reach Stripe with a new idempotency key", async () => {
+    m.campaignContribution.findUniqueOrThrow.mockResolvedValueOnce({ id: "contrib-36b", status: "PAYMENT_PROCESSING", participant: { userId: "buyer-6" } } as never);
+
+    await expect(campaignContributionsService.attemptCharge("contrib-36b")).rejects.toMatchObject({ statusCode: 409 });
+    expect(stripe.paymentIntents.create).not.toHaveBeenCalled();
+  });
+});
+
+// ─── Reliability scenario #5 (architecture doc §18): "payment succeeds after the app shows pending" ──
+
+describe("campaignContributionsService.resolveProcessingCharge — reliability scenario #5", () => {
+  it("posts the escrow ledger entry and marks the pledge PAID exactly once when the webhook later confirms success", async () => {
+    m.campaignChargeAttempt.findFirst.mockResolvedValueOnce({ id: "attempt-5", status: "PENDING" } as never);
+    m.campaignContribution.findUnique.mockResolvedValueOnce({
+      id: "contrib-5", status: "PAYMENT_PROCESSING", campaignId: "camp-25", currency: "GBP", amount: 1000,
+      participant: { userId: "buyer-5" },
+    } as never);
+    m.campaignChargeAttempt.updateMany.mockResolvedValueOnce({ count: 1 } as never);
+    const ledgerAccount = { findUnique: vi.fn().mockResolvedValue(null), create: vi.fn().mockResolvedValue({ id: "acct-5" }) };
+    const ledgerEntry = { create: vi.fn().mockResolvedValue({ id: "entry-5" }) };
+    const txContribution = { update: vi.fn() };
+    m.$transaction.mockImplementationOnce(async (cb: any) => cb({ campaignContribution: txContribution, ledgerAccount, ledgerEntry }));
+    m.campaignContribution.findUniqueOrThrow.mockResolvedValueOnce({ id: "contrib-5", status: "PAID" } as never);
+
+    const result = await campaignContributionsService.resolveProcessingCharge("contrib-5", "pi_proc_5", true);
+
+    expect(result.handled).toBe(true);
+    expect(m.campaignChargeAttempt.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: "attempt-5", status: "PENDING" }, data: { status: "SUCCEEDED" } }),
+    );
+    expect(txContribution.update).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: "contrib-5" }, data: expect.objectContaining({ status: "PAID", stripePaymentIntentId: "pi_proc_5" }) }),
+    );
+    expect(ledgerEntry.create).toHaveBeenCalledTimes(2); // escrow debit + credit, posted exactly once
+  });
+
+  it("is idempotent — a concurrent duplicate resolution that loses the atomic claim never posts the ledger entry a second time", async () => {
+    m.campaignChargeAttempt.findFirst.mockResolvedValueOnce({ id: "attempt-5b", status: "PENDING" } as never);
+    m.campaignContribution.findUnique.mockResolvedValueOnce({
+      id: "contrib-5b", status: "PAYMENT_PROCESSING", campaignId: "camp-25", currency: "GBP", amount: 1000,
+      participant: { userId: "buyer-5b" },
+    } as never);
+    m.campaignChargeAttempt.updateMany.mockResolvedValueOnce({ count: 0 } as never); // someone else already won
+
+    const result = await campaignContributionsService.resolveProcessingCharge("contrib-5b", "pi_proc_5b", true);
+
+    expect(result.handled).toBe(false);
+    expect(m.$transaction).not.toHaveBeenCalled();
+  });
+
+  it("is a no-op once the attempt is already resolved — a genuinely duplicate webhook cannot re-run the outcome", async () => {
+    m.campaignChargeAttempt.findFirst.mockResolvedValueOnce({ id: "attempt-5c", status: "SUCCEEDED" } as never);
+
+    const result = await campaignContributionsService.resolveProcessingCharge("contrib-5c", "pi_proc_5c", true);
+
+    expect(result.handled).toBe(false);
+    expect(m.campaignChargeAttempt.updateMany).not.toHaveBeenCalled();
+    expect(m.$transaction).not.toHaveBeenCalled();
+  });
+
+  it("moves the pledge to CHARGE_FAILED (retryable) when the delayed payment ultimately fails", async () => {
+    m.campaignChargeAttempt.findFirst.mockResolvedValueOnce({ id: "attempt-5d", status: "PENDING" } as never);
+    m.campaignContribution.findUnique.mockResolvedValueOnce({
+      id: "contrib-5d", status: "PAYMENT_PROCESSING", campaignId: "camp-25",
+      participant: { userId: "buyer-5d" },
+    } as never);
+    m.campaignChargeAttempt.updateMany.mockResolvedValueOnce({ count: 1 } as never);
+    m.campaignChargeAttempt.count.mockResolvedValueOnce(1 as never);
+
+    const result = await campaignContributionsService.resolveProcessingCharge("contrib-5d", "pi_proc_5d", false, "Bank debit failed");
+
+    expect(result.handled).toBe(true);
+    expect(m.campaignContribution.update).toHaveBeenCalledWith({ where: { id: "contrib-5d" }, data: { status: "CHARGE_FAILED" } });
   });
 });
 

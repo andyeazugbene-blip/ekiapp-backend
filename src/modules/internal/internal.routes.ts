@@ -64,6 +64,7 @@ async function runAutomationSweep() {
 async function runRenewalsSweep() {
   const generation = await renewalsService.generateDueRenewals();
   const reminded = await renewalsService.sendUpcomingRenewalReminders();
+  const priceApprovalExpiry = await renewalsService.expirePriceApprovalTimeouts();
 
   const readyForPayment = await prisma.renewal.findMany({
     where: { status: "READY_FOR_PAYMENT" },
@@ -83,7 +84,7 @@ async function runRenewalsSweep() {
       logger.error("Renewal payment attempt failed", { renewalId: renewal.id, error: String(err) });
     }
   }
-  return { ...generation, reminded, attempted: readyForPayment.length, charged, failed };
+  return { ...generation, reminded, priceApprovalExpiry, attempted: readyForPayment.length, charged, failed };
 }
 
 // Community Buy: closes campaigns whose deadline has passed (deciding

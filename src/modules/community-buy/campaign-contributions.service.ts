@@ -303,13 +303,73 @@ export const campaignContributionsService = {
       return this.markChargeSucceeded(contribution, intent.id);
     }
 
-    // requires_action / processing / anything else — an off-session charge
-    // with no buyer present can't complete extra authentication.
+    if (intent.status === "processing") {
+      // Delayed-notification payment method — genuinely unresolved, not a
+      // failure. The contribution stays claimed in PAYMENT_PROCESSING (set
+      // above) and the attempt stays PENDING, so the status guard at the
+      // top of this method blocks any concurrent or later
+      // attemptCharge()/retryCharge() call for this contribution — reopening
+      // retry here would let a second, distinct Stripe idempotency key
+      // double-charge the participant if this one later settles as
+      // succeeded (spec §18.4/§18.5). The eventual payment_intent webhook
+      // resolves it — see stripe.service.ts's handler for
+      // metadata.kind === "community_buy_pledge_charge".
+      await prisma.campaignChargeAttempt.update({
+        where: { id: attempt.id },
+        data: { stripePaymentIntentId: intent.id },
+      });
+      return prisma.campaignContribution.findUniqueOrThrow({ where: { id: contributionId } });
+    }
+
+    // requires_action / anything else — an off-session charge with no
+    // buyer present can't complete extra authentication.
     await prisma.campaignChargeAttempt.update({
       where: { id: attempt.id },
       data: { status: "FAILED", stripePaymentIntentId: intent.id, failureCode: intent.status, failureMessage: "Payment requires additional authentication" },
     });
     return this.handleChargeAttemptFailure(contribution, `Unexpected status: ${intent.status}`, attemptNumber >= MAX_CHARGE_ATTEMPTS);
+  },
+
+  /**
+   * Resolves a pledge charge whose PaymentIntent was left "processing" by
+   * attemptCharge() above, once Stripe's webhook reports the real outcome.
+   * Idempotent: a non-PENDING attempt or a contribution already past
+   * PAYMENT_PROCESSING means this already ran, so it's a safe no-op.
+   */
+  async resolveProcessingCharge(contributionId: string, stripePaymentIntentId: string, succeeded: boolean, failureMessage?: string) {
+    const attempt = await prisma.campaignChargeAttempt.findFirst({
+      where: { contributionId, stripePaymentIntentId },
+    });
+    if (!attempt || attempt.status !== "PENDING") return { handled: false as const };
+
+    const contribution = await prisma.campaignContribution.findUnique({
+      where: { id: contributionId },
+      include: { participant: true },
+    });
+    if (!contribution || contribution.status !== "PAYMENT_PROCESSING") return { handled: false as const };
+
+    if (succeeded) {
+      // Same atomic-claim pattern as attemptCharge()'s claim above — the
+      // conditional updateMany's count, not the findFirst read above, is
+      // what actually proves this call won the transition, so a concurrent
+      // duplicate resolution can never post the ledger entry twice.
+      const claim = await prisma.campaignChargeAttempt.updateMany({
+        where: { id: attempt.id, status: "PENDING" },
+        data: { status: "SUCCEEDED" },
+      });
+      if (claim.count !== 1) return { handled: false as const };
+      await this.markChargeSucceeded(contribution, stripePaymentIntentId);
+      return { handled: true as const };
+    }
+
+    const claim = await prisma.campaignChargeAttempt.updateMany({
+      where: { id: attempt.id, status: "PENDING" },
+      data: { status: "FAILED", failureMessage: failureMessage ?? "Payment failed after processing" },
+    });
+    if (claim.count !== 1) return { handled: false as const };
+    const priorAttempts = await prisma.campaignChargeAttempt.count({ where: { contributionId } });
+    await this.handleChargeAttemptFailure(contribution, failureMessage ?? "Payment failed after processing", priorAttempts >= MAX_CHARGE_ATTEMPTS);
+    return { handled: true as const };
   },
 
   async markChargeSucceeded(contribution: { id: string; campaignId: string; currency: string; amount: number; participant: { userId: string } }, stripePaymentIntentId: string) {

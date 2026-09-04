@@ -60,10 +60,20 @@ vi.mock("../modules/notifications/notifications.service", () => ({
   notificationsService: { enqueue: vi.fn().mockResolvedValue(undefined) },
 }));
 
+vi.mock("../modules/regular-deliveries/renewals.service", () => ({
+  renewalsService: { resolveProcessingPayment: vi.fn() },
+}));
+
+vi.mock("../modules/community-buy/campaign-contributions.service", () => ({
+  campaignContributionsService: { resolveProcessingCharge: vi.fn() },
+}));
+
 import { prisma } from "../lib/prisma";
 import { stripe } from "../lib/stripe";
 import { buyerWalletService } from "../modules/buyer-wallet/buyer-wallet.service";
 import { stripeWebhookService } from "../modules/stripe/stripe.service";
+import { renewalsService } from "../modules/regular-deliveries/renewals.service";
+import { campaignContributionsService } from "../modules/community-buy/campaign-contributions.service";
 
 // ─── Typed mocks ──────────────────────────────────────────────────────────
 
@@ -541,6 +551,205 @@ describe("payment_intent.canceled", () => {
 
     expect(result.received).toBe(true);
     expect(result.duplicate).toBe(true);
+  });
+});
+
+// ─── Reliability scenario #24 (architecture doc §18): "backend unavailable during webhook delivery" ──
+
+describe("Webhook processing — backend unavailable mid-delivery (reliability scenario #24)", () => {
+  it("propagates the failure instead of returning a fabricated 200 — so Stripe's own retry mechanism fires again", async () => {
+    const fakeEvent = {
+      id: "evt_backend_down",
+      type: "payment_intent.succeeded",
+      data: {
+        object: {
+          id: "pi_backend_down",
+          amount: 5000,
+          currency: "usd",
+          metadata: { checkoutId: "co_backend_down", buyerId: "buyer-down" },
+        },
+      },
+    };
+    constructEvent.mockReturnValue(fakeEvent);
+
+    // The DB genuinely dies mid-transaction (not a P2002 duplicate) —
+    // simulating the backend being unavailable while Stripe is delivering
+    // the webhook. Because this throws INSIDE the interactive transaction
+    // callback, Prisma rolls the whole thing back — including any
+    // webhookEvent row this attempt may have inserted — so the event id is
+    // never burned by a failed attempt.
+    $transaction.mockImplementationOnce(async () => {
+      throw new Error("Connection terminated unexpectedly");
+    });
+
+    await expect(
+      stripeWebhookService.handleWebhook({ signature: "valid-sig", rawBody: Buffer.from("body") }),
+    ).rejects.toThrow("Connection terminated unexpectedly");
+    // No financial side effect of any kind was recorded for this attempt.
+    expect(webhookEventUpdate).not.toHaveBeenCalled();
+  });
+
+  it("completes normally and produces exactly one financial effect once Stripe retries the same event after the backend recovers", async () => {
+    const fakeEvent = {
+      id: "evt_backend_down", // same event id Stripe retries with
+      type: "payment_intent.succeeded",
+      data: {
+        object: {
+          id: "pi_backend_down",
+          amount: 5000,
+          currency: "usd",
+          metadata: { checkoutId: "co_backend_down", buyerId: "buyer-down" },
+        },
+      },
+    };
+    constructEvent.mockReturnValue(fakeEvent);
+
+    const walletCreate = vi.fn();
+    const walletUpdateTx = vi.fn().mockResolvedValue({});
+    const walletTxCreateTx = vi.fn().mockResolvedValue({});
+    $transaction.mockImplementationOnce(async (cb: (tx: unknown) => unknown) => {
+      const tx = {
+        webhookEvent: {
+          create: vi.fn().mockResolvedValue({}), // event id free again — the earlier attempt was rolled back
+          update: vi.fn().mockResolvedValue({}),
+          updateMany: vi.fn().mockResolvedValue({}),
+        },
+        checkout: {
+          findUnique: vi.fn().mockResolvedValue({
+            id: "co_backend_down",
+            buyerId: "buyer-down",
+            status: "PENDING",
+            totalAmount: 5000,
+            currency: "usd",
+            metadata: null,
+            orders: [
+              {
+                id: "order-down-1",
+                vendorId: "vendor-down-1",
+                items: [{ vendorId: "vendor-down-1" }],
+                payment: { id: "payment-down-1", status: "PENDING", vendorEarningsAmount: 4000, platformFeeAmount: 1000, currency: "usd" },
+              },
+            ],
+          }),
+          updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+        },
+        payment: { updateMany: vi.fn().mockResolvedValue({ count: 1 }) },
+        order: { updateMany: vi.fn().mockResolvedValue({ count: 1 }) },
+        wallet: { findUnique: vi.fn().mockResolvedValue(null), create: walletCreate.mockResolvedValue({ id: "wallet-down-1" }), update: walletUpdateTx },
+        walletTransaction: { create: walletTxCreateTx },
+        cart: { findUnique: vi.fn().mockResolvedValue(null) },
+        cartItem: { deleteMany: vi.fn() },
+      };
+      return cb(tx);
+    });
+
+    const result = await stripeWebhookService.handleWebhook({ signature: "valid-sig", rawBody: Buffer.from("body") });
+
+    expect(result.received).toBe(true);
+    expect(result.duplicate).toBeUndefined();
+    expect(result.ignored).toBeUndefined();
+    // Exactly one wallet credit was posted for this recovery — not two,
+    // even though this is nominally the "second" delivery attempt Stripe
+    // made for this event id.
+    expect(walletUpdateTx).toHaveBeenCalledTimes(1);
+    expect(walletTxCreateTx).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ─── Webhook dispatch for the "processing" resolution path (scenarios #4/#5) ──
+
+describe("Webhook dispatch — regular_delivery_renewal / community_buy_pledge_charge resolution", () => {
+  const resolveProcessingPayment = vi.mocked(renewalsService.resolveProcessingPayment);
+  const resolveProcessingCharge = vi.mocked(campaignContributionsService.resolveProcessingCharge);
+
+  it("routes a renewal's payment_intent.succeeded to resolveProcessingPayment(succeeded=true), gated by the same WebhookEvent idempotency key as every other handler", async () => {
+    const fakeEvent = {
+      id: "evt_renewal_resolved",
+      type: "payment_intent.succeeded",
+      data: { object: { id: "pi_renewal_1", metadata: { kind: "regular_delivery_renewal", renewalId: "renewal-webhook-1" } } },
+    };
+    constructEvent.mockReturnValue(fakeEvent);
+    $transaction.mockImplementationOnce(async (cb: (tx: unknown) => unknown) => cb({
+      webhookEvent: { create: vi.fn().mockResolvedValue({}), update: vi.fn().mockResolvedValue({}) },
+    }));
+    resolveProcessingPayment.mockResolvedValue({ handled: true });
+
+    const result = await stripeWebhookService.handleWebhook({ signature: "valid-sig", rawBody: Buffer.from("body") });
+
+    expect(resolveProcessingPayment).toHaveBeenCalledWith("renewal-webhook-1", "pi_renewal_1", true, undefined);
+    expect(result.received).toBe(true);
+    expect(result.duplicate).toBeUndefined();
+  });
+
+  it("routes a renewal's payment_intent.payment_failed to resolveProcessingPayment(succeeded=false)", async () => {
+    const fakeEvent = {
+      id: "evt_renewal_failed",
+      type: "payment_intent.payment_failed",
+      data: { object: { id: "pi_renewal_2", metadata: { kind: "regular_delivery_renewal", renewalId: "renewal-webhook-2" } } },
+    };
+    constructEvent.mockReturnValue(fakeEvent);
+    $transaction.mockImplementationOnce(async (cb: (tx: unknown) => unknown) => cb({
+      webhookEvent: { create: vi.fn().mockResolvedValue({}), update: vi.fn().mockResolvedValue({}) },
+    }));
+    resolveProcessingPayment.mockResolvedValue({ handled: true });
+
+    await stripeWebhookService.handleWebhook({ signature: "valid-sig", rawBody: Buffer.from("body") });
+
+    expect(resolveProcessingPayment).toHaveBeenCalledWith("renewal-webhook-2", "pi_renewal_2", false, "Payment failed after processing");
+  });
+
+  it("is idempotent — a duplicate delivery of the same renewal-resolution event never calls resolveProcessingPayment twice", async () => {
+    const fakeEvent = {
+      id: "evt_renewal_dup",
+      type: "payment_intent.succeeded",
+      data: { object: { id: "pi_renewal_3", metadata: { kind: "regular_delivery_renewal", renewalId: "renewal-webhook-3" } } },
+    };
+    constructEvent.mockReturnValue(fakeEvent);
+    $transaction.mockImplementationOnce(async (cb: (tx: unknown) => unknown) => cb({
+      webhookEvent: {
+        create: vi.fn().mockRejectedValue(new Prisma.PrismaClientKnownRequestError("Unique constraint", { code: "P2002", clientVersion: "6.0.0" })),
+      },
+    }));
+
+    const result = await stripeWebhookService.handleWebhook({ signature: "valid-sig", rawBody: Buffer.from("body") });
+
+    expect(result.duplicate).toBe(true);
+    expect(resolveProcessingPayment).not.toHaveBeenCalled();
+  });
+
+  it("routes a Community Buy pledge's payment_intent.succeeded to resolveProcessingCharge(succeeded=true)", async () => {
+    const fakeEvent = {
+      id: "evt_pledge_resolved",
+      type: "payment_intent.succeeded",
+      data: { object: { id: "pi_pledge_1", metadata: { kind: "community_buy_pledge_charge", contributionId: "contrib-webhook-1" } } },
+    };
+    constructEvent.mockReturnValue(fakeEvent);
+    $transaction.mockImplementationOnce(async (cb: (tx: unknown) => unknown) => cb({
+      webhookEvent: { create: vi.fn().mockResolvedValue({}), update: vi.fn().mockResolvedValue({}) },
+    }));
+    resolveProcessingCharge.mockResolvedValue({ handled: true });
+
+    const result = await stripeWebhookService.handleWebhook({ signature: "valid-sig", rawBody: Buffer.from("body") });
+
+    expect(resolveProcessingCharge).toHaveBeenCalledWith("contrib-webhook-1", "pi_pledge_1", true, undefined);
+    expect(result.received).toBe(true);
+  });
+
+  it("routes a Community Buy pledge's payment_intent.canceled to resolveProcessingCharge(succeeded=false)", async () => {
+    const fakeEvent = {
+      id: "evt_pledge_failed",
+      type: "payment_intent.canceled",
+      data: { object: { id: "pi_pledge_2", metadata: { kind: "community_buy_pledge_charge", contributionId: "contrib-webhook-2" } } },
+    };
+    constructEvent.mockReturnValue(fakeEvent);
+    $transaction.mockImplementationOnce(async (cb: (tx: unknown) => unknown) => cb({
+      webhookEvent: { create: vi.fn().mockResolvedValue({}), update: vi.fn().mockResolvedValue({}) },
+    }));
+    resolveProcessingCharge.mockResolvedValue({ handled: true });
+
+    await stripeWebhookService.handleWebhook({ signature: "valid-sig", rawBody: Buffer.from("body") });
+
+    expect(resolveProcessingCharge).toHaveBeenCalledWith("contrib-webhook-2", "pi_pledge_2", false, "Payment failed after processing");
   });
 });
 
