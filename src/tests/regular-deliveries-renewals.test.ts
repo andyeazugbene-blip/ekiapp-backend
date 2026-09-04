@@ -551,6 +551,165 @@ describe("renewalsService.attemptPayment — Stripe status \"processing\" (relia
   });
 });
 
+// ─── Reliability scenario #6 (architecture doc §18): "provider timeout" ───
+
+describe("renewalsService.attemptPayment / requeryAmbiguousAttempt — reliability scenario #6", () => {
+  const baseRenewal = {
+    id: "renewal-timeout",
+    status: "READY_FOR_PAYMENT",
+    subscriptionId: "sub-timeout",
+    currency: "GBP",
+    subtotalAmount: 1000,
+    items: [{ currentUnitPrice: 1000, quantity: 1 }],
+    subscription: {
+      status: "ACTIVE",
+      buyerId: "buyer-timeout",
+      frequency: "WEEKLY",
+      paymentMethod: { stripeCustomerId: "cus_timeout", stripePaymentMethodId: "pm_timeout" },
+    },
+  };
+
+  it("a connection error is not treated as a confirmed decline — attempt stays PENDING, renewal stays claimed, no retry-recovery side effects fire", async () => {
+    m.renewal.findUniqueOrThrow.mockResolvedValue(baseRenewal as never);
+    m.renewal.updateMany.mockResolvedValue({ count: 1 } as never);
+    m.subscriptionPaymentAttempt.count.mockResolvedValue(0);
+    m.subscriptionPaymentAttempt.create.mockResolvedValue({ id: "attempt-timeout" } as never);
+    mCreateIntent.mockRejectedValue(Object.assign(new Error("Request timed out"), { type: "StripeConnectionError", code: "ETIMEDOUT" }));
+
+    await renewalsService.attemptPayment("renewal-timeout");
+
+    expect(m.subscriptionPaymentAttempt.update).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: "attempt-timeout" }, data: expect.objectContaining({ failureCode: "ETIMEDOUT" }) }),
+    );
+    // Never marked FAILED from an ambiguous outcome.
+    expect(m.subscriptionPaymentAttempt.update).not.toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ status: "FAILED" }) }),
+    );
+    expect(m.renewal.update).not.toHaveBeenCalled();
+    expect(notificationsService.enqueue).not.toHaveBeenCalled();
+    expect(automationService.scheduleAutomation).not.toHaveBeenCalled();
+  });
+
+  it("requeryAmbiguousAttempt() safely replays the SAME idempotency key and completes the order exactly once when Stripe confirms it actually succeeded", async () => {
+    m.subscriptionPaymentAttempt.findFirst.mockResolvedValue({ id: "attempt-timeout", idempotencyKey: "renewal-timeout:1", status: "PENDING", stripePaymentIntentId: null } as never);
+    m.renewal.findUniqueOrThrow.mockResolvedValue({ id: "renewal-timeout", status: "PAYMENT_PROCESSING", subtotalAmount: 1000, currency: "GBP", subscriptionId: "sub-timeout", subscription: baseRenewal.subscription } as never);
+    mCreateIntent.mockResolvedValue({ id: "pi_recovered", status: "succeeded" } as never);
+    m.subscriptionPaymentAttempt.updateMany.mockResolvedValue({ count: 1 } as never);
+    const convertSpy = vi.spyOn(renewalsService, "convertPaidRenewalToOrder").mockResolvedValue({ id: "order-recovered" } as never);
+
+    const result = await renewalsService.requeryAmbiguousAttempt("renewal-timeout");
+
+    expect(mCreateIntent).toHaveBeenCalledWith(expect.anything(), { idempotencyKey: "renewal-timeout:1" });
+    expect(result.handled).toBe(true);
+    expect(convertSpy).toHaveBeenCalledTimes(1);
+    convertSpy.mockRestore();
+  });
+
+  it("requeryAmbiguousAttempt() is a real no-op — never fabricates progress — when the outcome is still genuinely unknown", async () => {
+    m.subscriptionPaymentAttempt.findFirst.mockResolvedValue({ id: "attempt-timeout", idempotencyKey: "renewal-timeout:1", status: "PENDING", stripePaymentIntentId: null } as never);
+    m.renewal.findUniqueOrThrow.mockResolvedValue({ id: "renewal-timeout", status: "PAYMENT_PROCESSING", subtotalAmount: 1000, currency: "GBP", subscriptionId: "sub-timeout", subscription: baseRenewal.subscription } as never);
+    mCreateIntent.mockRejectedValue(Object.assign(new Error("still unreachable"), { type: "StripeConnectionError", code: "ETIMEDOUT" }));
+
+    const result = await renewalsService.requeryAmbiguousAttempt("renewal-timeout");
+
+    expect(result.handled).toBe(false);
+  });
+
+  it("requeryAmbiguousAttempt() does nothing when there is no ambiguous attempt to resolve", async () => {
+    m.subscriptionPaymentAttempt.findFirst.mockResolvedValue(null);
+    const result = await renewalsService.requeryAmbiguousAttempt("renewal-clean");
+    expect(result.handled).toBe(false);
+    expect(mCreateIntent).not.toHaveBeenCalled();
+  });
+});
+
+// ─── Reliability scenario #7 (architecture doc §18): "provider returns an invalid response" ──
+
+describe("renewalsService.attemptPayment — malformed/unexpected provider response (reliability scenario #7)", () => {
+  it("fails safely — no order created, no success recorded — when Stripe returns a status this code doesn't recognize", async () => {
+    const baseRenewal = {
+      id: "renewal-weird",
+      status: "READY_FOR_PAYMENT",
+      subscriptionId: "sub-weird",
+      currency: "GBP",
+      items: [{ currentUnitPrice: 500, quantity: 1 }],
+      subscription: {
+        status: "ACTIVE",
+        buyerId: "buyer-weird",
+        frequency: "WEEKLY",
+        paymentMethod: { stripeCustomerId: "cus_weird", stripePaymentMethodId: "pm_weird" },
+      },
+    };
+    m.renewal.findUniqueOrThrow.mockResolvedValue(baseRenewal as never);
+    m.renewal.updateMany.mockResolvedValue({ count: 1 } as never);
+    m.subscriptionPaymentAttempt.count.mockResolvedValue(0);
+    m.subscriptionPaymentAttempt.create.mockResolvedValue({ id: "attempt-weird" } as never);
+    // A malformed/unexpected response — not a status this integration knows.
+    mCreateIntent.mockResolvedValue({ id: "pi_weird", status: "some_unexpected_future_status" } as never);
+    m.buyerSubscription.update.mockResolvedValue({ buyerId: "buyer-weird" } as never);
+    m.renewal.findUnique.mockResolvedValue({ id: "renewal-weird", status: "PAYMENT_FAILED" } as never);
+    const convertSpy = vi.spyOn(renewalsService, "convertPaidRenewalToOrder");
+
+    await renewalsService.attemptPayment("renewal-weird");
+
+    // Never treated as success.
+    expect(convertSpy).not.toHaveBeenCalled();
+    expect(m.subscriptionPaymentAttempt.update).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: "attempt-weird" }, data: expect.objectContaining({ status: "FAILED", failureCode: "some_unexpected_future_status" }) }),
+    );
+    expect(m.renewal.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ status: "PAYMENT_FAILED" }) }),
+    );
+    convertSpy.mockRestore();
+  });
+});
+
+// ─── Reliability scenario #9 (architecture doc §18): "saved payment method expires" ──
+
+describe("renewalsService.attemptPayment — expired saved card (reliability scenario #9)", () => {
+  it("a real expired_card decline fails the attempt definitively — no order, real recovery notification sent, retry stays available", async () => {
+    const baseRenewal = {
+      id: "renewal-expired",
+      status: "READY_FOR_PAYMENT",
+      subscriptionId: "sub-expired",
+      currency: "GBP",
+      items: [{ currentUnitPrice: 800, quantity: 1 }],
+      subscription: {
+        status: "ACTIVE",
+        buyerId: "buyer-expired",
+        frequency: "WEEKLY",
+        paymentMethod: { stripeCustomerId: "cus_expired", stripePaymentMethodId: "pm_expired" },
+      },
+    };
+    m.renewal.findUniqueOrThrow.mockResolvedValue(baseRenewal as never);
+    m.renewal.updateMany.mockResolvedValue({ count: 1 } as never);
+    m.subscriptionPaymentAttempt.count.mockResolvedValue(0);
+    m.subscriptionPaymentAttempt.create.mockResolvedValue({ id: "attempt-expired" } as never);
+    mCreateIntent.mockRejectedValue(Object.assign(new Error("Your card has expired."), { type: "StripeCardError", code: "expired_card" }));
+    m.buyerSubscription.update.mockResolvedValue({ buyerId: "buyer-expired" } as never);
+    m.renewal.findUnique.mockResolvedValue({ id: "renewal-expired", status: "PAYMENT_FAILED" } as never);
+    const convertSpy = vi.spyOn(renewalsService, "convertPaidRenewalToOrder");
+
+    await renewalsService.attemptPayment("renewal-expired");
+
+    expect(convertSpy).not.toHaveBeenCalled();
+    expect(m.subscriptionPaymentAttempt.update).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: "attempt-expired" }, data: expect.objectContaining({ status: "FAILED", failureCode: "expired_card" }) }),
+    );
+    expect(m.renewal.update).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: "renewal-expired" }, data: expect.objectContaining({ status: "PAYMENT_FAILED" }) }),
+    );
+    expect(m.buyerSubscription.update).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: "sub-expired" }, data: { status: "PAYMENT_ATTENTION" } }),
+    );
+    expect(automationService.scheduleAutomation).toHaveBeenCalledWith(expect.objectContaining({ type: "PAYMENT_RECOVERY" }));
+    // PAYMENT_FAILED (not a blocked/ambiguous state) is exactly the status
+    // attemptPayment()'s own guard accepts for a future retry — this is the
+    // real "retry stays available" postcondition, not a separate mechanism.
+    convertSpy.mockRestore();
+  });
+});
+
 // ─── Reliability scenario #5 (architecture doc §18): "payment succeeds after the app shows pending" ──
 
 describe("renewalsService.resolveProcessingPayment — reliability scenario #5", () => {

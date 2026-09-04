@@ -23,6 +23,8 @@ const mockRestrictOrganiser = vi.fn();
 const mockUnrestrictOrganiser = vi.fn();
 const mockRestrictSupplier = vi.fn();
 const mockUnrestrictSupplier = vi.fn();
+const mockGetOrganiserRestrictionState = vi.fn();
+const mockGetSupplierRestrictionState = vi.fn();
 
 vi.mock("../modules/community-buy/organiser-supplier.service", () => ({
   organiserSupplierService: {
@@ -41,6 +43,8 @@ vi.mock("../modules/community-buy/organiser-supplier.service", () => ({
     unrestrictOrganiser: (...a: unknown[]) => mockUnrestrictOrganiser(...a),
     restrictSupplier: (...a: unknown[]) => mockRestrictSupplier(...a),
     unrestrictSupplier: (...a: unknown[]) => mockUnrestrictSupplier(...a),
+    getOrganiserRestrictionState: (...a: unknown[]) => mockGetOrganiserRestrictionState(...a),
+    getSupplierRestrictionState: (...a: unknown[]) => mockGetSupplierRestrictionState(...a),
   },
 }));
 
@@ -826,10 +830,14 @@ describe("Admin routes — permission-gated, id handling", () => {
     expect(bad.status).toBe(400);
     expect(mockRestrictOrganiser).not.toHaveBeenCalled();
 
-    mockRestrictOrganiser.mockResolvedValue({ id: "org-9", isRestricted: true });
+    mockGetOrganiserRestrictionState.mockResolvedValue({ isRestricted: false, restrictedReason: null });
+    mockRestrictOrganiser.mockResolvedValue({ id: "org-9", isRestricted: true, restrictedReason: "repeated no-shows" });
     const res = await request(app).post("/api/admin/community-buy/organisers/org-9/restrict").set("Authorization", `Bearer ${adminToken()}`).send({ reason: "repeated no-shows" });
     expect(res.status).toBe(200);
     expect(mockRestrictOrganiser).toHaveBeenCalledWith("org-9", "repeated no-shows");
+    // Audit completeness: the real prior state is fetched before mutating,
+    // never assumed/fabricated.
+    expect(mockGetOrganiserRestrictionState).toHaveBeenCalledWith("org-9");
   });
 
   it("POST /api/admin/community-buy/organisers/:id/unrestrict — id parsed correctly", async () => {
@@ -850,10 +858,12 @@ describe("Admin routes — permission-gated, id handling", () => {
     expect(bad.status).toBe(400);
     expect(mockRestrictSupplier).not.toHaveBeenCalled();
 
-    mockRestrictSupplier.mockResolvedValue({ id: "sup-4", isRestricted: true });
+    mockGetSupplierRestrictionState.mockResolvedValue({ isRestricted: false, restrictedReason: null });
+    mockRestrictSupplier.mockResolvedValue({ id: "sup-4", isRestricted: true, restrictedReason: "quality complaints" });
     const res = await request(app).post("/api/admin/community-buy/suppliers/sup-4/restrict").set("Authorization", `Bearer ${adminToken()}`).send({ reason: "quality complaints" });
     expect(res.status).toBe(200);
     expect(mockRestrictSupplier).toHaveBeenCalledWith("sup-4", "quality complaints");
+    expect(mockGetSupplierRestrictionState).toHaveBeenCalledWith("sup-4");
   });
 
   it("POST /api/admin/community-buy/suppliers/:id/unrestrict — id parsed correctly", async () => {

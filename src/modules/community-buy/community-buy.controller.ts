@@ -413,7 +413,7 @@ export async function adminApproveCampaign(request: Request, response: Response)
   const adminId = requireUserId(request);
   const id = requireIdParam(request);
   const campaign = await communityCampaignsService.approve(adminId, id);
-  await recordAudit({ actorId: adminId, action: "community_campaign.approve", entityType: "CommunityCampaign", entityId: id });
+  await recordAudit({ actorId: adminId, action: "community_campaign.approve", entityType: "CommunityCampaign", entityId: id, afterState: { status: campaign.status }, request });
   response.json({ campaign });
 }
 
@@ -423,15 +423,16 @@ export async function adminRequestCampaignChanges(request: Request, response: Re
   if (typeof notes !== "string" || !notes.trim()) throw new AppError("notes is required", 400);
   const id = requireIdParam(request);
   const campaign = await communityCampaignsService.requestChanges(adminId, id, notes);
-  await recordAudit({ actorId: adminId, action: "community_campaign.request_changes", entityType: "CommunityCampaign", entityId: id, metadata: { notes } });
+  await recordAudit({ actorId: adminId, action: "community_campaign.request_changes", entityType: "CommunityCampaign", entityId: id, reason: notes, afterState: { status: campaign.status }, request });
   response.json({ campaign });
 }
 
 export async function adminRejectCampaign(request: Request, response: Response): Promise<void> {
   const adminId = requireUserId(request);
   const id = requireIdParam(request);
-  const campaign = await communityCampaignsService.reject(adminId, id, request.body?.notes);
-  await recordAudit({ actorId: adminId, action: "community_campaign.reject", entityType: "CommunityCampaign", entityId: id, metadata: { notes: request.body?.notes } });
+  const notes = typeof request.body?.notes === "string" ? request.body.notes : undefined;
+  const campaign = await communityCampaignsService.reject(adminId, id, notes);
+  await recordAudit({ actorId: adminId, action: "community_campaign.reject", entityType: "CommunityCampaign", entityId: id, reason: notes, afterState: { status: campaign.status }, request });
   response.json({ campaign });
 }
 
@@ -439,7 +440,7 @@ export async function adminPauseCampaign(request: Request, response: Response): 
   const adminId = requireUserId(request);
   const id = requireIdParam(request);
   const campaign = await communityCampaignsService.pause(adminId, id);
-  await recordAudit({ actorId: adminId, action: "community_campaign.pause", entityType: "CommunityCampaign", entityId: id });
+  await recordAudit({ actorId: adminId, action: "community_campaign.pause", entityType: "CommunityCampaign", entityId: id, afterState: { status: campaign.status }, request });
   response.json({ campaign });
 }
 
@@ -447,7 +448,7 @@ export async function adminResumeCampaign(request: Request, response: Response):
   const adminId = requireUserId(request);
   const id = requireIdParam(request);
   const campaign = await communityCampaignsService.resume(adminId, id);
-  await recordAudit({ actorId: adminId, action: "community_campaign.resume", entityType: "CommunityCampaign", entityId: id });
+  await recordAudit({ actorId: adminId, action: "community_campaign.resume", entityType: "CommunityCampaign", entityId: id, afterState: { status: campaign.status }, request });
   response.json({ campaign });
 }
 
@@ -459,7 +460,7 @@ export async function adminVerifyOrganiser(request: Request, response: Response)
   const adminId = requireUserId(request);
   const id = requireIdParam(request);
   const profile = await organiserSupplierService.verifyOrganiser(id);
-  await recordAudit({ actorId: adminId, action: "community_organiser.verify", entityType: "CommunityOrganiserProfile", entityId: id });
+  await recordAudit({ actorId: adminId, action: "community_organiser.verify", entityType: "CommunityOrganiserProfile", entityId: id, afterState: { isVerified: true }, request });
   response.json({ profile });
 }
 
@@ -471,7 +472,7 @@ export async function adminVerifySupplier(request: Request, response: Response):
   const adminId = requireUserId(request);
   const id = requireIdParam(request);
   const profile = await organiserSupplierService.verifySupplier(id);
-  await recordAudit({ actorId: adminId, action: "community_supplier.verify", entityType: "CommunitySupplierProfile", entityId: id });
+  await recordAudit({ actorId: adminId, action: "community_supplier.verify", entityType: "CommunitySupplierProfile", entityId: id, afterState: { isVerified: true }, request });
   response.json({ profile });
 }
 
@@ -482,15 +483,16 @@ export async function adminListRefunds(_request: Request, response: Response): P
 export async function adminRequeryRefund(request: Request, response: Response): Promise<void> {
   const adminId = requireUserId(request);
   const refund = await campaignContributionsService.requeryRefund(requireIdParam(request));
-  await recordAudit({ actorId: adminId, action: "community_refund.requery", entityType: "CampaignRefund", entityId: refund.id, metadata: { status: refund.status } });
+  await recordAudit({ actorId: adminId, action: "community_refund.requery", entityType: "CampaignRefund", entityId: refund.id, afterState: { status: refund.status }, request });
   response.json({ refund });
 }
 
 export async function adminEscalateRefund(request: Request, response: Response): Promise<void> {
   const adminId = requireUserId(request);
   const { note } = request.body ?? {};
-  const supportCase = await campaignContributionsService.escalateRefund(adminId, requireIdParam(request), typeof note === "string" ? note : undefined);
-  await recordAudit({ actorId: adminId, action: "community_refund.escalate", entityType: "CampaignRefund", entityId: requireIdParam(request), metadata: { supportCaseId: supportCase.id } });
+  const escalationNote = typeof note === "string" ? note : undefined;
+  const supportCase = await campaignContributionsService.escalateRefund(adminId, requireIdParam(request), escalationNote);
+  await recordAudit({ actorId: adminId, action: "community_refund.escalate", entityType: "CampaignRefund", entityId: requireIdParam(request), reason: escalationNote, metadata: { supportCaseId: supportCase.id }, request });
   response.json({ supportCase });
 }
 
@@ -502,15 +504,16 @@ export async function adminApproveExtension(request: Request, response: Response
   const adminId = requireUserId(request);
   const id = requireIdParam(request);
   const extensionRequest = await communityCampaignsService.approveExtension(adminId, id);
-  await recordAudit({ actorId: adminId, action: "community_campaign_extension.approve", entityType: "CampaignExtensionRequest", entityId: id });
+  await recordAudit({ actorId: adminId, action: "community_campaign_extension.approve", entityType: "CampaignExtensionRequest", entityId: id, afterState: extensionRequest ? { status: extensionRequest.status } : undefined, request });
   response.json({ extensionRequest });
 }
 
 export async function adminRejectExtension(request: Request, response: Response): Promise<void> {
   const adminId = requireUserId(request);
   const id = requireIdParam(request);
-  const extensionRequest = await communityCampaignsService.rejectExtension(adminId, id, request.body?.notes);
-  await recordAudit({ actorId: adminId, action: "community_campaign_extension.reject", entityType: "CampaignExtensionRequest", entityId: id, metadata: { notes: request.body?.notes } });
+  const notes = typeof request.body?.notes === "string" ? request.body.notes : undefined;
+  const extensionRequest = await communityCampaignsService.rejectExtension(adminId, id, notes);
+  await recordAudit({ actorId: adminId, action: "community_campaign_extension.reject", entityType: "CampaignExtensionRequest", entityId: id, reason: notes, afterState: { status: extensionRequest.status }, request });
   response.json({ extensionRequest });
 }
 
@@ -550,13 +553,13 @@ export async function adminReleaseSupplierPayment(request: Request, response: Re
       requestedById: adminId,
       reason: "Supplier payment release requested",
     });
-    await recordAudit({ actorId: adminId, action: "community_supplier_payment.release_requested", entityType: "CampaignSupplierPayment", entityId: id });
+    await recordAudit({ actorId: adminId, action: "community_supplier_payment.release_requested", entityType: "CampaignSupplierPayment", entityId: id, request });
     response.status(202).json({ pendingApproval: approval, message: "This release requires a second admin's approval before it executes." });
     return;
   }
 
   const payment = await campaignContributionsService.releaseSupplierPayment(adminId, id);
-  await recordAudit({ actorId: adminId, action: "community_supplier_payment.release", entityType: "CampaignSupplierPayment", entityId: id });
+  await recordAudit({ actorId: adminId, action: "community_supplier_payment.release", entityType: "CampaignSupplierPayment", entityId: id, afterState: { status: payment.status }, request });
   response.json({ payment });
 }
 
@@ -566,7 +569,7 @@ export async function adminHoldSupplierPayment(request: Request, response: Respo
   if (typeof reason !== "string" || !reason.trim()) throw new AppError("reason is required", 400);
   const id = requireIdParam(request);
   const payment = await campaignContributionsService.holdSupplierPayment(adminId, id, reason);
-  await recordAudit({ actorId: adminId, action: "community_supplier_payment.hold", entityType: "CampaignSupplierPayment", entityId: id, metadata: { reason } });
+  await recordAudit({ actorId: adminId, action: "community_supplier_payment.hold", entityType: "CampaignSupplierPayment", entityId: id, reason, afterState: { status: payment.status }, request });
   response.json({ payment });
 }
 
@@ -577,8 +580,18 @@ export async function adminListMarketConfigurations(_request: Request, response:
 export async function adminUpdateMarketConfiguration(request: Request, response: Response): Promise<void> {
   const adminId = requireUserId(request);
   const countryCode = requireIdParam(request);
+  const before = await marketConfigurationService.get(countryCode);
   const config = await marketConfigurationService.update(countryCode, request.body);
-  await recordAudit({ actorId: adminId, action: "community_market_config.update", entityType: "MarketConfiguration", entityId: countryCode, metadata: request.body });
+  await recordAudit({
+    actorId: adminId,
+    action: "community_market_config.update",
+    entityType: "MarketConfiguration",
+    entityId: countryCode,
+    metadata: request.body,
+    beforeState: before ?? undefined,
+    afterState: config,
+    request,
+  });
   response.json({ config });
 }
 
@@ -605,16 +618,18 @@ export async function adminRestrictOrganiser(request: Request, response: Respons
   const reason = request.body?.reason;
   if (typeof reason !== "string" || !reason.trim()) throw new AppError("reason is required", 400);
   const id = requireIdParam(request);
+  const before = await organiserSupplierService.getOrganiserRestrictionState(id);
   const profile = await organiserSupplierService.restrictOrganiser(id, reason);
-  await recordAudit({ actorId: adminId, action: "community_organiser.restrict", entityType: "OrganiserProfile", entityId: id, metadata: { reason } });
+  await recordAudit({ actorId: adminId, action: "community_organiser.restrict", entityType: "OrganiserProfile", entityId: id, reason, beforeState: before ?? undefined, afterState: { isRestricted: profile.isRestricted, restrictedReason: profile.restrictedReason }, request });
   response.json({ profile });
 }
 
 export async function adminUnrestrictOrganiser(request: Request, response: Response): Promise<void> {
   const adminId = requireUserId(request);
   const id = requireIdParam(request);
+  const before = await organiserSupplierService.getOrganiserRestrictionState(id);
   const profile = await organiserSupplierService.unrestrictOrganiser(id);
-  await recordAudit({ actorId: adminId, action: "community_organiser.unrestrict", entityType: "OrganiserProfile", entityId: id });
+  await recordAudit({ actorId: adminId, action: "community_organiser.unrestrict", entityType: "OrganiserProfile", entityId: id, beforeState: before ?? undefined, afterState: { isRestricted: profile.isRestricted, restrictedReason: profile.restrictedReason }, request });
   response.json({ profile });
 }
 
@@ -623,15 +638,17 @@ export async function adminRestrictSupplier(request: Request, response: Response
   const reason = request.body?.reason;
   if (typeof reason !== "string" || !reason.trim()) throw new AppError("reason is required", 400);
   const id = requireIdParam(request);
+  const before = await organiserSupplierService.getSupplierRestrictionState(id);
   const profile = await organiserSupplierService.restrictSupplier(id, reason);
-  await recordAudit({ actorId: adminId, action: "community_supplier.restrict", entityType: "SupplierProfile", entityId: id, metadata: { reason } });
+  await recordAudit({ actorId: adminId, action: "community_supplier.restrict", entityType: "SupplierProfile", entityId: id, reason, beforeState: before ?? undefined, afterState: { isRestricted: profile.isRestricted, restrictedReason: profile.restrictedReason }, request });
   response.json({ profile });
 }
 
 export async function adminUnrestrictSupplier(request: Request, response: Response): Promise<void> {
   const adminId = requireUserId(request);
   const id = requireIdParam(request);
+  const before = await organiserSupplierService.getSupplierRestrictionState(id);
   const profile = await organiserSupplierService.unrestrictSupplier(id);
-  await recordAudit({ actorId: adminId, action: "community_supplier.unrestrict", entityType: "SupplierProfile", entityId: id });
+  await recordAudit({ actorId: adminId, action: "community_supplier.unrestrict", entityType: "SupplierProfile", entityId: id, beforeState: before ?? undefined, afterState: { isRestricted: profile.isRestricted, restrictedReason: profile.restrictedReason }, request });
   response.json({ profile });
 }

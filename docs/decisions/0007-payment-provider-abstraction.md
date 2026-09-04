@@ -38,3 +38,20 @@ doc explicitly forbids ("do NOT break existing Stripe/Paystack flows").
   concept — Paystack's integration here is single-charge, redirect-based.
   Those interface methods throw `PROVIDER_UNSUPPORTED_OPERATION` rather
   than faking behavior the provider doesn't have.
+
+## Paystack reconciliation — explicit launch-scope decision (2026-09)
+Confirmed **out of scope for the current launch** rather than an oversight:
+- `payment-provider.factory.ts` only routes a vendor to Paystack when their
+  country is Nigeria/Ghana; the current launch's markets
+  (`market-configuration.service.ts`'s `INITIAL_MARKETS`) are GB, US, CA,
+  and the approved European countries — no African market is enabled.
+- `PAYSTACK_SECRET_KEY` is not set in the production environment, so
+  `paystack.isConfigured()` is `false` and Paystack calls are inert there
+  today regardless of any vendor's country value.
+- Building real Paystack reconciliation now would mean adding the
+  transaction-list integration this ADR already flags as unbuilt, purely
+  to satisfy a checklist item for a rail nothing in the current launch
+  exercises — a real engineering-risk-for-no-current-benefit trade the
+  architecture doc's own "do NOT break existing flows" instruction argues
+  against. Revisit when Africa is actually enabled (see the market seed
+  list's own comment on why Africa is deliberately absent from it).

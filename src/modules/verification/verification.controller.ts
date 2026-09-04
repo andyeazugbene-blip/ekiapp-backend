@@ -108,6 +108,8 @@ export async function adminApproveVerificationReview(
     action: "verification.approve",
     entityType: "Vendor",
     entityId: vendorId,
+    afterState: { verificationStatus: "VERIFIED" },
+    request,
   });
   response.status(200).json(result);
 }
@@ -133,7 +135,9 @@ export async function adminRejectVerificationReview(
     action: "verification.reject",
     entityType: "Vendor",
     entityId: vendorId,
-    metadata: { rejectionReason: reason },
+    reason,
+    afterState: { verificationStatus: "REJECTED" },
+    request,
   });
   response.status(200).json(result);
 }
@@ -150,6 +154,7 @@ export async function adminDeleteVerificationFiles(
     entityType: "Vendor",
     entityId: vendorId,
     metadata: { deletedDocuments: result.deletedDocuments, failedDocuments: result.failedDocuments },
+    request,
   });
   response.status(200).json(result);
 }

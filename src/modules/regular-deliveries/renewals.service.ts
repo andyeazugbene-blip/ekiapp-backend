@@ -371,9 +371,31 @@ export const renewalsService = {
       );
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
+      const stripeErr = error as { type?: string; code?: string };
+
+      // Reliability scenario #6 "provider timeout": a network/connection
+      // error or a Stripe-side 5xx means we genuinely don't know whether
+      // Stripe received and processed the charge — unlike a definitive
+      // decline (StripeCardError etc), this is NOT a confirmed failure.
+      // Treating it as one would let a later retry compute a NEW
+      // attemptNumber (a different, undeduped idempotency key) and
+      // genuinely double-charge the buyer if the original request actually
+      // went through on Stripe's side. Instead this stays claimed exactly
+      // like the "processing" branch below — unresolved, no new attempt
+      // possible — and requeryAmbiguousAttempt() below is the real
+      // recovery path: it replays the SAME idempotencyKey, which Stripe
+      // itself guarantees is safe to repeat.
+      if (stripeErr.type === "StripeConnectionError" || stripeErr.type === "StripeAPIError") {
+        await prisma.subscriptionPaymentAttempt.update({
+          where: { id: attempt.id },
+          data: { failureCode: stripeErr.code, failureMessage: message },
+        });
+        return prisma.renewal.findUnique({ where: { id: renewalId } });
+      }
+
       await prisma.subscriptionPaymentAttempt.update({
         where: { id: attempt.id },
-        data: { status: "FAILED", failureCode: (error as Stripe.StripeRawError)?.code, failureMessage: message },
+        data: { status: "FAILED", failureCode: stripeErr.code, failureMessage: message },
       });
       return this.handlePaymentFailure(renewal.subscriptionId, renewalId, message);
     }
@@ -412,6 +434,75 @@ export const renewalsService = {
       data: { status: "FAILED", stripePaymentIntentId: intent.id, failureCode: intent.status, failureMessage: "Payment requires additional authentication" },
     });
     return this.handlePaymentFailure(renewal.subscriptionId, renewalId, `Unexpected status: ${intent.status}`);
+  },
+
+  /**
+   * Reliability scenario #6 "provider timeout" recovery path. Replays the
+   * exact same Stripe request with the SAME stored idempotencyKey for an
+   * attempt attemptPayment() left ambiguous after a connection/API error —
+   * Stripe itself guarantees replaying an idempotency key is safe, so this
+   * can never produce a second real charge even if the original request
+   * actually succeeded. A no-op if there is nothing ambiguous to resolve
+   * (already resolved by a webhook, or never went ambiguous).
+   */
+  async requeryAmbiguousAttempt(renewalId: string) {
+    const attempt = await prisma.subscriptionPaymentAttempt.findFirst({
+      where: { renewalId, status: "PENDING", stripePaymentIntentId: null },
+      orderBy: { attemptNumber: "desc" },
+    });
+    if (!attempt) return { handled: false as const };
+
+    const renewal = await prisma.renewal.findUniqueOrThrow({
+      where: { id: renewalId },
+      include: { subscription: { include: { paymentMethod: true } } },
+    });
+    if (renewal.status !== "PAYMENT_PROCESSING") return { handled: false as const };
+    const paymentMethod = renewal.subscription.paymentMethod;
+    if (!paymentMethod || renewal.subtotalAmount == null) return { handled: false as const };
+
+    let intent: Stripe.PaymentIntent;
+    try {
+      intent = await stripe.paymentIntents.create(
+        {
+          amount: renewal.subtotalAmount,
+          currency: resolveStripeCurrency(renewal.currency),
+          customer: paymentMethod.stripeCustomerId,
+          payment_method: paymentMethod.stripePaymentMethodId,
+          off_session: true,
+          confirm: true,
+          metadata: { kind: "regular_delivery_renewal", renewalId, subscriptionId: renewal.subscriptionId },
+        },
+        { idempotencyKey: attempt.idempotencyKey },
+      );
+    } catch (error) {
+      // Still ambiguous (or a fresh connection failure) — leave it exactly
+      // as it was for the next requery, never mark it FAILED from a
+      // requery we can't actually confirm either.
+      const stripeErr = error as { type?: string; code?: string };
+      const message = error instanceof Error ? error.message : String(error);
+      await prisma.subscriptionPaymentAttempt.update({ where: { id: attempt.id }, data: { failureCode: stripeErr.code, failureMessage: message } });
+      return { handled: false as const };
+    }
+
+    if (intent.status === "succeeded") {
+      const claim = await prisma.subscriptionPaymentAttempt.updateMany({ where: { id: attempt.id, status: "PENDING" }, data: { status: "SUCCEEDED", stripePaymentIntentId: intent.id } });
+      if (claim.count !== 1) return { handled: false as const };
+      const order = await this.convertPaidRenewalToOrder(renewalId, intent.id);
+      return { handled: true as const, order };
+    }
+
+    if (intent.status === "processing") {
+      await prisma.subscriptionPaymentAttempt.update({ where: { id: attempt.id }, data: { stripePaymentIntentId: intent.id } });
+      return { handled: false as const };
+    }
+
+    const claim = await prisma.subscriptionPaymentAttempt.updateMany({
+      where: { id: attempt.id, status: "PENDING" },
+      data: { status: "FAILED", stripePaymentIntentId: intent.id, failureCode: intent.status, failureMessage: "Payment requires additional authentication" },
+    });
+    if (claim.count !== 1) return { handled: false as const };
+    await this.handlePaymentFailure(renewal.subscriptionId, renewalId, `Unexpected status: ${intent.status}`);
+    return { handled: true as const };
   },
 
   /**

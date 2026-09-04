@@ -68,6 +68,25 @@ async function runRenewalsSweep() {
   const reminded = await renewalsService.sendUpcomingRenewalReminders();
   const priceApprovalExpiry = await renewalsService.expirePriceApprovalTimeouts();
 
+  // Reliability scenario #6 "provider timeout" recovery — a renewal left
+  // ambiguous by a connection/API error during attemptPayment() (see that
+  // function's comment) gets a real requery here, safely replaying the
+  // same idempotency key rather than sitting stuck forever.
+  const ambiguous = await prisma.renewal.findMany({
+    where: { status: "PAYMENT_PROCESSING", paymentAttempts: { some: { status: "PENDING", stripePaymentIntentId: null } } },
+    select: { id: true },
+    take: 200,
+  });
+  let requeried = 0;
+  for (const renewal of ambiguous) {
+    try {
+      const outcome = await renewalsService.requeryAmbiguousAttempt(renewal.id);
+      if (outcome.handled) requeried++;
+    } catch (err) {
+      logger.error("Renewal ambiguous-payment requery failed", { renewalId: renewal.id, error: String(err) });
+    }
+  }
+
   const readyForPayment = await prisma.renewal.findMany({
     where: { status: "READY_FOR_PAYMENT" },
     select: { id: true },
@@ -86,7 +105,7 @@ async function runRenewalsSweep() {
       logger.error("Renewal payment attempt failed", { renewalId: renewal.id, error: String(err) });
     }
   }
-  return { ...generation, reminded, priceApprovalExpiry, attempted: readyForPayment.length, charged, failed };
+  return { ...generation, reminded, priceApprovalExpiry, requeried, attempted: readyForPayment.length, charged, failed };
 }
 
 // Community Buy: closes campaigns whose deadline has passed (deciding
@@ -98,6 +117,24 @@ async function runCommunityBuySweep() {
   const rescueOutcome = await communityCampaignsService.evaluateRescueExpiry();
   const remindedParticipants = await communityCampaignsService.remindApproachingDeadlines();
   const refunds = await campaignContributionsService.processPendingRefunds();
+
+  // Reliability scenario #6 "provider timeout" recovery — the Community
+  // Buy equivalent of the renewals requery above.
+  const ambiguous = await prisma.campaignContribution.findMany({
+    where: { status: "PAYMENT_PROCESSING", chargeAttempts: { some: { status: "PENDING", stripePaymentIntentId: null } } },
+    select: { id: true },
+    take: 200,
+  });
+  let requeried = 0;
+  for (const contribution of ambiguous) {
+    try {
+      const outcome = await campaignContributionsService.requeryAmbiguousCharge(contribution.id);
+      if (outcome.handled) requeried++;
+    } catch (err) {
+      logger.error("Pledge ambiguous-charge requery failed", { contributionId: contribution.id, error: String(err) });
+    }
+  }
+
   return {
     closed: closing.closed,
     succeeded: closing.succeeded,
@@ -108,6 +145,7 @@ async function runCommunityBuySweep() {
     remindedParticipants,
     refundsProcessed: refunds.processed,
     refundsFailed: refunds.failed,
+    ambiguousChargesRequeried: requeried,
   };
 }
 

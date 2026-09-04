@@ -97,6 +97,15 @@ export const organiserSupplierService = {
     });
   },
 
+  /** Real prior state for audit before/after capture — never fabricated, since restrict/unrestrict below have no status guard of their own. */
+  async getOrganiserRestrictionState(id: string) {
+    return prisma.organiserProfile.findUnique({ where: { id }, select: { isRestricted: true, restrictedReason: true } });
+  },
+
+  async getSupplierRestrictionState(id: string) {
+    return prisma.supplierProfile.findUnique({ where: { id }, select: { isRestricted: true, restrictedReason: true } });
+  },
+
   async restrictOrganiser(id: string, reason: string) {
     return prisma.organiserProfile.update({ where: { id }, data: { isRestricted: true, restrictedReason: reason } });
   },

@@ -555,6 +555,126 @@ describe("payment_intent.canceled", () => {
   });
 });
 
+// ─── Reliability scenario #3: webhook arrives out of order ────────────────
+
+describe("Webhook out-of-order delivery (reliability scenario #3)", () => {
+  it("a late payment_intent.payment_failed cannot revert a checkout that already succeeded — no stock restored, no wallet reversal", async () => {
+    const fakeEvent = {
+      id: "evt_late_failed",
+      type: "payment_intent.payment_failed",
+      data: {
+        object: {
+          id: "pi_ooo_1",
+          metadata: { checkoutId: "co_ooo_1", buyerId: "buyer-ooo" },
+        },
+      },
+    };
+    constructEvent.mockReturnValue(fakeEvent);
+
+    const mockProductUpdate = vi.fn();
+    const mockCheckoutUpdateMany = vi.fn();
+    const mockBuyerWalletUpdate = vi.fn();
+
+    $transaction.mockImplementationOnce(async (cb: (tx: unknown) => unknown) => {
+      const tx = {
+        webhookEvent: {
+          create: vi.fn().mockResolvedValue({}),
+          updateMany: vi.fn().mockResolvedValue({}),
+        },
+        checkout: {
+          // The checkout already reached SUCCEEDED — e.g. the succeeded
+          // event was processed first, and this failed event is the
+          // older/out-of-order one arriving late.
+          findUnique: vi.fn().mockResolvedValue({
+            id: "co_ooo_1",
+            buyerId: "buyer-ooo",
+            status: "SUCCEEDED",
+            metadata: null,
+            orders: [{ id: "ord_ooo_1", items: [{ productId: "prod_ooo_1", quantity: 1 }] }],
+          }),
+          updateMany: mockCheckoutUpdateMany,
+        },
+        order: { updateMany: vi.fn() },
+        payment: { updateMany: vi.fn() },
+        product: { update: mockProductUpdate },
+        buyerWallet: { findUnique: vi.fn(), update: mockBuyerWalletUpdate },
+        buyerWalletTransaction: { create: vi.fn() },
+      };
+      return cb(tx);
+    });
+
+    const result = await stripeWebhookService.handleWebhook({ signature: "valid-sig", rawBody: Buffer.from("body") });
+
+    expect(result.received).toBe(true);
+    expect(result.ignored).toBe(true);
+    // The already-SUCCEEDED state is never touched by the late failure event.
+    expect(mockCheckoutUpdateMany).not.toHaveBeenCalled();
+    expect(mockProductUpdate).not.toHaveBeenCalled();
+    expect(mockBuyerWalletUpdate).not.toHaveBeenCalled();
+  });
+
+  it("a late payment_intent.succeeded cannot resurrect a checkout that already failed — no ledger/wallet credit, no order marked PAID", async () => {
+    const fakeEvent = {
+      id: "evt_late_succeeded",
+      type: "payment_intent.succeeded",
+      data: {
+        object: {
+          id: "pi_ooo_2",
+          amount: 5000,
+          currency: "usd",
+          metadata: { checkoutId: "co_ooo_2", buyerId: "buyer-ooo-2" },
+        },
+      },
+    };
+    constructEvent.mockReturnValue(fakeEvent);
+
+    const mockOrderUpdateMany = vi.fn();
+    const mockWalletUpdate = vi.fn();
+    const mockWalletTxCreate = vi.fn();
+
+    $transaction.mockImplementationOnce(async (cb: (tx: unknown) => unknown) => {
+      const tx = {
+        webhookEvent: {
+          create: vi.fn().mockResolvedValue({}),
+          updateMany: vi.fn().mockResolvedValue({}),
+        },
+        checkout: {
+          // Already FAILED — e.g. the failed event (or a prior cancellation)
+          // was processed first; this succeeded event is the older/
+          // out-of-order one arriving late.
+          findUnique: vi.fn().mockResolvedValue({
+            id: "co_ooo_2",
+            buyerId: "buyer-ooo-2",
+            status: "FAILED",
+            totalAmount: 5000,
+            currency: "usd",
+            metadata: null,
+            orders: [],
+          }),
+          // Conditional update only ever matches status: PENDING — the real
+          // status is FAILED, so this correctly matches zero rows.
+          updateMany: vi.fn().mockResolvedValue({ count: 0 }),
+        },
+        order: { updateMany: mockOrderUpdateMany },
+        wallet: { findUnique: vi.fn(), update: mockWalletUpdate },
+        walletTransaction: { create: mockWalletTxCreate },
+        cart: { findUnique: vi.fn() },
+        cartItem: { deleteMany: vi.fn() },
+      };
+      return cb(tx);
+    });
+
+    const result = await stripeWebhookService.handleWebhook({ signature: "valid-sig", rawBody: Buffer.from("body") });
+
+    expect(result.received).toBe(true);
+    expect(result.duplicate).toBe(true);
+    // Nothing about the already-FAILED financial state was touched.
+    expect(mockOrderUpdateMany).not.toHaveBeenCalled();
+    expect(mockWalletUpdate).not.toHaveBeenCalled();
+    expect(mockWalletTxCreate).not.toHaveBeenCalled();
+  });
+});
+
 // ─── Reliability scenario #24 (architecture doc §18): "backend unavailable during webhook delivery" ──
 
 describe("Webhook processing — backend unavailable mid-delivery (reliability scenario #24)", () => {

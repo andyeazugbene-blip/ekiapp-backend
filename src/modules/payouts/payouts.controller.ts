@@ -51,7 +51,7 @@ export async function adminApprovePayoutRequest(
   const adminId = requireUserId(request);
   const id = requireIdParam(request);
   const payoutRequest = await payoutsService.adminApprove(adminId, id);
-  await recordAudit({ actorId: adminId, action: "payout_request.approve", entityType: "PayoutRequest", entityId: id, metadata: { amount: payoutRequest.amount, vendorId: payoutRequest.vendorId } });
+  await recordAudit({ actorId: adminId, action: "payout_request.approve", entityType: "PayoutRequest", entityId: id, metadata: { amount: payoutRequest.amount, vendorId: payoutRequest.vendorId }, beforeState: { status: "PENDING" }, afterState: { status: payoutRequest.status }, request });
   response.status(200).json({ payoutRequest });
 }
 
@@ -63,7 +63,7 @@ export async function adminRejectPayoutRequest(
   const adminId = requireUserId(request);
   const id = requireIdParam(request);
   const payoutRequest = await payoutsService.adminReject(adminId, id, input);
-  await recordAudit({ actorId: adminId, action: "payout_request.reject", entityType: "PayoutRequest", entityId: id, metadata: { reason: input.reason } });
+  await recordAudit({ actorId: adminId, action: "payout_request.reject", entityType: "PayoutRequest", entityId: id, reason: input.reason, beforeState: { status: "PENDING" }, afterState: { status: payoutRequest.status }, request });
   response.status(200).json({ payoutRequest });
 }
 
@@ -76,7 +76,7 @@ export async function adminMarkPayoutRequestPaid(
   const adminId = requireUserId(request);
   const id = requireIdParam(request);
   const payoutRequest = await payoutsService.adminMarkPaid(adminId, id, transferProof);
-  await recordAudit({ actorId: adminId, action: "payout_request.mark_paid", entityType: "PayoutRequest", entityId: id, metadata: { amount: payoutRequest.amount, vendorId: payoutRequest.vendorId, hasTransferProof: Boolean(transferProof) } });
+  await recordAudit({ actorId: adminId, action: "payout_request.mark_paid", entityType: "PayoutRequest", entityId: id, metadata: { amount: payoutRequest.amount, vendorId: payoutRequest.vendorId, hasTransferProof: Boolean(transferProof) }, beforeState: { status: "APPROVED" }, afterState: { status: payoutRequest.status }, request });
   response.status(200).json({ payoutRequest });
 }
 export async function adminGetPayoutRequest(

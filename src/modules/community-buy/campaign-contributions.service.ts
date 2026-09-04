@@ -291,9 +291,26 @@ export const campaignContributionsService = {
       );
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
+      const stripeErr = error as { type?: string; code?: string };
+
+      // Reliability scenario #6 "provider timeout" — see the identical
+      // comment in renewals.service.ts's attemptPayment(). A connection/API
+      // error is not a confirmed decline; treating it as one would let a
+      // retry compute a new, undeduped idempotency key and genuinely
+      // double-charge the participant if the original request actually
+      // reached Stripe. requeryAmbiguousCharge() below is the real recovery
+      // path — it safely replays the SAME idempotencyKey.
+      if (stripeErr.type === "StripeConnectionError" || stripeErr.type === "StripeAPIError") {
+        await prisma.campaignChargeAttempt.update({
+          where: { id: attempt.id },
+          data: { failureCode: stripeErr.code, failureMessage: message },
+        });
+        return prisma.campaignContribution.findUniqueOrThrow({ where: { id: contributionId } });
+      }
+
       await prisma.campaignChargeAttempt.update({
         where: { id: attempt.id },
-        data: { status: "FAILED", failureCode: (error as Stripe.StripeRawError)?.code, failureMessage: message },
+        data: { status: "FAILED", failureCode: stripeErr.code, failureMessage: message },
       });
       return this.handleChargeAttemptFailure(contribution, message, attemptNumber >= MAX_CHARGE_ATTEMPTS);
     }
@@ -328,6 +345,69 @@ export const campaignContributionsService = {
       data: { status: "FAILED", stripePaymentIntentId: intent.id, failureCode: intent.status, failureMessage: "Payment requires additional authentication" },
     });
     return this.handleChargeAttemptFailure(contribution, `Unexpected status: ${intent.status}`, attemptNumber >= MAX_CHARGE_ATTEMPTS);
+  },
+
+  /**
+   * Reliability scenario #6 "provider timeout" recovery path — the
+   * Community Buy equivalent of renewals.service.ts's
+   * requeryAmbiguousAttempt(). Replays the exact same Stripe request with
+   * the SAME stored idempotencyKey; Stripe guarantees this is safe even if
+   * the original request actually succeeded.
+   */
+  async requeryAmbiguousCharge(contributionId: string) {
+    const attempt = await prisma.campaignChargeAttempt.findFirst({
+      where: { contributionId, status: "PENDING", stripePaymentIntentId: null },
+      orderBy: { attemptNumber: "desc" },
+    });
+    if (!attempt) return { handled: false as const };
+
+    const contribution = await prisma.campaignContribution.findUniqueOrThrow({
+      where: { id: contributionId },
+      include: { participant: true, paymentMethod: true },
+    });
+    if (contribution.status !== "PAYMENT_PROCESSING" || !contribution.paymentMethod) return { handled: false as const };
+
+    let intent: Stripe.PaymentIntent;
+    try {
+      intent = await stripe.paymentIntents.create(
+        {
+          amount: contribution.amount,
+          currency: resolveStripeCurrency(contribution.currency),
+          customer: contribution.paymentMethod.stripeCustomerId,
+          payment_method: contribution.paymentMethod.stripePaymentMethodId,
+          off_session: true,
+          confirm: true,
+          metadata: { kind: "community_buy_pledge_charge", contributionId, campaignId: contribution.campaignId },
+        },
+        { idempotencyKey: attempt.idempotencyKey },
+      );
+    } catch (error) {
+      const stripeErr = error as { type?: string; code?: string };
+      const message = error instanceof Error ? error.message : String(error);
+      await prisma.campaignChargeAttempt.update({ where: { id: attempt.id }, data: { failureCode: stripeErr.code, failureMessage: message } });
+      return { handled: false as const };
+    }
+
+    if (intent.status === "succeeded") {
+      const claim = await prisma.campaignChargeAttempt.updateMany({ where: { id: attempt.id, status: "PENDING" }, data: { status: "SUCCEEDED", stripePaymentIntentId: intent.id } });
+      if (claim.count !== 1) return { handled: false as const };
+      await this.markChargeSucceeded(contribution, intent.id);
+      return { handled: true as const };
+    }
+
+    if (intent.status === "processing") {
+      await prisma.campaignChargeAttempt.update({ where: { id: attempt.id }, data: { stripePaymentIntentId: intent.id } });
+      return { handled: false as const };
+    }
+
+    const claim = await prisma.campaignChargeAttempt.updateMany({
+      where: { id: attempt.id, status: "PENDING" },
+      data: { status: "FAILED", stripePaymentIntentId: intent.id, failureCode: intent.status, failureMessage: "Payment requires additional authentication" },
+    });
+    if (claim.count !== 1) return { handled: false as const };
+    const priorAttempts = await prisma.campaignChargeAttempt.count({ where: { contributionId } });
+    await this.handleChargeAttemptFailure(contribution, `Unexpected status: ${intent.status}`, priorAttempts >= MAX_CHARGE_ATTEMPTS);
+    return { handled: true as const };
   },
 
   /**

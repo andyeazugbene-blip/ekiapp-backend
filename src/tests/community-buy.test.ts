@@ -572,6 +572,112 @@ describe("campaignContributionsService.attemptCharge — the only place a pledge
   });
 });
 
+// ─── Reliability scenario #6 (architecture doc §18): "provider timeout" ───
+
+describe("campaignContributionsService.attemptCharge / requeryAmbiguousCharge — reliability scenario #6", () => {
+  it("a connection error is not treated as a confirmed decline — attempt stays PENDING, no retry-recovery side effects fire", async () => {
+    m.campaignContribution.findUniqueOrThrow.mockResolvedValueOnce({
+      id: "contrib-timeout", campaignId: "camp-timeout", quantity: 1, status: "PLEDGED", currency: "GBP", amount: 1000,
+      participant: { userId: "buyer-timeout" },
+      paymentMethod: { stripeCustomerId: "cus_timeout", stripePaymentMethodId: "pm_timeout" },
+    } as never);
+    m.campaignContribution.updateMany.mockResolvedValueOnce({ count: 1 } as never);
+    m.campaignChargeAttempt.count.mockResolvedValueOnce(0 as never);
+    m.campaignChargeAttempt.create.mockResolvedValueOnce({ id: "attempt-timeout" } as never);
+    vi.mocked(stripe.paymentIntents.create).mockRejectedValueOnce(Object.assign(new Error("Request timed out"), { type: "StripeConnectionError", code: "ETIMEDOUT" }));
+    m.campaignContribution.findUniqueOrThrow.mockResolvedValueOnce({ id: "contrib-timeout", status: "PAYMENT_PROCESSING" } as never);
+
+    const result = await campaignContributionsService.attemptCharge("contrib-timeout");
+
+    expect(result.status).toBe("PAYMENT_PROCESSING");
+    expect(m.campaignChargeAttempt.update).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: "attempt-timeout" }, data: expect.objectContaining({ failureCode: "ETIMEDOUT" }) }),
+    );
+    expect(m.campaignChargeAttempt.update).not.toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ status: "FAILED" }) }));
+    expect(m.campaignContribution.update).not.toHaveBeenCalled();
+    expect(notificationsService.enqueue).not.toHaveBeenCalled();
+  });
+
+  it("requeryAmbiguousCharge() safely replays the SAME idempotency key and posts the ledger exactly once when Stripe confirms success", async () => {
+    m.campaignChargeAttempt.findFirst.mockResolvedValueOnce({ id: "attempt-timeout", idempotencyKey: "contrib-timeout:1", status: "PENDING", stripePaymentIntentId: null } as never);
+    m.campaignContribution.findUniqueOrThrow.mockResolvedValueOnce({
+      id: "contrib-timeout", status: "PAYMENT_PROCESSING", campaignId: "camp-timeout", currency: "GBP", amount: 1000,
+      participant: { userId: "buyer-timeout" },
+      paymentMethod: { stripeCustomerId: "cus_timeout", stripePaymentMethodId: "pm_timeout" },
+    } as never);
+    vi.mocked(stripe.paymentIntents.create).mockResolvedValueOnce({ id: "pi_recovered", status: "succeeded" } as never);
+    m.campaignChargeAttempt.updateMany.mockResolvedValueOnce({ count: 1 } as never);
+    const ledgerAccount = { findUnique: vi.fn().mockResolvedValue(null), create: vi.fn().mockResolvedValue({ id: "acct-recovered" }) };
+    const ledgerEntry = { create: vi.fn().mockResolvedValue({ id: "entry-recovered" }) };
+    m.$transaction.mockImplementationOnce(async (cb: any) => cb({ campaignContribution: { update: vi.fn() }, ledgerAccount, ledgerEntry }));
+
+    const result = await campaignContributionsService.requeryAmbiguousCharge("contrib-timeout");
+
+    expect(stripe.paymentIntents.create).toHaveBeenCalledWith(expect.anything(), { idempotencyKey: "contrib-timeout:1" });
+    expect(result.handled).toBe(true);
+    expect(ledgerEntry.create).toHaveBeenCalledTimes(2); // escrow debit + credit, posted exactly once
+  });
+
+  it("requeryAmbiguousCharge() does nothing when there is no ambiguous attempt to resolve", async () => {
+    m.campaignChargeAttempt.findFirst.mockResolvedValueOnce(null);
+    const result = await campaignContributionsService.requeryAmbiguousCharge("contrib-clean");
+    expect(result.handled).toBe(false);
+    expect(stripe.paymentIntents.create).not.toHaveBeenCalled();
+  });
+});
+
+// ─── Reliability scenario #7 (architecture doc §18): "provider returns an invalid response" ──
+
+describe("campaignContributionsService.attemptCharge — malformed/unexpected provider response (reliability scenario #7)", () => {
+  it("fails safely — no ledger entry, no PAID status — when Stripe returns a status this code doesn't recognize", async () => {
+    m.campaignContribution.findUniqueOrThrow.mockResolvedValueOnce({
+      id: "contrib-weird", campaignId: "camp-weird", quantity: 1, status: "PLEDGED", currency: "GBP", amount: 700,
+      participant: { userId: "buyer-weird" },
+      paymentMethod: { stripeCustomerId: "cus_weird", stripePaymentMethodId: "pm_weird" },
+    } as never);
+    m.campaignContribution.updateMany.mockResolvedValueOnce({ count: 1 } as never);
+    m.campaignChargeAttempt.count.mockResolvedValueOnce(0 as never);
+    m.campaignChargeAttempt.create.mockResolvedValueOnce({ id: "attempt-weird" } as never);
+    vi.mocked(stripe.paymentIntents.create).mockResolvedValueOnce({ id: "pi_weird", status: "some_unexpected_future_status" } as never);
+    m.campaignContribution.findUniqueOrThrow.mockResolvedValueOnce({ id: "contrib-weird", status: "CHARGE_FAILED" } as never);
+
+    const result = await campaignContributionsService.attemptCharge("contrib-weird");
+
+    expect(result.status).toBe("CHARGE_FAILED");
+    expect(m.campaignChargeAttempt.update).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: "attempt-weird" }, data: expect.objectContaining({ status: "FAILED" }) }),
+    );
+    expect(m.campaignContribution.update).toHaveBeenCalledWith({ where: { id: "contrib-weird" }, data: { status: "CHARGE_FAILED" } });
+  });
+});
+
+// ─── Reliability scenario #9 (architecture doc §18): "saved payment method expires" ──
+
+describe("campaignContributionsService.attemptCharge — expired saved card (reliability scenario #9)", () => {
+  it("a real expired_card decline fails the pledge charge definitively, leaving it retryable — no ledger entry posted", async () => {
+    m.campaignContribution.findUniqueOrThrow.mockResolvedValueOnce({
+      id: "contrib-expired", campaignId: "camp-expired", quantity: 1, status: "PLEDGED", currency: "GBP", amount: 900,
+      participant: { userId: "buyer-expired" },
+      paymentMethod: { stripeCustomerId: "cus_expired", stripePaymentMethodId: "pm_expired" },
+    } as never);
+    m.campaignContribution.updateMany.mockResolvedValueOnce({ count: 1 } as never);
+    m.campaignChargeAttempt.count.mockResolvedValueOnce(0 as never);
+    m.campaignChargeAttempt.create.mockResolvedValueOnce({ id: "attempt-expired" } as never);
+    vi.mocked(stripe.paymentIntents.create).mockRejectedValueOnce(Object.assign(new Error("Your card has expired."), { type: "StripeCardError", code: "expired_card" }));
+    m.campaignContribution.findUniqueOrThrow.mockResolvedValueOnce({ id: "contrib-expired", status: "CHARGE_FAILED" } as never);
+
+    const result = await campaignContributionsService.attemptCharge("contrib-expired");
+
+    expect(result.status).toBe("CHARGE_FAILED");
+    expect(m.campaignChargeAttempt.update).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: "attempt-expired" }, data: expect.objectContaining({ status: "FAILED", failureCode: "expired_card" }) }),
+    );
+    // CHARGE_FAILED (not PAYMENT_PROCESSING) is exactly the status
+    // attemptCharge()'s own guard accepts for a future retryCharge().
+    expect(m.campaignContribution.update).toHaveBeenCalledWith({ where: { id: "contrib-expired" }, data: { status: "CHARGE_FAILED" } });
+  });
+});
+
 // ─── Reliability scenario #5 (architecture doc §18): "payment succeeds after the app shows pending" ──
 
 describe("campaignContributionsService.resolveProcessingCharge — reliability scenario #5", () => {
