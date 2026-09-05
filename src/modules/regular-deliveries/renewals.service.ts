@@ -266,7 +266,7 @@ export const renewalsService = {
   async buyerDecidePriceChange(buyerId: string, renewalId: string, decision: "accepted" | "declined") {
     const renewal = await prisma.renewal.findUnique({
       where: { id: renewalId },
-      include: { subscription: true, priceChangeRequest: true },
+      include: { subscription: { include: { offer: { select: { vendorId: true } } } }, priceChangeRequest: true },
     });
     if (!renewal || renewal.subscription.buyerId !== buyerId) throw new AppError("Renewal not found", 404);
     if (renewal.status !== "AWAITING_PRICE_APPROVAL" || !renewal.priceChangeRequestId) {
@@ -287,6 +287,14 @@ export const renewalsService = {
         data: { nextRenewalAt: nextCycleDate(renewal.subscription.frequency, renewal.cycleDate) },
       });
     }
+
+    // Architecture doc's vendor-notification list names "Buyer approved
+    // price" explicitly — this module otherwise notifies only the buyer
+    // (see notifySubscriptionEvent below), so without this the vendor had
+    // no way to learn the buyer's decision short of checking the
+    // subscriber list later.
+    await notifyVendorPriceDecision(renewal.subscription.offer.vendorId, decision, renewal.subscriptionId).catch(() => {});
+
     return prisma.renewal.findUnique({ where: { id: renewalId } });
   },
 
@@ -771,5 +779,19 @@ async function notifySubscriptionEvent(buyerId: string, event: string, renewalId
     title: titles[event] ?? "Regular Delivery update",
     body: bodies[event] ?? "",
     data: { type: "subscription_update", event, renewalId, subscriptionId },
+  });
+}
+
+async function notifyVendorPriceDecision(vendorId: string, decision: "accepted" | "declined", subscriptionId: string): Promise<void> {
+  const vendor = await prisma.vendor.findUnique({ where: { id: vendorId }, select: { userId: true } });
+  if (!vendor) return;
+  await notificationsService.enqueue({
+    userId: vendor.userId,
+    type: "SUBSCRIPTION_UPDATE",
+    title: decision === "accepted" ? "Buyer approved your price change" : "Buyer declined your price change",
+    body: decision === "accepted"
+      ? "The buyer accepted the new price. This delivery will proceed at the updated price."
+      : "The buyer declined the new price. This delivery was skipped.",
+    data: { type: "subscription_update", event: "vendor_price_decision", subscriptionId },
   });
 }

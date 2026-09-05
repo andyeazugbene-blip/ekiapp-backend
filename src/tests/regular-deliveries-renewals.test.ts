@@ -182,14 +182,16 @@ describe("renewalsService.evaluatePriceChange", () => {
 });
 
 describe("renewalsService.buyerDecidePriceChange", () => {
-  it("moves the renewal to READY_FOR_PAYMENT when the buyer accepts", async () => {
+  it("moves the renewal to READY_FOR_PAYMENT when the buyer accepts, and notifies the vendor", async () => {
     m.renewal.findUnique.mockResolvedValueOnce({
       id: "renewal-3",
       status: "AWAITING_PRICE_APPROVAL",
       priceChangeRequestId: "pcr-2",
-      subscription: { buyerId: "buyer-1" },
+      subscriptionId: "sub-1",
+      subscription: { buyerId: "buyer-1", offer: { vendorId: "vendor-1" } },
     } as never);
     m.renewal.findUnique.mockResolvedValueOnce({ id: "renewal-3", status: "READY_FOR_PAYMENT" } as never);
+    m.vendor.findUnique.mockResolvedValueOnce({ userId: "vendor-user-1" } as never);
 
     const result = await renewalsService.buyerDecidePriceChange("buyer-1", "renewal-3", "accepted");
 
@@ -200,18 +202,30 @@ describe("renewalsService.buyerDecidePriceChange", () => {
       expect.objectContaining({ where: { id: "renewal-3" }, data: { status: "READY_FOR_PAYMENT" } }),
     );
     expect(result?.status).toBe("READY_FOR_PAYMENT");
+
+    // Real gap this closes: the vendor previously had no way to learn the
+    // buyer's price-approval decision short of checking the subscriber
+    // list later — architecture doc names "Buyer approved price" as a
+    // real vendor notification.
+    expect(notificationsService.enqueue).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: "vendor-user-1",
+        data: expect.objectContaining({ type: "subscription_update", event: "vendor_price_decision", subscriptionId: "sub-1" }),
+      }),
+    );
   });
 
-  it("skips the renewal and advances the next cycle when the buyer declines", async () => {
+  it("skips the renewal and advances the next cycle when the buyer declines, and notifies the vendor", async () => {
     m.renewal.findUnique.mockResolvedValueOnce({
       id: "renewal-4",
       status: "AWAITING_PRICE_APPROVAL",
       priceChangeRequestId: "pcr-3",
       cycleDate: new Date("2026-06-01T00:00:00.000Z"),
       subscriptionId: "sub-1",
-      subscription: { buyerId: "buyer-1", frequency: "WEEKLY" },
+      subscription: { buyerId: "buyer-1", frequency: "WEEKLY", offer: { vendorId: "vendor-1" } },
     } as never);
     m.renewal.findUnique.mockResolvedValueOnce({ id: "renewal-4", status: "SKIPPED" } as never);
+    m.vendor.findUnique.mockResolvedValueOnce({ userId: "vendor-user-1" } as never);
 
     await renewalsService.buyerDecidePriceChange("buyer-1", "renewal-4", "declined");
 
@@ -221,13 +235,19 @@ describe("renewalsService.buyerDecidePriceChange", () => {
     expect(m.buyerSubscription.update).toHaveBeenCalledWith(
       expect.objectContaining({ where: { id: "sub-1" } }),
     );
+    expect(notificationsService.enqueue).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: "vendor-user-1",
+        data: expect.objectContaining({ type: "subscription_update", event: "vendor_price_decision", subscriptionId: "sub-1" }),
+      }),
+    );
   });
 
   it("rejects a decision on a renewal that belongs to a different buyer", async () => {
     m.renewal.findUnique.mockResolvedValueOnce({
       id: "renewal-5",
       status: "AWAITING_PRICE_APPROVAL",
-      subscription: { buyerId: "someone-else" },
+      subscription: { buyerId: "someone-else", offer: { vendorId: "vendor-1" } },
     } as never);
 
     await expect(renewalsService.buyerDecidePriceChange("buyer-1", "renewal-5", "accepted")).rejects.toMatchObject({
