@@ -186,6 +186,125 @@ export async function adminRefundOrder(request: Request, response: Response): Pr
   response.status(202).json(result);
 }
 
+interface AdminRefundListItem {
+  id: string;
+  orderId: string;
+  orderNumber: string;
+  buyerName: string | null;
+  buyerEmail: string | null;
+  vendorName: string | null;
+  amount: number | null;
+  currency: string | null;
+  reason: string | null;
+  status: "REQUESTED" | "REJECTED" | "COMPLETED";
+  requestedBy: { id: string; name: string; email: string } | null;
+  decidedBy: { id: string; name: string; email: string } | null;
+  createdAt: Date;
+  decidedAt: Date | null;
+}
+
+/**
+ * GET /api/admin/refunds — real refund history, not a client-side guess
+ * built from the generic order list. Two genuine sources, never fabricated:
+ *
+ *  - AuditLog rows with action "ORDER_REFUNDED" — written by
+ *    executeOrderRefund() the moment a refund ACTUALLY succeeds against
+ *    the provider, whether it went through the four-eyes flow or executed
+ *    directly. This is the real "COMPLETED" list, with the real refunded
+ *    amount (not the order's full total, which would be wrong for a
+ *    partial refund).
+ *  - AdminApproval rows for actionType "order.refund.large" that are
+ *    still PENDING (requested, awaiting a second admin) or REJECTED
+ *    (declined, never executed). An APPROVED approval that has actually
+ *    executed is already covered by the AuditLog row above — including it
+ *    again here would double-count the same refund.
+ */
+export async function adminListOrderRefunds(_request: Request, response: Response): Promise<void> {
+  const [completedLogs, openApprovals] = await Promise.all([
+    prisma.auditLog.findMany({
+      where: { action: "ORDER_REFUNDED" },
+      orderBy: { createdAt: "desc" },
+      take: 200,
+    }),
+    prisma.adminApproval.findMany({
+      where: { actionType: "order.refund.large", status: { in: ["PENDING", "REJECTED"] } },
+      include: {
+        requestedBy: { select: { id: true, name: true, email: true } },
+        decidedBy: { select: { id: true, name: true, email: true } },
+      },
+      orderBy: { createdAt: "desc" },
+      take: 200,
+    }),
+  ]);
+
+  const orderIds = [...new Set([...completedLogs.map((l) => l.entityId).filter((id): id is string => !!id), ...openApprovals.map((a) => a.businessRefId)])];
+  const orders = await prisma.order.findMany({
+    where: { id: { in: orderIds } },
+    select: {
+      id: true, orderNumber: true, currency: true, vendorId: true,
+      buyer: { select: { name: true, email: true } },
+    },
+  });
+  // Order has no direct `vendor` relation (only the scalar vendorId) —
+  // resolve store names in one batched lookup instead.
+  const vendorIds = [...new Set(orders.map((o) => o.vendorId).filter((id): id is string => !!id))];
+  const vendors = await prisma.vendor.findMany({ where: { id: { in: vendorIds } }, select: { id: true, storeName: true } });
+  const vendorNameById = new Map(vendors.map((v) => [v.id, v.storeName]));
+  const orderById = new Map(orders.map((o) => [o.id, { ...o, vendorName: o.vendorId ? vendorNameById.get(o.vendorId) ?? null : null }]));
+
+  const items: AdminRefundListItem[] = [
+    ...completedLogs
+      .filter((log) => log.entityId)
+      .map((log): AdminRefundListItem => {
+        const order = orderById.get(log.entityId!);
+        const metadata = (log.metadata as { amount?: number; reason?: string } | null) ?? null;
+        return {
+          id: log.id,
+          orderId: log.entityId!,
+          orderNumber: order?.orderNumber ?? log.entityId!,
+          buyerName: order?.buyer?.name ?? null,
+          buyerEmail: order?.buyer?.email ?? null,
+          vendorName: order?.vendorName ?? null,
+          amount: metadata?.amount ?? null,
+          currency: order?.currency ?? null,
+          reason: metadata?.reason || null,
+          status: "COMPLETED",
+          requestedBy: null,
+          decidedBy: null,
+          createdAt: log.createdAt,
+          decidedAt: log.createdAt,
+        };
+      }),
+    ...openApprovals.map((approval): AdminRefundListItem => {
+      const order = orderById.get(approval.businessRefId);
+      return {
+        id: approval.id,
+        orderId: approval.businessRefId,
+        orderNumber: order?.orderNumber ?? approval.businessRefId,
+        buyerName: order?.buyer?.name ?? null,
+        buyerEmail: order?.buyer?.email ?? null,
+        vendorName: order?.vendorName ?? null,
+        amount: approval.amount,
+        currency: approval.currency ?? order?.currency ?? null,
+        reason: approval.reason,
+        status: approval.status === "PENDING" ? "REQUESTED" : "REJECTED",
+        requestedBy: approval.requestedBy,
+        decidedBy: approval.decidedBy,
+        createdAt: approval.createdAt,
+        decidedAt: approval.decidedAt,
+      };
+    }),
+  ].sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+
+  const counts = {
+    requested: items.filter((i) => i.status === "REQUESTED").length,
+    rejected: items.filter((i) => i.status === "REJECTED").length,
+    completed: items.filter((i) => i.status === "COMPLETED").length,
+  };
+
+  response.status(200).json({ items, counts });
+}
+
 async function createAuditLog(actorId: string, orderId: string, refundId: string, amount: number, reason: unknown): Promise<void> {
   await prisma.auditLog.create({
     data: {

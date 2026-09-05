@@ -56,15 +56,27 @@ export const adminApprovalsService = {
     });
   },
 
-  /** Returns the decided approval. Throws if the deciding admin is the same as the requester — that's the entire point of four-eyes. */
-  async decide(approvalId: string, decidedById: string, approve: boolean, note?: string) {
+  /**
+   * Read-only gate: throws if the approval doesn't exist, was already
+   * decided, or the deciding admin is the same as the requester — never
+   * writes anything. Split out from the actual decision write so the
+   * controller can validate, then execute the gated action, and only
+   * record the decision once execution has actually succeeded (see
+   * commitDecision) — approving-then-failing-to-execute must never
+   * permanently consume the approval with nothing to show for it.
+   */
+  async validateDecision(approvalId: string, decidedById: string) {
     const approval = await prisma.adminApproval.findUnique({ where: { id: approvalId } });
     if (!approval) throw new AppError("Approval request not found", 404);
     if (approval.status !== AdminApprovalStatus.PENDING) throw new AppError("This approval has already been decided", 409);
     if (approval.requestedById === decidedById) {
       throw new AppError("A second, different admin must decide this — the requester cannot approve their own request", 403, undefined, "SELF_APPROVAL_FORBIDDEN");
     }
+    return approval;
+  },
 
+  /** Durably records the decision. Only call after a REJECT (no execution risk) or after an APPROVE's execution has already succeeded. */
+  async commitDecision(approvalId: string, decidedById: string, approve: boolean, note?: string) {
     return prisma.adminApproval.update({
       where: { id: approvalId },
       data: {
@@ -74,6 +86,12 @@ export const adminApprovalsService = {
         decisionNote: note ?? null,
       },
     });
+  },
+
+  /** Convenience wrapper for the REJECT path, where there's no execution to sequence around. */
+  async decide(approvalId: string, decidedById: string, approve: boolean, note?: string) {
+    await this.validateDecision(approvalId, decidedById);
+    return this.commitDecision(approvalId, decidedById, approve, note);
   },
 
   async cancel(approvalId: string) {

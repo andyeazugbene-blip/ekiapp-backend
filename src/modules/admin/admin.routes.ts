@@ -142,7 +142,7 @@ import {
   updateAdminRole,
 } from "./admin-roles.controller";
 import { completeOrder, processStuckOrder } from "./admin-orders.controller";
-import { adminRefundOrder } from "./admin-refunds.controller";
+import { adminListOrderRefunds, adminRefundOrder } from "./admin-refunds.controller";
 import { inviteVendor, suspendVendor, unsuspendVendor } from "./admin-vendors.controller";
 import { getAdminAutomationSummary } from "../automation/automation.controller";
 import { adminListSubscriptionExceptions } from "../regular-deliveries/regular-deliveries.controller";
@@ -448,6 +448,7 @@ adminRouter.post("/2fa/disable", asyncHandler(requireAdminPermission("security.m
 adminRouter.post("/2fa/backup-codes/regenerate", asyncHandler(requireAdminPermission("security.mutate")), asyncHandler(regenerateBackupCodes));
 
 // ─── Sensitive operations requiring 2FA (if enabled) ────────────────────────
+adminRouter.get("/refunds", asyncHandler(requireAdminPermission("orders.read")), asyncHandler(adminListOrderRefunds));
 adminRouter.post("/orders/:id/refund", asyncHandler(requireAdminPermission("payments.mutate")), asyncHandler(require2fa), asyncHandler(adminRefundOrder));
 adminRouter.patch("/vendors/:id/suspend", asyncHandler(requireAdminPermission("vendors.mutate")), asyncHandler(require2fa), asyncHandler(suspendVendor));
 adminRouter.patch("/vendors/:id/unsuspend", asyncHandler(requireAdminPermission("vendors.mutate")), asyncHandler(require2fa), asyncHandler(unsuspendVendor));

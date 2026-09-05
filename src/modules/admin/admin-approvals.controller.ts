@@ -23,6 +23,16 @@ export async function adminListPendingApprovals(_request: Request, response: Res
  * this framework gates needs its execution wired in here explicitly; an
  * actionType with a rule but no case below fails closed with a clear error
  * rather than silently approving without doing anything.
+ *
+ * Validate -> execute -> commit, in that order: the approval is only
+ * durably marked APPROVED once the gated action has actually succeeded.
+ * A provider failure (Stripe down, a network blip) during execution used
+ * to still mark the approval APPROVED (the write happened before the
+ * execution attempt) — permanently stranding it with nothing executed,
+ * no way to retry through this endpoint, and no audit trail of what
+ * happened. Now a failed execution leaves the approval PENDING (retryable
+ * by any qualified admin once the underlying problem clears) and still
+ * writes an immutable audit record of the failed attempt.
  */
 export async function adminDecideApproval(request: Request, response: Response): Promise<void> {
   const adminId = requireUserId(request);
@@ -30,10 +40,24 @@ export async function adminDecideApproval(request: Request, response: Response):
   if (typeof id !== "string" || id.length === 0) throw new AppError("Missing approval id", 400);
   const { approve, note } = request.body ?? {};
   if (typeof approve !== "boolean") throw new AppError("approve (boolean) is required", 400);
+  const decisionNote = typeof note === "string" ? note : undefined;
 
-  const approval = await adminApprovalsService.decide(id, adminId, approve, typeof note === "string" ? note : undefined);
+  if (!approve) {
+    const approval = await adminApprovalsService.decide(id, adminId, false, decisionNote);
+    await recordAudit({
+      actorId: adminId,
+      action: "admin_approval.rejected",
+      entityType: approval.businessRefType,
+      entityId: approval.businessRefId,
+      metadata: { approvalId: id, actionType: approval.actionType, note: note ?? null },
+    });
+    response.json({ approval });
+    return;
+  }
 
-  if (approve) {
+  const approval = await adminApprovalsService.validateDecision(id, adminId);
+
+  try {
     if (approval.actionType === "community_buy.supplier_payment_release") {
       await campaignContributionsService.releaseSupplierPayment(adminId, approval.businessRefId);
     } else if (approval.actionType === "order.refund.large") {
@@ -41,17 +65,32 @@ export async function adminDecideApproval(request: Request, response: Response):
     } else {
       throw new AppError(`No execution wired for approved actionType "${approval.actionType}"`, 500, undefined, "APPROVAL_EXECUTION_NOT_WIRED");
     }
+  } catch (error) {
+    await recordAudit({
+      actorId: adminId,
+      action: "admin_approval.execution_failed",
+      entityType: approval.businessRefType,
+      entityId: approval.businessRefId,
+      metadata: {
+        approvalId: id,
+        actionType: approval.actionType,
+        error: error instanceof Error ? error.message : String(error),
+      },
+    });
+    throw error;
   }
+
+  const decided = await adminApprovalsService.commitDecision(id, adminId, true, decisionNote);
 
   await recordAudit({
     actorId: adminId,
-    action: approve ? "admin_approval.approved_and_executed" : "admin_approval.rejected",
-    entityType: approval.businessRefType,
-    entityId: approval.businessRefId,
-    metadata: { approvalId: id, actionType: approval.actionType, note: note ?? null },
+    action: "admin_approval.approved_and_executed",
+    entityType: decided.businessRefType,
+    entityId: decided.businessRefId,
+    metadata: { approvalId: id, actionType: decided.actionType, note: note ?? null },
   });
 
-  response.json({ approval });
+  response.json({ approval: decided });
 }
 
 export async function adminListApprovalRules(_request: Request, response: Response): Promise<void> {
