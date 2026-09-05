@@ -95,7 +95,10 @@ export const productsService = {
       throw new AppError("Forbidden", 403);
     }
 
-    const { priceAmount, costAmount, costCurrency, ...rest } = input;
+    // currency is destructured out and discarded even though UpdateProductInput
+    // no longer declares it — a product's currency always inherits from its
+    // vendor and must never drift from it post-creation (see createProduct).
+    const { priceAmount, costAmount, costCurrency, currency: _ignoredCurrency, ...rest } = input as UpdateProductInput & { currency?: string };
 
     return prisma.product.update({
       where: { id: productId },

@@ -12,13 +12,21 @@ vi.mock("../lib/prisma", () => ({
   },
 }));
 
+vi.mock("../modules/community-buy/market-configuration.service", () => ({
+  marketConfigurationService: { list: vi.fn() },
+}));
+
 import { prisma } from "../lib/prisma";
+import { marketConfigurationService } from "../modules/community-buy/market-configuration.service";
 import { buyerSubscriptionsService } from "../modules/regular-deliveries/buyer-subscriptions.service";
 
 const m = vi.mocked(prisma, true);
+const listMarketConfigs = vi.mocked(marketConfigurationService.list);
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // Default: Regular Deliveries enabled in the UK — matches baseOffer's vendor.
+  listMarketConfigs.mockResolvedValue([{ countryCode: "GB", regularDeliveriesEnabled: true }] as never);
 });
 
 describe("buyerSubscriptionsService.create — offer approval threshold copy-through (spec §22)", () => {
@@ -26,7 +34,8 @@ describe("buyerSubscriptionsService.create — offer approval threshold copy-thr
     id: "offer-1",
     isActive: true,
     frequencies: ["WEEKLY"],
-    products: [{ productId: "p1" }],
+    vendor: { isSuspended: false, country: "United Kingdom" },
+    products: [{ productId: "p1", pausedAt: null, product: { isActive: true, stock: 5 } }],
   };
   const baseAddress = { id: "addr-1", buyerId: "buyer-1" };
   const basePaymentMethod = { id: "pm-1", buyerId: "buyer-1" };
@@ -61,6 +70,85 @@ describe("buyerSubscriptionsService.create — offer approval threshold copy-thr
 
     const call = m.buyerSubscription.create.mock.calls[0]![0] as any;
     expect(call.data.priceChangeApprovalLimitBps).toBeUndefined();
+  });
+});
+
+describe("buyerSubscriptionsService.create — re-enforces listPublic's own eligibility rules (closes the direct-offer-id bypass)", () => {
+  const baseOffer = {
+    id: "offer-1",
+    isActive: true,
+    frequencies: ["WEEKLY"],
+    vendor: { isSuspended: false, country: "United Kingdom" },
+    products: [{ productId: "p1", pausedAt: null, product: { isActive: true, stock: 5 } }],
+  };
+  const baseAddress = { id: "addr-1", buyerId: "buyer-1" };
+  const basePaymentMethod = { id: "pm-1", buyerId: "buyer-1" };
+  const baseInput = {
+    offerId: "offer-1",
+    frequency: "WEEKLY" as const,
+    deliveryAddressId: "addr-1",
+    paymentMethodId: "pm-1",
+    items: [{ productId: "p1", quantity: 1 }],
+  };
+
+  beforeEach(() => {
+    m.buyerAddress.findUnique.mockResolvedValue(baseAddress as never);
+    m.buyerPaymentMethod.findUnique.mockResolvedValue(basePaymentMethod as never);
+    m.buyerSubscription.create.mockResolvedValue({ id: "sub-new" } as never);
+  });
+
+  it("rejects a subscribe attempt against a suspended vendor — a buyer with just the offer id must not bypass the browse-list filter", async () => {
+    m.subscriptionOffer.findUnique.mockResolvedValue({
+      ...baseOffer,
+      vendor: { isSuspended: true, country: "United Kingdom" },
+    } as never);
+
+    await expect(buyerSubscriptionsService.create("buyer-1", baseInput)).rejects.toThrow(
+      "This vendor is not currently accepting orders",
+    );
+    expect(m.buyerSubscription.create).not.toHaveBeenCalled();
+  });
+
+  it("rejects a subscribe attempt when the vendor's market has Regular Deliveries disabled", async () => {
+    listMarketConfigs.mockResolvedValue([{ countryCode: "GB", regularDeliveriesEnabled: false }] as never);
+    m.subscriptionOffer.findUnique.mockResolvedValue(baseOffer as never);
+
+    await expect(buyerSubscriptionsService.create("buyer-1", baseInput)).rejects.toThrow(
+      "Regular Deliveries are not available in this vendor's market",
+    );
+    expect(m.buyerSubscription.create).not.toHaveBeenCalled();
+  });
+
+  it("rejects a subscribe attempt for a product that's been paused since the offer was last browsed", async () => {
+    m.subscriptionOffer.findUnique.mockResolvedValue({
+      ...baseOffer,
+      products: [{ productId: "p1", pausedAt: new Date(), product: { isActive: true, stock: 5 } }],
+    } as never);
+
+    await expect(buyerSubscriptionsService.create("buyer-1", baseInput)).rejects.toThrow(
+      "Product not eligible for this offer",
+    );
+    expect(m.buyerSubscription.create).not.toHaveBeenCalled();
+  });
+
+  it("rejects a subscribe attempt for a product that's gone out of stock since the offer was last browsed", async () => {
+    m.subscriptionOffer.findUnique.mockResolvedValue({
+      ...baseOffer,
+      products: [{ productId: "p1", pausedAt: null, product: { isActive: true, stock: 0 } }],
+    } as never);
+
+    await expect(buyerSubscriptionsService.create("buyer-1", baseInput)).rejects.toThrow(
+      "Product not eligible for this offer",
+    );
+    expect(m.buyerSubscription.create).not.toHaveBeenCalled();
+  });
+
+  it("allows a legitimate subscribe when the vendor is active, the market is enabled, and the product is orderable", async () => {
+    m.subscriptionOffer.findUnique.mockResolvedValue(baseOffer as never);
+
+    await buyerSubscriptionsService.create("buyer-1", baseInput);
+
+    expect(m.buyerSubscription.create).toHaveBeenCalled();
   });
 });
 

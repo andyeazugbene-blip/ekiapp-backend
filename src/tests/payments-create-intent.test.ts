@@ -17,6 +17,7 @@ vi.mock("../lib/prisma", () => ({
     buyerWallet: { findUnique: vi.fn() },
     checkout: { update: vi.fn() },
     campaign: { findMany: vi.fn() },
+    promoCode: { findFirst: vi.fn() },
     $transaction: vi.fn(),
   },
 }));
@@ -27,12 +28,18 @@ vi.mock("../lib/stripe", () => ({
   },
 }));
 
+vi.mock("../modules/promos/promos.service", () => ({
+  promosService: { validatePromo: vi.fn() },
+}));
+
 import { prisma } from "../lib/prisma";
 import { stripe } from "../lib/stripe";
+import { promosService } from "../modules/promos/promos.service";
 import { paymentsService } from "../modules/payments/payments.service";
 
 const m = vi.mocked(prisma, true);
 const mPiCreate = vi.mocked(stripe.paymentIntents.create);
+const mValidatePromo = vi.mocked(promosService.validatePromo);
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -337,5 +344,103 @@ describe("paymentsService.createPaymentIntent — PaymentSheet response shape", 
     // Must fail before any stock/checkout/order is ever created.
     expect(m.$transaction).not.toHaveBeenCalled();
     expect(mPiCreate).not.toHaveBeenCalled();
+  });
+
+  it("falls back to the global zone's fee when a vendor's own zone override has a mismatched currency (real screenshot scenario: cart is one currency, a delivery zone in play is configured for another)", async () => {
+    m.cart.findUnique.mockResolvedValue({
+      id: "cart-1",
+      buyerId: "buyer-1",
+      items: [
+        {
+          productId: "p1",
+          quantity: 1,
+          product: { vendorId: "v1", priceInCents: 1000, currency: "gbp", isActive: true, stock: 10, weightGrams: 100, title: "Item" },
+        },
+      ],
+    } as never);
+
+    // Global zone resolution (deliveryCountry path) — already currency-checked, known-good.
+    m.deliveryZone.findFirst.mockResolvedValueOnce({
+      id: "zone-global",
+      country: "united kingdom",
+      isActive: true,
+      currency: "gbp",
+      baseFeeAmount: 500,
+      feePerKgAmount: 100,
+    } as never);
+    // Vendor-specific override lookup — misconfigured in a different currency,
+    // with a wildly different fee that must NOT be used.
+    m.deliveryZone.findFirst.mockResolvedValueOnce({
+      id: "zone-vendor-bad",
+      country: "united kingdom",
+      isActive: true,
+      currency: "eur",
+      baseFeeAmount: 99999,
+      feePerKgAmount: 0,
+    } as never);
+
+    m.$transaction.mockResolvedValue({ checkoutId: "co-5", orderIds: ["ord-5"] } as never);
+    mPiCreate.mockResolvedValue({ id: "pi_test_gbp", client_secret: "pi_test_gbp_secret" } as never);
+
+    const result = await paymentsService.createPaymentIntent(
+      { cartId: "cart-1", deliveryCountry: "united kingdom" },
+      "buyer-1",
+    );
+
+    // subtotal 1000 + fallback global fee (500 + 1kg*100 = 600) = 1600.
+    // A regression back to using the mismatched vendor zone's 99999 fee would
+    // fail this assertion loudly rather than silently overcharging in prod.
+    expect(result.amount).toBe(1600);
+    expect(result.currency).toBe("gbp");
+  });
+
+  it("redeems a promo code (increments usedCount, records PromoRedemption) even when the client omits promoVendorId — real bug found via live E2E: redemption was gated on the raw, near-always-undefined payload.promoVendorId instead of the auto-resolved vendor id already used for the discount calculation, so a maxUses:1 coupon could be reused indefinitely", async () => {
+    m.cart.findUnique.mockResolvedValue({
+      id: "cart-1",
+      buyerId: "buyer-1",
+      items: [
+        {
+          productId: "p1",
+          quantity: 1,
+          product: { vendorId: "v1", priceInCents: 1000, currency: "gbp", isActive: true, stock: 10, weightGrams: 100, title: "Item" },
+        },
+      ],
+    } as never);
+    m.deliveryZone.findFirst.mockResolvedValue({
+      id: "zone-1",
+      country: "united kingdom",
+      isActive: true,
+      currency: "gbp",
+      baseFeeAmount: 0,
+      feePerKgAmount: 0,
+    } as never);
+    // Client sends only `promoCode`, no `promoVendorId` — the normal case.
+    m.promoCode.findFirst.mockResolvedValue({ id: "promo-1", vendorId: "v1" } as never);
+    mValidatePromo.mockResolvedValue({ discountAmount: 100, code: "SAVE10", type: "PERCENTAGE", value: 10 } as never);
+
+    const tx = {
+      product: { updateMany: vi.fn().mockResolvedValue({ count: 1 }) },
+      checkout: { create: vi.fn().mockResolvedValue({ id: "co-6" }) },
+      order: { create: vi.fn().mockResolvedValue({ id: "ord-6" }) },
+      orderItem: { createMany: vi.fn().mockResolvedValue({ count: 1 }) },
+      payment: { create: vi.fn().mockResolvedValue({ id: "pay-6", vendorEarningsAmount: 0, currency: "gbp" }) },
+      promoCode: { findFirst: vi.fn().mockResolvedValue({ id: "promo-1", maxUses: 1 }), updateMany: vi.fn().mockResolvedValue({ count: 1 }) },
+      promoRedemption: { findFirst: vi.fn().mockResolvedValue(null), create: vi.fn().mockResolvedValue({}) },
+    };
+    m.$transaction.mockImplementationOnce(async (cb: any) => cb(tx));
+
+    mPiCreate.mockResolvedValue({ id: "pi_test_promo", client_secret: "pi_test_promo_secret" } as never);
+
+    await paymentsService.createPaymentIntent(
+      { cartId: "cart-1", deliveryCountry: "united kingdom", promoCode: "SAVE10" },
+      "buyer-1",
+    );
+
+    expect(tx.promoCode.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: expect.objectContaining({ id: "promo-1", usedCount: { lt: 1 } }), data: expect.objectContaining({ usedCount: { increment: 1 } }) }),
+    );
+    expect(tx.promoRedemption.create).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ promoCodeId: "promo-1", buyerId: "buyer-1" }) }),
+    );
   });
 });

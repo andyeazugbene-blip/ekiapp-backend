@@ -143,11 +143,18 @@ class PaymentsService {
       const vendorZone = await prisma.deliveryZone.findFirst({
         where: {
           vendorId,
-          country: zone.country,
+          country: { equals: zone.country, mode: "insensitive" },
           isActive: true,
         },
       });
-      const effectiveZone = vendorZone ?? zone;
+      // A vendor-specific zone override must still match the cart currency
+      // already validated above — never let a mismatched vendor zone's fee
+      // (denominated in a different currency) get silently added into a
+      // total charged in `currency`. Fall back to the global zone, which is
+      // already known-good, rather than blocking checkout over a vendor's
+      // own zone misconfiguration.
+      const effectiveZone =
+        vendorZone && vendorZone.currency.toLowerCase() === currency ? vendorZone : zone;
 
       const deliveryFee = effectiveZone.baseFeeAmount + Math.ceil(totalWeight / 1000) * effectiveZone.feePerKgAmount;
       const commission = await resolveVendorCommission(vendorId, subtotal);
@@ -183,9 +190,18 @@ class PaymentsService {
 
     let promoDiscount = 0;
     let promoCodeApplied: string | undefined;
+    // Hoisted to function scope (not just the `if` block below) so the
+    // $transaction closure further down — which redeems the promo code and
+    // increments usedCount — can see the SAME auto-resolved vendor id used
+    // for the discount calculation, instead of falling back to the raw,
+    // often-undefined `payload.promoVendorId` input field and silently
+    // never recording the redemption (see the real bug this fixed: a
+    // buyer who omits promoVendorId, the normal case, could reuse a
+    // maxUses:1 coupon indefinitely because usedCount was never incremented).
+    let promoVendorId: string | undefined;
     if (payload.promoCode) {
       // Auto-resolve vendor from promo code if promoVendorId not provided
-      let promoVendorId = payload.promoVendorId;
+      promoVendorId = payload.promoVendorId;
       if (!promoVendorId) {
         const promoRecord = await prisma.promoCode.findFirst({
           where: { code: payload.promoCode, isActive: true },
@@ -460,7 +476,7 @@ class PaymentsService {
         }
 
         // Redeem promo code if applicable for this vendor
-        if (promoCodeApplied && group.discountAmount > 0 && group.vendorId === payload.promoVendorId) {
+        if (promoCodeApplied && group.discountAmount > 0 && group.vendorId === promoVendorId) {
           const promo = await tx.promoCode.findFirst({
             where: { vendorId: group.vendorId, code: promoCodeApplied },
           });

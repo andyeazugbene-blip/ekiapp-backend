@@ -64,6 +64,40 @@ export function isSupportedCurrency(currency: string): currency is SupportedCurr
   return SUPPORTED_CURRENCIES.includes(currency.toUpperCase() as SupportedCurrency);
 }
 
+/**
+ * MarketConfiguration.countryCode is an ISO alpha-2 code ("GB"), but
+ * Vendor.country / DeliveryZone.country store full free-text country names
+ * ("United Kingdom") — the two were never translatable into each other,
+ * which let a market's regularDeliveriesEnabled/organiserApplicationsEnabled
+ * flags silently fail to apply to the vendor rows they were meant to gate.
+ * Covers exactly the 10 approved launch markets (see market-configuration
+ * .service.ts INITIAL_MARKETS) plus common name variants already used
+ * elsewhere in Vendor.country data.
+ */
+const MARKET_CODE_COUNTRY_NAMES: Record<string, string[]> = {
+  gb: ["United Kingdom", "UK", "England", "Scotland", "Wales"],
+  us: ["United States", "USA", "United States of America"],
+  ca: ["Canada"],
+  fr: ["France"],
+  es: ["Spain"],
+  pt: ["Portugal"],
+  ch: ["Switzerland"],
+  be: ["Belgium"],
+  it: ["Italy"],
+  hr: ["Croatia"],
+};
+
+/**
+ * Resolve a MarketConfiguration.countryCode (e.g. "GB") to every country-name
+ * spelling that may appear in Vendor.country/DeliveryZone.country for that
+ * market. Returns [code] unchanged for an unrecognized code so callers can
+ * still fall back to matching it literally.
+ */
+export function countryNamesForMarketCode(countryCode: string): string[] {
+  const key = countryCode.trim().toLowerCase();
+  return MARKET_CODE_COUNTRY_NAMES[key] ?? [countryCode];
+}
+
 
 /**
  * Currencies supported by the project's Stripe account (Italy-based).

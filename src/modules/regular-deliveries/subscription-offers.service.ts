@@ -2,8 +2,23 @@ import type { FulfilmentMethod, OfferSubstitutionMode, SubscriptionFrequency } f
 
 import { prisma } from "../../lib/prisma";
 import { AppError } from "../../shared/errors/app-error";
+import { countryNamesForMarketCode } from "../../shared/currency";
 import { notificationsService } from "../notifications/notifications.service";
 import { marketConfigurationService } from "../community-buy/market-configuration.service";
+
+/**
+ * Every country name (across all approved markets) that currently has
+ * Regular Deliveries enabled. MarketConfiguration is keyed by ISO code
+ * ("GB") while Vendor.country stores full names ("United Kingdom") — see
+ * countryNamesForMarketCode for why a direct comparison silently matched
+ * nothing.
+ */
+export async function getEnabledRegularDeliveryCountryNames(): Promise<string[]> {
+  const configs = await marketConfigurationService.list();
+  return configs
+    .filter((c) => c.regularDeliveriesEnabled)
+    .flatMap((c) => countryNamesForMarketCode(c.countryCode));
+}
 
 export interface UpsertSubscriptionOfferInput {
   title: string;
@@ -208,11 +223,26 @@ export const subscriptionOffersService = {
    * (spec rule shared with Community Buy): a country with
    * regularDeliveriesEnabled off returns nothing, never an error, so
    * browsing from an unsupported market just shows an empty list.
+   *
+   * This gate is ALWAYS applied (by each offer's own vendor country), not
+   * only when the caller happens to pass a `country` filter — the default
+   * "browse all markets" request previously skipped it entirely, exposing
+   * every vendor's offers regardless of whether their market had Regular
+   * Deliveries enabled.
    */
   async listPublic(filters: { country?: string; vendorId?: string }) {
+    const enabledCountryNames = await getEnabledRegularDeliveryCountryNames();
+    if (enabledCountryNames.length === 0) return [];
+
+    let countryNames = enabledCountryNames;
     if (filters.country) {
-      const config = await marketConfigurationService.get(filters.country);
-      if (!config?.regularDeliveriesEnabled) return [];
+      // filters.country may arrive as an ISO market code ("GB", from the
+      // market-chip UI) or, from older callers, a full country name — match
+      // either against the enabled set rather than assuming one shape.
+      const requestedNames = countryNamesForMarketCode(filters.country);
+      const matchAgainst = new Set([filters.country.toLowerCase(), ...requestedNames.map((n) => n.toLowerCase())]);
+      countryNames = enabledCountryNames.filter((name) => matchAgainst.has(name.toLowerCase()));
+      if (countryNames.length === 0) return [];
     }
 
     return prisma.subscriptionOffer.findMany({
@@ -220,7 +250,7 @@ export const subscriptionOffersService = {
         isActive: true,
         vendor: {
           isSuspended: false,
-          ...(filters.country ? { country: { equals: filters.country, mode: "insensitive" } } : {}),
+          country: { in: countryNames, mode: "insensitive" },
         },
         ...(filters.vendorId ? { vendorId: filters.vendorId } : {}),
         // At least one real, orderable, non-paused product — an offer with

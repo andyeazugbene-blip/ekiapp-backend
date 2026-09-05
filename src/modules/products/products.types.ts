@@ -17,7 +17,6 @@ export interface UpdateProductInput {
   priceAmount?: number;
   costAmount?: number | null;
   costCurrency?: string | null;
-  currency?: string;
   images?: string[];
   category?: string | null;
   stock?: number;

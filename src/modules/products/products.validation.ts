@@ -111,11 +111,6 @@ export function validateUpdateProductInput(input: unknown): UpdateProductInput {
     update.costCurrency =
       raw.costCurrency === null ? null : optionalString(raw.costCurrency, "costCurrency")?.toUpperCase() ?? null;
   }
-  if (raw.currency !== undefined) {
-    const currency = optionalString(raw.currency, "currency");
-    if (!currency) throw new AppError("Invalid currency", 400);
-    update.currency = currency.toLowerCase();
-  }
   if (raw.images !== undefined) update.images = imagesArray(raw.images);
   if (raw.category !== undefined) {
     update.category = nullableString(raw.category, "category");
@@ -125,6 +120,9 @@ export function validateUpdateProductInput(input: unknown): UpdateProductInput {
     update.weightGrams =
       raw.weightGrams === null ? null : nonNegativeInt(raw.weightGrams, "weightGrams");
   }
+  // `currency` is intentionally NOT vendor-editable, same as `isActive` below —
+  // product currency always inherits from the vendor (see products.service.ts
+  // createProduct) and must never drift from it post-creation.
   // `isActive` is intentionally NOT vendor-editable. Vendors disable a product
   // via DELETE /products/:id; only admins can re-enable via /admin/products/:id/approve.
   // Allowing vendor PATCH would let them silently undo admin moderation.

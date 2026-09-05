@@ -30,16 +30,7 @@ export const deliveryService = {
       throw new AppError("Delivery zone not available", 404);
     }
 
-    let subtotalAmount = 0;
-    let totalWeightGrams = 0;
-    const currencies = new Set<string>();
-
-    for (const item of cart.items) {
-      subtotalAmount += item.product.priceInCents * item.quantity;
-      totalWeightGrams += (item.product.weightGrams ?? 0) * item.quantity;
-      currencies.add(item.product.currency.toLowerCase());
-    }
-
+    const currencies = new Set(cart.items.map((item) => item.product.currency.toLowerCase()));
     if (currencies.size > 1) {
       throw new AppError("Products must use the same currency", 400);
     }
@@ -48,17 +39,50 @@ export const deliveryService = {
     if (cartCurrency !== zone.currency.toLowerCase()) {
       throw new AppError("Delivery zone currency mismatch", 400);
     }
-    const deliveryAmount = calculateDeliveryFee({
-      baseFeeAmount: zone.baseFeeAmount,
-      feePerKgAmount: zone.feePerKgAmount,
-      totalWeightGrams,
-    });
-    const totalAmount = subtotalAmount + deliveryAmount;
+
+    // Mirrors payments.service.ts createPaymentIntent exactly: group by
+    // vendor, resolve each vendor's own delivery-zone override (falling back
+    // to the shared zone when no override exists or the override's currency
+    // doesn't match), and sum per-vendor fees. This estimate is shown to the
+    // buyer BEFORE payment — it previously applied one flat global-zone fee
+    // to the whole cart's combined weight, which silently diverged from the
+    // real per-vendor charge computed at actual payment time whenever any
+    // vendor had their own zone override (different fee, or a different
+    // weight split across vendors).
+    const vendorGroups = new Map<string, typeof cart.items>();
+    for (const item of cart.items) {
+      const existing = vendorGroups.get(item.product.vendorId) ?? [];
+      existing.push(item);
+      vendorGroups.set(item.product.vendorId, existing);
+    }
+
+    let subtotalAmount = 0;
+    let deliveryAmount = 0;
+    let totalWeightGrams = 0;
+
+    for (const [vendorId, items] of vendorGroups) {
+      const vendorWeight = items.reduce((sum, i) => sum + (i.product.weightGrams ?? 0) * i.quantity, 0);
+      const vendorSubtotal = items.reduce((sum, i) => sum + i.product.priceInCents * i.quantity, 0);
+
+      const vendorZone = await prisma.deliveryZone.findFirst({
+        where: { vendorId, country: { equals: zone.country, mode: "insensitive" }, isActive: true },
+      });
+      const effectiveZone =
+        vendorZone && vendorZone.currency.toLowerCase() === cartCurrency ? vendorZone : zone;
+
+      subtotalAmount += vendorSubtotal;
+      totalWeightGrams += vendorWeight;
+      deliveryAmount += calculateDeliveryFee({
+        baseFeeAmount: effectiveZone.baseFeeAmount,
+        feePerKgAmount: effectiveZone.feePerKgAmount,
+        totalWeightGrams: vendorWeight,
+      });
+    }
 
     return {
       subtotalAmount,
       deliveryAmount,
-      totalAmount,
+      totalAmount: subtotalAmount + deliveryAmount,
       totalWeightGrams,
       currency: cartCurrency,
     };

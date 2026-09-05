@@ -2,6 +2,7 @@ import type { SubscriptionFrequency } from "@prisma/client";
 
 import { prisma } from "../../lib/prisma";
 import { AppError } from "../../shared/errors/app-error";
+import { getEnabledRegularDeliveryCountryNames } from "./subscription-offers.service";
 
 const FREQUENCY_DAYS: Record<SubscriptionFrequency, number> = {
   WEEKLY: 7,
@@ -33,13 +34,35 @@ export const buyerSubscriptionsService = {
   async create(buyerId: string, input: CreateBuyerSubscriptionInput) {
     const offer = await prisma.subscriptionOffer.findUnique({
       where: { id: input.offerId },
-      include: { products: true },
+      include: {
+        products: { include: { product: { select: { isActive: true, stock: true } } } },
+        vendor: { select: { isSuspended: true, country: true } },
+      },
     });
     if (!offer || !offer.isActive) throw new AppError("Offer not found", 404);
     if (!offer.frequencies.includes(input.frequency)) throw new AppError("Frequency not offered", 400);
     if (input.items.length === 0) throw new AppError("At least one item is required", 400);
 
-    const eligibleProductIds = new Set(offer.products.map((p) => p.productId));
+    // Re-enforce the same eligibility rules listPublic() applies at
+    // discovery time — a buyer who already has the offer id (deep link,
+    // stale cache, direct API call) must not be able to subscribe to
+    // something the browse list would have filtered out: a suspended
+    // vendor, a market where Regular Deliveries isn't enabled, or an
+    // inactive/out-of-stock/paused product.
+    if (offer.vendor.isSuspended) {
+      throw new AppError("This vendor is not currently accepting orders", 400);
+    }
+    const enabledCountryNames = await getEnabledRegularDeliveryCountryNames();
+    const vendorCountry = (offer.vendor.country ?? "").trim().toLowerCase();
+    if (!enabledCountryNames.some((name) => name.toLowerCase() === vendorCountry)) {
+      throw new AppError("Regular Deliveries are not available in this vendor's market", 400);
+    }
+
+    const eligibleProductIds = new Set(
+      offer.products
+        .filter((p) => p.pausedAt === null && p.product.isActive && p.product.stock > 0)
+        .map((p) => p.productId),
+    );
     for (const item of input.items) {
       if (!eligibleProductIds.has(item.productId)) throw new AppError("Product not eligible for this offer", 400);
       if (item.quantity < 1) throw new AppError("Quantity must be at least 1", 400);
