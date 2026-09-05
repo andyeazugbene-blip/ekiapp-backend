@@ -32,9 +32,12 @@ export const paystackService = {
       throw new AppError("Paystack is not configured", 503);
     }
 
-    // Load cart
-    const cart = await prisma.cart.findUnique({
+    // Load cart — carts are per-currency now; Paystack checkout (currently
+    // unreachable in production, see docs/decisions/0007) operates on the
+    // buyer's most-recently-active cart across currencies.
+    const cart = await prisma.cart.findFirst({
       where: { buyerId },
+      orderBy: { updatedAt: "desc" },
       include: { items: { include: { product: { include: { vendor: true } } } } },
     });
     if (!cart || cart.items.length === 0) {

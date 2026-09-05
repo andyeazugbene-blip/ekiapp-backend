@@ -6,3 +6,9 @@ export interface AddCartItemInput {
 export interface UpdateCartItemInput {
   quantity: number;
 }
+
+export interface CartSummaryEntry {
+  currency: string;
+  itemCount: number;
+  updatedAt: string;
+}

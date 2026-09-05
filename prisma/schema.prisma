@@ -155,7 +155,7 @@ model User {
   role                    UserRole              @default(BUYER)
   vendor                  Vendor?
   orders                  Order[]               @relation("BuyerOrders")
-  cart                    Cart?
+  carts                   Cart[]
   notifications           Notification[]
   purchasedGiftCards      PurchasedGiftCard[]
   adminTwoFactor          AdminTwoFactor?
@@ -326,13 +326,24 @@ model Product {
   @@index([createdAt])
 }
 
+// One Cart row per (buyer, currency) — not one cart per buyer. A product's
+// currency is fixed (inherited from its vendor, immutable — see
+// products.service.ts), so a buyer shopping across vendors in different
+// currencies gets a separate cart per currency instead of a blocked/
+// destructive "different currency" error. Whichever cart was most recently
+// touched (highest updatedAt) is the buyer's "active" cart; others are
+// preserved untouched until the buyer switches back — see cart.service.ts.
 model Cart {
   id        String     @id @default(cuid())
-  buyerId   String     @unique
+  buyerId   String
+  currency  String     @default("EUR")
   buyer     User       @relation(fields: [buyerId], references: [id], onDelete: Cascade)
   items     CartItem[]
   createdAt DateTime   @default(now())
   updatedAt DateTime   @updatedAt
+
+  @@unique([buyerId, currency])
+  @@index([buyerId])
 }
 
 model CartItem {

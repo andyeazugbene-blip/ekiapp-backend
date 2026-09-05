@@ -515,10 +515,11 @@ class PaymentsService {
           data: { status: "SUCCEEDED", processedAt: new Date() },
         });
 
-        const buyerCart = await tx.cart.findUnique({ where: { buyerId }, select: { id: true } });
-        if (buyerCart) {
-          await tx.cartItem.deleteMany({ where: { cartId: buyerCart.id } });
-        }
+        // `cart` (loaded in Step 1 by its own id) is the exact currency-cart
+        // that was just checked out — clear that one specifically, not
+        // whatever the buyer's currently-active cart happens to be (they can
+        // be different carts now that carts are per-currency).
+        await tx.cartItem.deleteMany({ where: { cartId: cart.id } });
       }
 
       return { checkoutId: checkout.id, orderIds };
