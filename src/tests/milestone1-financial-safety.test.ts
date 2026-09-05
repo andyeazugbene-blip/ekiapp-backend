@@ -152,9 +152,9 @@ describe("Milestone 1: Payment Flow Safety", () => {
   });
 
   describe("Cart race condition", () => {
-    it("uses upsert for cart creation — Cart is unique per (buyerId, currency), so upsert can't create duplicate currency-carts under concurrency", () => {
-      expect(cartServiceSource).toMatch(/cart\.upsert\(\{\s*where: \{ buyerId_currency: \{ buyerId, currency \} \}/);
-      expect(extractModel(schemaSource, "Cart")).toMatch(/@@unique\(\[buyerId, currency\]\)/);
+    it("uses upsert for cart creation — Cart.buyerId is unique, so upsert can't create duplicates under concurrency", () => {
+      expect(cartServiceSource).toMatch(/cart\.upsert\(\{\s*where: \{ buyerId \}/);
+      expect(extractModel(schemaSource, "Cart")).toMatch(/buyerId\s+String\s+@unique/);
     });
   });
 });

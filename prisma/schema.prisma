@@ -155,7 +155,7 @@ model User {
   role                    UserRole              @default(BUYER)
   vendor                  Vendor?
   orders                  Order[]               @relation("BuyerOrders")
-  carts                   Cart[]
+  cart                    Cart?
   notifications           Notification[]
   purchasedGiftCards      PurchasedGiftCard[]
   adminTwoFactor          AdminTwoFactor?
@@ -326,24 +326,17 @@ model Product {
   @@index([createdAt])
 }
 
-// One Cart row per (buyer, currency) — not one cart per buyer. A product's
-// currency is fixed (inherited from its vendor, immutable — see
-// products.service.ts), so a buyer shopping across vendors in different
-// currencies gets a separate cart per currency instead of a blocked/
-// destructive "different currency" error. Whichever cart was most recently
-// touched (highest updatedAt) is the buyer's "active" cart; others are
-// preserved untouched until the buyer switches back — see cart.service.ts.
+// One cart per buyer. A buyer may add products in different native
+// currencies to the SAME cart — currency-safety is enforced at checkout
+// time by backend FX normalization into one checkout currency (see
+// fx-rates.ts / payments.service.ts), not by partitioning carts.
 model Cart {
   id        String     @id @default(cuid())
-  buyerId   String
-  currency  String     @default("EUR")
+  buyerId   String     @unique
   buyer     User       @relation(fields: [buyerId], references: [id], onDelete: Cascade)
   items     CartItem[]
   createdAt DateTime   @default(now())
   updatedAt DateTime   @updatedAt
-
-  @@unique([buyerId, currency])
-  @@index([buyerId])
 }
 
 model CartItem {
@@ -383,6 +376,19 @@ model Order {
   withdrawalFeeBps    Int?
   totalAmount         Int
   currency            String               @default("EUR")
+  // Multi-currency checkout audit trail. `currency` above stays the
+  // vendor's NATIVE currency for this order (unchanged — wallet/ledger
+  // crediting still happens in it). These are only set when the buyer's
+  // checkout currency differs from this order's native currency: the
+  // authoritative, snapshotted conversion used to fold this order's
+  // native total into the ONE currency actually charged via Stripe.
+  // Never recomputed later — refunds must reference these exact values,
+  // not a freshly fetched rate (see fx-rates.ts).
+  checkoutCurrency       String?
+  normalizedTotalAmount  Int?
+  exchangeRate           Float?
+  exchangeRateTimestamp  DateTime?
+  exchangeRateSource     String?
   deliveryZoneId      String?
   deliveryAddress     String?
   notes               String?
@@ -412,6 +418,12 @@ model Order {
   @@index([createdAt])
 }
 
+// `currency`/`totalAmount` here are the ONE checkout currency Stripe
+// actually charges — the sum of every order's amount, each already
+// normalized (see Order.normalizedTotalAmount) into this same currency
+// when its own native currency differed. A mixed-currency cart (EUR +
+// USD + GBP items) still produces exactly one Checkout, one currency,
+// one PaymentIntent.
 model Checkout {
   id                    String        @id @default(cuid())
   buyerId               String

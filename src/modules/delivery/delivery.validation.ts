@@ -17,5 +17,8 @@ export function validateCalculateDeliveryInput(input: unknown): CalculateDeliver
   return {
     cartId: raw.cartId.trim(),
     destinationZoneId: raw.destinationZoneId.trim(),
+    checkoutCurrency: typeof raw.checkoutCurrency === "string" && raw.checkoutCurrency.trim().length > 0
+      ? raw.checkoutCurrency.trim()
+      : undefined,
   };
 }

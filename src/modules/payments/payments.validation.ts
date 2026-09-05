@@ -49,6 +49,9 @@ export function validateCreatePaymentIntentFromCartInput(
   if (typeof raw.promoVendorId === "string" && raw.promoVendorId.trim().length > 0) {
     result.promoVendorId = raw.promoVendorId.trim();
   }
+  if (typeof raw.checkoutCurrency === "string" && raw.checkoutCurrency.trim().length > 0) {
+    result.checkoutCurrency = raw.checkoutCurrency.trim();
+  }
 
   return result;
 }

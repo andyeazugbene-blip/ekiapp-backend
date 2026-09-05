@@ -346,7 +346,7 @@ describe("paymentsService.createPaymentIntent — PaymentSheet response shape", 
     expect(mPiCreate).not.toHaveBeenCalled();
   });
 
-  it("falls back to the global zone's fee when a vendor's own zone override has a mismatched currency (real screenshot scenario: cart is one currency, a delivery zone in play is configured for another)", async () => {
+  it("normalizes a vendor's own zone override into the vendor's currency instead of discarding it for having a different native currency", async () => {
     m.cart.findUnique.mockResolvedValue({
       id: "cart-1",
       buyerId: "buyer-1",
@@ -368,10 +368,11 @@ describe("paymentsService.createPaymentIntent — PaymentSheet response shape", 
       baseFeeAmount: 500,
       feePerKgAmount: 100,
     } as never);
-    // Vendor-specific override lookup — misconfigured in a different currency,
-    // with a wildly different fee that must NOT be used.
+    // Vendor-specific override, denominated in EUR while the vendor's own
+    // products are GBP — no longer discarded for that reason; its fee gets
+    // normalized into the vendor's (GBP) currency instead.
     m.deliveryZone.findFirst.mockResolvedValueOnce({
-      id: "zone-vendor-bad",
+      id: "zone-vendor-eur",
       country: "united kingdom",
       isActive: true,
       currency: "eur",
@@ -387,10 +388,10 @@ describe("paymentsService.createPaymentIntent — PaymentSheet response shape", 
       "buyer-1",
     );
 
-    // subtotal 1000 + fallback global fee (500 + 1kg*100 = 600) = 1600.
-    // A regression back to using the mismatched vendor zone's 99999 fee would
-    // fail this assertion loudly rather than silently overcharging in prod.
-    expect(result.amount).toBe(1600);
+    // subtotal 1000 + the vendor's own EUR zone fee (99999 EUR-cents)
+    // normalized into GBP at the reviewed reference rate
+    // (1 GBP = 1.17 EUR, so round(99999 / 1.17) = 85469) = 86469.
+    expect(result.amount).toBe(86469);
     expect(result.currency).toBe("gbp");
   });
 

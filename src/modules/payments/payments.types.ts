@@ -16,6 +16,12 @@ export type CreatePaymentIntentFromCartInput = {
   walletAmount?: number;
   promoCode?: string;
   promoVendorId?: string;
+  /** Buyer's chosen checkout currency. A cart may hold products in
+   * different native currencies — every line item, delivery fee, and
+   * discount is normalized into this ONE currency before Stripe ever sees
+   * an amount. Defaults to the cart's first item's native currency when
+   * omitted (see payments.service.ts). */
+  checkoutCurrency?: string;
 };
 
 export type NormalizedPaymentItem = CreatePaymentIntentItemInput;
@@ -47,4 +53,7 @@ export type CreatePaymentIntentResponse = {
   campaignId?: string;
   campaignTitle?: string;
   campaignDiscount?: number;
+  /** Present only when at least one vendor's native currency differed from
+   * the checkout currency — lets the buyer see that a conversion happened. */
+  conversionApplied?: boolean;
 };

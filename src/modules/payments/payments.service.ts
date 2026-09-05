@@ -17,6 +17,7 @@ import type { CreatePaymentIntentResponse, PricedOrderItem } from "./payments.ty
 
 import { MAX_VENDOR_WEIGHT_GRAMS } from "../../shared/constants";
 import { resolveStripeCurrency } from "../../shared/currency";
+import { getFxRate, normalizeMoneyMinor } from "../../shared/fx-normalizer";
 import { enqueueEmail } from "../../lib/email-queue";
 import { emailTemplates } from "../../lib/email-templates";
 import { notificationsService } from "../notifications/notifications.service";
@@ -25,6 +26,12 @@ import { communicationService } from "../communications/communication.service";
 interface VendorGroup {
   vendorId: string;
   items: PricedOrderItem[];
+  /** This vendor's own native currency — Product.currency inherits from
+   * Vendor.currency, so every item within one vendor group already shares
+   * this. subtotal/delivery/total/earnings below are ALL in this currency —
+   * conversion into the checkout currency happens only once, at the end,
+   * for the Stripe charge total (see normalizedTotalAmount). */
+  currency: string;
   subtotalAmount: number;
   deliveryFeeAmount: number;
   totalAmount: number;
@@ -37,6 +44,13 @@ interface VendorGroup {
   withdrawalFeeBps: number;
   deliveryZoneId: string;
   discountAmount: number;
+  /** This order's totalAmount converted into the checkout currency — the
+   * amount that actually contributes to the single Stripe charge. Equal to
+   * totalAmount when currency === checkoutCurrency. */
+  normalizedTotalAmount: number;
+  exchangeRate: number | null;
+  exchangeRateTimestamp: Date | null;
+  exchangeRateSource: string | null;
 }
 
 /**
@@ -89,10 +103,12 @@ class PaymentsService {
       weightGrams: (item.product.weightGrams ?? 0) * item.quantity,
     }));
 
-    // Validate uniform currency
-    const currencies = new Set(pricedItems.map((i) => i.currency.toLowerCase()));
-    if (currencies.size !== 1) throw new AppError("All products must use the same currency", 400);
-    const currency = pricedItems[0].currency.toLowerCase();
+    // A cart may hold products in different native currencies. The
+    // CHECKOUT currency is the ONE currency everything gets normalized
+    // into and the ONE currency Stripe ever sees — never per-vendor-group
+    // currencies mixed into one charge. Defaults to the first item's
+    // native currency when the buyer hasn't explicitly chosen one.
+    const checkoutCurrency = (payload.checkoutCurrency ?? pricedItems[0].currency).toLowerCase();
 
     // Group by vendor
     const vendorMap = new Map<string, PricedOrderItem[]>();
@@ -120,14 +136,15 @@ class PaymentsService {
       throw new AppError("Delivery destination is required", 400);
     }
 
-    if (zone.currency.toLowerCase() !== currency) {
-      throw new AppError("Delivery zone currency mismatch", 400);
-    }
+    // No currency requirement on the shared zone anymore — its native fee
+    // gets normalized into each vendor's own currency below, same as any
+    // vendor-specific zone override.
 
     // ─── Step 2c: Per-vendor delivery validation + weight check ────────────
 
     const vendorGroups: VendorGroup[] = [];
     for (const [vendorId, items] of vendorMap) {
+      const vendorCurrency = items[0].currency.toLowerCase();
       const subtotal = items.reduce((sum, i) => sum + i.totalAmount, 0);
       const totalWeight = items.reduce((sum, i) => sum + i.weightGrams, 0);
 
@@ -147,16 +164,18 @@ class PaymentsService {
           isActive: true,
         },
       });
-      // A vendor-specific zone override must still match the cart currency
-      // already validated above — never let a mismatched vendor zone's fee
-      // (denominated in a different currency) get silently added into a
-      // total charged in `currency`. Fall back to the global zone, which is
-      // already known-good, rather than blocking checkout over a vendor's
-      // own zone misconfiguration.
-      const effectiveZone =
-        vendorZone && vendorZone.currency.toLowerCase() === currency ? vendorZone : zone;
+      const effectiveZone = vendorZone ?? zone;
 
-      const deliveryFee = effectiveZone.baseFeeAmount + Math.ceil(totalWeight / 1000) * effectiveZone.feePerKgAmount;
+      const deliveryFeeInZoneCurrency = effectiveZone.baseFeeAmount + Math.ceil(totalWeight / 1000) * effectiveZone.feePerKgAmount;
+      // Normalize the zone's native fee into THIS vendor's currency so the
+      // order's own subtotal/delivery/total stay in one consistent
+      // currency throughout — exactly as they always have been. The
+      // separate normalization into the checkout currency happens once,
+      // below, on the order's already-native total.
+      const deliveryFee = effectiveZone.currency.toLowerCase() === vendorCurrency
+        ? deliveryFeeInZoneCurrency
+        : normalizeMoneyMinor(deliveryFeeInZoneCurrency, effectiveZone.currency, vendorCurrency, getFxRate(effectiveZone.currency, vendorCurrency));
+
       const commission = await resolveVendorCommission(vendorId, subtotal);
       if (!commission.canReceiveOrders) {
         throw new AppError("This vendor's plan does not allow receiving orders", 403);
@@ -165,9 +184,13 @@ class PaymentsService {
       const totalAmount = subtotal + deliveryFee;
       const vendorEarnings = totalAmount - platformFee;
 
+      const needsConversion = vendorCurrency !== checkoutCurrency;
+      const fx = needsConversion ? getFxRate(vendorCurrency, checkoutCurrency) : null;
+
       vendorGroups.push({
         vendorId,
         items,
+        currency: vendorCurrency,
         subtotalAmount: subtotal,
         deliveryFeeAmount: deliveryFee,
         totalAmount,
@@ -180,10 +203,17 @@ class PaymentsService {
         withdrawalFeeBps: commission.withdrawalFeeBps,
         deliveryZoneId: effectiveZone.id,
         discountAmount: 0,
+        normalizedTotalAmount: fx ? normalizeMoneyMinor(totalAmount, vendorCurrency, checkoutCurrency, fx) : totalAmount,
+        exchangeRate: fx?.rate ?? null,
+        exchangeRateTimestamp: fx?.timestamp ?? null,
+        exchangeRateSource: fx?.source ?? null,
       });
     }
 
-    let grandTotal = vendorGroups.reduce((sum, g) => sum + g.totalAmount, 0);
+    // The buyer-facing grand total is the sum of every order's amount
+    // ALREADY converted into the one checkout currency — this is what
+    // Stripe is ever asked to charge, never a per-vendor native amount.
+    let grandTotal = vendorGroups.reduce((sum, g) => sum + g.normalizedTotalAmount, 0);
     const buyerId = cart.buyerId;
 
     // ─── Step 2e: Promo code validation ────────────────────────────────────
@@ -225,7 +255,7 @@ class PaymentsService {
       promoDiscount = validation.discountAmount;
       promoCodeApplied = payload.promoCode;
 
-      // Apply discount to the target vendor group
+      // Apply discount to the target vendor group (native currency, unchanged)
       targetGroup.discountAmount = promoDiscount;
       targetGroup.subtotalAmount = Math.max(0, targetGroup.subtotalAmount - promoDiscount);
       // Recalculate platform fee and earnings on discounted subtotal
@@ -233,7 +263,17 @@ class PaymentsService {
       targetGroup.platformFeeAmount = calcPlatformFee(targetGroup.subtotalAmount, commission.platformFeeBps);
       targetGroup.totalAmount = targetGroup.subtotalAmount + targetGroup.deliveryFeeAmount;
       targetGroup.vendorEarningsAmount = targetGroup.totalAmount - targetGroup.platformFeeAmount;
-      grandTotal = vendorGroups.reduce((sum, group) => sum + group.totalAmount, 0);
+      // Re-derive the checkout-currency contribution from the discounted
+      // native total using the SAME rate snapshot already taken for this
+      // group — never re-fetch a fresh rate mid-calculation.
+      targetGroup.normalizedTotalAmount = targetGroup.exchangeRate
+        ? normalizeMoneyMinor(targetGroup.totalAmount, targetGroup.currency, checkoutCurrency, {
+            rate: targetGroup.exchangeRate,
+            timestamp: targetGroup.exchangeRateTimestamp ?? new Date(),
+            source: targetGroup.exchangeRateSource ?? "eki_static_reference_v1",
+          })
+        : targetGroup.totalAmount;
+      grandTotal = vendorGroups.reduce((sum, group) => sum + group.normalizedTotalAmount, 0);
     }
 
     // ─── Step 2e2: Hot Deal campaign auto-apply (platform-funded, vendor payout unaffected) ──
@@ -268,7 +308,7 @@ class PaymentsService {
       if (!buyerWallet) {
         throw new AppError("Buyer wallet not found", 400);
       }
-      if (buyerWallet.currency.toLowerCase() !== currency) {
+      if (buyerWallet.currency.toLowerCase() !== checkoutCurrency) {
         throw new AppError("Wallet currency must match checkout currency", 400);
       }
       if (payload.walletAmount > buyerWallet.balance) {
@@ -296,9 +336,9 @@ class PaymentsService {
     // GHS-denominated integer as EUR cents (an ~17x overcharge in the wrong
     // currency). Reject before any stock/wallet is reserved rather than
     // invent an FX conversion no one has approved.
-    if (stripeAmount > 0 && resolveStripeCurrency(currency) !== currency) {
+    if (stripeAmount > 0 && resolveStripeCurrency(checkoutCurrency) !== checkoutCurrency) {
       throw new AppError(
-        `Card payments are not currently available in ${currency.toUpperCase()}. Please contact support.`,
+        `Card payments are not currently available in ${checkoutCurrency.toUpperCase()}. Please contact support.`,
         400,
         undefined,
         "CURRENCY_NOT_SUPPORTED",
@@ -337,7 +377,7 @@ class PaymentsService {
               buyerId,
               type: "ORDER_DEBIT",
               amount: -walletDeduction,
-              currency,
+              currency: checkoutCurrency,
               description: "Order payment (wallet)",
             },
           });
@@ -345,18 +385,19 @@ class PaymentsService {
       }
 
       // Resolve Stripe-compatible currency (Italy account may not support some local currencies)
-      const stripeCurrency = resolveStripeCurrency(currency);
+      const stripeCurrency = resolveStripeCurrency(checkoutCurrency);
 
       // Create Checkout record
       const checkout = await tx.checkout.create({
         data: {
           buyerId,
           totalAmount: grandTotal,
-          currency,
+          currency: checkoutCurrency,
           status: "PENDING",
           metadata: {
             vendorGroups: vendorGroups.map((g) => ({
               vendorId: g.vendorId,
+              currency: g.currency,
               subtotal: g.subtotalAmount,
               delivery: g.deliveryFeeAmount,
               platformFee: g.platformFeeAmount,
@@ -367,6 +408,9 @@ class PaymentsService {
               commissionBps: g.commissionBps,
               withdrawalFeeBps: g.withdrawalFeeBps,
               discountAmount: g.discountAmount,
+              normalizedTotalAmount: g.normalizedTotalAmount,
+              exchangeRate: g.exchangeRate,
+              exchangeRateSource: g.exchangeRateSource,
             })),
             walletDeduction,
             deliveryAddress: payload.deliveryAddress ?? null,
@@ -403,7 +447,12 @@ class PaymentsService {
             commissionBps: group.commissionBps,
             withdrawalFeeBps: group.withdrawalFeeBps,
             totalAmount: group.totalAmount,
-            currency,
+            currency: group.currency,
+            checkoutCurrency: group.currency !== checkoutCurrency ? checkoutCurrency : null,
+            normalizedTotalAmount: group.currency !== checkoutCurrency ? group.normalizedTotalAmount : null,
+            exchangeRate: group.exchangeRate,
+            exchangeRateTimestamp: group.exchangeRateTimestamp,
+            exchangeRateSource: group.exchangeRateSource,
             deliveryZoneId: group.deliveryZoneId,
             deliveryAddress: payload.deliveryAddress ?? null,
           },
@@ -437,7 +486,7 @@ class PaymentsService {
             commissionTierId: group.commissionTierId,
             commissionBps: group.commissionBps,
             withdrawalFeeBps: group.withdrawalFeeBps,
-            currency,
+            currency: group.currency,
             status: stripeAmount === 0 ? "SUCCEEDED" : "PENDING",
             provider: walletDeduction > 0 && stripeAmount === 0 ? "wallet" : "stripe",
           },
@@ -451,7 +500,7 @@ class PaymentsService {
           });
           if (!vendorWallet) {
             vendorWallet = await tx.wallet.create({
-              data: { vendorId: group.vendorId, currency },
+              data: { vendorId: group.vendorId, currency: group.currency },
               select: { id: true },
             });
           }
@@ -515,10 +564,6 @@ class PaymentsService {
           data: { status: "SUCCEEDED", processedAt: new Date() },
         });
 
-        // `cart` (loaded in Step 1 by its own id) is the exact currency-cart
-        // that was just checked out — clear that one specifically, not
-        // whatever the buyer's currently-active cart happens to be (they can
-        // be different carts now that carts are per-currency).
         await tx.cartItem.deleteMany({ where: { cartId: cart.id } });
       }
 
@@ -544,7 +589,7 @@ class PaymentsService {
       });
 
       // ─── Send buyer confirmation email for wallet-paid orders ─────────
-      this.sendBuyerConfirmationEmails(buyerId, orderIds, vendorGroups, currency).catch((error) => {
+      this.sendBuyerConfirmationEmails(buyerId, orderIds, vendorGroups, checkoutCurrency).catch((error) => {
         logger.error("Failed to send buyer confirmation emails for wallet-paid checkout", {
           buyerId,
           errorMessage: error instanceof Error ? error.message : String(error),
@@ -565,16 +610,28 @@ class PaymentsService {
         checkoutId,
         orderIds,
         amount: grandTotal,
-        currency,
+        currency: checkoutCurrency,
         discountAmount: promoDiscount + campaignDiscountAmount,
         promoCode: promoCodeApplied,
         campaignId: appliedCampaignId,
         campaignTitle: appliedCampaignTitle,
         campaignDiscount: campaignDiscountAmount || undefined,
+        conversionApplied: vendorGroups.some((g) => g.currency !== checkoutCurrency),
       };
     }
 
-    const stripeCurrency = resolveStripeCurrency(currency);
+    const stripeCurrency = resolveStripeCurrency(checkoutCurrency);
+
+    // Provider-safety assert (defense in depth, per architecture
+    // requirement: no mixed-currency payment may ever reach Stripe). Every
+    // vendor group's contribution to grandTotal was already normalized
+    // into checkoutCurrency above — this recomputes that sum independently
+    // right before the charge and refuses to proceed if it has drifted,
+    // rather than trusting the earlier calculation blindly.
+    const recomputedTotal = vendorGroups.reduce((sum, g) => sum + g.normalizedTotalAmount, 0) - campaignDiscountAmount;
+    if (Math.abs(recomputedTotal - grandTotal) > 0) {
+      throw new AppError("Internal currency/total mismatch before payment — refusing to charge", 500, undefined, "CHECKOUT_TOTAL_MISMATCH");
+    }
 
     let paymentIntent;
     try {
@@ -604,7 +661,7 @@ class PaymentsService {
         stripeCode: stripeErr.code,
       });
 
-      await this.rollbackFailedCheckout({ checkoutId, orderIds, pricedItems, walletDeduction, buyerId, currency });
+      await this.rollbackFailedCheckout({ checkoutId, orderIds, pricedItems, walletDeduction, buyerId, currency: checkoutCurrency });
 
       // Card-declined or invalid request → client error
       if (stripeErr.type === "StripeCardError") {
@@ -618,7 +675,7 @@ class PaymentsService {
     }
 
     if (!paymentIntent.client_secret) {
-      await this.rollbackFailedCheckout({ checkoutId, orderIds, pricedItems, walletDeduction, buyerId, currency });
+      await this.rollbackFailedCheckout({ checkoutId, orderIds, pricedItems, walletDeduction, buyerId, currency: checkoutCurrency });
       throw new AppError("Stripe failure: no client secret", 502);
     }
 
@@ -635,12 +692,13 @@ class PaymentsService {
       checkoutId,
       orderIds,
       amount: grandTotal,
-      currency,
+      currency: checkoutCurrency,
       discountAmount: promoDiscount + campaignDiscountAmount,
       promoCode: promoCodeApplied,
       campaignId: appliedCampaignId,
       campaignTitle: appliedCampaignTitle,
       campaignDiscount: campaignDiscountAmount || undefined,
+      conversionApplied: vendorGroups.some((g) => g.currency !== checkoutCurrency),
     };
   }
 

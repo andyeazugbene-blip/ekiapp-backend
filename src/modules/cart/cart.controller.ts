@@ -22,28 +22,9 @@ function requireIdParam(request: Request): string {
   return id;
 }
 
-function optionalCurrencyQuery(request: Request): string | undefined {
-  const raw = request.query.currency;
-  if (typeof raw !== "string" || raw.trim().length === 0) return undefined;
-  return raw.trim();
-}
-
-function requireCurrencyQuery(request: Request): string {
-  const currency = optionalCurrencyQuery(request);
-  if (!currency) {
-    throw new AppError("currency is required", 400);
-  }
-  return currency;
-}
-
 export async function getCart(request: Request, response: Response): Promise<void> {
-  const cart = await cartService.getCart(requireUserId(request), optionalCurrencyQuery(request));
+  const cart = await cartService.getCart(requireUserId(request));
   response.status(200).json({ cart });
-}
-
-export async function getCartsSummary(request: Request, response: Response): Promise<void> {
-  const carts = await cartService.listCartsSummary(requireUserId(request));
-  response.status(200).json({ carts });
 }
 
 export async function addCartItem(request: Request, response: Response): Promise<void> {
@@ -64,6 +45,6 @@ export async function removeCartItem(request: Request, response: Response): Prom
 }
 
 export async function clearCart(request: Request, response: Response): Promise<void> {
-  const cart = await cartService.clearCart(requireUserId(request), requireCurrencyQuery(request));
+  const cart = await cartService.clearCart(requireUserId(request));
   response.status(200).json({ cart });
 }

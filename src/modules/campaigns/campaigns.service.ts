@@ -162,13 +162,8 @@ export const campaignsService = {
     }
 
     const [cart, orderStats] = await Promise.all([
-      // Carts are per-currency now — this display-only eligibility check
-      // (marketing banner "eligible" flag; discounts are re-enforced
-      // server-side at payment time by listEligibleForUser) uses the
-      // buyer's most-recently-active cart across currencies.
-      prisma.cart.findFirst({
+      prisma.cart.findUnique({
         where: { buyerId },
-        orderBy: { updatedAt: "desc" },
         include: { items: { include: { product: true } } },
       }),
       prisma.order.findMany({

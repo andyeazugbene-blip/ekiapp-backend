@@ -6,7 +6,6 @@ import {
   addCartItem,
   clearCart,
   getCart,
-  getCartsSummary,
   removeCartItem,
   updateCartItem,
 } from "./cart.controller";
@@ -15,7 +14,6 @@ export const cartRouter = Router();
 
 cartRouter.use(authenticate);
 
-cartRouter.get("/summary", asyncHandler(getCartsSummary));
 cartRouter.get("/", asyncHandler(getCart));
 cartRouter.post("/items", asyncHandler(addCartItem));
 cartRouter.patch("/items/:id", asyncHandler(updateCartItem));

@@ -44,17 +44,23 @@ describe("deliveryService.calculate — matches paymentsService's real per-vendo
     await expect(deliveryService.calculate("buyer-1", { cartId: "c1", destinationZoneId: "z1" })).rejects.toMatchObject({ statusCode: 400 });
   });
 
-  it("rejects when the cart's currency doesn't match the requested zone's currency", async () => {
+  it("normalizes a GBP delivery zone's fee into the checkout currency instead of rejecting a currency mismatch (real device bug: a valid address was rejected purely because the zone's native currency differed)", async () => {
     m.cart.findUnique.mockResolvedValue({
       id: "c1",
       buyerId: "buyer-1",
       items: [{ productId: "p1", quantity: 1, product: { vendorId: "v1", priceInCents: 1000, currency: "usd", weightGrams: 100 } }],
     } as never);
-    m.deliveryZone.findUnique.mockResolvedValue(globalZone as never);
+    m.deliveryZone.findUnique.mockResolvedValue(globalZone as never); // globalZone is GBP
+    m.deliveryZone.findFirst.mockResolvedValue(null as never);
 
-    await expect(deliveryService.calculate("buyer-1", { cartId: "c1", destinationZoneId: "zone-global" })).rejects.toMatchObject({
-      statusCode: 400,
-    });
+    const result = await deliveryService.calculate("buyer-1", { cartId: "c1", destinationZoneId: "zone-global" });
+
+    // Native GBP fee: 500 + ceil(100g/1000)*100 = 600 GBP-cents.
+    // Normalized to USD at the reviewed reference rate (1 GBP = 1.28 USD): 768.
+    expect(result.subtotalAmount).toBe(1000);
+    expect(result.deliveryAmount).toBe(768);
+    expect(result.totalAmount).toBe(1768);
+    expect(result.currency).toBe("usd");
   });
 
   it("single vendor, no zone override: fee = global zone base + per-kg on that vendor's weight (unchanged baseline behavior)", async () => {
@@ -72,6 +78,22 @@ describe("deliveryService.calculate — matches paymentsService's real per-vendo
     expect(result.subtotalAmount).toBe(2000);
     expect(result.deliveryAmount).toBe(600);
     expect(result.totalAmount).toBe(2600);
+    expect(result.currency).toBe("gbp");
+  });
+
+  it("no normalization is applied when everything already shares one currency — no rate lookup, no rounding drift", async () => {
+    m.cart.findUnique.mockResolvedValue({
+      id: "c1",
+      buyerId: "buyer-1",
+      items: [{ productId: "p1", quantity: 1, product: { vendorId: "v1", priceInCents: 999, currency: "gbp", weightGrams: 250 } }],
+    } as never);
+    m.deliveryZone.findUnique.mockResolvedValue(globalZone as never);
+    m.deliveryZone.findFirst.mockResolvedValue(null as never);
+
+    const result = await deliveryService.calculate("buyer-1", { cartId: "c1", destinationZoneId: "zone-global", checkoutCurrency: "GBP" });
+
+    // 500 + ceil(250g/1000)*100 = 600 — exact, no FX rounding involved at all.
+    expect(result.deliveryAmount).toBe(600);
     expect(result.currency).toBe("gbp");
   });
 
@@ -100,27 +122,30 @@ describe("deliveryService.calculate — matches paymentsService's real per-vendo
     expect(result.totalAmount).toBe(1200);
   });
 
-  it("falls back to the global zone when the vendor's own override has a mismatched currency, instead of using its fee under a different currency", async () => {
+  it("honors the vendor's own zone even when its native currency differs from the checkout currency, normalizing its fee rather than ignoring it", async () => {
     m.cart.findUnique.mockResolvedValue({
       id: "c1",
       buyerId: "buyer-1",
       items: [{ productId: "p1", quantity: 1, product: { vendorId: "v1", priceInCents: 1000, currency: "gbp", weightGrams: 100 } }],
     } as never);
     m.deliveryZone.findUnique.mockResolvedValue(globalZone as never);
-    // Vendor's own zone is misconfigured in a different currency — must be ignored.
+    // Vendor's own zone, denominated in EUR — no longer discarded for that
+    // reason alone; its fee is normalized into the vendor's (== checkout,
+    // here) currency instead.
     m.deliveryZone.findFirst.mockResolvedValue({
-      id: "zone-vendor-bad",
+      id: "zone-vendor-eur",
       country: "united kingdom",
       isActive: true,
       currency: "eur",
-      baseFeeAmount: 99999,
+      baseFeeAmount: 1000,
       feePerKgAmount: 0,
     } as never);
 
     const result = await deliveryService.calculate("buyer-1", { cartId: "c1", destinationZoneId: "zone-global" });
 
-    // Falls back to the global zone's 500 + 1*100 = 600, not the mismatched vendor zone's 99999.
-    expect(result.deliveryAmount).toBe(600);
+    // 1000 EUR-cents normalized to GBP at the reviewed reference rate
+    // (1 GBP = 1.17 EUR, so 1 EUR = 1/1.17 GBP): round(1000 / 1.17) = 855.
+    expect(result.deliveryAmount).toBe(855);
   });
 
   it("multi-vendor cart: sums each vendor's own fee independently, matching paymentsService's per-vendor grouping", async () => {

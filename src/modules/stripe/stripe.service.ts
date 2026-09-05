@@ -229,7 +229,7 @@ class StripeWebhookService {
 
         paidOrders = checkout.orders.map((o) => ({ id: o.id, vendorId: o.vendorId, items: o.items }));
 
-        await this.clearBuyerCart(tx, buyerId, checkout.currency);
+        await this.clearBuyerCart(tx, buyerId);
 
         await tx.webhookEvent.update({
           where: { stripeEventId: event.id },
@@ -1209,14 +1209,8 @@ class StripeWebhookService {
     }
   }
 
-  private async clearBuyerCart(tx: Prisma.TransactionClient, buyerId: string, currency: string): Promise<void> {
-    // Carts are per-(buyer, currency) — clear the specific currency-cart
-    // this checkout was for, not whichever cart the buyer currently has
-    // active (they can differ once a buyer has more than one currency-cart).
-    const cart = await tx.cart.findUnique({
-      where: { buyerId_currency: { buyerId, currency: currency.toUpperCase() } },
-      select: { id: true },
-    });
+  private async clearBuyerCart(tx: Prisma.TransactionClient, buyerId: string): Promise<void> {
+    const cart = await tx.cart.findUnique({ where: { buyerId }, select: { id: true } });
     if (!cart) return;
     await tx.cartItem.deleteMany({ where: { cartId: cart.id } });
   }
