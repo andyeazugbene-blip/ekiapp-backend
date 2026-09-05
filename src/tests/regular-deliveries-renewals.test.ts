@@ -474,8 +474,16 @@ describe("renewalsService.generateDueRenewals", () => {
     const count = await renewalsService.sendUpcomingRenewalReminders();
 
     expect(count).toBe(1);
+    // The in-app notification and the AutomationRun must be keyed by the
+    // exact same canonical identity ("RENEWAL_REMINDER:{subscriptionId}:
+    // {cycleDate}") — real dedup at the DB level requires both to agree on
+    // what "the same event" means, not two independently-invented keys.
     expect(notificationsService.enqueue).toHaveBeenCalledWith(
-      expect.objectContaining({ userId: "buyer-9", type: "SUBSCRIPTION_UPDATE" }),
+      expect.objectContaining({
+        userId: "buyer-9",
+        type: "SUBSCRIPTION_UPDATE",
+        dedupeKey: "RENEWAL_REMINDER:sub-r1:2026-06-16",
+      }),
     );
     expect(automationService.scheduleAutomation).toHaveBeenCalledWith(
       expect.objectContaining({

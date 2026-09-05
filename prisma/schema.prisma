@@ -634,6 +634,15 @@ model Notification {
   body      String?
   data      Json?
   readAt    DateTime?
+  // Canonical business-identity key for idempotent creation — e.g.
+  // "RENEWAL_REMINDER:{subscriptionId}:{isoDate}", the SAME identity used
+  // for the corresponding AutomationRun.dedupeKey. Null for every
+  // notification that doesn't need dedup (the overwhelming majority) —
+  // Postgres allows unlimited NULLs under a unique index, so this is
+  // purely additive. Enforced at the DB level so two concurrent sweeps for
+  // the same event can never both succeed in creating a row, unlike an
+  // application-level "check then create" which races.
+  dedupeKey String?          @unique
   user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
   createdAt DateTime         @default(now())
 

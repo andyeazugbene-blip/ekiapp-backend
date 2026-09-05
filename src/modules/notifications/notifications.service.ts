@@ -18,6 +18,14 @@ export interface CreateNotificationInput {
   title: string;
   body?: string;
   data?: Prisma.InputJsonValue;
+  /** Canonical business-identity key for idempotent creation — e.g.
+   * "RENEWAL_REMINDER:{subscriptionId}:{isoDate}", the SAME identity a
+   * caller also uses for the corresponding AutomationRun.dedupeKey.
+   * Enforced at the DB level (Notification.dedupeKey unique), so two
+   * concurrent calls for the same event can never both create a row.
+   * Omit entirely for notifications that don't need dedup — the default,
+   * unaffected by this. */
+  dedupeKey?: string;
 }
 
 export interface ListNotificationsQuery {
@@ -28,17 +36,39 @@ export interface ListNotificationsQuery {
 
 type PrismaLike = Prisma.TransactionClient | typeof prisma;
 
+function isUniqueViolation(error: unknown, field: string): boolean {
+  const e = error as any;
+  return e?.code === "P2002"
+    && Array.isArray(e?.meta?.target)
+    && e.meta.target.includes(field);
+}
+
 export const notificationsService = {
-  async create(input: CreateNotificationInput, tx: PrismaLike = prisma): Promise<Notification> {
-    return tx.notification.create({
-      data: {
-        userId: input.userId,
-        type: input.type,
-        title: input.title,
-        body: input.body,
-        data: input.data,
-      },
-    });
+  /**
+   * Returns null (not an error) when `dedupeKey` was already used by an
+   * existing notification — the DB-level unique constraint is what
+   * actually prevents the duplicate, including under two concurrent
+   * calls; this just turns that into a clean "already exists" signal
+   * instead of letting the caller stumble into a raw P2002.
+   */
+  async create(input: CreateNotificationInput, tx: PrismaLike = prisma): Promise<Notification | null> {
+    try {
+      return await tx.notification.create({
+        data: {
+          userId: input.userId,
+          type: input.type,
+          title: input.title,
+          body: input.body,
+          data: input.data,
+          dedupeKey: input.dedupeKey,
+        },
+      });
+    } catch (error) {
+      if (input.dedupeKey && isUniqueViolation(error, "dedupeKey")) {
+        return null;
+      }
+      throw error;
+    }
   },
 
   // Async path: when Redis is configured, push the notification to the
@@ -60,13 +90,24 @@ export const notificationsService = {
   // Still best-effort-enqueues afterwards so a real worker, if deployed,
   // has a record for retries/analytics — but delivery never depends on it.
   async enqueue(input: CreateNotificationInput): Promise<void> {
+    let created: Notification | null = null;
     try {
-      await this.create(input);
+      created = await this.create(input);
     } catch (error) {
       logger.error("Notification insert failed", {
         type: input.type,
         errorMessage: error instanceof Error ? error.message : String(error),
       });
+    }
+
+    // A dedupeKey that already existed means this exact event already
+    // produced a notification — the DB row, the push, and the best-effort
+    // queue entry all represent the SAME effective notification, so all
+    // three stop here. Without this, a deduped DB insert would still fire
+    // a real duplicate push to the buyer's device on every repeated sweep.
+    if (input.dedupeKey && created === null) {
+      logger.info("Notification skipped: duplicate dedupeKey", { type: input.type, dedupeKey: input.dedupeKey });
+      return;
     }
 
     // Fire Expo push after saving to DB — awaited for serverless.
@@ -153,11 +194,12 @@ export const notificationsService = {
       select: {
         smsMarketingConsentAt: true,
         smsTransactionalEnabled: true,
+        marketingConsentAt: true,
       },
     });
   },
 
-  async updatePreferences(userId: string, input: { smsMarketing?: boolean; smsTransactional?: boolean }) {
+  async updatePreferences(userId: string, input: { smsMarketing?: boolean; smsTransactional?: boolean; marketingConsent?: boolean }) {
     return prisma.user.update({
       where: { id: userId },
       data: {
@@ -167,10 +209,18 @@ export const notificationsService = {
         ...(input.smsTransactional === undefined
           ? {}
           : { smsTransactionalEnabled: input.smsTransactional }),
+        // Gates CART_RECOVERY / BUYER_WIN_BACK / BUYER_REFERRAL /
+        // REVIEW_REQUEST in automation.service.ts's isEligible() — that
+        // check already reads this field as-is, so honoring the buyer's
+        // choice here requires no change on the automation side at all.
+        ...(input.marketingConsent === undefined
+          ? {}
+          : { marketingConsentAt: input.marketingConsent ? new Date() : null }),
       },
       select: {
         smsMarketingConsentAt: true,
         smsTransactionalEnabled: true,
+        marketingConsentAt: true,
       },
     });
   },

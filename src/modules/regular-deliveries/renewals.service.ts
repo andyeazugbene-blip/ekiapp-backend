@@ -63,9 +63,17 @@ export const renewalsService = {
   /**
    * Proactive heads-up 1-3 days before a subscription's next renewal —
    * distinct from any of the reactive renewal-cycle notifications above,
-   * which all fire once a Renewal row already exists. Dedupe key is
-   * per subscription+cycle date, so a buyer gets at most one of these
-   * per renewal even if the sweep runs more than once before it fires.
+   * which all fire once a Renewal row already exists.
+   *
+   * Both the in-app Notification and the AutomationRun below are keyed by
+   * the SAME canonical identity — "RENEWAL_REMINDER:{subscriptionId}:
+   * {cycleDate}" — and both dedupe at the DB level (Notification.dedupeKey
+   * / AutomationRun.dedupeKey, each a unique column), not just in
+   * application logic. That's what actually makes "a buyer gets at most
+   * one of these per renewal" true even when the sweep runs more than
+   * once (a retry, an overlapping cron trigger, two concurrent
+   * invocations) before or after it first fires — a plain "does one
+   * already exist" check here would still race under concurrent execution.
    */
   async sendUpcomingRenewalReminders(): Promise<number> {
     const now = new Date();
@@ -76,22 +84,25 @@ export const renewalsService = {
         id: true,
         buyerId: true,
         nextRenewalAt: true,
-        offer: { select: { title: true, vendor: { select: { storeName: true } } } },
+        offer: { select: { vendorId: true, title: true, vendor: { select: { storeName: true } } } },
       },
     });
 
     for (const sub of upcoming) {
       if (!sub.nextRenewalAt) continue;
       const storeName = sub.offer.vendor.storeName;
+      const dedupeKey = `RENEWAL_REMINDER:${sub.id}:${sub.nextRenewalAt.toISOString().slice(0, 10)}`;
       await notificationsService.enqueue({
         userId: sub.buyerId,
         type: "SUBSCRIPTION_UPDATE",
         title: "Upcoming Regular Delivery",
         body: `Your delivery from ${storeName} renews on ${sub.nextRenewalAt.toDateString()}.`,
         data: { type: "subscription_update", event: "renewal_upcoming", subscriptionId: sub.id },
+        dedupeKey,
       });
       await automationService.scheduleAutomation({
         type: "RENEWAL_REMINDER",
+        vendorId: sub.offer.vendorId,
         recipientUserId: sub.buyerId,
         subjectKey: `${sub.id}:${sub.nextRenewalAt.toISOString().slice(0, 10)}`,
         frequencyCapDays: 3,

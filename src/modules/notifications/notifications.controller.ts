@@ -1,6 +1,7 @@
 import type { Request, Response } from "express";
 
 import { AppError } from "../../shared/errors/app-error";
+import { recordAudit } from "../../shared/utils/audit";
 import { notificationsService, parseListQuery } from "./notifications.service";
 
 function requireUserId(request: Request): string {
@@ -48,6 +49,7 @@ export async function getNotificationPreferences(request: Request, response: Res
   response.status(200).json({
     smsMarketing: preferences.smsMarketingConsentAt != null,
     smsTransactional: preferences.smsTransactionalEnabled,
+    marketingConsent: preferences.marketingConsentAt != null,
   });
 }
 
@@ -72,12 +74,37 @@ export async function updateNotificationPreferences(request: Request, response: 
   if (raw.smsTransactional !== undefined && typeof raw.smsTransactional !== "boolean") {
     throw new AppError("smsTransactional must be a boolean", 400);
   }
-  const preferences = await notificationsService.updatePreferences(requireUserId(request), {
+  if (raw.marketingConsent !== undefined && typeof raw.marketingConsent !== "boolean") {
+    throw new AppError("marketingConsent must be a boolean", 400);
+  }
+
+  const userId = requireUserId(request);
+  // Captured before the write so a grant/revoke is audited with both
+  // states, not just the new one — the same recordAudit convention used
+  // throughout the rest of the backend for consent/permission changes.
+  const before = raw.marketingConsent !== undefined ? await notificationsService.getPreferences(userId) : null;
+
+  const preferences = await notificationsService.updatePreferences(userId, {
     smsMarketing: raw.smsMarketing as boolean | undefined,
     smsTransactional: raw.smsTransactional as boolean | undefined,
+    marketingConsent: raw.marketingConsent as boolean | undefined,
   });
+
+  if (before) {
+    await recordAudit({
+      actorId: userId,
+      action: raw.marketingConsent ? "user.marketing_consent.granted" : "user.marketing_consent.revoked",
+      entityType: "User",
+      entityId: userId,
+      beforeState: { marketingConsentAt: before.marketingConsentAt },
+      afterState: { marketingConsentAt: preferences.marketingConsentAt },
+      request,
+    });
+  }
+
   response.status(200).json({
     smsMarketing: preferences.smsMarketingConsentAt != null,
     smsTransactional: preferences.smsTransactionalEnabled,
+    marketingConsent: preferences.marketingConsentAt != null,
   });
 }
