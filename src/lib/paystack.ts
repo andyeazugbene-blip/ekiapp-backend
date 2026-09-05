@@ -1,6 +1,7 @@
 import crypto from "crypto";
 
 import { logger } from "./logger";
+import { constantTimeEqual } from "../shared/utils/crypto";
 
 /**
  * Paystack API client — lightweight wrapper (no SDK dependency).
@@ -223,6 +224,6 @@ export const paystack = {
       .createHmac("sha512", PAYSTACK_SECRET_KEY)
       .update(typeof body === "string" ? body : body.toString("utf-8"))
       .digest("hex");
-    return hash === signature;
+    return constantTimeEqual(hash, signature);
   },
 };

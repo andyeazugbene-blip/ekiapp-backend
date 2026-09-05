@@ -1,6 +1,7 @@
 import { Router, type Request, type Response } from "express";
 
 import { logger } from "../../lib/logger";
+import { constantTimeEqual } from "../../shared/utils/crypto";
 import { prisma } from "../../lib/prisma";
 import { verificationService } from "../verification/verification.service";
 import { scheduledCommunicationService } from "../communications/scheduled-communication.service";
@@ -30,7 +31,10 @@ function requireCronSecret(req: Request, res: Response): boolean {
   // original custom header so either Vercel Cron or an external scheduler
   // (e.g. a GitHub Actions cron workflow) can trigger these jobs.
   const bearer = req.headers.authorization?.replace(/^Bearer\s+/i, "");
-  if (req.headers["x-job-secret"] !== secret && bearer !== secret) {
+  const jobSecretHeader = req.headers["x-job-secret"];
+  const jobSecretMatches = typeof jobSecretHeader === "string" && constantTimeEqual(jobSecretHeader, secret);
+  const bearerMatches = typeof bearer === "string" && constantTimeEqual(bearer, secret);
+  if (!jobSecretMatches && !bearerMatches) {
     res.status(401).json({ error: "Unauthorized" });
     return false;
   }
