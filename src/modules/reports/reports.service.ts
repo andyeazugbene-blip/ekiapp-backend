@@ -52,13 +52,24 @@ export async function isBlocked(blockerId: string, blockedId: string): Promise<b
   return !!block;
 }
 
-// Admin: list reports
+// Admin: list reports — enriched with the reporter's real name/email so a
+// moderator has something actionable to look at, not a bare reporterId.
+// Apple 1.2 (User-Generated Content) requires "a mechanism to report
+// offensive content and timely responses to concerns" — an admin page with
+// no way to identify who reported what isn't a usable moderation queue.
 export async function listReports(status?: string) {
-  return prisma.contentReport.findMany({
+  const reports = await prisma.contentReport.findMany({
     where: status ? { status } : undefined,
     orderBy: { createdAt: "desc" },
     take: 100,
   });
+  const reporterIds = [...new Set(reports.map((r) => r.reporterId))];
+  const reporters = await prisma.user.findMany({
+    where: { id: { in: reporterIds } },
+    select: { id: true, name: true, email: true },
+  });
+  const reporterById = new Map(reporters.map((r) => [r.id, r]));
+  return reports.map((r) => ({ ...r, reporter: reporterById.get(r.reporterId) ?? null }));
 }
 
 // Admin: update report status
