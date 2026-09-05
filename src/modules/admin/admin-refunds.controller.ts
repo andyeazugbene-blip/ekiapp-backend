@@ -11,7 +11,11 @@ import { notificationsService } from "../notifications/notifications.service";
 
 interface OrderRefundResult {
   refundId: string;
+  /** Always the order's OWN native currency and minor unit — never the
+   * PaymentIntent/checkout currency, so the admin UI never shows an amount
+   * whose currency is ambiguous relative to everything else on this order. */
   amount: number;
+  currency: string;
   status: string;
   provider: "stripe" | "paystack";
 }
@@ -33,30 +37,68 @@ export async function executeOrderRefund(orderId: string, adminId: string, amoun
   if (!order) throw new AppError("Order not found", 404);
   if (order.status === "REFUNDED") throw new AppError("Order already refunded", 409);
 
-  const refundAmount = typeof amount === "number" && amount > 0 ? amount : undefined;
+  // The admin always enters an amount in the ORDER's OWN native currency —
+  // order.currency, order.totalAmount — the same currency every other
+  // figure for this order is shown in everywhere else in the admin UI.
+  // Never accept or infer an amount already expressed in the checkout/
+  // PaymentIntent currency; that ambiguity is exactly what let a
+  // normalized-vs-native mismatch silently reach Stripe.
+  if (amount !== undefined && (typeof amount !== "number" || !Number.isInteger(amount) || amount <= 0)) {
+    throw new AppError("Refund amount must be a positive integer (minor units) in the order's own currency", 400);
+  }
+  if (amount !== undefined && amount > order.totalAmount) {
+    throw new AppError("Refund amount cannot exceed the order's own total", 400);
+  }
+
   const provider = order.payment?.provider ?? (order.paystackTransaction ? "paystack" : "stripe");
 
   if (provider === "stripe") {
     if (!order.payment?.stripePaymentIntentId) throw new AppError("No Stripe payment found for this order", 400);
     if (order.payment.status !== "SUCCEEDED") throw new AppError("Can only refund succeeded payments", 400);
 
+    const nativeRefundAmount = amount ?? order.totalAmount;
+
+    // The PaymentIntent this order's payment references may be SHARED
+    // across every vendor's order in the same multi-vendor checkout (see
+    // payments.service.ts createPaymentIntent — exactly one PaymentIntent
+    // per checkout, summing every vendor group's normalized amount). Two
+    // things follow:
+    //   1. `amount` sent to Stripe must ALWAYS be explicit. Omitting it
+    //      would refund the entire PaymentIntent — every other vendor's
+    //      money in that checkout too, not just this order's share.
+    //   2. That amount must be expressed in the PaymentIntent's OWN
+    //      currency (order.checkoutCurrency when this order's native
+    //      currency differs from it), converted using the SAME rate
+    //      snapshot taken at checkout time (order.exchangeRate) — never a
+    //      freshly fetched rate, so a refund always matches what the buyer
+    //      was actually charged for this order.
+    const stripeRefundAmount =
+      order.checkoutCurrency && order.exchangeRate
+        ? Math.round(nativeRefundAmount * order.exchangeRate)
+        : nativeRefundAmount;
+
     try {
       const refund = await stripe.refunds.create(
         {
           payment_intent: order.payment.stripePaymentIntentId,
-          ...(refundAmount ? { amount: refundAmount } : {}),
-          metadata: { orderId, adminUserId: adminId },
+          amount: stripeRefundAmount,
+          metadata: {
+            orderId,
+            adminUserId: adminId,
+            nativeAmount: String(nativeRefundAmount),
+            nativeCurrency: order.currency,
+          },
           reason: (reason as string) === "duplicate" ? "duplicate"
             : (reason as string) === "fraudulent" ? "fraudulent"
             : "requested_by_customer",
         },
-        { idempotencyKey: `refund:${orderId}:${refundAmount ?? "full"}` },
+        { idempotencyKey: `refund:${orderId}:${nativeRefundAmount}` },
       );
 
-      logger.info("Admin Stripe refund issued", { orderId, refundId: refund.id, amount: refund.amount });
+      logger.info("Admin Stripe refund issued", { orderId, refundId: refund.id, nativeAmount: nativeRefundAmount, nativeCurrency: order.currency, stripeAmount: refund.amount, stripeCurrency: refund.currency });
       await prisma.order.update({ where: { id: orderId }, data: { status: "REFUNDED" } });
-      await createAuditLog(adminId, orderId, refund.id, refund.amount, reason);
-      return { refundId: refund.id, amount: refund.amount, status: refund.status ?? "unknown", provider: "stripe" };
+      await createAuditLog(adminId, orderId, refund.id, nativeRefundAmount, reason);
+      return { refundId: refund.id, amount: nativeRefundAmount, currency: order.currency, status: refund.status ?? "unknown", provider: "stripe" };
     } catch (error) {
       logger.error("Stripe refund failed", { orderId, error: error instanceof Error ? error.message : String(error) });
       throw new AppError("Stripe refund failed", 502);
@@ -68,7 +110,12 @@ export async function executeOrderRefund(orderId: string, adminId: string, amoun
     if (order.paystackTransaction.status !== "SUCCESS") throw new AppError("Can only refund successful Paystack payments", 400);
 
     try {
-      await paystack.refundTransaction(order.paystackTransaction.reference, refundAmount);
+      // Paystack transactions are 1:1 with an order (PaystackTransaction.
+      // orderId is unique, unlike Stripe's shared-PaymentIntent-per-checkout
+      // model) — no normalized/native split applies here, so the amount is
+      // already in the right currency/scale as-is.
+      const finalAmount = amount ?? order.paystackTransaction.amount;
+      await paystack.refundTransaction(order.paystackTransaction.reference, amount);
       logger.info("Admin Paystack refund issued", { orderId, reference: order.paystackTransaction.reference });
 
       await prisma.$transaction(async (tx) => {
@@ -79,7 +126,6 @@ export async function executeOrderRefund(orderId: string, adminId: string, amoun
         });
       });
 
-      const finalAmount = refundAmount ?? order.paystackTransaction.amount;
       await createAuditLog(adminId, orderId, order.paystackTransaction.reference, finalAmount, reason);
 
       // Paystack has no webhook-driven refund confirmation wired up here
@@ -93,7 +139,7 @@ export async function executeOrderRefund(orderId: string, adminId: string, amoun
         data: { type: "order_refunded", orderIds: [orderId] },
       }).catch(() => {});
 
-      return { refundId: order.paystackTransaction.reference, amount: finalAmount, status: "reversed", provider: "paystack" };
+      return { refundId: order.paystackTransaction.reference, amount: finalAmount, currency: order.currency, status: "reversed", provider: "paystack" };
     } catch (error) {
       logger.error("Paystack refund failed", { orderId, error: error instanceof Error ? error.message : String(error) });
       throw new AppError("Paystack refund failed", 502);

@@ -13,6 +13,7 @@ vi.mock("../lib/prisma", () => ({
   prisma: {
     cart: { findUnique: vi.fn() },
     deliveryZone: { findUnique: vi.fn(), findFirst: vi.fn() },
+    vendor: { findMany: vi.fn() },
   },
 }));
 
@@ -21,7 +22,10 @@ import { deliveryService } from "../modules/delivery/delivery.service";
 
 const m = vi.mocked(prisma, true);
 
-beforeEach(() => vi.clearAllMocks());
+beforeEach(() => {
+  vi.clearAllMocks();
+  m.vendor.findMany.mockResolvedValue([] as never);
+});
 
 const globalZone = {
   id: "zone-global",

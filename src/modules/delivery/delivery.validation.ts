@@ -10,15 +10,26 @@ export function validateCalculateDeliveryInput(input: unknown): CalculateDeliver
   if (typeof raw.cartId !== "string" || raw.cartId.trim().length === 0) {
     throw new AppError("Invalid cartId", 400);
   }
-  if (typeof raw.destinationZoneId !== "string" || raw.destinationZoneId.trim().length === 0) {
-    throw new AppError("Invalid destinationZoneId", 400);
+
+  const result: CalculateDeliveryInput = { cartId: raw.cartId.trim() };
+
+  // Accept either destinationZoneId (legacy) or deliveryCountry (preferred —
+  // lets the backend resolve each vendor's own eligibility independently
+  // instead of the caller pre-picking one zone for the whole cart).
+  if (typeof raw.destinationZoneId === "string" && raw.destinationZoneId.trim().length > 0) {
+    result.destinationZoneId = raw.destinationZoneId.trim();
+  }
+  if (typeof raw.deliveryCountry === "string" && raw.deliveryCountry.trim().length > 0) {
+    result.deliveryCountry = raw.deliveryCountry.trim();
+  }
+  if (!result.destinationZoneId && !result.deliveryCountry) {
+    throw new AppError("Either destinationZoneId or deliveryCountry is required", 400);
   }
 
-  return {
-    cartId: raw.cartId.trim(),
-    destinationZoneId: raw.destinationZoneId.trim(),
-    checkoutCurrency: typeof raw.checkoutCurrency === "string" && raw.checkoutCurrency.trim().length > 0
+  result.checkoutCurrency =
+    typeof raw.checkoutCurrency === "string" && raw.checkoutCurrency.trim().length > 0
       ? raw.checkoutCurrency.trim()
-      : undefined,
-  };
+      : undefined;
+
+  return result;
 }

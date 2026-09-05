@@ -89,6 +89,10 @@ describe("adminRefundOrder — provider branching", () => {
     mockedPrisma.order.findUnique.mockResolvedValue({
       id: "ord-1",
       status: "PAID",
+      totalAmount: 10000,
+      currency: "eur",
+      checkoutCurrency: null,
+      exchangeRate: null,
       payment: {
         id: "pay-1",
         stripePaymentIntentId: "pi_123",
@@ -135,10 +139,14 @@ describe("adminRefundOrder — provider branching", () => {
     expect((res.data as Record<string, unknown>).provider).toBe("stripe");
   });
 
-  it("STRIPE: full refund (no amount) uses idempotencyKey suffix 'full'", async () => {
+  it("STRIPE: full refund (no amount) defaults to the order's own native total, expressed explicitly (never omitted)", async () => {
     mockedPrisma.order.findUnique.mockResolvedValue({
       id: "ord-2",
       status: "PAID",
+      totalAmount: 5000,
+      currency: "eur",
+      checkoutCurrency: null,
+      exchangeRate: null,
       payment: {
         id: "pay-2",
         stripePaymentIntentId: "pi_456",
@@ -160,8 +168,133 @@ describe("adminRefundOrder — provider branching", () => {
 
     await adminRefundOrder(req, res as unknown as Response);
 
-    const [, options] = mockedStripeRefundCreate.mock.calls[0];
-    expect(options).toEqual(expect.objectContaining({ idempotencyKey: "refund:ord-2:full" }));
+    // Omitting `amount` must never omit it from the Stripe call — this
+    // order's PaymentIntent may be shared with other vendors' orders in the
+    // same checkout, so an omitted Stripe amount would refund ALL of them.
+    const [payload, options] = mockedStripeRefundCreate.mock.calls[0];
+    expect(payload).toEqual(expect.objectContaining({ amount: 5000 }));
+    expect(options).toEqual(expect.objectContaining({ idempotencyKey: "refund:ord-2:5000" }));
+  });
+
+  it("STRIPE: a normalized order (native currency differs from the checkout/PaymentIntent currency) refunds the amount actually charged, using the stored rate — never the native number taken at face value", async () => {
+    mockedPrisma.order.findUnique.mockResolvedValue({
+      id: "ord-10",
+      status: "PAID",
+      totalAmount: 1000, // native EUR-cents
+      currency: "eur",
+      checkoutCurrency: "usd", // buyer's checkout was charged in USD
+      exchangeRate: 1.0940, // same snapshot taken at checkout time (1 EUR = 1.094 USD here)
+      payment: {
+        id: "pay-10",
+        stripePaymentIntentId: "pi_shared",
+        status: "SUCCEEDED",
+        amount: 1094, // this order's contribution in USD-cents, as actually charged
+        provider: "stripe",
+      },
+      paystackTransaction: null,
+    } as never);
+
+    mockedStripeRefundCreate.mockResolvedValue({
+      id: "re_ghi",
+      amount: 1094,
+      status: "succeeded",
+    } as never);
+
+    const req = createMockReq("ord-10", { reason: "requested_by_customer" });
+    const res = createMockRes();
+
+    await adminRefundOrder(req, res as unknown as Response);
+
+    const [payload] = mockedStripeRefundCreate.mock.calls[0];
+    // Stripe must be told to refund 1094 (USD-cents, the PI's real
+    // currency) — refunding 1000 (the native EUR-cents number) would be a
+    // silent under-refund in the wrong currency's terms.
+    expect(payload).toEqual(expect.objectContaining({ payment_intent: "pi_shared", amount: 1094 }));
+    // The response shown to the admin stays in the order's own native
+    // currency/amount — never the converted PaymentIntent figure — so it
+    // matches every other amount already displayed for this order.
+    expect((res.data as Record<string, unknown>).amount).toBe(1000);
+    expect((res.data as Record<string, unknown>).currency).toBe("eur");
+  });
+
+  it("STRIPE: a partial refund on a normalized order is validated against the native total and converted with the same stored rate", async () => {
+    mockedPrisma.order.findUnique.mockResolvedValue({
+      id: "ord-11",
+      status: "PAID",
+      totalAmount: 1000, // native EUR-cents
+      currency: "eur",
+      checkoutCurrency: "usd",
+      exchangeRate: 1.0940,
+      payment: {
+        id: "pay-11",
+        stripePaymentIntentId: "pi_shared_2",
+        status: "SUCCEEDED",
+        amount: 1094,
+        provider: "stripe",
+      },
+      paystackTransaction: null,
+    } as never);
+
+    mockedStripeRefundCreate.mockResolvedValue({ id: "re_jkl", amount: 547, status: "succeeded" } as never);
+
+    // Admin enters 500 (native EUR-cents — half the order) — never a
+    // pre-converted USD figure.
+    const req = createMockReq("ord-11", { amount: 500, reason: "requested_by_customer" });
+    const res = createMockRes();
+
+    await adminRefundOrder(req, res as unknown as Response);
+
+    const [payload] = mockedStripeRefundCreate.mock.calls[0];
+    // round(500 * 1.0940) = 547 USD-cents.
+    expect(payload).toEqual(expect.objectContaining({ amount: 547 }));
+    expect((res.data as Record<string, unknown>).amount).toBe(500);
+  });
+
+  it("STRIPE: a partial refund on a single-currency order (no conversion) passes the native amount straight through", async () => {
+    mockedPrisma.order.findUnique.mockResolvedValue({
+      id: "ord-13",
+      status: "PAID",
+      totalAmount: 4000,
+      currency: "gbp",
+      checkoutCurrency: null,
+      exchangeRate: null,
+      payment: { id: "pay-13", stripePaymentIntentId: "pi_partial", status: "SUCCEEDED", amount: 4000, provider: "stripe" },
+      paystackTransaction: null,
+    } as never);
+
+    mockedStripeRefundCreate.mockResolvedValue({ id: "re_mno", amount: 1500, status: "succeeded" } as never);
+
+    const req = createMockReq("ord-13", { amount: 1500, reason: "requested_by_customer" });
+    const res = createMockRes();
+
+    await adminRefundOrder(req, res as unknown as Response);
+
+    const [payload] = mockedStripeRefundCreate.mock.calls[0];
+    expect(payload).toEqual(expect.objectContaining({ amount: 1500 }));
+    expect((res.data as Record<string, unknown>).amount).toBe(1500);
+    expect((res.data as Record<string, unknown>).currency).toBe("gbp");
+  });
+
+  it("STRIPE: rejects a refund amount greater than the order's own native total", async () => {
+    mockedPrisma.order.findUnique.mockResolvedValue({
+      id: "ord-12",
+      status: "PAID",
+      totalAmount: 1000,
+      currency: "eur",
+      checkoutCurrency: null,
+      exchangeRate: null,
+      payment: { id: "pay-12", stripePaymentIntentId: "pi_over", status: "SUCCEEDED", amount: 1000, provider: "stripe" },
+      paystackTransaction: null,
+    } as never);
+
+    const req = createMockReq("ord-12", { amount: 5000 });
+    const res = createMockRes();
+
+    await expect(adminRefundOrder(req, res as unknown as Response)).rejects.toMatchObject({
+      statusCode: 400,
+      message: expect.stringContaining("cannot exceed"),
+    });
+    expect(mockedStripeRefundCreate).not.toHaveBeenCalled();
   });
 
   it("PAYSTACK: calls paystack.refundTransaction and marks order REFUNDED + tx REVERSED", async () => {
@@ -169,6 +302,8 @@ describe("adminRefundOrder — provider branching", () => {
       id: "ord-3",
       buyerId: "buyer-3",
       status: "PAID",
+      totalAmount: 20000,
+      currency: "ngn",
       payment: null,
       paystackTransaction: {
         reference: "psk-ref-789",
@@ -207,6 +342,8 @@ describe("adminRefundOrder — provider branching", () => {
       id: "ord-9",
       buyerId: "buyer-9",
       status: "PAID",
+      totalAmount: 5000,
+      currency: "ngn",
       payment: null,
       paystackTransaction: {
         reference: "psk-ref-999",
@@ -315,6 +452,10 @@ describe("adminRefundOrder — provider branching", () => {
     mockedPrisma.order.findUnique.mockResolvedValue({
       id: "ord-7",
       status: "PAID",
+      totalAmount: 1000,
+      currency: "eur",
+      checkoutCurrency: null,
+      exchangeRate: null,
       payment: {
         id: "pay-7",
         stripePaymentIntentId: "pi_fail",

@@ -18,6 +18,7 @@ import type { CreatePaymentIntentResponse, PricedOrderItem } from "./payments.ty
 import { MAX_VENDOR_WEIGHT_GRAMS } from "../../shared/constants";
 import { resolveStripeCurrency } from "../../shared/currency";
 import { getFxRate, normalizeMoneyMinor } from "../../shared/fx-normalizer";
+import { findGlobalDeliveryZone, resolveVendorDeliveryZone } from "../../shared/delivery-eligibility";
 import { enqueueEmail } from "../../lib/email-queue";
 import { emailTemplates } from "../../lib/email-templates";
 import { notificationsService } from "../notifications/notifications.service";
@@ -118,20 +119,25 @@ class PaymentsService {
       vendorMap.set(item.vendorId, existing);
     }
 
-    // ─── Step 2b: Resolve delivery zone ────────────────────────────────────
+    // ─── Step 2b: Resolve delivery country ─────────────────────────────────
     // Accept either a direct destinationZoneId or resolve from deliveryCountry.
+    // Either way, this only establishes WHICH country the buyer is ordering
+    // to — each vendor's own delivery eligibility/zone for that country is
+    // resolved independently below (resolveVendorDeliveryZone), never
+    // inherited from whichever zone happened to match first. That
+    // independence is what lets one vendor stay valid even when another
+    // vendor in the same cart cannot deliver here.
 
-    let zone;
+    let deliveryCountry: string;
+    let globalZone: Awaited<ReturnType<typeof findGlobalDeliveryZone>>;
     if (payload.destinationZoneId) {
-      zone = await prisma.deliveryZone.findUnique({ where: { id: payload.destinationZoneId } });
-      if (!zone || !zone.isActive) throw new AppError("Delivery zone not available", 404);
+      const anchorZone = await prisma.deliveryZone.findUnique({ where: { id: payload.destinationZoneId } });
+      if (!anchorZone || !anchorZone.isActive) throw new AppError("Delivery zone not available", 404);
+      deliveryCountry = anchorZone.country;
+      globalZone = anchorZone;
     } else if (payload.deliveryCountry) {
-      zone = await prisma.deliveryZone.findFirst({
-        where: { country: { equals: payload.deliveryCountry, mode: "insensitive" }, isActive: true },
-      });
-      if (!zone) {
-        throw new AppError(`Delivery to "${payload.deliveryCountry}" is not available`, 400);
-      }
+      deliveryCountry = payload.deliveryCountry;
+      globalZone = await findGlobalDeliveryZone(deliveryCountry);
     } else {
       throw new AppError("Delivery destination is required", 400);
     }
@@ -140,8 +146,14 @@ class PaymentsService {
     // gets normalized into each vendor's own currency below, same as any
     // vendor-specific zone override.
 
-    // ─── Step 2c: Per-vendor delivery validation + weight check ────────────
+    // ─── Step 2c: Per-vendor delivery eligibility + weight check ───────────
+    // (Vendor display names for this error come from the buyer-facing
+    // GET /delivery/calculate pre-check, which the checkout screen always
+    // calls before this endpoint — this throw is defense-in-depth for a
+    // stale/bypassed client, so product titles are specific enough here
+    // without an extra vendor lookup on the money-charging path.)
 
+    const ineligibleVendors: { vendorId: string; reason: string; productIds: string[]; productTitles: string[] }[] = [];
     const vendorGroups: VendorGroup[] = [];
     for (const [vendorId, items] of vendorMap) {
       const vendorCurrency = items[0].currency.toLowerCase();
@@ -156,15 +168,23 @@ class PaymentsService {
         );
       }
 
-      // Check if vendor-specific zone exists; fall back to global zone
-      const vendorZone = await prisma.deliveryZone.findFirst({
-        where: {
+      const resolution = await resolveVendorDeliveryZone(vendorId, deliveryCountry, globalZone);
+      if (!resolution.eligible || !resolution.zone) {
+        // Backend-authoritative gate: refuse to silently fall back to the
+        // global zone for a vendor who cannot actually deliver here. Every
+        // eligible vendor group still gets computed normally below — this
+        // vendor alone is collected and reported after the loop, so the
+        // buyer sees exactly which vendor/items are the problem instead of
+        // a blanket checkout failure.
+        ineligibleVendors.push({
           vendorId,
-          country: { equals: zone.country, mode: "insensitive" },
-          isActive: true,
-        },
-      });
-      const effectiveZone = vendorZone ?? zone;
+          reason: resolution.reason ?? "NO_COVERAGE",
+          productIds: items.map((i) => i.productId),
+          productTitles: items.map((i) => i.productTitle),
+        });
+        continue;
+      }
+      const effectiveZone = resolution.zone;
 
       const deliveryFeeInZoneCurrency = effectiveZone.baseFeeAmount + Math.ceil(totalWeight / 1000) * effectiveZone.feePerKgAmount;
       // Normalize the zone's native fee into THIS vendor's currency so the
@@ -208,6 +228,16 @@ class PaymentsService {
         exchangeRateTimestamp: fx?.timestamp ?? null,
         exchangeRateSource: fx?.source ?? null,
       });
+    }
+
+    if (ineligibleVendors.length > 0) {
+      const affectedProducts = ineligibleVendors.flatMap((v) => v.productTitles).join(", ");
+      throw new AppError(
+        `Some items can't be delivered to this address: ${affectedProducts}. Choose another address or remove these items from your cart.`,
+        422,
+        { vendors: ineligibleVendors },
+        "DELIVERY_INELIGIBLE_VENDOR",
+      );
     }
 
     // The buyer-facing grand total is the sum of every order's amount
@@ -414,7 +444,7 @@ class PaymentsService {
             })),
             walletDeduction,
             deliveryAddress: payload.deliveryAddress ?? null,
-            deliveryCountry: payload.deliveryCountry ?? zone.country,
+            deliveryCountry,
             stripeCurrency,
             promoCode: promoCodeApplied ?? null,
             promoDiscount: promoDiscount,

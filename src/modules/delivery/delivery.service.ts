@@ -2,7 +2,8 @@ import { prisma } from "../../lib/prisma";
 import { AppError } from "../../shared/errors/app-error";
 import { calculateDeliveryFee } from "../../shared/pricing";
 import { getFxRate, normalizeMoneyMinor } from "../../shared/fx-normalizer";
-import type { CalculateDeliveryInput, CalculateDeliveryResult } from "./delivery.types";
+import { findGlobalDeliveryZone, resolveVendorDeliveryZone } from "../../shared/delivery-eligibility";
+import type { CalculateDeliveryInput, CalculateDeliveryResult, VendorDeliveryEligibility } from "./delivery.types";
 
 export const deliveryService = {
   async calculate(
@@ -24,11 +25,27 @@ export const deliveryService = {
       throw new AppError("Cart is empty", 400);
     }
 
-    const zone = await prisma.deliveryZone.findUnique({
-      where: { id: input.destinationZoneId },
-    });
-    if (!zone || !zone.isActive) {
-      throw new AppError("Delivery zone not available", 404);
+    // The country the buyer is asking about, and the zone every vendor
+    // without their own override falls back to. Legacy callers pass a
+    // specific destinationZoneId — that exact zone is used as the fallback,
+    // unchanged from previous behavior. Preferred callers pass a country
+    // directly, in which case the TRUE shared zone (vendorId: null) for
+    // that country is looked up explicitly, rather than trusting whichever
+    // zone a caller-side pre-check happened to pick.
+    let country: string;
+    let globalZone: Awaited<ReturnType<typeof findGlobalDeliveryZone>>;
+    if (input.destinationZoneId) {
+      const anchorZone = await prisma.deliveryZone.findUnique({ where: { id: input.destinationZoneId } });
+      if (!anchorZone) {
+        throw new AppError("Delivery zone not available", 404);
+      }
+      country = anchorZone.country;
+      globalZone = anchorZone;
+    } else if (input.deliveryCountry) {
+      country = input.deliveryCountry;
+      globalZone = await findGlobalDeliveryZone(country);
+    } else {
+      throw new AppError("Either destinationZoneId or deliveryCountry is required", 400);
     }
 
     // A cart may hold products in different native currencies — the buyer's
@@ -38,12 +55,10 @@ export const deliveryService = {
     // there's genuinely only one currency in play.
     const checkoutCurrency = (input.checkoutCurrency ?? cart.items[0].product.currency).toLowerCase();
 
-    // Mirrors payments.service.ts createPaymentIntent: group by vendor,
-    // resolve each vendor's own delivery-zone override (falling back to the
-    // shared zone when no override exists), sum per-vendor fees — then
-    // normalize each vendor group's native subtotal/delivery into the one
-    // checkout currency. This estimate is shown to the buyer BEFORE
-    // payment, so it must match what actually gets charged.
+    // Group by vendor — each vendor's delivery eligibility/zone for this
+    // country is resolved independently (see resolveVendorDeliveryZone): a
+    // valid vendor stays valid even when another vendor in the same cart
+    // cannot deliver here.
     const vendorGroups = new Map<string, typeof cart.items>();
     for (const item of cart.items) {
       const existing = vendorGroups.get(item.product.vendorId) ?? [];
@@ -51,24 +66,38 @@ export const deliveryService = {
       vendorGroups.set(item.product.vendorId, existing);
     }
 
+    const vendors = await prisma.vendor.findMany({
+      where: { id: { in: Array.from(vendorGroups.keys()) } },
+      select: { id: true, storeName: true },
+    });
+    const vendorNameById = new Map(vendors.map((v) => [v.id, v.storeName]));
+
     let subtotalAmount = 0;
     let deliveryAmount = 0;
     let totalWeightGrams = 0;
+    const vendorEligibility: VendorDeliveryEligibility[] = [];
 
     for (const [vendorId, items] of vendorGroups) {
       const vendorWeight = items.reduce((sum, i) => sum + (i.product.weightGrams ?? 0) * i.quantity, 0);
       const vendorCurrency = (items[0]?.product.currency ?? checkoutCurrency).toLowerCase();
       const vendorSubtotalNative = items.reduce((sum, i) => sum + i.product.priceInCents * i.quantity, 0);
+      const productIds = items.map((i) => i.productId);
+      const productTitles = items.map((i) => i.product.title);
 
-      const vendorZone = await prisma.deliveryZone.findFirst({
-        where: { vendorId, country: { equals: zone.country, mode: "insensitive" }, isActive: true },
-      });
-      // No longer requires the zone's own currency to match anything — its
-      // native fee gets normalized into the checkout currency below like
-      // everything else. Prefer a real vendor-specific zone over the
-      // shared/global one whenever one exists for this country.
-      const effectiveZone = vendorZone ?? zone;
+      const resolution = await resolveVendorDeliveryZone(vendorId, country, globalZone);
+      if (!resolution.eligible || !resolution.zone) {
+        vendorEligibility.push({
+          vendorId,
+          vendorName: vendorNameById.get(vendorId) ?? "Vendor",
+          eligible: false,
+          reason: resolution.reason,
+          productIds,
+          productTitles,
+        });
+        continue;
+      }
 
+      const effectiveZone = resolution.zone;
       const deliveryFeeNative = calculateDeliveryFee({
         baseFeeAmount: effectiveZone.baseFeeAmount,
         feePerKgAmount: effectiveZone.feePerKgAmount,
@@ -78,17 +107,32 @@ export const deliveryService = {
       const subtotalFx = getFxRate(vendorCurrency, checkoutCurrency);
       const deliveryFx = getFxRate(effectiveZone.currency, checkoutCurrency);
 
-      subtotalAmount += normalizeMoneyMinor(vendorSubtotalNative, vendorCurrency, checkoutCurrency, subtotalFx);
-      deliveryAmount += normalizeMoneyMinor(deliveryFeeNative, effectiveZone.currency, checkoutCurrency, deliveryFx);
+      const normalizedSubtotal = normalizeMoneyMinor(vendorSubtotalNative, vendorCurrency, checkoutCurrency, subtotalFx);
+      const normalizedDelivery = normalizeMoneyMinor(deliveryFeeNative, effectiveZone.currency, checkoutCurrency, deliveryFx);
+
+      subtotalAmount += normalizedSubtotal;
+      deliveryAmount += normalizedDelivery;
       totalWeightGrams += vendorWeight;
+
+      vendorEligibility.push({
+        vendorId,
+        vendorName: vendorNameById.get(vendorId) ?? "Vendor",
+        eligible: true,
+        productIds,
+        productTitles,
+        subtotalAmount: normalizedSubtotal,
+        deliveryAmount: normalizedDelivery,
+      });
     }
 
     return {
+      eligible: vendorEligibility.every((v) => v.eligible),
       subtotalAmount,
       deliveryAmount,
       totalAmount: subtotalAmount + deliveryAmount,
       totalWeightGrams,
       currency: checkoutCurrency,
+      vendors: vendorEligibility,
     };
   },
 };

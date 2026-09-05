@@ -466,7 +466,15 @@ model OrderItem {
 model Payment {
   id                    String              @id @default(cuid())
   orderId               String              @unique
-  stripePaymentIntentId String?             @unique
+  // NOT unique: a multi-vendor checkout creates exactly ONE Stripe
+  // PaymentIntent shared across every vendor's Order/Payment row (see
+  // payments.service.ts createPaymentIntent) — Checkout.stripePaymentIntentId
+  // is the actual unique identifier for "this PaymentIntent"; this field is
+  // a denormalized copy for per-order lookups only. A unique constraint
+  // here made the webhook's per-order update loop throw a P2002 starting
+  // from the second order in any 2+-vendor Stripe checkout, leaving every
+  // vendor after the first stuck PENDING despite the buyer having paid.
+  stripePaymentIntentId String?
   amount                Int
   platformFeeAmount     Int
   vendorEarningsAmount  Int
@@ -492,6 +500,7 @@ model Payment {
   @@index([commissionTierId])
   @@index([status, createdAt])
   @@index([createdAt])
+  @@index([stripePaymentIntentId])
 }
 
 model Wallet {
