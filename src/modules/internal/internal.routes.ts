@@ -17,6 +17,7 @@ import { fulfilmentDelayService } from "../community-buy/fulfilment-delay.servic
 import { sendEmail } from "../../lib/email";
 import { emailTemplates } from "../../lib/email-templates";
 import { enqueueEmail } from "../../lib/email-queue";
+import { checkPushReceipts } from "../../lib/expo-push";
 
 export const internalRouter = Router();
 
@@ -280,6 +281,14 @@ async function runFulfilmentDelayScan() {
   return fulfilmentDelayService.scan();
 }
 
+// A ticket status of "ok" from Expo's push send only means Expo queued the
+// request — it is not proof APNs/FCM actually delivered anything. This
+// checks the real receipts for tickets sent >5 minutes ago and classifies
+// genuine delivery failures (see checkPushReceipts).
+async function runPushReceiptCheck() {
+  return checkPushReceipts();
+}
+
 // ─── HTTP handlers ──────────────────────────────────────────────────────
 // GET for Vercel Cron (which only issues GET requests); POST kept for any
 // external/manual trigger using the original x-job-secret header.
@@ -311,6 +320,7 @@ const jobs: [string, string, () => Promise<Record<string, unknown>>][] = [
   ["reconciliation-sweep", "daily Stripe reconciliation", runReconciliationSweep],
   ["payment-anomaly-scan", "duplicate-payment / financial-inconsistency scan", runPaymentAnomalyScan],
   ["fulfilment-delay-scan", "supplier-fulfilment delay scan", runFulfilmentDelayScan],
+  ["push-receipt-check", "Expo push receipt check", runPushReceiptCheck],
 ];
 
 for (const [path, name, run] of jobs) {

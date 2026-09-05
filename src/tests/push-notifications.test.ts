@@ -3,18 +3,20 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 vi.mock("../lib/prisma", () => ({
   prisma: {
     pushToken: { upsert: vi.fn(), deleteMany: vi.fn(), findMany: vi.fn() },
+    pushTicket: { createMany: vi.fn(), findMany: vi.fn(), deleteMany: vi.fn() },
   },
 }));
 
 import { prisma } from "../lib/prisma";
 import { pushTokensService } from "../modules/push-tokens/push-tokens.service";
-import { sendExpoPush, sendPushToUser } from "../lib/expo-push";
+import { sendExpoPush, sendPushToUser, checkPushReceipts } from "../lib/expo-push";
 
 const m = vi.mocked(prisma, true);
 
 beforeEach(() => {
   vi.clearAllMocks();
   vi.unstubAllGlobals();
+  m.pushTicket.createMany.mockResolvedValue({ count: 0 } as never);
 });
 
 describe("pushTokensService.register — real Expo token format validation (architecture doc §5 requirement #6)", () => {
@@ -39,8 +41,18 @@ describe("pushTokensService.register — real Expo token format validation (arch
     m.pushToken.upsert.mockResolvedValue({ id: "pt-1", userId: "u1", token: "ExponentPushToken[abc123]", platform: "android", createdAt: new Date() });
     await pushTokensService.register("u1", "ExponentPushToken[abc123]", "android");
     expect(m.pushToken.upsert).toHaveBeenCalledWith(
-      expect.objectContaining({ where: { userId_token: { userId: "u1", token: "ExponentPushToken[abc123]" } } }),
+      expect.objectContaining({ where: { token: "ExponentPushToken[abc123]" } }),
     );
+  });
+
+  it("re-registering the SAME token under a DIFFERENT user reassigns it, rather than creating a stale second row — a device only belongs to whoever is currently signed into it", async () => {
+    m.pushToken.upsert.mockResolvedValue({ id: "pt-1", userId: "u2", token: "ExponentPushToken[shared-device]", platform: "ios", createdAt: new Date() });
+    await pushTokensService.register("u2", "ExponentPushToken[shared-device]", "ios");
+    expect(m.pushToken.upsert).toHaveBeenCalledWith({
+      where: { token: "ExponentPushToken[shared-device]" },
+      update: { userId: "u2", platform: "ios" },
+      create: { userId: "u2", token: "ExponentPushToken[shared-device]", platform: "ios" },
+    });
   });
 });
 
@@ -90,6 +102,96 @@ describe("sendExpoPush — the actual relay to Expo's push API (architecture doc
   it("never throws when Expo's API returns a non-200", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: false, status: 500, text: async () => "server error" }));
     await expect(sendExpoPush([{ to: "ExponentPushToken[abc123]", title: "Hi", body: "There" }])).resolves.toBeUndefined();
+  });
+
+  it("persists an accepted ticket for a later real receipt check — a ticket status of 'ok' is only Expo's queue-acceptance, not proof of APNs/FCM delivery", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, json: async () => ({ data: [{ status: "ok", id: "ticket-xyz" }] }) }));
+
+    await sendExpoPush([{ to: "ExponentPushToken[abc123]", title: "Hi", body: "There" }], [{ userId: "buyer-1" }]);
+
+    expect(m.pushTicket.createMany).toHaveBeenCalledWith({
+      data: [{ ticketId: "ticket-xyz", token: "ExponentPushToken[abc123]", userId: "buyer-1" }],
+      skipDuplicates: true,
+    });
+  });
+
+  it("does not persist a ticket when no userId context is given (nothing to check receipts against)", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, json: async () => ({ data: [{ status: "ok", id: "ticket-xyz" }] }) }));
+
+    await sendExpoPush([{ to: "ExponentPushToken[abc123]", title: "Hi", body: "There" }]);
+
+    expect(m.pushTicket.createMany).not.toHaveBeenCalled();
+  });
+});
+
+describe("checkPushReceipts — the real proof of delivery a ticket alone can never give", () => {
+  it("does nothing (no Expo API call) when no tickets are old enough to check yet", async () => {
+    m.pushTicket.findMany.mockResolvedValue([]);
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await checkPushReceipts();
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(result).toEqual({ checked: 0, invalidated: 0, errors: 0 });
+  });
+
+  it("removes the push token when the REAL receipt (not the ticket) reports DeviceNotRegistered", async () => {
+    m.pushTicket.findMany.mockResolvedValue([
+      { id: "pt-1", ticketId: "ticket-1", token: "ExponentPushToken[stale]", userId: "buyer-1", createdAt: new Date() },
+    ] as never);
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ data: { "ticket-1": { status: "error", details: { error: "DeviceNotRegistered" } } } }),
+    }));
+    m.pushToken.deleteMany.mockResolvedValue({ count: 1 } as never);
+
+    const result = await checkPushReceipts();
+
+    expect(m.pushToken.deleteMany).toHaveBeenCalledWith({ where: { token: "ExponentPushToken[stale]" } });
+    expect(result).toEqual({ checked: 1, invalidated: 1, errors: 0 });
+    // The checked ticket is always cleaned up, regardless of outcome.
+    expect(m.pushTicket.deleteMany).toHaveBeenCalledWith({ where: { id: { in: ["pt-1"] } } });
+  });
+
+  it("classifies a real APNs/FCM-level failure (e.g. bad credentials) instead of silently discarding it — this is exactly what a ticket-only check can never surface", async () => {
+    m.pushTicket.findMany.mockResolvedValue([
+      { id: "pt-2", ticketId: "ticket-2", token: "ExponentPushToken[abc]", userId: "buyer-2", createdAt: new Date() },
+    ] as never);
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ data: { "ticket-2": { status: "error", details: { error: "InvalidCredentials" } } } }),
+    }));
+
+    const result = await checkPushReceipts();
+
+    expect(m.pushToken.deleteMany).not.toHaveBeenCalled();
+    expect(result).toEqual({ checked: 1, invalidated: 0, errors: 1 });
+  });
+
+  it("does not remove a token or count an error for a genuinely successful receipt", async () => {
+    m.pushTicket.findMany.mockResolvedValue([
+      { id: "pt-3", ticketId: "ticket-3", token: "ExponentPushToken[good]", userId: "buyer-3", createdAt: new Date() },
+    ] as never);
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ data: { "ticket-3": { status: "ok" } } }),
+    }));
+
+    const result = await checkPushReceipts();
+
+    expect(m.pushToken.deleteMany).not.toHaveBeenCalled();
+    expect(result).toEqual({ checked: 1, invalidated: 0, errors: 0 });
+  });
+
+  it("never throws when Expo's receipts API is unreachable, and still cleans up the pending tickets", async () => {
+    m.pushTicket.findMany.mockResolvedValue([
+      { id: "pt-4", ticketId: "ticket-4", token: "ExponentPushToken[x]", userId: "buyer-4", createdAt: new Date() },
+    ] as never);
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("network down")));
+
+    await expect(checkPushReceipts()).resolves.toEqual({ checked: 1, invalidated: 0, errors: 0 });
+    expect(m.pushTicket.deleteMany).toHaveBeenCalledWith({ where: { id: { in: ["pt-4"] } } });
   });
 });
 

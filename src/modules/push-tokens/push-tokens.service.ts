@@ -10,10 +10,15 @@ export const pushTokensService = {
       throw new AppError("Invalid Expo push token format", 400);
     }
 
-    // Upsert: if token already exists for this user, just return it
+    // token is globally unique — a device installation belongs to exactly
+    // one user at a time. If this exact token was previously registered
+    // under a DIFFERENT user (logout, then a different account signs in on
+    // the same device), re-registering it here reassigns it to the current
+    // user instead of leaving a stale second row that would keep pushing
+    // to a device its old owner is no longer signed into.
     return prisma.pushToken.upsert({
-      where: { userId_token: { userId, token } },
-      update: { platform },
+      where: { token },
+      update: { userId, platform },
       create: { userId, token, platform },
     });
   },

@@ -1327,15 +1327,36 @@ model SmsDelivery {
 
 // ─── Push Notifications (Expo) ──────────────────────────────────────────────
 
+// A push token identifies one device installation, not one user — the
+// same physical device can only ever be logged into one account at a
+// time. `token` is globally unique (not scoped to userId) so that
+// re-registering the same token under a different user (logout, then a
+// different account logs in on the same device) REPLACES the previous
+// association instead of leaving a second row that would keep pushing
+// notifications to a device the original user is no longer signed into.
 model PushToken {
   id        String   @id @default(cuid())
   userId    String
-  token     String
+  token     String   @unique
   platform  String?
   createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  @@unique([userId, token])
   @@index([userId])
+}
+
+// A ticket Expo returned status "ok" for — accepted into Expo's queue, NOT
+// proof APNs/FCM delivered it. Held here until checkPushReceipts() (an
+// internal cron sweep) fetches the real receipt after a delay and reports
+// the actual delivery outcome; rows are deleted once checked either way.
+model PushTicket {
+  id        String   @id @default(cuid())
+  ticketId  String   @unique
+  token     String
+  userId    String
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
 }
 
 // ─── Domestic Africa Escrow ─────────────────────────────────────────────────
