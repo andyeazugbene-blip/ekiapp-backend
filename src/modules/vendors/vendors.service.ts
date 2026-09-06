@@ -4,7 +4,7 @@ import type { PayoutMethod, Vendor } from "@prisma/client";
 import { env } from "../../config/env";
 import { prisma } from "../../lib/prisma";
 import { AppError } from "../../shared/errors/app-error";
-import { currencyFromCountry } from "../../shared/currency";
+import { currencyFromCountry, resolveMarketCode } from "../../shared/currency";
 import { resolveUniqueSlug } from "../../shared/utils/slug";
 import type {
   CreatePayoutMethodInput,
@@ -37,6 +37,25 @@ async function generateUniqueStoreSlug(storeName: string): Promise<string> {
     });
     return existing !== null;
   });
+}
+
+/**
+ * Vendor onboarding must never accept a country outside the 10 approved
+ * launch markets (backend was previously fully ungated here — see the
+ * admin QA finding that the mobile app's country picker offered 12 African
+ * countries plus Germany/Netherlands/Ireland and defaulted new vendors to
+ * "Nigeria"). Uses the same resolveMarketCode() normalization as Community
+ * Buy/Regular Deliveries so there is exactly one place that defines "which
+ * countries are launched." An unchanged value (a vendor re-saving their
+ * existing profile without touching country) is always allowed, even if it
+ * predates this gate, so existing accounts are never locked out.
+ */
+function assertApprovedLaunchCountry(country: string | null | undefined, currentCountry?: string | null): void {
+  if (!country) return;
+  if (currentCountry && country.trim().toLowerCase() === currentCountry.trim().toLowerCase()) return;
+  if (!resolveMarketCode(country)) {
+    throw new AppError(`"${country}" is not one of Eki's currently approved launch markets`, 400);
+  }
 }
 
 async function ensureStoreNameAvailable(storeName: string, excludeVendorId?: string): Promise<void> {
@@ -176,6 +195,8 @@ export const vendorsService = {
   },
 
   async createVendor(userId: string, input: CreateVendorInput): Promise<Vendor> {
+    assertApprovedLaunchCountry(input.country);
+
     const existing = await prisma.vendor.findUnique({ where: { userId } });
     if (existing) {
       throw new AppError("Vendor profile already exists", 409);
@@ -249,6 +270,10 @@ export const vendorsService = {
     const vendor = await prisma.vendor.findUnique({ where: { userId } });
     if (!vendor) {
       throw new AppError("Vendor profile not found", 404);
+    }
+
+    if (input.country !== undefined) {
+      assertApprovedLaunchCountry(input.country, vendor.country);
     }
 
     if (

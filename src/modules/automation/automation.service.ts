@@ -210,7 +210,7 @@ export const automationService = {
       });
 
       try {
-        await communicationService.send({
+        const result = await communicationService.send({
           eventKey: automationEventKey(input.type),
           recipientId: input.recipientUserId,
           recipientEmail: recipient?.email,
@@ -224,10 +224,31 @@ export const automationService = {
           // and is silently skipped instead of double-notifying the user.
           dedupeKey: run.dedupeKey,
         });
-        await prisma.automationRun.update({
-          where: { id: run.id },
-          data: { status: "SENT", sentAt: new Date() },
-        });
+
+        // Status truth: SENT must mean the communication layer actually
+        // accepted and dispatched it on at least one channel. Previously
+        // this branch always wrote "SENT" as long as send() didn't throw —
+        // but send() never throws for a disabled/missing template, so a
+        // fully suppressed communication (e.g. an admin disabled
+        // "automation_renewal_reminder" from the Communications page)
+        // showed as a normal successful run on the admin Automation
+        // Activity page, indistinguishable from a real delivery.
+        if (result.outcome === "SENT") {
+          await prisma.automationRun.update({
+            where: { id: run.id },
+            data: { status: "SENT", sentAt: new Date() },
+          });
+        } else if (result.outcome === "SUPPRESSED") {
+          await prisma.automationRun.update({
+            where: { id: run.id },
+            data: { status: "SUPPRESSED", suppressedReason: result.reason ?? "Suppressed" },
+          });
+        } else {
+          await prisma.automationRun.update({
+            where: { id: run.id },
+            data: { status: "FAILED", failureReason: result.reason ?? "Every channel failed to dispatch" },
+          });
+        }
       } catch (error) {
         await prisma.automationRun.update({
           where: { id: run.id },
@@ -292,11 +313,20 @@ export const automationService = {
 
   async adminSummary() {
     const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
-    const [byType, byStatus, recentFailures] = await Promise.all([
+    const [byType, byStatus, recentFailures, recentSuppressed] = await Promise.all([
       prisma.automationRun.groupBy({ by: ["type"], where: { createdAt: { gte: since } }, _count: { id: true } }),
       prisma.automationRun.groupBy({ by: ["status"], where: { createdAt: { gte: since } }, _count: { id: true } }),
       prisma.automationRun.findMany({
         where: { status: "FAILED", createdAt: { gte: since } },
+        orderBy: { createdAt: "desc" },
+        take: 20,
+      }),
+      // Runs that were correctly NOT sent (disabled/missing template, or no
+      // eligible channel) — a real, honest outcome distinct from both
+      // "sent" and "failed," now surfaced instead of being indistinguishable
+      // from a genuine successful send.
+      prisma.automationRun.findMany({
+        where: { status: "SUPPRESSED", createdAt: { gte: since } },
         orderBy: { createdAt: "desc" },
         take: 20,
       }),
@@ -305,6 +335,7 @@ export const automationService = {
       byType: byType.map((t) => ({ type: t.type, count: t._count.id })),
       byStatus: byStatus.map((s) => ({ status: s.status, count: s._count.id })),
       recentFailures,
+      recentSuppressed,
     };
   },
 };

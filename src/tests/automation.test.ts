@@ -98,7 +98,7 @@ describe("automationService.scheduleAutomation", () => {
     m.user.findUnique.mockResolvedValueOnce({ isSuspended: false, marketingConsentAt: new Date() } as never);
     m.automationRun.create.mockResolvedValue({ id: "run-2" } as never);
     m.user.findUnique.mockResolvedValueOnce({ name: "Buyer", email: "b@eki.app" } as never);
-    mSend.mockResolvedValue(undefined as never);
+    mSend.mockResolvedValue({ outcome: "SENT" } as never);
 
     await automationService.scheduleAutomation(baseInput);
 
@@ -132,6 +132,50 @@ describe("automationService.scheduleAutomation", () => {
 
     expect(m.automationRun.update).toHaveBeenCalledWith(
       expect.objectContaining({ where: { id: "run-3" }, data: expect.objectContaining({ status: "FAILED" }) }),
+    );
+  });
+
+  /**
+   * Status-truth regression: an AutomationRun used to be marked SENT purely
+   * because communicationService.send() didn't throw — but send() never
+   * throws for a disabled/missing template (or when no channel could be
+   * attempted), so a fully suppressed communication was indistinguishable
+   * from a genuine delivery on the admin Automation Activity page. send()
+   * now reports its real outcome, and scheduleAutomation() must honor it.
+   */
+  it("marks the run SUPPRESSED (not SENT) when the communication layer reports the template was disabled/missing", async () => {
+    m.user.findUnique.mockResolvedValueOnce({ isSuspended: false, marketingConsentAt: new Date() } as never);
+    m.automationRun.create.mockResolvedValue({ id: "run-4" } as never);
+    m.user.findUnique.mockResolvedValueOnce({ name: "Buyer", email: "b@eki.app" } as never);
+    mSend.mockResolvedValue({ outcome: "SUPPRESSED", reason: "Template disabled" } as never);
+
+    await automationService.scheduleAutomation(baseInput);
+
+    expect(m.automationRun.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: "run-4" },
+        data: expect.objectContaining({ status: "SUPPRESSED", suppressedReason: "Template disabled" }),
+      }),
+    );
+    // Explicitly NOT marked SENT or FAILED.
+    const call = m.automationRun.update.mock.calls.find((c: any) => c[0].where.id === "run-4");
+    expect(call?.[0].data.status).not.toBe("SENT");
+    expect(call?.[0].data.status).not.toBe("FAILED");
+  });
+
+  it("marks the run FAILED (with the real reason) when every channel failed to dispatch, even though send() didn't throw", async () => {
+    m.user.findUnique.mockResolvedValueOnce({ isSuspended: false, marketingConsentAt: new Date() } as never);
+    m.automationRun.create.mockResolvedValue({ id: "run-5" } as never);
+    m.user.findUnique.mockResolvedValueOnce({ name: "Buyer", email: "b@eki.app" } as never);
+    mSend.mockResolvedValue({ outcome: "FAILED", reason: "Every channel failed to dispatch" } as never);
+
+    await automationService.scheduleAutomation(baseInput);
+
+    expect(m.automationRun.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: "run-5" },
+        data: expect.objectContaining({ status: "FAILED", failureReason: "Every channel failed to dispatch" }),
+      }),
     );
   });
 });

@@ -177,6 +177,20 @@ interface SendParams {
   dedupeKey?: string;
 }
 
+/**
+ * Real outcome of a send() call, distinct from "did the promise resolve
+ * without throwing" (which was always true, even when nothing was actually
+ * delivered). A caller that only checked "did send() throw" — as
+ * automationService.scheduleAutomation() used to — could not tell a
+ * genuinely delivered communication from one silently skipped because its
+ * template was disabled, or one where every channel actually failed.
+ */
+export type SendOutcome = "SENT" | "SUPPRESSED" | "FAILED";
+export interface SendResult {
+  outcome: SendOutcome;
+  reason?: string;
+}
+
 async function resolveTemplate(eventKey: string): Promise<CommunicationTemplate | null> {
   try {
     const dbTemplate = await prisma.communicationTemplate.findUnique({ where: { key: eventKey } });
@@ -197,22 +211,27 @@ async function resolveTemplate(eventKey: string): Promise<CommunicationTemplate 
 }
 
 export const communicationService = {
-  async send(params: SendParams): Promise<void> {
+  async send(params: SendParams): Promise<SendResult> {
     const template = await resolveTemplate(params.eventKey);
     if (!template || !template.enabled) {
       logger.info("Communication skipped: template disabled or not found", { eventKey: params.eventKey });
-      return;
+      return { outcome: "SUPPRESSED", reason: `Template "${params.eventKey}" is disabled or does not exist` };
     }
 
     const title = interpolate(template.title, params.variables);
     const body = interpolate(template.body, params.variables);
 
-    const promises: Promise<void>[] = [];
+    // Each channel resolves to whether it actually dispatched — never
+    // rejects — so send() can report a real aggregate outcome instead of
+    // just "the promise didn't throw" (which was always true).
+    const promises: Promise<boolean>[] = [];
+    let attemptedAnyChannel = false;
 
     for (const channel of template.channels) {
       switch (channel) {
         case "email":
           if (params.recipientEmail) {
+            attemptedAnyChannel = true;
             const html = wrapEmailHtml(title, body);
             promises.push(
               enqueueEmail({ to: params.recipientEmail, subject: title, html })
@@ -224,7 +243,7 @@ export const communicationService = {
                   title,
                   body,
                   status: "QUEUED",
-                }))
+                }).then(() => true))
                 .catch((err) => {
                   logger.warn("Communication email failed", { eventKey: params.eventKey, error: String(err) });
                   return logCommunication({
@@ -236,13 +255,14 @@ export const communicationService = {
                     body,
                     status: "FAILED",
                     metadata: { error: String(err) },
-                  });
+                  }).then(() => false);
                 }),
             );
           }
           break;
 
         case "push":
+          attemptedAnyChannel = true;
           promises.push(
             sendPushToUser(params.recipientId, { title, body, data: { type: params.eventKey } })
               .then(() => logCommunication({
@@ -252,7 +272,7 @@ export const communicationService = {
                 channel: "push",
                 title,
                 body,
-              }))
+              }).then(() => true))
               .catch((err) => {
                 logger.warn("Communication push failed", { eventKey: params.eventKey, error: String(err) });
                 return logCommunication({
@@ -263,12 +283,13 @@ export const communicationService = {
                   title,
                   body,
                   status: "FAILED",
-                });
+                }).then(() => false);
               }),
           );
           break;
 
         case "in_app":
+          attemptedAnyChannel = true;
           promises.push(
             notificationsService.create({
               userId: params.recipientId,
@@ -278,14 +299,19 @@ export const communicationService = {
               data: { eventKey: params.eventKey },
               dedupeKey: params.dedupeKey,
             })
-              .then(() => logCommunication({
+              .then((created) => logCommunication({
                 recipientId: params.recipientId,
                 recipientType: template.recipientType,
                 eventKey: params.eventKey,
                 channel: "in_app",
                 title,
                 body,
-              }))
+                // created === null means a Notification already existed
+                // under this exact dedupeKey (e.g. a caller like
+                // renewals.service.ts already created it directly) — the
+                // recipient IS notified, just not by this write, so this
+                // still counts as delivered, not failed.
+              }).then(() => true))
               .catch((err) => {
                 logger.warn("Communication in-app failed", { eventKey: params.eventKey, error: String(err) });
                 return logCommunication({
@@ -296,14 +322,24 @@ export const communicationService = {
                   title,
                   body,
                   status: "FAILED",
-                });
+                }).then(() => false);
               }),
           );
           break;
       }
     }
 
-    await Promise.allSettled(promises);
+    if (!attemptedAnyChannel) {
+      // Every configured channel was structurally skippable (e.g. the only
+      // channel was "email" and the caller had no recipientEmail) — nothing
+      // was ever attempted, which is a suppression, not a silent success.
+      return { outcome: "SUPPRESSED", reason: "No eligible channel to dispatch on (e.g. no recipient email for an email-only template)" };
+    }
+
+    const results = await Promise.allSettled(promises);
+    const anyDelivered = results.some((r) => r.status === "fulfilled" && r.value === true);
+    if (anyDelivered) return { outcome: "SENT" };
+    return { outcome: "FAILED", reason: "Every channel failed to dispatch" };
   },
 
   logOnly: logCommunication,

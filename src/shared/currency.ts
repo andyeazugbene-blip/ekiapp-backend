@@ -98,6 +98,39 @@ export function countryNamesForMarketCode(countryCode: string): string[] {
   return MARKET_CODE_COUNTRY_NAMES[key] ?? [countryCode];
 }
 
+/**
+ * Every approved launch market's canonical ISO code, keyed by every raw
+ * spelling that may appear in free-text country fields (OrganiserProfile.
+ * country, SupplierProfile.country, CommunityCampaign.country, Vendor.
+ * country, ...) — the reverse of countryNamesForMarketCode. Built once from
+ * the same MARKET_CODE_COUNTRY_NAMES table so there is exactly one place
+ * that defines "which countries are the 10 launch markets."
+ */
+const COUNTRY_NAME_TO_MARKET_CODE: Record<string, string> = Object.entries(MARKET_CODE_COUNTRY_NAMES)
+  .reduce<Record<string, string>>((acc, [code, names]) => {
+    acc[code] = code.toUpperCase();
+    for (const name of names) acc[name.toLowerCase()] = code.toUpperCase();
+    return acc;
+  }, {});
+
+/**
+ * Resolve ANY raw country representation (a full name like "United Kingdom",
+ * a common alias like "UK", or an ISO code like "gb") to its
+ * MarketConfiguration.countryCode. Returns null for a country that isn't
+ * one of the 10 approved launch markets — callers must treat that as "not
+ * a recognized market" (fail closed), not silently pass the raw string
+ * through to a countryCode-keyed lookup that will just never match.
+ */
+export function resolveMarketCode(rawCountry: string | null | undefined): string | null {
+  if (!rawCountry) return null;
+  return COUNTRY_NAME_TO_MARKET_CODE[rawCountry.trim().toLowerCase()] ?? null;
+}
+
+/** The exact set of approved launch markets' canonical display names, for UI pickers. One name per code — the first entry in MARKET_CODE_COUNTRY_NAMES. */
+export const LAUNCH_MARKET_COUNTRIES: { code: string; name: string }[] = Object.entries(MARKET_CODE_COUNTRY_NAMES).map(
+  ([code, names]) => ({ code: code.toUpperCase(), name: names[0] }),
+);
+
 
 /**
  * Currencies supported by the project's Stripe account (Italy-based).

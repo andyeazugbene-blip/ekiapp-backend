@@ -1,6 +1,7 @@
 import type { CommunityBuyPaymentMode, MarketPaymentMode, SupplierReleasePolicy } from "@prisma/client";
 
 import { prisma } from "../../lib/prisma";
+import { resolveMarketCode } from "../../shared/currency";
 
 /**
  * Every market approved for the current launch scope (client mandate
@@ -55,9 +56,22 @@ export const marketConfigurationService = {
     }
   },
 
+  /**
+   * Accepts either a real MarketConfiguration.countryCode ("GB") or any raw
+   * free-text country representation that might be stored on OrganiserProfile
+   * .country / SupplierProfile.country / CommunityCampaign.country / Vendor
+   * .country ("United Kingdom", "UK", "gb", ...) — normalizes through
+   * resolveMarketCode() first. Previously this did a literal countryCode
+   * lookup only, so every caller passing a full country name (which is what
+   * request.body.country / campaign.country actually contain in real usage)
+   * silently got null back and every gated action ("Community Buy is not
+   * available in this market yet") incorrectly rejected even fully-enabled
+   * markets.
+   */
   async get(countryCode: string) {
     await this.ensureDefaults();
-    return prisma.marketConfiguration.findUnique({ where: { countryCode } });
+    const resolved = resolveMarketCode(countryCode) ?? countryCode.trim().toUpperCase();
+    return prisma.marketConfiguration.findUnique({ where: { countryCode: resolved } });
   },
 
   async list() {
