@@ -1,6 +1,7 @@
 import type { Request, Response } from "express";
 
 import { AppError } from "../../shared/errors/app-error";
+import { recordAudit } from "../../shared/utils/audit";
 import { disputeService } from "./dispute.service";
 
 /**
@@ -69,6 +70,21 @@ export async function adminResolveDispute(request: Request, response: Response):
     note: note.trim(),
     refundAmount: typeof refundAmount === "number" ? refundAmount : undefined,
     fraudulent: fraudulent === true,
+  });
+
+  await recordAudit({
+    actorId: request.user.id,
+    action: "dispute.resolved",
+    entityType: "Dispute",
+    entityId: disputeId,
+    metadata: {
+      resolution,
+      refundAmount: typeof refundAmount === "number" ? refundAmount : null,
+      fraudulent: fraudulent === true,
+      resultStatus: result.status,
+    },
+    reason: note.trim(),
+    request,
   });
 
   response.status(200).json(result);

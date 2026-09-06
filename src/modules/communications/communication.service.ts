@@ -165,6 +165,16 @@ interface SendParams {
   recipientEmail?: string;
   variables: Record<string, string>;
   notificationType?: NotificationType;
+  /**
+   * Threaded through to notificationsService.create()'s in_app write.
+   * Callers that already created their own Notification for this exact
+   * event (e.g. renewals.service.ts's direct enqueue() before calling
+   * automationService.scheduleAutomation()) should pass the SAME dedupe
+   * key here so this in_app write collides against it and is silently
+   * skipped, instead of creating a second Notification + push for one
+   * logical event.
+   */
+  dedupeKey?: string;
 }
 
 async function resolveTemplate(eventKey: string): Promise<CommunicationTemplate | null> {
@@ -266,6 +276,7 @@ export const communicationService = {
               title,
               body,
               data: { eventKey: params.eventKey },
+              dedupeKey: params.dedupeKey,
             })
               .then(() => logCommunication({
                 recipientId: params.recipientId,

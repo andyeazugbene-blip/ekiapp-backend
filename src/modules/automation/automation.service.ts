@@ -216,6 +216,13 @@ export const automationService = {
           recipientEmail: recipient?.email,
           variables: { name: recipient?.name ?? "there", ...(input.data as Record<string, string> | undefined) },
           notificationType: "AUTOMATION_MESSAGE",
+          // Same key as this run's own dedupeKey (below). If a caller already
+          // created its own in-app Notification for this exact event (e.g.
+          // renewals.service.ts calling notificationsService.enqueue()
+          // directly before scheduling this automation, using the identical
+          // `${type}:${subjectKey}` key), this second in-app write collides
+          // and is silently skipped instead of double-notifying the user.
+          dedupeKey: run.dedupeKey,
         });
         await prisma.automationRun.update({
           where: { id: run.id },

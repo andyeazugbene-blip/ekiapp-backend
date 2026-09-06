@@ -423,7 +423,7 @@ adminRouter.patch("/reports/:id", asyncHandler(requireAdminPermission("reports.m
 // Escrow disputes
 adminRouter.get("/disputes", asyncHandler(requireAdminPermission("disputes.read")), asyncHandler(adminListDisputes));
 adminRouter.get("/disputes/:id", asyncHandler(requireAdminPermission("disputes.read")), asyncHandler(adminGetDispute));
-adminRouter.patch("/disputes/:id/resolve", asyncHandler(requireAdminPermission("disputes.mutate")), asyncHandler(adminResolveDispute));
+adminRouter.patch("/disputes/:id/resolve", asyncHandler(requireAdminPermission("disputes.mutate")), asyncHandler(require2fa), asyncHandler(adminResolveDispute));
 
 // Real Stripe chargebacks (architecture doc §15.3 "Chargebacks") — distinct
 // from the buyer/vendor Dispute model above.

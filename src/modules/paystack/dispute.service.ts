@@ -173,6 +173,31 @@ export const disputeService = {
 
     let resolvedStatus: "RESOLVED_VENDOR" | "RESOLVED_BUYER" | "RESOLVED_PARTIAL";
 
+    // Any resolution that owes the buyer money must actually move that money
+    // BEFORE the dispute/order are marked resolved. Previously the DB
+    // transaction below committed status: REFUNDED first, then attempted the
+    // real Paystack refund afterward with only a log line on failure — a
+    // dispute could show "resolved, buyer refunded" while no refund had
+    // happened (provider error), with no way to retry (re-resolving an
+    // already-resolved dispute correctly 409s). Same shape as the four-eyes
+    // approval execution-ordering bug fixed earlier: execute the real
+    // side-effect first, only commit the terminal state on success.
+    const needsRefund = input.resolution === "buyer" || (input.resolution === "partial" && !!input.refundAmount);
+    if (needsRefund) {
+      const refundRef = dispute.order.paystackTransaction?.reference;
+      if (!refundRef) {
+        throw new AppError("Cannot resolve in the buyer's favour: no payment reference found for this order to refund", 409);
+      }
+      const amount = input.resolution === "buyer" ? undefined : input.refundAmount;
+      try {
+        await paystack.refundTransaction(refundRef, amount);
+        logger.info("Dispute refund issued", { disputeId, refundRef, amount });
+      } catch (err) {
+        logger.error("Dispute refund failed — dispute left OPEN for retry", { disputeId, error: String(err) });
+        throw new AppError("Refund failed with the payment provider. The dispute was not resolved — you can retry.", 502);
+      }
+    }
+
     await prisma.$transaction(async (tx) => {
       if (input.resolution === "vendor") {
         resolvedStatus = "RESOLVED_VENDOR";
@@ -185,7 +210,7 @@ export const disputeService = {
       } else if (input.resolution === "buyer") {
         resolvedStatus = "RESOLVED_BUYER";
 
-        // Full refund — mark order REFUNDED
+        // Full refund already issued above — mark order REFUNDED
         await tx.order.update({
           where: { id: dispute.orderId },
           data: { status: "REFUNDED" },
@@ -193,7 +218,7 @@ export const disputeService = {
       } else {
         resolvedStatus = "RESOLVED_PARTIAL";
 
-        // Partial resolution
+        // Partial refund (if any) already issued above
         await tx.order.update({
           where: { id: dispute.orderId },
           data: { status: "COMPLETED", deliveredAt: new Date() },
@@ -221,20 +246,6 @@ export const disputeService = {
         });
       }
     });
-
-    // Post-transaction: handle Paystack refund for buyer resolution
-    if (input.resolution === "buyer" || (input.resolution === "partial" && input.refundAmount)) {
-      const refundRef = dispute.order.paystackTransaction?.reference;
-      if (refundRef) {
-        try {
-          const amount = input.resolution === "buyer" ? undefined : input.refundAmount;
-          await paystack.refundTransaction(refundRef, amount);
-          logger.info("Dispute refund issued", { disputeId, refundRef, amount });
-        } catch (err) {
-          logger.error("Dispute refund failed", { disputeId, error: String(err) });
-        }
-      }
-    }
 
     // If resolved in vendor's favour, release wallet earnings and initiate payout
     if (input.resolution === "vendor") {
