@@ -264,10 +264,19 @@ adminRouter.post("/community-campaigns/:id/supplier-payment/release", asyncHandl
 adminRouter.post("/community-campaigns/:id/supplier-payment/hold", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(require2fa), asyncHandler(adminHoldSupplierPayment));
 
 // Four-eyes approvals (architecture doc §7) — generic across gated action
-// types. roles.mutate reused as the permission gate since deciding an
-// approval is itself a role/authority-level action, not tied to one module.
-adminRouter.get("/approvals", asyncHandler(requireAdminPermission("roles.read")), asyncHandler(adminListPendingApprovals));
-adminRouter.post("/approvals/:id/decide", asyncHandler(requireAdminPermission("roles.mutate")), asyncHandler(require2fa), asyncHandler(adminDecideApproval));
+// types. Deciding a specific pending approval uses its own approvals.read/
+// approvals.decide permissions (granted to the operational roles whose
+// mutate actions actually trigger four-eyes: Refund Ops, Payment Ops,
+// Campaign Reviewer, Supplier Settlement) so that a *different* operational
+// admin — not only a Super Administrator — can be the second pair of eyes.
+// Previously this reused roles.read/roles.mutate, which none of those
+// operational roles hold, meaning only Super Administrator accounts could
+// ever decide an approval — defeating the point of a role-gated four-eyes
+// control. approval-rules (the threshold policy itself, not an individual
+// decision) intentionally stays on roles.read/roles.mutate: changing what
+// requires approval is a higher-privilege, authority-level setting.
+adminRouter.get("/approvals", asyncHandler(requireAdminPermission("approvals.read")), asyncHandler(adminListPendingApprovals));
+adminRouter.post("/approvals/:id/decide", asyncHandler(requireAdminPermission("approvals.decide")), asyncHandler(require2fa), asyncHandler(adminDecideApproval));
 adminRouter.get("/approval-rules", asyncHandler(requireAdminPermission("roles.read")), asyncHandler(adminListApprovalRules));
 adminRouter.put("/approval-rules/:actionType", asyncHandler(requireAdminPermission("roles.mutate")), asyncHandler(require2fa), asyncHandler(adminUpsertApprovalRule));
 adminRouter.get("/community-buy/markets", asyncHandler(requireAdminPermission("community_buy.read")), asyncHandler(adminListMarketConfigurations));

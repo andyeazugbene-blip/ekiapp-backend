@@ -45,6 +45,8 @@ export const ADMIN_PERMISSIONS = [
   "audit.read",
   "reports.read",
   "reports.mutate",
+  "approvals.read",
+  "approvals.decide",
 ] as const;
 
 export type AdminPermission = (typeof ADMIN_PERMISSIONS)[number];
@@ -100,22 +102,30 @@ const DEFAULT_ROLES: { name: string; description: string; permissions: AdminPerm
   {
     name: "Campaign Reviewer",
     description: "Approves/rejects Community Buy campaigns and Hot Deal campaigns. NOTE: shares community_buy.mutate with Refund Ops and Supplier Settlement — no finer split exists yet.",
-    permissions: ["campaigns.read", "campaigns.mutate", "community_buy.read", "community_buy.mutate"],
+    permissions: ["campaigns.read", "campaigns.mutate", "community_buy.read", "community_buy.mutate", "approvals.read", "approvals.decide"],
   },
   {
     name: "Payment Operations",
     description: "Manages payouts and escrow visibility.",
-    permissions: ["payments.mutate", "payouts.read", "payouts.mutate", "escrow.read"],
+    // orders.read: needed to view the /payments, /wallet-transactions and
+    // /orders/:id records their payments.mutate actions actually operate on
+    // — without it this role could execute payment actions but never look
+    // up what it was acting on through the admin API.
+    permissions: ["orders.read", "payments.mutate", "payouts.read", "payouts.mutate", "escrow.read", "approvals.read", "approvals.decide"],
   },
   {
     name: "Refund Operations",
     description: "Processes order and Community Buy refunds. NOTE: shares community_buy.mutate — see Campaign Reviewer.",
-    permissions: ["payments.mutate", "disputes.read", "disputes.mutate", "community_buy.read", "community_buy.mutate"],
+    // orders.read: needed to view /orders, /orders/:id, /refunds — the
+    // exact records this role's payments.mutate actually refunds. Without
+    // it, refunds could only ever be executed blind (order id supplied by
+    // someone else), which does not match the role's stated job.
+    permissions: ["orders.read", "payments.mutate", "disputes.read", "disputes.mutate", "community_buy.read", "community_buy.mutate", "approvals.read", "approvals.decide"],
   },
   {
     name: "Supplier Settlement",
     description: "Releases/holds Community Buy supplier payments. NOTE: shares community_buy.mutate — see Campaign Reviewer.",
-    permissions: ["community_buy.read", "community_buy.mutate"],
+    permissions: ["community_buy.read", "community_buy.mutate", "approvals.read", "approvals.decide"],
   },
   {
     name: "Risk / Fraud",
