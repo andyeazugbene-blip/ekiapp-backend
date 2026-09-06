@@ -1,5 +1,11 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { resolveMarketCode, countryNamesForMarketCode, LAUNCH_MARKET_COUNTRIES } from "../shared/currency";
+import {
+  resolveMarketCode,
+  countryNamesForMarketCode,
+  LAUNCH_MARKET_COUNTRIES,
+  marketCodeToCountryName,
+  isApprovedLaunchMarketCode,
+} from "../shared/currency";
 
 /**
  * Regression coverage for the Community Buy country-normalization bug:
@@ -62,6 +68,48 @@ describe("resolveMarketCode — the 10 approved launch markets, every real spell
         expect(resolveMarketCode(name)).toBe(code);
       }
     }
+  });
+});
+
+describe("marketCodeToCountryName — the display-name resolver (never a raw code visible to a user)", () => {
+  it.each(LAUNCH_MARKET_COUNTRIES.map((m) => [m.code, m.name] as const))(
+    "resolves %s to its canonical full name %s",
+    (code, expectedName) => {
+      expect(marketCodeToCountryName(code)).toBe(expectedName);
+    },
+  );
+
+  it("is case-insensitive", () => {
+    expect(marketCodeToCountryName("gb")).toBe("United Kingdom");
+    expect(marketCodeToCountryName("ch")).toBe("Switzerland");
+  });
+
+  it("returns null for a code outside the 10 launch markets — never fabricates a name for Africa or anywhere else", () => {
+    expect(marketCodeToCountryName("NG")).toBeNull();
+    expect(marketCodeToCountryName("GH")).toBeNull();
+    expect(marketCodeToCountryName("XX")).toBeNull();
+  });
+});
+
+describe("isApprovedLaunchMarketCode — Africa (and everything else) must be false", () => {
+  it("is true for exactly the 10 approved launch market codes", () => {
+    for (const { code } of LAUNCH_MARKET_COUNTRIES) {
+      expect(isApprovedLaunchMarketCode(code)).toBe(true);
+      expect(isApprovedLaunchMarketCode(code.toLowerCase())).toBe(true);
+    }
+  });
+
+  it("is false for Nigeria/Ghana and any other non-launch code", () => {
+    expect(isApprovedLaunchMarketCode("NG")).toBe(false);
+    expect(isApprovedLaunchMarketCode("GH")).toBe(false);
+    expect(isApprovedLaunchMarketCode("KE")).toBe(false);
+    expect(isApprovedLaunchMarketCode("ZA")).toBe(false);
+  });
+
+  it("is false for null/undefined/empty", () => {
+    expect(isApprovedLaunchMarketCode(null)).toBe(false);
+    expect(isApprovedLaunchMarketCode(undefined)).toBe(false);
+    expect(isApprovedLaunchMarketCode("")).toBe(false);
   });
 });
 
