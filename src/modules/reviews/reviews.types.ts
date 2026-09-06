@@ -17,6 +17,7 @@ export interface ListReviewsQuery {
 
 export interface AdminListReviewsQuery {
   status?: ReviewStatus;
+  q?: string;
   limit: number;
   cursor?: string;
 }

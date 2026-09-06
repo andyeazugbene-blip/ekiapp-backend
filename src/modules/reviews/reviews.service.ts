@@ -54,23 +54,52 @@ export const reviewsService = {
     return { items: items.map((r: any) => ({ id: r.id, vendorId: r.vendorId, productId: r.productId, rating: r.rating, comment: r.comment, buyerDisplayName: nameMap.get(r.buyerId) ?? "Anonymous", buyerName: nameMap.get(r.buyerId) ?? "Anonymous", createdAt: r.createdAt })), nextCursor, averageRating: agg._avg.rating, totalReviews };
   },
 
-  async adminListReviews(query: AdminListReviewsQuery): Promise<{ items: any[]; nextCursor: string | null }> {
-    const items = await prisma.review.findMany({
-      where: query.status ? { status: query.status } : {},
-      orderBy: CURSOR_ORDER_BY, take: query.limit + 1,
-      ...(query.cursor ? { cursor: { id: query.cursor }, skip: 1 } : {}),
-    });
+  async adminListReviews(query: AdminListReviewsQuery): Promise<{ items: any[]; nextCursor: string | null; counts: Record<string, number> }> {
+    const searchClause: Prisma.ReviewWhereInput = query.q
+      ? { OR: [{ comment: { contains: query.q, mode: "insensitive" } }] }
+      : {};
+    const where: Prisma.ReviewWhereInput = { ...(query.status ? { status: query.status } : {}), ...searchClause };
+
+    const [items, statusCounts] = await Promise.all([
+      prisma.review.findMany({
+        where,
+        orderBy: CURSOR_ORDER_BY, take: query.limit + 1,
+        ...(query.cursor ? { cursor: { id: query.cursor }, skip: 1 } : {}),
+      }),
+      // Real counts per status, independent of the current page/filter, so
+      // the admin UI can show accurate totals without loading every review
+      // (previously capped at a single 100-row fetch).
+      prisma.review.groupBy({ by: ["status"], _count: { id: true } }),
+    ]);
     let nextCursor: string | null = null;
     if (items.length > query.limit) { const next = items.pop(); nextCursor = next?.id ?? null; }
     const vids = [...new Set(items.map(r => r.vendorId))];
     const bids = [...new Set(items.map(r => r.buyerId))];
-    const [vendors, buyers] = await Promise.all([
+    const pids = [...new Set(items.map(r => r.productId).filter((id): id is string => !!id))];
+    const [vendors, buyers, products] = await Promise.all([
       vids.length ? prisma.vendor.findMany({ where: { id: { in: vids } }, select: { id: true, storeName: true } }) : [],
       bids.length ? prisma.user.findMany({ where: { id: { in: bids } }, select: { id: true, name: true } }) : [],
+      pids.length ? prisma.product.findMany({ where: { id: { in: pids } }, select: { id: true, title: true } }) : [],
     ]);
     const vm: Map<string, string> = new Map(); vendors.forEach((v: any) => vm.set(v.id, v.storeName));
     const bm: Map<string, string> = new Map(); buyers.forEach((b: any) => bm.set(b.id, b.name));
-    return { items: items.map(r => ({ ...r, vendorName: vm.get(r.vendorId) ?? null, buyerName: bm.get(r.buyerId) ?? null })), nextCursor };
+    // Review has no title column of its own — the admin-web table's
+    // "Product" column previously always rendered the literal fallback
+    // string "Product" for every row (real Review rows never had a
+    // .title field to fall back from). Join the real product title.
+    const pm: Map<string, string> = new Map(); products.forEach((p: any) => pm.set(p.id, p.title));
+    const counts: Record<string, number> = {};
+    for (const row of statusCounts) counts[row.status] = row._count.id;
+    return {
+      items: items.map(r => ({
+        ...r,
+        vendorName: vm.get(r.vendorId) ?? null,
+        buyerName: bm.get(r.buyerId) ?? null,
+        productTitle: r.productId ? (pm.get(r.productId) ?? null) : null,
+      })),
+      nextCursor,
+      counts,
+    };
   },
 
   async moderateReview(reviewId: string, adminId: string, input: ModerateReviewInput): Promise<Review> {

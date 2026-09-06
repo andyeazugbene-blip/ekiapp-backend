@@ -2,6 +2,13 @@ import { AppError } from "../../shared/errors/app-error";
 import type { AdminListReviewsQuery, CreateReviewInput, ListReviewsQuery, ModerateReviewInput } from "./reviews.types";
 
 const VALID_STATUSES = new Set(["APPROVED", "HIDDEN", "REJECTED"]);
+// The admin LIST query may filter for any real ReviewStatus, including
+// PENDING (new reviews start here) — VALID_STATUSES above is deliberately
+// narrower because it also gates what a review can be MODERATED to (you
+// can't moderate a review "to" pending), but reusing it for the list
+// filter meant an admin could never actually query for the pending-
+// moderation queue at all; ?status=PENDING was silently dropped.
+const VALID_QUERY_STATUSES = new Set(["PENDING", "APPROVED", "HIDDEN", "REJECTED"]);
 
 export function validateCreateReviewInput(input: unknown): CreateReviewInput {
   if (!input || typeof input !== "object") {
@@ -41,11 +48,13 @@ export function validateListReviewsQuery(query: Record<string, unknown>): ListRe
 
 export function validateAdminListReviewsQuery(query: Record<string, unknown>): AdminListReviewsQuery {
   const limit = Math.min(Math.max(Number(query.limit) || 20, 1), 100);
-  const status = typeof query.status === "string" && VALID_STATUSES.has(query.status.toUpperCase())
+  const status = typeof query.status === "string" && VALID_QUERY_STATUSES.has(query.status.toUpperCase())
     ? (query.status.toUpperCase() as AdminListReviewsQuery["status"])
     : undefined;
+  const q = typeof query.q === "string" && query.q.trim() ? query.q.trim().slice(0, 200) : undefined;
   return {
     status,
+    q,
     limit,
     cursor: typeof query.cursor === "string" ? query.cursor : undefined,
   };
