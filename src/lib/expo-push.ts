@@ -258,7 +258,20 @@ export async function sendPushToUser(
       priority: "high",           // Deliver immediately, critical for serverless
     }));
 
-    await sendExpoPush(messages, tokens.map(() => ({ userId })));
+    // One Expo request per token, not one batched request for all of the
+    // user's tokens. Expo rejects an entire request with
+    // PUSH_TOO_MANY_EXPERIENCE_IDS if it contains tokens from more than one
+    // Expo project — which happens for real here: this app's EAS project
+    // ownership changed multiple times (mouadchiali -> mouaduae ->
+    // chialimouad), so a user who registered a device under an old build and
+    // later reinstalled a current one can have tokens from two project
+    // generations in the same PushToken rows. Batching them together meant
+    // one stale/orphaned token silently zeroed out delivery to that user's
+    // valid, current token too. Isolating per token contains the failure to
+    // the one bad token (still cleaned up individually via its own ticket).
+    await Promise.allSettled(
+      messages.map((message) => sendExpoPush([message], [{ userId }])),
+    );
   } catch (error) {
     logger.warn("sendPushToUser failed", {
       userId,

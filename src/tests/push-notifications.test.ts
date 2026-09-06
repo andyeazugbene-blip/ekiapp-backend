@@ -250,17 +250,45 @@ describe("checkPushReceipts — the real proof of delivery a ticket alone can ne
 });
 
 describe("sendPushToUser — real event-to-device routing", () => {
-  it("sends to every registered device for a user, with the right Android channel mapped from the notification type", async () => {
+  it("sends one Expo request PER registered device, not one batched request for all of a user's devices, with the right Android channel mapped from the notification type", async () => {
     m.pushToken.findMany.mockResolvedValue([{ token: "ExponentPushToken[dev1]" }, { token: "ExponentPushToken[dev2]" }]);
-    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ data: [{ status: "ok" }, { status: "ok" }] }) });
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ data: [{ status: "ok" }] }) });
     vi.stubGlobal("fetch", fetchMock);
 
     await sendPushToUser("buyer-1", { title: "New Order! 🛒", body: "...", data: { type: "new_order", orderId: "ord-1" } });
 
-    const [, options] = fetchMock.mock.calls[0];
-    const sentMessages = JSON.parse(options.body as string);
-    expect(sentMessages).toHaveLength(2);
-    expect(sentMessages[0].channelId).toBe("orders");
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const bodies = fetchMock.mock.calls.map(([, options]) => JSON.parse(options.body as string));
+    expect(bodies.every((b) => b.length === 1)).toBe(true);
+    expect(bodies.map((b) => b[0].to).sort()).toEqual(["ExponentPushToken[dev1]", "ExponentPushToken[dev2]"]);
+    expect(bodies[0][0].channelId).toBe("orders");
+  });
+
+  it("a stale/orphaned token from a retired Expo project cannot block delivery to the user's other, valid token — real bug: Expo rejects an ENTIRE batched request with PUSH_TOO_MANY_EXPERIENCE_IDS when it mixes tokens from more than one Expo project, which happens whenever a user has tokens registered under this app's old and current EAS project ownership (this app's EAS project ownership has genuinely changed multiple times)", async () => {
+    m.pushToken.findMany.mockResolvedValue([
+      { token: "ExponentPushToken[stale-old-project]" },
+      { token: "ExponentPushToken[valid-current-project]" },
+    ]);
+    const fetchMock = vi.fn().mockImplementation(async (_url, options) => {
+      const [message] = JSON.parse(options.body as string);
+      if (message.to === "ExponentPushToken[stale-old-project]") {
+        return {
+          ok: false,
+          status: 400,
+          text: async () => JSON.stringify({ errors: [{ code: "PUSH_TOO_MANY_EXPERIENCE_IDS" }] }),
+        };
+      }
+      return { ok: true, json: async () => ({ data: [{ status: "ok", id: "ticket-valid" }] }) };
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await sendPushToUser("buyer-mixed-projects", { title: "Hi", body: "There" });
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    // The valid token's own request must have gone out and succeeded independently —
+    // isolating per-token means the stale token's failure never reaches it.
+    const validCall = fetchMock.mock.calls.find(([, options]) => (JSON.parse(options.body as string))[0].to === "ExponentPushToken[valid-current-project]");
+    expect(validCall).toBeDefined();
   });
 
   it("skips sending entirely (no Expo API call) when the user has no registered devices", async () => {
