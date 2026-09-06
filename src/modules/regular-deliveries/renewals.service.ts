@@ -10,7 +10,20 @@ import { resolveStripeCurrency } from "../../shared/currency";
 import { resolveVendorCommission } from "../subscriptions/subscription-plan-utils";
 import { notificationsService } from "../notifications/notifications.service";
 import { automationService } from "../automation/automation.service";
+import { recordAudit } from "../../shared/utils/audit";
 import { nextCycleDate } from "./buyer-subscriptions.service";
+
+// Regular Deliveries had zero AuditLog coverage for anything beyond buyer-
+// initiated actions (those go to SubscriptionActionHistory instead, see
+// buyer-subscriptions.service.ts — deliberately not duplicated here).
+// Routine, expected, high-volume automation (a renewal simply being
+// created on schedule, an internal PAYMENT_PROCESSING claim) is not
+// audited — there's nothing to investigate about a scheduled job doing
+// its job. What IS audited below are the transitions with real business/
+// dispute relevance: a buyer's material price decision, a payment
+// actually failing, a renewal being cancelled after exhausting retries,
+// and a price-approval silently expiring.
+const SYSTEM_CRON_ACTOR = "system:cron";
 
 const MAX_PAYMENT_ATTEMPTS = 3;
 const PRICE_CHANGE_APPROVAL_DEFAULT_BPS = 500; // 5%
@@ -306,6 +319,14 @@ export const renewalsService = {
     // subscriber list later.
     await notifyVendorPriceDecision(renewal.subscription.offer.vendorId, decision, renewal.subscriptionId).catch(() => {});
 
+    await recordAudit({
+      actorId: buyerId,
+      action: "renewal.price_decision",
+      entityType: "Renewal",
+      entityId: renewalId,
+      metadata: { decision },
+    });
+
     return prisma.renewal.findUnique({ where: { id: renewalId } });
   },
 
@@ -569,6 +590,13 @@ export const renewalsService = {
       where: { id: subscriptionId },
       data: { status: "PAYMENT_ATTENTION" },
     });
+    await recordAudit({
+      actorId: SYSTEM_CRON_ACTOR,
+      action: "renewal.payment_failed",
+      entityType: "Renewal",
+      entityId: renewalId,
+      metadata: { subscriptionId, reason },
+    });
     await notifySubscriptionEvent(sub.buyerId, "payment_failed", renewalId, subscriptionId);
     await automationService.scheduleAutomation({
       type: "PAYMENT_RECOVERY",
@@ -614,6 +642,13 @@ export const renewalsService = {
         where: { id: renewal.subscriptionId },
         data: { nextRenewalAt: nextCycleDate(renewal.subscription.frequency, renewal.cycleDate) },
       });
+      await recordAudit({
+        actorId: SYSTEM_CRON_ACTOR,
+        action: "renewal.price_approval_expired",
+        entityType: "Renewal",
+        entityId: renewal.id,
+        metadata: { subscriptionId: renewal.subscriptionId, timeoutHours: env.priceApprovalTimeoutHours },
+      });
       await notifySubscriptionEvent(renewal.subscription.buyerId, "price_approval_expired", renewal.id, renewal.subscriptionId);
     }
     return { configured: true, expired };
@@ -624,6 +659,13 @@ export const renewalsService = {
     const sub = await prisma.buyerSubscription.update({
       where: { id: renewal.subscriptionId },
       data: { status: "PAYMENT_ATTENTION" },
+    });
+    await recordAudit({
+      actorId: SYSTEM_CRON_ACTOR,
+      action: "renewal.cancelled_retries_exhausted",
+      entityType: "Renewal",
+      entityId: renewalId,
+      metadata: { subscriptionId: renewal.subscriptionId },
     });
     await notifySubscriptionEvent(sub.buyerId, "renewal_cancelled", renewalId, renewal.subscriptionId);
   },

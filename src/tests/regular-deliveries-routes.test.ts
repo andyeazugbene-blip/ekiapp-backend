@@ -94,6 +94,11 @@ const mockSubscriptionCount = vi.fn();
 const mockRenewalFindMany = vi.fn();
 const mockAddressFindUnique = vi.fn();
 const mockPaymentMethodFindUnique = vi.fn();
+const mockRecordAudit = vi.fn().mockResolvedValue(undefined);
+
+vi.mock("../shared/utils/audit", () => ({
+  recordAudit: (...a: unknown[]) => mockRecordAudit(...a),
+}));
 
 vi.mock("../lib/prisma", async () => {
   const actual = await vi.importActual<typeof import("../lib/prisma")>("../lib/prisma");
@@ -242,12 +247,14 @@ describe("Vendor subscription-offer routes", () => {
     const res = await request(app).post("/api/subscription-offers/offer-42/pause-renewals").set("Authorization", `Bearer ${vendorToken()}`);
     expect(res.status).toBe(200);
     expect(mockPauseRenewals).toHaveBeenCalledWith("vendor-db-1", "offer-42");
+    expect(mockRecordAudit).toHaveBeenCalledWith(expect.objectContaining({ action: "subscription_offer.pause_renewals", entityId: "offer-42" }));
   });
 
   it("POST /api/subscription-offers/:id/resume-renewals — reads id from the URL", async () => {
     const res = await request(app).post("/api/subscription-offers/offer-42/resume-renewals").set("Authorization", `Bearer ${vendorToken()}`);
     expect(res.status).toBe(200);
     expect(mockResumeRenewals).toHaveBeenCalledWith("vendor-db-1", "offer-42");
+    expect(mockRecordAudit).toHaveBeenCalledWith(expect.objectContaining({ action: "subscription_offer.resume_renewals", entityId: "offer-42" }));
   });
 });
 
@@ -352,6 +359,7 @@ describe("Renewal action routes", () => {
     const ok = await request(app).post("/api/renewals/renewal-5/stock-confirmation").set("Authorization", `Bearer ${vendorToken()}`);
     expect(ok.status).toBe(200);
     expect(mockConfirmStock).toHaveBeenCalledWith("vendor-user-1", "renewal-5");
+    expect(mockRecordAudit).toHaveBeenCalledWith(expect.objectContaining({ action: "renewal.stock_confirmed", entityId: "renewal-5" }));
   });
 
   it("POST /api/renewals/:id/price-change — 400 for an invalid decision value", async () => {

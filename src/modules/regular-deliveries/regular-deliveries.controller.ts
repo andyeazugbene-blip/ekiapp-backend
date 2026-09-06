@@ -2,6 +2,7 @@ import type { Request, Response } from "express";
 
 import { prisma } from "../../lib/prisma";
 import { AppError } from "../../shared/errors/app-error";
+import { recordAudit } from "../../shared/utils/audit";
 import { subscriptionOffersService } from "./subscription-offers.service";
 import { buyerSubscriptionsService } from "./buyer-subscriptions.service";
 import { buyerPaymentMethodsService } from "./payment-methods.service";
@@ -58,14 +59,20 @@ export async function unpublishSubscriptionOffer(request: Request, response: Res
 }
 
 export async function pauseSubscriptionOfferRenewals(request: Request, response: Response): Promise<void> {
-  const vendorId = await requireVendorId(requireUserId(request));
-  const offer = await subscriptionOffersService.pauseRenewals(vendorId, requireIdParam(request));
+  const userId = requireUserId(request);
+  const vendorId = await requireVendorId(userId);
+  const offerId = requireIdParam(request);
+  const offer = await subscriptionOffersService.pauseRenewals(vendorId, offerId);
+  await recordAudit({ actorId: userId, action: "subscription_offer.pause_renewals", entityType: "SubscriptionOffer", entityId: offerId, request });
   response.json({ offer });
 }
 
 export async function resumeSubscriptionOfferRenewals(request: Request, response: Response): Promise<void> {
-  const vendorId = await requireVendorId(requireUserId(request));
-  const offer = await subscriptionOffersService.resumeRenewals(vendorId, requireIdParam(request));
+  const userId = requireUserId(request);
+  const vendorId = await requireVendorId(userId);
+  const offerId = requireIdParam(request);
+  const offer = await subscriptionOffersService.resumeRenewals(vendorId, offerId);
+  await recordAudit({ actorId: userId, action: "subscription_offer.resume_renewals", entityType: "SubscriptionOffer", entityId: offerId, request });
   response.json({ offer });
 }
 
@@ -76,21 +83,36 @@ function requireProductIdParam(request: Request): string {
 }
 
 export async function pauseSubscriptionOfferProduct(request: Request, response: Response): Promise<void> {
-  const vendorId = await requireVendorId(requireUserId(request));
+  const userId = requireUserId(request);
+  const vendorId = await requireVendorId(userId);
+  const offerId = requireIdParam(request);
+  const productId = requireProductIdParam(request);
   const { reason, expectedReturnAt } = request.body ?? {};
   const link = await subscriptionOffersService.pauseProduct(
     vendorId,
-    requireIdParam(request),
-    requireProductIdParam(request),
+    offerId,
+    productId,
     typeof reason === "string" ? reason : undefined,
     typeof expectedReturnAt === "string" ? new Date(expectedReturnAt) : undefined,
   );
+  await recordAudit({
+    actorId: userId,
+    action: "subscription_offer_product.pause",
+    entityType: "SubscriptionOfferProduct",
+    entityId: `${offerId}:${productId}`,
+    metadata: { reason: typeof reason === "string" ? reason : null },
+    request,
+  });
   response.json({ product: link });
 }
 
 export async function resumeSubscriptionOfferProduct(request: Request, response: Response): Promise<void> {
-  const vendorId = await requireVendorId(requireUserId(request));
-  const link = await subscriptionOffersService.resumeProduct(vendorId, requireIdParam(request), requireProductIdParam(request));
+  const userId = requireUserId(request);
+  const vendorId = await requireVendorId(userId);
+  const offerId = requireIdParam(request);
+  const productId = requireProductIdParam(request);
+  const link = await subscriptionOffersService.resumeProduct(vendorId, offerId, productId);
+  await recordAudit({ actorId: userId, action: "subscription_offer_product.resume", entityType: "SubscriptionOfferProduct", entityId: `${offerId}:${productId}`, request });
   response.json({ product: link });
 }
 
@@ -136,7 +158,16 @@ export async function listVendorRenewals(request: Request, response: Response): 
 
 export async function confirmRenewalStock(request: Request, response: Response): Promise<void> {
   const userId = requireUserId(request);
-  const renewal = await renewalsService.confirmStock(userId, requireIdParam(request));
+  const renewalId = requireIdParam(request);
+  const renewal = await renewalsService.confirmStock(userId, renewalId);
+  await recordAudit({
+    actorId: userId,
+    action: "renewal.stock_confirmed",
+    entityType: "Renewal",
+    entityId: renewalId,
+    metadata: { newStatus: renewal?.status ?? null },
+    request,
+  });
   response.json({ renewal });
 }
 
