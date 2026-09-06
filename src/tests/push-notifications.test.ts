@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 vi.mock("../lib/prisma", () => ({
   prisma: {
@@ -97,6 +97,60 @@ describe("sendExpoPush — the actual relay to Expo's push API (architecture doc
   it("never throws when Expo's API is unreachable — push failures must not break the calling operation", async () => {
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("network down")));
     await expect(sendExpoPush([{ to: "ExponentPushToken[abc123]", title: "Hi", body: "There" }])).resolves.toBeUndefined();
+  });
+});
+
+/**
+ * Regression coverage for the "Expo dashboard shows no data" investigation:
+ * every send/receipt call went out with no Authorization header at all.
+ * Expo's push API still accepts and delivers unauthenticated requests (the
+ * token itself is what ties a request to a project), but Expo's own docs
+ * describe the access-token header as how a send gets attributed to a
+ * specific expo.dev account/project for dashboard analytics — its absence
+ * is the most likely explanation for the dashboard showing nothing despite
+ * real sends succeeding. This is optional and backward compatible: with no
+ * EXPO_ACCESS_TOKEN configured, behavior is byte-for-byte unchanged.
+ */
+describe("sendExpoPush / checkPushReceipts — optional Expo access token", () => {
+  const ORIGINAL_ENV = process.env.EXPO_ACCESS_TOKEN;
+  afterEach(() => {
+    if (ORIGINAL_ENV === undefined) delete process.env.EXPO_ACCESS_TOKEN;
+    else process.env.EXPO_ACCESS_TOKEN = ORIGINAL_ENV;
+  });
+
+  it("sends with no Authorization header when EXPO_ACCESS_TOKEN is not set (current production behavior, unchanged)", async () => {
+    delete process.env.EXPO_ACCESS_TOKEN;
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ data: [{ status: "ok", id: "t1" }] }) });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await sendExpoPush([{ to: "ExponentPushToken[abc123]", title: "Hi", body: "There" }]);
+
+    const [, options] = fetchMock.mock.calls[0];
+    expect(options.headers.Authorization).toBeUndefined();
+  });
+
+  it("includes a Bearer Authorization header when EXPO_ACCESS_TOKEN is configured", async () => {
+    process.env.EXPO_ACCESS_TOKEN = "test-expo-access-token";
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ data: [{ status: "ok", id: "t1" }] }) });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await sendExpoPush([{ to: "ExponentPushToken[abc123]", title: "Hi", body: "There" }]);
+
+    const [, options] = fetchMock.mock.calls[0];
+    expect(options.headers.Authorization).toBe("Bearer test-expo-access-token");
+  });
+
+  it("also authenticates the receipts call the same way", async () => {
+    process.env.EXPO_ACCESS_TOKEN = "test-expo-access-token";
+    m.pushTicket.findMany.mockResolvedValue([{ id: "row-1", ticketId: "t1", token: "ExponentPushToken[abc123]", userId: "u1", createdAt: new Date(0) }] as never);
+    m.pushTicket.deleteMany.mockResolvedValue({ count: 1 } as never);
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ data: {} }) });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await checkPushReceipts();
+
+    const [, options] = fetchMock.mock.calls[0];
+    expect(options.headers.Authorization).toBe("Bearer test-expo-access-token");
   });
 
   it("never throws when Expo's API returns a non-200", async () => {

@@ -7,6 +7,23 @@ import { prisma } from "./prisma";
 const EXPO_PUSH_URL = "https://exp.host/--/api/v2/push/send";
 const EXPO_RECEIPTS_URL = "https://exp.host/--/api/v2/push/getReceipts";
 
+/**
+ * Optional Expo access token (expo.dev → account settings → access tokens).
+ * Every send/receipt call this module has ever made has gone out with no
+ * Authorization header at all — Expo's push API accepts that (the token
+ * itself is what ties a request to a project, not this header), so real
+ * pushes have still been able to reach APNs/FCM. But Expo's own docs
+ * describe this header as how a send gets attributed to a specific
+ * expo.dev account/project — its absence is the most likely reason the
+ * project's "Push notifications sent" dashboard can show no data even
+ * while real sends succeed. Optional and backward compatible: unset, this
+ * changes nothing about how sends behave.
+ */
+function expoAuthHeaders(): Record<string, string> {
+  const token = process.env.EXPO_ACCESS_TOKEN;
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
 // Expo recommends waiting before checking receipts — APNs/FCM need time to
 // actually attempt delivery. Checking too soon just gets "not available yet".
 const RECEIPT_CHECK_DELAY_MS = 5 * 60 * 1000;
@@ -66,6 +83,7 @@ export async function sendExpoPush(
       headers: {
         "Content-Type": "application/json",
         Accept: "application/json",
+        ...expoAuthHeaders(),
       },
       body: JSON.stringify(messages),
     });
@@ -158,6 +176,7 @@ export async function checkPushReceipts(): Promise<{ checked: number; invalidate
       headers: {
         "Content-Type": "application/json",
         Accept: "application/json",
+        ...expoAuthHeaders(),
       },
       body: JSON.stringify({ ids: pending.map((p) => p.ticketId) }),
     });
