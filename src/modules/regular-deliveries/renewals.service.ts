@@ -339,7 +339,10 @@ export const renewalsService = {
   async attemptPayment(renewalId: string) {
     const renewal = await prisma.renewal.findUniqueOrThrow({
       where: { id: renewalId },
-      include: { items: true, subscription: { include: { paymentMethod: true } } },
+      include: {
+        items: { include: { product: { select: { weightGrams: true } } } },
+        subscription: { include: { paymentMethod: true, offer: { select: { fulfilmentMethod: true } }, deliveryAddress: { select: { country: true } } } },
+      },
     });
     if (renewal.status !== "READY_FOR_PAYMENT" && renewal.status !== "PAYMENT_FAILED") {
       throw new AppError("Renewal is not ready for payment", 409);
@@ -355,6 +358,46 @@ export const renewalsService = {
 
     const subtotal = renewal.items.reduce((sum, i) => sum + i.currentUnitPrice * i.quantity, 0);
 
+    // Resolve delivery fee ONCE, here, BEFORE the buyer is ever charged —
+    // never re-derived later at order-conversion time. Previously the fee
+    // was computed for the first time AFTER payment succeeded, defaulting
+    // to £0 whenever no zone matched (a DELIVERY-fulfilment renewal could
+    // be silently charged with no delivery coverage at all) — or, when a
+    // zone DID exist, the buyer was still only ever charged `subtotal`
+    // (see the Stripe call below) while the Order/Payment/vendor-wallet-
+    // credit recorded subtotal+fee, permanently overstating vendor
+    // earnings for a fee never actually collected. One-off checkout
+    // refuses to charge a vendor with no delivery coverage in that
+    // market; this now matches that.
+    let deliveryFeeAmount = 0;
+    let deliveryZoneId: string | null = null;
+    if (renewal.subscription.offer.fulfilmentMethod === "DELIVERY") {
+      const zone = await prisma.deliveryZone.findFirst({
+        where: { country: { equals: renewal.subscription.deliveryAddress.country, mode: "insensitive" }, isActive: true },
+      });
+      if (!zone) {
+        const reason = `No active delivery coverage configured for ${renewal.subscription.deliveryAddress.country}`;
+        await prisma.renewal.update({ where: { id: renewalId }, data: { status: "PAYMENT_FAILED", failureReason: reason } });
+        await recordAudit({
+          actorId: SYSTEM_CRON_ACTOR,
+          action: "renewal.payment_blocked_no_delivery_coverage",
+          entityType: "Renewal",
+          entityId: renewalId,
+          metadata: { subscriptionId: renewal.subscriptionId, country: renewal.subscription.deliveryAddress.country },
+        });
+        await notifySubscriptionEvent(renewal.subscription.buyerId, "payment_failed", renewalId, renewal.subscriptionId);
+        // Not a retryable payment failure in the normal sense — no card was
+        // ever attempted, and retrying won't help until an admin adds
+        // coverage — so no SubscriptionPaymentAttempt row is created here,
+        // it doesn't count against MAX_PAYMENT_ATTEMPTS.
+        return prisma.renewal.findUnique({ where: { id: renewalId } });
+      }
+      deliveryZoneId = zone.id;
+      const totalWeightGrams = renewal.items.reduce((sum, i) => sum + (i.product.weightGrams ?? 0) * i.quantity, 0);
+      deliveryFeeAmount = zone.baseFeeAmount + Math.ceil(totalWeightGrams / 1000) * zone.feePerKgAmount;
+    }
+    const totalToCharge = subtotal + deliveryFeeAmount;
+
     // Atomic claim — mirrors the same fix applied to Community Buy's
     // attemptCharge(). Without this, two concurrent triggers (e.g. an
     // overlapping cron sweep and a buyer-initiated retryPayment) can both
@@ -366,7 +409,7 @@ export const renewalsService = {
     // to Stripe.
     const claim = await prisma.renewal.updateMany({
       where: { id: renewalId, status: { in: ["READY_FOR_PAYMENT", "PAYMENT_FAILED"] } },
-      data: { status: "PAYMENT_PROCESSING", subtotalAmount: subtotal },
+      data: { status: "PAYMENT_PROCESSING", subtotalAmount: subtotal, deliveryFeeAmount, deliveryZoneId },
     });
     if (claim.count !== 1) {
       return prisma.renewal.findUnique({ where: { id: renewalId } });
@@ -399,7 +442,7 @@ export const renewalsService = {
 
       intent = await stripe.paymentIntents.create(
         {
-          amount: subtotal,
+          amount: totalToCharge,
           currency: resolveStripeCurrency(renewal.currency),
           customer: paymentMethod.stripeCustomerId,
           payment_method: paymentMethod.stripePaymentMethodId,
@@ -499,12 +542,19 @@ export const renewalsService = {
     if (renewal.status !== "PAYMENT_PROCESSING") return { handled: false as const };
     const paymentMethod = renewal.subscription.paymentMethod;
     if (!paymentMethod || renewal.subtotalAmount == null) return { handled: false as const };
+    // Must exactly match the amount attemptPayment() originally sent under
+    // this same idempotencyKey (subtotal + the delivery fee resolved and
+    // stored at that same claim) — Stripe rejects an idempotency-key
+    // replay whose parameters don't match the original request, so this
+    // requery would otherwise fail outright for any renewal with a real
+    // delivery fee.
+    const totalToCharge = renewal.subtotalAmount + (renewal.deliveryFeeAmount ?? 0);
 
     let intent: Stripe.PaymentIntent;
     try {
       intent = await stripe.paymentIntents.create(
         {
-          amount: renewal.subtotalAmount,
+          amount: totalToCharge,
           currency: resolveStripeCurrency(renewal.currency),
           customer: paymentMethod.stripeCustomerId,
           payment_method: paymentMethod.stripePaymentMethodId,
@@ -699,13 +749,15 @@ export const renewalsService = {
     const vendorId = renewal.subscription.offer.vendorId;
     const subtotal = renewal.items.reduce((sum, i) => sum + i.currentUnitPrice * i.quantity, 0);
 
-    const zone = await prisma.deliveryZone.findFirst({
-      where: { country: { equals: renewal.subscription.deliveryAddress.country, mode: "insensitive" }, isActive: true },
-    });
-    const deliveryFee = zone
-      ? zone.baseFeeAmount +
-        Math.ceil(renewal.items.reduce((sum, i) => sum + (i.product.weightGrams ?? 0) * i.quantity, 0) / 1000) * zone.feePerKgAmount
-      : 0;
+    // Read back the fee actually resolved and CHARGED at attemptPayment()
+    // time — never re-derive it here. Re-querying DeliveryZone fresh at
+    // this point risked recording a different fee than what Stripe was
+    // actually charged (e.g. an admin edits/removes a zone in the window
+    // between charge and conversion), and previously defaulted to £0
+    // whenever no zone matched at all, silently understating what a
+    // DELIVERY-fulfilment renewal owed.
+    const deliveryFee = renewal.deliveryFeeAmount ?? 0;
+    const zoneId = renewal.deliveryZoneId;
 
     const commission = await resolveVendorCommission(vendorId, subtotal);
     const platformFee = calculatePlatformFee(subtotal, commission.platformFeeBps);
@@ -742,7 +794,7 @@ export const renewalsService = {
           withdrawalFeeBps: commission.withdrawalFeeBps,
           totalAmount,
           currency: renewal.currency,
-          deliveryZoneId: zone?.id,
+          deliveryZoneId: zoneId,
           deliveryAddress: `${renewal.subscription.deliveryAddress.line1}, ${renewal.subscription.deliveryAddress.city}, ${renewal.subscription.deliveryAddress.country}`,
           notes: "Regular Delivery renewal",
           items: {

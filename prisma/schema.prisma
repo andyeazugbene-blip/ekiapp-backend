@@ -576,6 +576,7 @@ model DeliveryZone {
   isActive        Boolean          @default(true)
   vendorId        String?
   orders          Order[]
+  renewals        Renewal[]
   deliveryMethods DeliveryMethod[]
   createdAt       DateTime         @default(now())
   updatedAt       DateTime         @updatedAt
@@ -1949,6 +1950,16 @@ model Renewal {
   stockConfirmedById   String?
   priceChangeRequestId String?                      @unique
   subtotalAmount       Int?
+  // Resolved and CHARGED at attemptPayment() time — never re-derived later
+  // at order-conversion time, so what the buyer was actually charged can
+  // never drift from what the Order/Payment rows record. Null only for a
+  // COLLECTION-fulfilment offer (no delivery fee applies at all); for a
+  // DELIVERY-fulfilment offer, attemptPayment() refuses to charge at all
+  // if no matching zone exists rather than silently charging £0 delivery
+  // (previously computed for the first time post-charge, defaulting to 0
+  // when no zone existed).
+  deliveryFeeAmount    Int?
+  deliveryZoneId       String?
   currency             String                       @default("GBP")
   orderId              String?                      @unique
   failureReason        String?
@@ -1956,6 +1967,7 @@ model Renewal {
   subscription         BuyerSubscription            @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
   order                Order?                       @relation(fields: [orderId], references: [id], onDelete: SetNull)
   priceChangeRequest   PriceChangeRequest?          @relation("RenewalPriceChange", fields: [priceChangeRequestId], references: [id], onDelete: SetNull)
+  deliveryZone         DeliveryZone?                @relation(fields: [deliveryZoneId], references: [id], onDelete: SetNull)
   items                RenewalItem[]
   paymentAttempts      SubscriptionPaymentAttempt[]
   createdAt            DateTime                     @default(now())

@@ -268,6 +268,8 @@ describe("renewalsService.attemptPayment", () => {
       buyerId: "buyer-1",
       frequency: "WEEKLY",
       paymentMethod: { stripeCustomerId: "cus_1", stripePaymentMethodId: "pm_1" },
+      offer: { fulfilmentMethod: "COLLECTION" },
+      deliveryAddress: { country: "United Kingdom" },
     },
   };
 
@@ -384,6 +386,12 @@ describe("renewalsService.convertPaidRenewalToOrder", () => {
     items: [
       { productId: "p1", quantity: 2, currentUnitPrice: 1000, currency: "GBP", product: { title: "Rice", weightGrams: 500 } },
     ],
+    // Resolved and actually CHARGED by attemptPayment() — convertPaidRenewalToOrder
+    // must read these back verbatim, never re-derive them from a fresh
+    // DeliveryZone lookup (which could legitimately return a different
+    // zone/fee than what the buyer was actually charged).
+    deliveryFeeAmount: 600,
+    deliveryZoneId: "zone-1",
     subscription: {
       buyerId: "buyer-1",
       frequency: "WEEKLY",
@@ -409,7 +417,6 @@ describe("renewalsService.convertPaidRenewalToOrder", () => {
 
   it("creates a real Order + Payment and credits the vendor wallet, exactly once", async () => {
     m.renewal.findUniqueOrThrow.mockResolvedValue(paidRenewal as never);
-    m.deliveryZone.findFirst.mockResolvedValue({ id: "zone-1", baseFeeAmount: 500, feePerKgAmount: 100 } as never);
     m.vendor.findUnique.mockResolvedValue({ userId: "vendor-user-1" } as never);
     const tx = fakeTx();
     m.$transaction.mockImplementation(async (cb: any) => cb(tx));
@@ -419,6 +426,13 @@ describe("renewalsService.convertPaidRenewalToOrder", () => {
     expect(tx.product.updateMany).toHaveBeenCalledTimes(1);
     expect(tx.order.create).toHaveBeenCalledTimes(1);
     expect(tx.order.create.mock.calls[0][0].data.payment.create.stripePaymentIntentId).toBe("pi_paid");
+    // The delivery fee/zone recorded on the Order must be exactly what was
+    // stored on the Renewal at charge time — never a fresh DeliveryZone
+    // lookup at conversion time (see comment on paidRenewal above).
+    expect(m.deliveryZone.findFirst).not.toHaveBeenCalled();
+    expect(tx.order.create.mock.calls[0][0].data.deliveryFeeAmount).toBe(600);
+    expect(tx.order.create.mock.calls[0][0].data.deliveryZoneId).toBe("zone-1");
+    expect(tx.order.create.mock.calls[0][0].data.totalAmount).toBe(2000 + 600); // subtotal (2 x 1000) + stored delivery fee
     expect(tx.walletTransaction.create).toHaveBeenCalledTimes(1);
     expect(tx.renewal.update).toHaveBeenCalledWith(
       expect.objectContaining({ where: { id: "renewal-7" }, data: { status: "ORDER_CREATED", orderId: "order-1" } }),
@@ -538,6 +552,8 @@ describe("renewalsService.attemptPayment — Stripe status \"processing\" (relia
       buyerId: "buyer-proc",
       frequency: "WEEKLY",
       paymentMethod: { stripeCustomerId: "cus_proc", stripePaymentMethodId: "pm_proc" },
+      offer: { fulfilmentMethod: "COLLECTION" },
+      deliveryAddress: { country: "United Kingdom" },
     },
   };
 
@@ -594,6 +610,8 @@ describe("renewalsService.attemptPayment / requeryAmbiguousAttempt — reliabili
       buyerId: "buyer-timeout",
       frequency: "WEEKLY",
       paymentMethod: { stripeCustomerId: "cus_timeout", stripePaymentMethodId: "pm_timeout" },
+      offer: { fulfilmentMethod: "COLLECTION" },
+      deliveryAddress: { country: "United Kingdom" },
     },
   };
 
@@ -666,6 +684,8 @@ describe("renewalsService.attemptPayment — malformed/unexpected provider respo
         buyerId: "buyer-weird",
         frequency: "WEEKLY",
         paymentMethod: { stripeCustomerId: "cus_weird", stripePaymentMethodId: "pm_weird" },
+        offer: { fulfilmentMethod: "COLLECTION" },
+        deliveryAddress: { country: "United Kingdom" },
       },
     };
     m.renewal.findUniqueOrThrow.mockResolvedValue(baseRenewal as never);
@@ -707,6 +727,8 @@ describe("renewalsService.attemptPayment — expired saved card (reliability sce
         buyerId: "buyer-expired",
         frequency: "WEEKLY",
         paymentMethod: { stripeCustomerId: "cus_expired", stripePaymentMethodId: "pm_expired" },
+        offer: { fulfilmentMethod: "COLLECTION" },
+        deliveryAddress: { country: "United Kingdom" },
       },
     };
     m.renewal.findUniqueOrThrow.mockResolvedValue(baseRenewal as never);
