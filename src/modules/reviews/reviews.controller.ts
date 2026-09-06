@@ -1,6 +1,7 @@
 import type { Request, Response } from "express";
 
 import { AppError } from "../../shared/errors/app-error";
+import { recordAudit } from "../../shared/utils/audit";
 import { reviewsService } from "./reviews.service";
 import {
   validateAdminListReviewsQuery,
@@ -44,6 +45,17 @@ export async function adminModerateReview(request: Request, response: Response):
   const reviewId = String(request.params.id ?? "");
   if (!reviewId) throw new AppError("Invalid review id", 400);
   const input = validateModerateReviewInput(request.body);
-  const review = await reviewsService.moderateReview(reviewId, requireUserId(request), input);
+  const actorId = requireUserId(request);
+  const review = await reviewsService.moderateReview(reviewId, actorId, input);
+
+  await recordAudit({
+    actorId,
+    action: "review.moderated",
+    entityType: "Review",
+    entityId: reviewId,
+    metadata: { status: input.status },
+    request,
+  });
+
   response.status(200).json({ review });
 }

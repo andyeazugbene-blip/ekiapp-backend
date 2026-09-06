@@ -1,6 +1,7 @@
 import type { Request, Response } from "express";
 
 import { AppError } from "../../shared/errors/app-error";
+import { recordAudit } from "../../shared/utils/audit";
 import * as reportsService from "./reports.service";
 
 const VALID_TARGET_TYPES = ["review", "message", "product", "store"] as const;
@@ -81,5 +82,15 @@ export async function adminReviewReport(request: Request, response: Response): P
   }
 
   const report = await reportsService.reviewReport(id, status, userId);
+
+  await recordAudit({
+    actorId: userId,
+    action: "report.reviewed",
+    entityType: "ContentReport",
+    entityId: id,
+    metadata: { status },
+    request,
+  });
+
   response.json({ report });
 }
