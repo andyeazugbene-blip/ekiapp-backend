@@ -2,7 +2,7 @@ import type { FulfilmentMethod, OfferSubstitutionMode, SubscriptionFrequency } f
 
 import { prisma } from "../../lib/prisma";
 import { AppError } from "../../shared/errors/app-error";
-import { countryNamesForMarketCode } from "../../shared/currency";
+import { countryNamesForMarketCode, resolveMarketCode } from "../../shared/currency";
 import { notificationsService } from "../notifications/notifications.service";
 import { marketConfigurationService } from "../community-buy/market-configuration.service";
 
@@ -12,12 +12,32 @@ import { marketConfigurationService } from "../community-buy/market-configuratio
  * ("GB") while Vendor.country stores full names ("United Kingdom") — see
  * countryNamesForMarketCode for why a direct comparison silently matched
  * nothing.
+ * @deprecated eligibility is now resolved via VendorMarketAssignment
+ * (getEnabledRegularDeliveryMarketCodes) so a multi-market vendor is
+ * eligible through ANY of their active markets, not just their single
+ * primary Vendor.country. Kept only for anything still comparing against
+ * Vendor.country directly.
  */
 export async function getEnabledRegularDeliveryCountryNames(): Promise<string[]> {
   const configs = await marketConfigurationService.list();
   return configs
     .filter((c) => c.regularDeliveriesEnabled)
     .flatMap((c) => countryNamesForMarketCode(c.countryCode));
+}
+
+/**
+ * Every market CODE that currently has Regular Deliveries enabled. This is
+ * the model decision for multi-market vendors: an offer is discoverable/
+ * subscribable in EVERY market the vendor has an active assignment for —
+ * the offer itself carries no market field of its own (matching the
+ * existing architecture, which already computed eligibility live from the
+ * vendor at query time rather than storing it per-offer), so "inherit all
+ * active vendor markets" is the model that changes the least while still
+ * unlocking multi-market vendors correctly.
+ */
+export async function getEnabledRegularDeliveryMarketCodes(): Promise<string[]> {
+  const configs = await marketConfigurationService.list();
+  return configs.filter((c) => c.regularDeliveriesEnabled).map((c) => c.countryCode);
 }
 
 export interface UpsertSubscriptionOfferInput {
@@ -231,18 +251,18 @@ export const subscriptionOffersService = {
    * Deliveries enabled.
    */
   async listPublic(filters: { country?: string; vendorId?: string }) {
-    const enabledCountryNames = await getEnabledRegularDeliveryCountryNames();
-    if (enabledCountryNames.length === 0) return [];
+    const enabledMarketCodes = await getEnabledRegularDeliveryMarketCodes();
+    if (enabledMarketCodes.length === 0) return [];
 
-    let countryNames = enabledCountryNames;
+    let marketCodes = enabledMarketCodes;
     if (filters.country) {
       // filters.country may arrive as an ISO market code ("GB", from the
-      // market-chip UI) or, from older callers, a full country name — match
-      // either against the enabled set rather than assuming one shape.
-      const requestedNames = countryNamesForMarketCode(filters.country);
-      const matchAgainst = new Set([filters.country.toLowerCase(), ...requestedNames.map((n) => n.toLowerCase())]);
-      countryNames = enabledCountryNames.filter((name) => matchAgainst.has(name.toLowerCase()));
-      if (countryNames.length === 0) return [];
+      // market-chip UI) or a full country name — resolveMarketCode accepts
+      // either; an unrecognized value matches nothing rather than falling
+      // through to "every enabled market."
+      const requestedCode = resolveMarketCode(filters.country) ?? filters.country.trim().toUpperCase();
+      marketCodes = enabledMarketCodes.filter((code) => code === requestedCode);
+      if (marketCodes.length === 0) return [];
     }
 
     return prisma.subscriptionOffer.findMany({
@@ -250,7 +270,11 @@ export const subscriptionOffersService = {
         isActive: true,
         vendor: {
           isSuspended: false,
-          country: { in: countryNames, mode: "insensitive" },
+          // A multi-market vendor is eligible in EVERY market they hold an
+          // active assignment for, not just their single primary
+          // Vendor.country — see getEnabledRegularDeliveryMarketCodes for
+          // the "inherit all active vendor markets" decision.
+          marketAssignments: { some: { enabled: true, marketCode: { in: marketCodes } } },
         },
         ...(filters.vendorId ? { vendorId: filters.vendorId } : {}),
         // At least one real, orderable, non-paused product — an offer with

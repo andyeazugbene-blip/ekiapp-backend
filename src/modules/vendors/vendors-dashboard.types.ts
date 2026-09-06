@@ -86,6 +86,15 @@ export interface VendorDashboardData {
     maxOrders: number | null;
     renewalDate: string | null;
   };
+  /**
+   * Every market this vendor operates in — primary market first. A vendor
+   * with only one market still gets a one-item array here (never the bare
+   * singular "country" the client used to read alone), so the dashboard can
+   * always render "Markets served" consistently, and never combines two
+   * markets' currencies into one misleading total: each entry carries its
+   * own resolved currency.
+   */
+  markets: { marketCode: string; countryName: string; currency: string; enabled: boolean; isPrimary: boolean }[];
 }
 
 export interface VendorEarningsData {

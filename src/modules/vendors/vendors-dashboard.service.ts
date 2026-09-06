@@ -3,6 +3,7 @@ import { CURSOR_ORDER_BY } from "../../shared/constants";
 import { AppError } from "../../shared/errors/app-error";
 import { subscriptionsService } from "../subscriptions/subscriptions.service";
 import { marketConfigurationService } from "../community-buy/market-configuration.service";
+import { vendorMarketsService } from "./vendor-markets.service";
 import type { DashboardAlert, DashboardToolEntry, RecommendedAction, VendorDashboardData, VendorEarningsData } from "./vendors-dashboard.types";
 
 function startOfDay(): Date {
@@ -115,7 +116,7 @@ export const vendorDashboardService = {
     // Orchestration" / screen 01) — additive alongside the legacy fields
     // above, which the shipped mobile client still reads unchanged. ───────
 
-    const [ratingAgg, buyerOrderCounts, bundleCount, flashSaleCount, marketConfig, account] = await Promise.all([
+    const [ratingAgg, buyerOrderCounts, bundleCount, flashSaleCount, marketAssignments, account] = await Promise.all([
       prisma.review.aggregate({ where: { vendorId: vendor.id, status: "APPROVED" }, _avg: { rating: true }, _count: { _all: true } }),
       prisma.order.groupBy({
         by: ["buyerId"],
@@ -124,9 +125,22 @@ export const vendorDashboardService = {
       }),
       prisma.bundle.count({ where: { vendorId: vendor.id } }),
       prisma.flashSale.count({ where: { vendorId: vendor.id } }),
-      vendor.country ? marketConfigurationService.get(vendor.country) : Promise.resolve(null),
+      vendorMarketsService.listForVendor(vendor.id),
       subscriptionsService.getVendorAccount(userId),
     ]);
+
+    // A multi-market vendor sees a marketing tool if ANY of their active
+    // markets has it enabled — not just whichever market happens to be
+    // primary. Falls back to vendor.country directly for a vendor with no
+    // assignment rows yet (pre-backfill edge case).
+    const activeAssignments = marketAssignments.filter((m) => m.enabled);
+    const marketConfigs = activeAssignments.length > 0
+      ? await Promise.all(activeAssignments.map((m) => marketConfigurationService.get(m.marketCode)))
+      : vendor.country
+        ? [await marketConfigurationService.get(vendor.country)]
+        : [];
+    const anyMarketHas = (flag: "regularDeliveriesEnabled" | "communityBuyEnabled"): boolean =>
+      marketConfigs.some((config) => config?.[flag] === true);
 
     const buyersCount = buyerOrderCounts.length;
     const repeatBuyers = buyerOrderCounts.filter((b) => b._count._all >= 2).length;
@@ -154,10 +168,10 @@ export const vendorDashboardService = {
     }
     // Market-aware visibility (spec rule: "do not show Community Buy in
     // unsupported markets") — real backend market config, not a client guess.
-    if (marketConfig?.regularDeliveriesEnabled) {
+    if (anyMarketHas("regularDeliveriesEnabled")) {
       marketingTools.push({ id: "regular_deliveries", type: "regular_deliveries", label: "Regular Deliveries", route: "/(vendor)/regular-deliveries" });
     }
-    if (marketConfig?.communityBuyEnabled) {
+    if (anyMarketHas("communityBuyEnabled")) {
       marketingTools.push({ id: "community_buy", type: "community_buy", label: "Community Buy", route: "/(vendor)/community-buy-supplier" });
     }
 
@@ -222,6 +236,13 @@ export const vendorDashboardService = {
         maxOrders: account.limits.maxOrders,
         renewalDate: account.renewalDate,
       },
+      markets: marketAssignments.map((m) => ({
+        marketCode: m.marketCode,
+        countryName: m.countryName,
+        currency: m.currency,
+        enabled: m.enabled,
+        isPrimary: m.countryName.trim().toLowerCase() === (vendor.country ?? "").trim().toLowerCase(),
+      })),
     };
   },
 

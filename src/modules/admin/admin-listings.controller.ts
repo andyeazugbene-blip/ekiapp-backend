@@ -190,12 +190,15 @@ export async function getWalletTransaction(request: Request, response: Response)
 
 export async function updateVendor(request: Request, response: Response): Promise<void> {
   const vendorId = requireIdParam(request);
-  const vendor = await adminListingsService.updateVendor(vendorId, request.body ?? {});
+  const { vendor, before, after } = await adminListingsService.updateVendor(vendorId, request.body ?? {});
   await recordAudit({
     actorId: requireUserId(request),
     action: "vendor.update",
     entityType: "Vendor",
     entityId: vendorId,
+    beforeState: before,
+    afterState: after,
+    request,
   });
   response.status(200).json({ vendor });
 }

@@ -37,6 +37,12 @@ import {
   getVendorBuyer,
   listVendorBuyers,
 } from "./vendors-buyers.controller";
+import {
+  addOwnVendorMarket,
+  listOwnVendorMarkets,
+  removeOwnVendorMarket,
+  setOwnVendorMarketEnabled,
+} from "./vendor-markets.controller";
 import { vendorConfirmEscrowOrder, vendorDispatchOrder, registerBankAccount, listBankAccounts } from "../paystack/escrow.controller";
 import { getVendorPublicStoreAnalytics } from "../public-stores/public-stores.controller";
 import {
@@ -59,6 +65,10 @@ vendorsRouter.post("/", asyncHandler(createVendor));
 vendorsRouter.get("/me", requireRole("VENDOR", "ADMIN"), asyncHandler(getOwnVendor));
 vendorsRouter.patch("/me", requireRole("VENDOR", "ADMIN"), asyncHandler(updateOwnVendor));
 vendorsRouter.get("/me/dashboard", requireRole("VENDOR", "ADMIN"), asyncHandler(getVendorDashboard));
+vendorsRouter.get("/me/markets", requireRole("VENDOR", "ADMIN"), asyncHandler(listOwnVendorMarkets));
+vendorsRouter.post("/me/markets", requireRole("VENDOR", "ADMIN"), asyncHandler(addOwnVendorMarket));
+vendorsRouter.patch("/me/markets/:marketCode", requireRole("VENDOR", "ADMIN"), asyncHandler(setOwnVendorMarketEnabled));
+vendorsRouter.delete("/me/markets/:marketCode", requireRole("VENDOR", "ADMIN"), asyncHandler(removeOwnVendorMarket));
 vendorsRouter.get("/me/earnings", requireRole("VENDOR", "ADMIN"), asyncHandler(getVendorEarnings));
 vendorsRouter.get(
   "/me/analytics",

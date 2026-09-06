@@ -2,7 +2,8 @@ import type { SubscriptionFrequency } from "@prisma/client";
 
 import { prisma } from "../../lib/prisma";
 import { AppError } from "../../shared/errors/app-error";
-import { getEnabledRegularDeliveryCountryNames } from "./subscription-offers.service";
+import { vendorMarketsService } from "../vendors/vendor-markets.service";
+import { getEnabledRegularDeliveryMarketCodes } from "./subscription-offers.service";
 
 const FREQUENCY_DAYS: Record<SubscriptionFrequency, number> = {
   WEEKLY: 7,
@@ -36,7 +37,7 @@ export const buyerSubscriptionsService = {
       where: { id: input.offerId },
       include: {
         products: { include: { product: { select: { isActive: true, stock: true } } } },
-        vendor: { select: { isSuspended: true, country: true } },
+        vendor: { select: { id: true, isSuspended: true, country: true } },
       },
     });
     if (!offer || !offer.isActive) throw new AppError("Offer not found", 404);
@@ -52,9 +53,13 @@ export const buyerSubscriptionsService = {
     if (offer.vendor.isSuspended) {
       throw new AppError("This vendor is not currently accepting orders", 400);
     }
-    const enabledCountryNames = await getEnabledRegularDeliveryCountryNames();
-    const vendorCountry = (offer.vendor.country ?? "").trim().toLowerCase();
-    if (!enabledCountryNames.some((name) => name.toLowerCase() === vendorCountry)) {
+    // A multi-market vendor is eligible via ANY of their active market
+    // assignments, matching listPublic()'s discovery-time filter — not just
+    // their single primary Vendor.country.
+    const enabledMarketCodes = await getEnabledRegularDeliveryMarketCodes();
+    const vendorActiveCodes = await vendorMarketsService.getActiveMarketCodes(offer.vendor.id);
+    const eligibleInAnyMarket = vendorActiveCodes.some((code) => enabledMarketCodes.includes(code));
+    if (!eligibleInAnyMarket) {
       throw new AppError("Regular Deliveries are not available in this vendor's market", 400);
     }
 

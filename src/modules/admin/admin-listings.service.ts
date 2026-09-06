@@ -9,6 +9,7 @@ import {
 import { prisma } from "../../lib/prisma";
 import { CURSOR_ORDER_BY } from "../../shared/constants";
 import { AppError } from "../../shared/errors/app-error";
+import { assertApprovedLaunchCountry } from "../vendors/vendors.service";
 
 const MAX_LIMIT = 100;
 const DEFAULT_LIMIT = 20;
@@ -162,7 +163,19 @@ export const adminListingsService = {
       }
     }
     if (Object.keys(data).length === 0) throw new AppError("No vendor fields to update", 400);
-    return prisma.vendor.update({ where: { id: vendorId }, data });
+    // This edits the vendor's PRIMARY market (Vendor.country) — same
+    // launch-market gate as vendor self-service onboarding/profile edits, so
+    // an admin can't set a vendor's primary country to somewhere outside the
+    // 10 approved launch markets either (unchanged values stay grandfathered,
+    // same as the vendor-facing gate). Additional markets are managed
+    // separately via VendorMarketAssignment (admin-vendors.controller.ts).
+    if (data.country !== undefined) {
+      assertApprovedLaunchCountry(data.country, vendor.country);
+    }
+    const before: Record<string, unknown> = {};
+    for (const field of Object.keys(data)) before[field] = (vendor as Record<string, unknown>)[field];
+    const updated = await prisma.vendor.update({ where: { id: vendorId }, data });
+    return { vendor: updated, before, after: data };
   },
 
   async deleteVendor(vendorId: string, reason?: string) {

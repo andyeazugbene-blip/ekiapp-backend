@@ -143,7 +143,15 @@ import {
 } from "./admin-roles.controller";
 import { completeOrder, processStuckOrder } from "./admin-orders.controller";
 import { adminListOrderRefunds, adminRefundOrder } from "./admin-refunds.controller";
-import { inviteVendor, suspendVendor, unsuspendVendor } from "./admin-vendors.controller";
+import {
+  addVendorMarket,
+  inviteVendor,
+  listVendorMarkets,
+  removeVendorMarket,
+  setVendorMarketEnabled,
+  suspendVendor,
+  unsuspendVendor,
+} from "./admin-vendors.controller";
 import { getAdminAutomationSummary } from "../automation/automation.controller";
 import { adminListSubscriptionExceptions } from "../regular-deliveries/regular-deliveries.controller";
 import {
@@ -461,4 +469,8 @@ adminRouter.get("/refunds", asyncHandler(requireAdminPermission("orders.read")),
 adminRouter.post("/orders/:id/refund", asyncHandler(requireAdminPermission("payments.mutate")), asyncHandler(require2fa), asyncHandler(adminRefundOrder));
 adminRouter.patch("/vendors/:id/suspend", asyncHandler(requireAdminPermission("vendors.mutate")), asyncHandler(require2fa), asyncHandler(suspendVendor));
 adminRouter.patch("/vendors/:id/unsuspend", asyncHandler(requireAdminPermission("vendors.mutate")), asyncHandler(require2fa), asyncHandler(unsuspendVendor));
+adminRouter.get("/vendors/:id/markets", asyncHandler(requireAdminPermission("vendors.read")), asyncHandler(listVendorMarkets));
+adminRouter.post("/vendors/:id/markets", asyncHandler(requireAdminPermission("vendors.mutate")), asyncHandler(require2fa), asyncHandler(addVendorMarket));
+adminRouter.patch("/vendors/:id/markets/:marketCode", asyncHandler(requireAdminPermission("vendors.mutate")), asyncHandler(require2fa), asyncHandler(setVendorMarketEnabled));
+adminRouter.delete("/vendors/:id/markets/:marketCode", asyncHandler(requireAdminPermission("vendors.mutate")), asyncHandler(require2fa), asyncHandler(removeVendorMarket));
 adminRouter.patch("/payout-requests/:id/mark-paid", asyncHandler(requireAdminPermission("payouts.mutate")), asyncHandler(require2fa), asyncHandler(adminMarkPayoutRequestPaid));

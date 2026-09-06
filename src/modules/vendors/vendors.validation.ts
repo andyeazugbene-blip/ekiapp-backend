@@ -56,6 +56,17 @@ export function validateCreateVendorInput(input: unknown): CreateVendorInput {
     throw new AppError("storeName is required", 400);
   }
 
+  let markets: string[] | undefined;
+  if (raw.markets !== undefined) {
+    if (!Array.isArray(raw.markets) || raw.markets.some((m) => typeof m !== "string")) {
+      throw new AppError("markets must be an array of country names", 400);
+    }
+    markets = raw.markets.map((m) => (m as string).trim()).filter((m) => m.length > 0);
+    if (markets.length === 0) {
+      throw new AppError("At least one market is required", 400);
+    }
+  }
+
   return {
     storeName,
     description: optionalString(raw.description, "description"),
@@ -64,6 +75,7 @@ export function validateCreateVendorInput(input: unknown): CreateVendorInput {
       ? normalizePhoneNumber(raw.contactPhone, "contactPhone")
       : undefined,
     country: optionalString(raw.country, "country"),
+    markets,
   };
 }
 

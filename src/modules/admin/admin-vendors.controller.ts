@@ -1,6 +1,7 @@
 import type { Request, Response } from "express";
 
 import { AppError } from "../../shared/errors/app-error";
+import { vendorMarketsService } from "../vendors/vendor-markets.service";
 import { adminVendorsService } from "./admin-vendors.service";
 
 function requireUserId(request: Request): string {
@@ -55,4 +56,68 @@ export async function inviteVendor(request: Request, response: Response): Promis
       : "";
   const result = await adminVendorsService.inviteVendor(requireUserId(request), email);
   response.status(200).json(result);
+}
+
+function requireBodyString(request: Request, field: string): string {
+  const value = (request.body as Record<string, unknown> | undefined)?.[field];
+  if (typeof value !== "string" || value.trim().length === 0) {
+    throw new AppError(`${field} is required`, 400);
+  }
+  return value;
+}
+
+function optionalBodyString(request: Request, field: string): string | undefined {
+  const value = (request.body as Record<string, unknown> | undefined)?.[field];
+  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+}
+
+export async function listVendorMarkets(request: Request, response: Response): Promise<void> {
+  const markets = await vendorMarketsService.listForVendor(requireIdParam(request));
+  response.status(200).json({ markets });
+}
+
+export async function addVendorMarket(request: Request, response: Response): Promise<void> {
+  const market = await vendorMarketsService.addMarket({
+    vendorId: requireIdParam(request),
+    actorId: requireUserId(request),
+    rawMarket: requireBodyString(request, "market"),
+    reason: optionalBodyString(request, "reason"),
+    request,
+  });
+  response.status(201).json({ market });
+}
+
+export async function setVendorMarketEnabled(request: Request, response: Response): Promise<void> {
+  const enabled = (request.body as Record<string, unknown> | undefined)?.enabled;
+  if (typeof enabled !== "boolean") {
+    throw new AppError("enabled must be a boolean", 400);
+  }
+  const marketCode = request.params.marketCode;
+  if (typeof marketCode !== "string" || marketCode.trim().length === 0) {
+    throw new AppError("Invalid market", 400);
+  }
+  const market = await vendorMarketsService.setEnabled({
+    vendorId: requireIdParam(request),
+    actorId: requireUserId(request),
+    rawMarket: marketCode,
+    enabled,
+    reason: optionalBodyString(request, "reason"),
+    request,
+  });
+  response.status(200).json({ market });
+}
+
+export async function removeVendorMarket(request: Request, response: Response): Promise<void> {
+  const marketCode = request.params.marketCode;
+  if (typeof marketCode !== "string" || marketCode.trim().length === 0) {
+    throw new AppError("Invalid market", 400);
+  }
+  await vendorMarketsService.removeMarket({
+    vendorId: requireIdParam(request),
+    actorId: requireUserId(request),
+    rawMarket: marketCode,
+    reason: optionalBodyString(request, "reason"),
+    request,
+  });
+  response.status(200).json({ message: "Market removed" });
 }

@@ -38,6 +38,7 @@
     "seed:otp": "tsx scripts/seed-otp-scenarios.ts",
     "validate:qa": "tsx scripts/validate-qa-seed.ts",
     "repair:qa-ledger": "tsx scripts/repair-qa-ledger.ts",
+    "backfill:vendor-markets": "tsx scripts/backfill-vendor-market-assignments.ts",
     "reconcile:stripe": "tsx scripts/reconcile-stripe.ts",
     "reconcile:paystack": "tsx scripts/reconcile-paystack.ts",
     "reconcile:wallets": "tsx scripts/reconcile-wallets.ts",

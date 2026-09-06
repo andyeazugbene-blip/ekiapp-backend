@@ -16,17 +16,24 @@ vi.mock("../modules/community-buy/market-configuration.service", () => ({
   marketConfigurationService: { list: vi.fn() },
 }));
 
+vi.mock("../modules/vendors/vendor-markets.service", () => ({
+  vendorMarketsService: { getActiveMarketCodes: vi.fn() },
+}));
+
 import { prisma } from "../lib/prisma";
 import { marketConfigurationService } from "../modules/community-buy/market-configuration.service";
+import { vendorMarketsService } from "../modules/vendors/vendor-markets.service";
 import { buyerSubscriptionsService } from "../modules/regular-deliveries/buyer-subscriptions.service";
 
 const m = vi.mocked(prisma, true);
 const listMarketConfigs = vi.mocked(marketConfigurationService.list);
+const getActiveMarketCodes = vi.mocked(vendorMarketsService.getActiveMarketCodes);
 
 beforeEach(() => {
   vi.clearAllMocks();
   // Default: Regular Deliveries enabled in the UK — matches baseOffer's vendor.
   listMarketConfigs.mockResolvedValue([{ countryCode: "GB", regularDeliveriesEnabled: true }] as never);
+  getActiveMarketCodes.mockResolvedValue(["GB"]);
 });
 
 describe("buyerSubscriptionsService.create — offer approval threshold copy-through (spec §22)", () => {
@@ -34,7 +41,7 @@ describe("buyerSubscriptionsService.create — offer approval threshold copy-thr
     id: "offer-1",
     isActive: true,
     frequencies: ["WEEKLY"],
-    vendor: { isSuspended: false, country: "United Kingdom" },
+    vendor: { id: "vendor-1", isSuspended: false, country: "United Kingdom" },
     products: [{ productId: "p1", pausedAt: null, product: { isActive: true, stock: 5 } }],
   };
   const baseAddress = { id: "addr-1", buyerId: "buyer-1" };
@@ -78,7 +85,7 @@ describe("buyerSubscriptionsService.create — re-enforces listPublic's own elig
     id: "offer-1",
     isActive: true,
     frequencies: ["WEEKLY"],
-    vendor: { isSuspended: false, country: "United Kingdom" },
+    vendor: { id: "vendor-1", isSuspended: false, country: "United Kingdom" },
     products: [{ productId: "p1", pausedAt: null, product: { isActive: true, stock: 5 } }],
   };
   const baseAddress = { id: "addr-1", buyerId: "buyer-1" };
@@ -100,7 +107,7 @@ describe("buyerSubscriptionsService.create — re-enforces listPublic's own elig
   it("rejects a subscribe attempt against a suspended vendor — a buyer with just the offer id must not bypass the browse-list filter", async () => {
     m.subscriptionOffer.findUnique.mockResolvedValue({
       ...baseOffer,
-      vendor: { isSuspended: true, country: "United Kingdom" },
+      vendor: { id: "vendor-1", isSuspended: true, country: "United Kingdom" },
     } as never);
 
     await expect(buyerSubscriptionsService.create("buyer-1", baseInput)).rejects.toThrow(
@@ -149,6 +156,33 @@ describe("buyerSubscriptionsService.create — re-enforces listPublic's own elig
     await buyerSubscriptionsService.create("buyer-1", baseInput);
 
     expect(m.buyerSubscription.create).toHaveBeenCalled();
+  });
+
+  it("a two-market vendor (GB disabled, FR enabled) can still be subscribed to via FR — eligibility is 'any active market', not just the primary one", async () => {
+    listMarketConfigs.mockResolvedValue([
+      { countryCode: "GB", regularDeliveriesEnabled: false },
+      { countryCode: "FR", regularDeliveriesEnabled: true },
+    ] as never);
+    getActiveMarketCodes.mockResolvedValue(["GB", "FR"]);
+    m.subscriptionOffer.findUnique.mockResolvedValue(baseOffer as never);
+
+    await buyerSubscriptionsService.create("buyer-1", baseInput);
+
+    expect(m.buyerSubscription.create).toHaveBeenCalled();
+  });
+
+  it("rejects when none of the vendor's active markets have Regular Deliveries enabled, even with two markets assigned", async () => {
+    listMarketConfigs.mockResolvedValue([
+      { countryCode: "GB", regularDeliveriesEnabled: false },
+      { countryCode: "FR", regularDeliveriesEnabled: false },
+    ] as never);
+    getActiveMarketCodes.mockResolvedValue(["GB", "FR"]);
+    m.subscriptionOffer.findUnique.mockResolvedValue(baseOffer as never);
+
+    await expect(buyerSubscriptionsService.create("buyer-1", baseInput)).rejects.toThrow(
+      "Regular Deliveries are not available in this vendor's market",
+    );
+    expect(m.buyerSubscription.create).not.toHaveBeenCalled();
   });
 });
 

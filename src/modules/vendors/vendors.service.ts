@@ -4,8 +4,9 @@ import type { PayoutMethod, Vendor } from "@prisma/client";
 import { env } from "../../config/env";
 import { prisma } from "../../lib/prisma";
 import { AppError } from "../../shared/errors/app-error";
-import { currencyFromCountry, resolveMarketCode } from "../../shared/currency";
+import { resolveMarketCode } from "../../shared/currency";
 import { resolveUniqueSlug } from "../../shared/utils/slug";
+import { resolveCurrencyForMarket, vendorMarketsService } from "./vendor-markets.service";
 import type {
   CreatePayoutMethodInput,
   CreateVendorInput,
@@ -50,7 +51,7 @@ async function generateUniqueStoreSlug(storeName: string): Promise<string> {
  * existing profile without touching country) is always allowed, even if it
  * predates this gate, so existing accounts are never locked out.
  */
-function assertApprovedLaunchCountry(country: string | null | undefined, currentCountry?: string | null): void {
+export function assertApprovedLaunchCountry(country: string | null | undefined, currentCountry?: string | null): void {
   if (!country) return;
   if (currentCountry && country.trim().toLowerCase() === currentCountry.trim().toLowerCase()) return;
   if (!resolveMarketCode(country)) {
@@ -195,7 +196,17 @@ export const vendorsService = {
   },
 
   async createVendor(userId: string, input: CreateVendorInput): Promise<Vendor> {
-    assertApprovedLaunchCountry(input.country);
+    // markets[] (multi-select onboarding) takes precedence when sent; every
+    // entry must be an approved launch market — no partial grandfathering
+    // for a brand-new vendor, unlike the single-country legacy path below,
+    // which still allows an unchanged pre-existing value on update.
+    const markets = input.markets?.length ? input.markets : input.country ? [input.country] : [];
+    if (input.markets?.length) {
+      for (const market of input.markets) assertApprovedLaunchCountry(market);
+    } else {
+      assertApprovedLaunchCountry(input.country);
+    }
+    const primaryCountry = markets[0] ?? input.country;
 
     const existing = await prisma.vendor.findUnique({ where: { userId } });
     if (existing) {
@@ -206,6 +217,7 @@ export const vendorsService = {
 
     for (let attempt = 0; attempt < 3; attempt += 1) {
       const storeSlug = await generateUniqueStoreSlug(input.storeName);
+      const primaryCurrency = await resolveCurrencyForMarket(primaryCountry);
 
       try {
         return await prisma.$transaction(async (tx) => {
@@ -217,12 +229,16 @@ export const vendorsService = {
               description: input.description,
               contactEmail: input.contactEmail,
               contactPhone: input.contactPhone,
-              country: input.country,
-              currency: currencyFromCountry(input.country),
+              country: primaryCountry,
+              currency: primaryCurrency,
             },
           });
 
           await ensureWallet(vendor.id, tx);
+
+          for (const market of markets) {
+            await vendorMarketsService.ensureInitialAssignment(vendor.id, market, tx);
+          }
 
           // Only promote buyers to vendors; never demote admins or other elevated roles.
           await tx.user.updateMany({

@@ -131,6 +131,26 @@ export const LAUNCH_MARKET_COUNTRIES: { code: string; name: string }[] = Object.
   ([code, names]) => ({ code: code.toUpperCase(), name: names[0] }),
 );
 
+const MARKET_CODE_TO_COUNTRY_NAME: Record<string, string> = Object.fromEntries(
+  LAUNCH_MARKET_COUNTRIES.map((market) => [market.code, market.name]),
+);
+
+/**
+ * Canonical display name for one of the 10 approved launch markets' ISO
+ * codes (e.g. "GB" -> "United Kingdom"). Returns null for anything outside
+ * the launch set — callers must not fall back to displaying the raw code,
+ * since that's exactly the "US"/"CA"/"GB" leak this exists to prevent.
+ */
+export function marketCodeToCountryName(marketCode: string): string | null {
+  return MARKET_CODE_TO_COUNTRY_NAME[marketCode.trim().toUpperCase()] ?? null;
+}
+
+/** True only for one of the 10 approved launch markets' ISO codes — never Africa or any other market. */
+export function isApprovedLaunchMarketCode(marketCode: string | null | undefined): boolean {
+  if (!marketCode) return false;
+  return marketCode.trim().toUpperCase() in MARKET_CODE_TO_COUNTRY_NAME;
+}
+
 
 /**
  * Currencies supported by the project's Stripe account (Italy-based).

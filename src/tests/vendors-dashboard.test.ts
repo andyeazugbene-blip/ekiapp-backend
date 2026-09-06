@@ -31,14 +31,20 @@ vi.mock("../modules/subscriptions/subscriptions.service", () => ({
   subscriptionsService: { getVendorAccount: vi.fn() },
 }));
 
+vi.mock("../modules/vendors/vendor-markets.service", () => ({
+  vendorMarketsService: { listForVendor: vi.fn() },
+}));
+
 import { prisma } from "../lib/prisma";
 import { marketConfigurationService } from "../modules/community-buy/market-configuration.service";
 import { subscriptionsService } from "../modules/subscriptions/subscriptions.service";
+import { vendorMarketsService } from "../modules/vendors/vendor-markets.service";
 import { vendorDashboardService } from "../modules/vendors/vendors-dashboard.service";
 
 const m = vi.mocked(prisma, true);
 const getMarketConfig = vi.mocked(marketConfigurationService.get);
 const getVendorAccount = vi.mocked(subscriptionsService.getVendorAccount);
+const listVendorMarkets = vi.mocked(vendorMarketsService.listForVendor);
 
 const BASE_ACCOUNT = {
   verificationStatus: "verified",
@@ -65,6 +71,9 @@ beforeEach(() => {
   m.flashSale.count.mockResolvedValue(0);
   getMarketConfig.mockResolvedValue({ regularDeliveriesEnabled: false, communityBuyEnabled: false } as never);
   getVendorAccount.mockResolvedValue(BASE_ACCOUNT);
+  listVendorMarkets.mockResolvedValue([
+    { id: "vma-1", vendorId: "vendor-1", marketCode: "GB", countryName: "GB", currency: "GBP", enabled: true, createdAt: new Date(), updatedAt: new Date() },
+  ] as never);
 });
 
 describe("vendorDashboardService.getDashboard — urgent_actions", () => {
@@ -183,14 +192,74 @@ describe("vendorDashboardService.getDashboard — marketing_tools (market-aware 
     expect(result.marketing_tools.some((t) => t.type === "community_buy")).toBe(true);
   });
 
-  it("never queries or shows market-gated tools for a vendor with no country set", async () => {
+  it("never queries or shows market-gated tools for a vendor with no country set and no market assignments", async () => {
     m.vendor.findUnique.mockResolvedValue({ id: "vendor-1", storeName: "Test Store", country: null, verificationStatus: "VERIFIED" } as never);
+    listVendorMarkets.mockResolvedValue([] as never);
 
     const result = await vendorDashboardService.getDashboard("user-1");
 
     expect(getMarketConfig).not.toHaveBeenCalled();
     expect(result.marketing_tools.some((t) => t.type === "regular_deliveries")).toBe(false);
     expect(result.marketing_tools.some((t) => t.type === "community_buy")).toBe(false);
+  });
+
+  it("a two-market vendor (GB + FR) sees a tool enabled in EITHER market — not just their primary one", async () => {
+    listVendorMarkets.mockResolvedValue([
+      { id: "vma-1", vendorId: "vendor-1", marketCode: "GB", countryName: "United Kingdom", currency: "GBP", enabled: true, createdAt: new Date(), updatedAt: new Date() },
+      { id: "vma-2", vendorId: "vendor-1", marketCode: "FR", countryName: "France", currency: "EUR", enabled: true, createdAt: new Date(), updatedAt: new Date() },
+    ] as never);
+    getMarketConfig.mockImplementation(async (code: string) =>
+      (code === "FR"
+        ? { regularDeliveriesEnabled: true, communityBuyEnabled: false }
+        : { regularDeliveriesEnabled: false, communityBuyEnabled: false }) as never,
+    );
+
+    const result = await vendorDashboardService.getDashboard("user-1");
+
+    expect(getMarketConfig).toHaveBeenCalledWith("GB");
+    expect(getMarketConfig).toHaveBeenCalledWith("FR");
+    expect(result.marketing_tools.some((t) => t.type === "regular_deliveries")).toBe(true);
+  });
+
+  it("a disabled (inactive) market assignment is excluded from tool visibility", async () => {
+    listVendorMarkets.mockResolvedValue([
+      { id: "vma-1", vendorId: "vendor-1", marketCode: "GB", countryName: "United Kingdom", currency: "GBP", enabled: true, createdAt: new Date(), updatedAt: new Date() },
+      { id: "vma-2", vendorId: "vendor-1", marketCode: "FR", countryName: "France", currency: "EUR", enabled: false, createdAt: new Date(), updatedAt: new Date() },
+    ] as never);
+    getMarketConfig.mockImplementation(async (code: string) =>
+      (code === "FR"
+        ? { regularDeliveriesEnabled: true, communityBuyEnabled: false }
+        : { regularDeliveriesEnabled: false, communityBuyEnabled: false }) as never,
+    );
+
+    const result = await vendorDashboardService.getDashboard("user-1");
+
+    expect(getMarketConfig).not.toHaveBeenCalledWith("FR");
+    expect(result.marketing_tools.some((t) => t.type === "regular_deliveries")).toBe(false);
+  });
+});
+
+describe("vendorDashboardService.getDashboard — markets served", () => {
+  it("returns every market assignment, flagging which one is the primary (matches Vendor.country)", async () => {
+    m.vendor.findUnique.mockResolvedValue({ id: "vendor-1", storeName: "Test Store", country: "United Kingdom", verificationStatus: "VERIFIED" } as never);
+    listVendorMarkets.mockResolvedValue([
+      { id: "vma-1", vendorId: "vendor-1", marketCode: "GB", countryName: "United Kingdom", currency: "GBP", enabled: true, createdAt: new Date(), updatedAt: new Date() },
+      { id: "vma-2", vendorId: "vendor-1", marketCode: "FR", countryName: "France", currency: "EUR", enabled: true, createdAt: new Date(), updatedAt: new Date() },
+    ] as never);
+
+    const result = await vendorDashboardService.getDashboard("user-1");
+
+    expect(result.markets).toHaveLength(2);
+    expect(result.markets.find((mkt) => mkt.marketCode === "GB")?.isPrimary).toBe(true);
+    expect(result.markets.find((mkt) => mkt.marketCode === "FR")?.isPrimary).toBe(false);
+    // Each market keeps its own resolved currency — never collapsed into one.
+    expect(result.markets.find((mkt) => mkt.marketCode === "FR")?.currency).toBe("EUR");
+    expect(result.markets.find((mkt) => mkt.marketCode === "GB")?.currency).toBe("GBP");
+  });
+
+  it("a single-market vendor still gets a one-item markets array, never a bare missing field", async () => {
+    const result = await vendorDashboardService.getDashboard("user-1");
+    expect(result.markets).toHaveLength(1);
   });
 });
 

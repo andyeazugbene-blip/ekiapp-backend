@@ -244,12 +244,37 @@ model Vendor {
   subscriptionOffers          SubscriptionOffer[]
   automationSettings          VendorAutomationSetting[]
   automationRuns              AutomationRun[]
+  marketAssignments           VendorMarketAssignment[]
   createdAt                   DateTime                  @default(now())
   updatedAt                   DateTime                  @updatedAt
 
   @@index([verificationStatus, createdAt])
   @@index([createdAt])
   @@index([isSuspended])
+}
+
+// A vendor's PRIMARY market stays `Vendor.country`/`Vendor.currency` (unchanged —
+// every existing single-country call site keeps working against the primary
+// market with zero behavior change). This table is the ADDITIVE layer: a vendor
+// may hold more than one active assignment, each an independent approved launch
+// market with its own resolved currency, so "UK + France" never collapses into
+// one mixed value. `marketCode` is the canonical ISO code from
+// shared/currency.ts's LAUNCH_MARKET_COUNTRIES — never a free-text country name —
+// so gating code compares codes, not strings that can vary in spelling/case.
+model VendorMarketAssignment {
+  id          String   @id @default(cuid())
+  vendorId    String
+  vendor      Vendor   @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+  marketCode  String
+  countryName String
+  currency    String
+  enabled     Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@unique([vendorId, marketCode])
+  @@index([vendorId, enabled])
+  @@index([marketCode, enabled])
 }
 
 model PayoutMethod {

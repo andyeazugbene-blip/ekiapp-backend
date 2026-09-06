@@ -1,5 +1,6 @@
 import { prisma } from "../../lib/prisma";
 import { AppError } from "../../shared/errors/app-error";
+import { vendorMarketsService } from "../vendors/vendor-markets.service";
 import { marketConfigurationService } from "./market-configuration.service";
 
 /**
@@ -26,6 +27,14 @@ export const organiserSupplierService = {
     const vendor = await prisma.vendor.findUnique({ where: { id: vendorId }, select: { verificationStatus: true } });
     if (!vendor || vendor.verificationStatus !== "VERIFIED") {
       throw new AppError("Only a verified vendor may apply as a Community Buy supplier", 403);
+    }
+    // A vendor may apply as a Community Buy supplier only for a market they
+    // actually have an active VendorMarketAssignment for — otherwise a
+    // vendor operating only in the UK could apply to supply France's
+    // Community Buy just by sending a different country string, since this
+    // application was previously decoupled from the vendor's own markets.
+    if (!(await vendorMarketsService.hasActiveMarket(vendorId, country))) {
+      throw new AppError("You can only apply as a supplier for a market your vendor account is assigned to", 403);
     }
     const existing = await prisma.supplierProfile.findUnique({ where: { vendorId } });
     if (existing) throw new AppError("Supplier application already exists", 409);
