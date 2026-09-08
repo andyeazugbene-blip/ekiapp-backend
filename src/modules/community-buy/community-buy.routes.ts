@@ -7,6 +7,7 @@ import {
   applyAsSupplier,
   confirmFulfilmentInventory,
   confirmSupplierCommitment,
+  declineSupplierCommitment,
   pledgeContribution,
   createSupportCase,
   createOrganiserCampaign,
@@ -41,6 +42,7 @@ import {
   organiserConfirmFulfilmentCompletion,
   postCampaignUpdate,
   publishOrganiserCampaign,
+  reassignCampaignSupplier,
   requestCampaignExtension,
   retryContributionCharge,
   setFulfilmentPlan,
@@ -86,6 +88,9 @@ organiserRouter.get("/suppliers", asyncHandler(listVerifiedSuppliers));
 organiserRouter.get("/campaigns", asyncHandler(listMyOrganiserCampaigns));
 organiserRouter.post("/campaigns", asyncHandler(createOrganiserCampaign));
 organiserRouter.patch("/campaigns/:id", asyncHandler(updateOrganiserCampaign));
+// Necessary companion to supplier decline — moves a still-draft campaign
+// to a different supplier so a decline is never a dead end.
+organiserRouter.post("/campaigns/:id/supplier", asyncHandler(reassignCampaignSupplier));
 organiserRouter.post("/campaigns/:id/submit", asyncHandler(submitOrganiserCampaign));
 organiserRouter.post("/campaigns/:id/publish", asyncHandler(publishOrganiserCampaign));
 // Rescue-window actions — doc §8. "Fulfil anyway below minimum" does not
@@ -113,6 +118,7 @@ supplierRouter.get("/profile", asyncHandler(getMySupplierProfile));
 supplierRouter.post("/applications", asyncHandler(applyAsSupplier));
 supplierRouter.get("/campaigns", asyncHandler(listMySupplierCampaigns));
 supplierRouter.post("/campaigns/:id/supplier-commitment", asyncHandler(confirmSupplierCommitment));
+supplierRouter.post("/campaigns/:id/decline", asyncHandler(declineSupplierCommitment));
 supplierRouter.get("/campaigns/:id/fulfilment", asyncHandler(getSupplierFulfilment));
 supplierRouter.post("/campaigns/:id/fulfilment/confirm-inventory", asyncHandler(confirmFulfilmentInventory));
 supplierRouter.post("/campaigns/:id/fulfilment/plan", asyncHandler(setFulfilmentPlan));

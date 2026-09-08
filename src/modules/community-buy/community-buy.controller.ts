@@ -224,6 +224,27 @@ export async function confirmSupplierCommitment(request: Request, response: Resp
   response.json({ campaign: await communityCampaignsService.confirmSupplierCommitment(vendorId, requireIdParam(request)) });
 }
 
+export async function declineSupplierCommitment(request: Request, response: Response): Promise<void> {
+  const userId = requireUserId(request);
+  const vendorId = await requireVendorId(userId);
+  const { reason } = request.body ?? {};
+  const campaign = await communityCampaignsService.declineSupplierCommitment(
+    userId,
+    vendorId,
+    requireIdParam(request),
+    typeof reason === "string" ? reason : undefined,
+  );
+  response.json({ campaign });
+}
+
+export async function reassignCampaignSupplier(request: Request, response: Response): Promise<void> {
+  const userId = requireUserId(request);
+  const { supplierId } = request.body ?? {};
+  if (typeof supplierId !== "string" || !supplierId) throw new AppError("supplierId is required", 400);
+  const campaign = await communityCampaignsService.reassignSupplier(userId, requireIdParam(request), supplierId);
+  response.json({ campaign });
+}
+
 // ─── Supplier fulfilment — doc Phase 8 ─────────────────────────────────
 
 export async function getSupplierFulfilment(request: Request, response: Response): Promise<void> {

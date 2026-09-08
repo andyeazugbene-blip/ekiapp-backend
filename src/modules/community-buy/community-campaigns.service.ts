@@ -134,6 +134,42 @@ export const communityCampaignsService = {
     });
   },
 
+  /**
+   * Necessary companion to declineSupplierCommitment() above — without
+   * this, a decline would be a dead end, since the organiser would have no
+   * way to move the campaign forward with a different supplier. Only
+   * valid pre-commitment (mirrors update()'s financial-terms-locked gate);
+   * resets the commitment/decline state so the new supplier starts clean.
+   */
+  async reassignSupplier(userId: string, campaignId: string, newSupplierId: string) {
+    const campaign = await this.requireOwnedByOrganiser(userId, campaignId);
+    if (campaign.status !== "DRAFT" && campaign.status !== "CHANGES_REQUIRED") {
+      throw new AppError("The supplier can only be changed while a campaign is in draft", 409);
+    }
+    if (campaign.termsLockedAt) {
+      throw new AppError("This campaign's terms are locked after the first confirmed contribution", 409);
+    }
+    if (newSupplierId === campaign.supplierId) {
+      throw new AppError("This is already the assigned supplier", 409);
+    }
+    const supplier = await prisma.supplierProfile.findUnique({ where: { id: newSupplierId } });
+    if (!supplier || !supplier.isVerified) throw new AppError("Supplier not found or not verified", 404);
+    if (supplier.isRestricted) throw new AppError("This supplier is currently restricted and cannot take on new campaigns", 403);
+    if (supplier.country !== campaign.country) {
+      throw new AppError("Supplier must be based in the same market as the campaign", 400);
+    }
+    return prisma.communityCampaign.update({
+      where: { id: campaignId },
+      data: {
+        supplierId: newSupplierId,
+        supplierCommitted: false,
+        supplierCommittedAt: null,
+        supplierDeclinedAt: null,
+        supplierDeclineReason: null,
+      },
+    });
+  },
+
   /** Supplier-side commitment — doc screens 115-117. Required before the organiser can submit for admin review. */
   async confirmSupplierCommitment(vendorId: string, campaignId: string) {
     const supplier = await prisma.supplierProfile.findUnique({ where: { vendorId } });
@@ -149,6 +185,51 @@ export const communityCampaignsService = {
       where: { id: campaignId },
       data: { supplierCommitted: true, supplierCommittedAt: new Date() },
     });
+  },
+
+  /**
+   * Client spec (Community Buy doc, Screen CB67) requires a real Decline
+   * alongside Accept. Deliberately does NOT touch campaign.status or
+   * supplierId — a restricted supplier may still decline (restriction only
+   * blocks taking on NEW work, not backing out of an unwanted invite).
+   * The organiser must call reassignSupplier() below to move forward;
+   * this only records the decline and notifies them.
+   */
+  async declineSupplierCommitment(userId: string, vendorId: string, campaignId: string, reason?: string) {
+    const supplier = await prisma.supplierProfile.findUnique({ where: { vendorId } });
+    const campaign = await prisma.communityCampaign.findUnique({ where: { id: campaignId }, include: { organiser: true } });
+    if (!campaign || !supplier || campaign.supplierId !== supplier.id) {
+      throw new AppError("Campaign not found", 404);
+    }
+    if (campaign.status !== "DRAFT" && campaign.status !== "CHANGES_REQUIRED") {
+      throw new AppError("This campaign is not awaiting your decision", 409);
+    }
+    if (campaign.supplierCommitted) {
+      throw new AppError("You have already accepted this campaign", 409);
+    }
+    if (campaign.supplierDeclinedAt) {
+      throw new AppError("You have already declined this campaign", 409);
+    }
+    const updated = await prisma.communityCampaign.update({
+      where: { id: campaignId },
+      data: { supplierDeclinedAt: new Date(), supplierDeclineReason: reason?.trim() || null },
+    });
+    await recordAudit({
+      actorId: userId,
+      action: "community_campaign.supplier_declined",
+      entityType: "CommunityCampaign",
+      entityId: campaignId,
+      reason,
+      afterState: { supplierDeclinedAt: updated.supplierDeclinedAt, supplierDeclineReason: updated.supplierDeclineReason },
+    });
+    await notifyCampaign(
+      campaign.organiser.userId,
+      "supplier_declined",
+      "Supplier declined your campaign",
+      reason ? `The supplier declined: ${reason}` : "The supplier declined this campaign. Choose a different supplier to continue.",
+      campaignId,
+    );
+    return updated;
   },
 
   async submit(userId: string, campaignId: string) {

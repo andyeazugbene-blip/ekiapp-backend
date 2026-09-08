@@ -2176,6 +2176,13 @@ model CommunityCampaign {
   fundingOutcome            FundingOutcome   @default(PENDING)
   supplierCommitted         Boolean          @default(false)
   supplierCommittedAt       DateTime?
+  // Distinct from CHANGES_REQUIRED (which always means "admin sent this
+  // back to the organiser") — a supplier decline never touches campaign
+  // status, since the organiser still needs to reassign a new supplier
+  // (reassignSupplier() below) before doing anything else. Cleared on
+  // reassignment so a fresh supplier starts from a clean slate.
+  supplierDeclinedAt        DateTime?
+  supplierDeclineReason     String?
   rescueDurationMinutes     Int              @default(2880)
   rescueEndsAt              DateTime?
   extensionCount            Int              @default(0)

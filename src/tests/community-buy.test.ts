@@ -19,6 +19,7 @@ vi.mock("../lib/prisma", () => ({
     supplierProfile: { findUnique: vi.fn(), findMany: vi.fn(), update: vi.fn() },
     user: { findUnique: vi.fn() },
     marketConfiguration: { findUnique: vi.fn(), count: vi.fn(), upsert: vi.fn() },
+    auditLog: { create: vi.fn() },
     $transaction: vi.fn(),
   },
 }));
@@ -1521,5 +1522,150 @@ describe("communityCampaignsService.postCampaignUpdate — real organiser/suppli
       expect.objectContaining({ data: expect.objectContaining({ authorRole: "SUPPLIER" }) }),
     );
     expect(result.authorRole).toBe("SUPPLIER");
+  });
+});
+
+describe("communityCampaignsService.declineSupplierCommitment — real decline capability (client spec, Screen CB67)", () => {
+  it("lets an assigned, un-committed supplier decline with a reason, records the decline, notifies the organiser, and writes an audit log", async () => {
+    m.supplierProfile.findUnique.mockResolvedValue({ id: "sup-1", vendorId: "vendor-1" } as never);
+    m.communityCampaign.findUnique.mockResolvedValue({
+      id: "camp-1", supplierId: "sup-1", status: "DRAFT", supplierCommitted: false, supplierDeclinedAt: null,
+      organiser: { userId: "organiser-1" },
+    } as never);
+    m.communityCampaign.update.mockResolvedValue({ id: "camp-1", supplierDeclinedAt: new Date(), supplierDeclineReason: "Out of stock this month" } as never);
+
+    const result = await communityCampaignsService.declineSupplierCommitment("supplier-user-1", "vendor-1", "camp-1", "Out of stock this month");
+
+    expect(m.communityCampaign.update).toHaveBeenCalledWith({
+      where: { id: "camp-1" },
+      data: { supplierDeclinedAt: expect.any(Date), supplierDeclineReason: "Out of stock this month" },
+    });
+    expect(result.supplierDeclineReason).toBe("Out of stock this month");
+    // Organiser sees the updated state — the returned campaign already
+    // carries it, and is notified separately.
+    expect(notificationsService.enqueue).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: "organiser-1", type: "COMMUNITY_CAMPAIGN_UPDATE" }),
+    );
+    expect(m.auditLog.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ actorId: "supplier-user-1", action: "community_campaign.supplier_declined", entityType: "CommunityCampaign", entityId: "camp-1" }),
+    }));
+  });
+
+  it("rejects a vendor who isn't a supplier at all (unauthorized)", async () => {
+    m.supplierProfile.findUnique.mockResolvedValue(null);
+    m.communityCampaign.findUnique.mockResolvedValue({ id: "camp-1", supplierId: "sup-1", status: "DRAFT" } as never);
+    await expect(
+      communityCampaignsService.declineSupplierCommitment("some-user", "vendor-x", "camp-1"),
+    ).rejects.toMatchObject({ statusCode: 404 });
+    expect(m.communityCampaign.update).not.toHaveBeenCalled();
+  });
+
+  it("rejects a real supplier declining a campaign that isn't assigned to them (unrelated campaign)", async () => {
+    m.supplierProfile.findUnique.mockResolvedValue({ id: "sup-2", vendorId: "vendor-2" } as never);
+    m.communityCampaign.findUnique.mockResolvedValue({ id: "camp-1", supplierId: "sup-1", status: "DRAFT" } as never);
+    await expect(
+      communityCampaignsService.declineSupplierCommitment("supplier-user-2", "vendor-2", "camp-1"),
+    ).rejects.toMatchObject({ statusCode: 404 });
+    expect(m.communityCampaign.update).not.toHaveBeenCalled();
+  });
+
+  it("rejects declining a campaign that is no longer in a valid state (already LIVE)", async () => {
+    m.supplierProfile.findUnique.mockResolvedValue({ id: "sup-1", vendorId: "vendor-1" } as never);
+    m.communityCampaign.findUnique.mockResolvedValue({ id: "camp-1", supplierId: "sup-1", status: "LIVE", supplierCommitted: true } as never);
+    await expect(
+      communityCampaignsService.declineSupplierCommitment("supplier-user-1", "vendor-1", "camp-1"),
+    ).rejects.toMatchObject({ statusCode: 409 });
+    expect(m.communityCampaign.update).not.toHaveBeenCalled();
+  });
+
+  it("rejects declining a campaign the supplier already accepted", async () => {
+    m.supplierProfile.findUnique.mockResolvedValue({ id: "sup-1", vendorId: "vendor-1" } as never);
+    m.communityCampaign.findUnique.mockResolvedValue({ id: "camp-1", supplierId: "sup-1", status: "DRAFT", supplierCommitted: true } as never);
+    await expect(
+      communityCampaignsService.declineSupplierCommitment("supplier-user-1", "vendor-1", "camp-1"),
+    ).rejects.toMatchObject({ statusCode: 409 });
+  });
+
+  it("rejects a duplicate decline of an already-declined campaign", async () => {
+    m.supplierProfile.findUnique.mockResolvedValue({ id: "sup-1", vendorId: "vendor-1" } as never);
+    m.communityCampaign.findUnique.mockResolvedValue({
+      id: "camp-1", supplierId: "sup-1", status: "DRAFT", supplierCommitted: false, supplierDeclinedAt: new Date(),
+    } as never);
+    await expect(
+      communityCampaignsService.declineSupplierCommitment("supplier-user-1", "vendor-1", "camp-1", "still declining"),
+    ).rejects.toMatchObject({ statusCode: 409 });
+    expect(m.communityCampaign.update).not.toHaveBeenCalled();
+  });
+
+  it("does not require a reason — decline with no reason still succeeds", async () => {
+    m.supplierProfile.findUnique.mockResolvedValue({ id: "sup-1", vendorId: "vendor-1" } as never);
+    m.communityCampaign.findUnique.mockResolvedValue({
+      id: "camp-1", supplierId: "sup-1", status: "CHANGES_REQUIRED", supplierCommitted: false, supplierDeclinedAt: null,
+      organiser: { userId: "organiser-1" },
+    } as never);
+    m.communityCampaign.update.mockResolvedValue({ id: "camp-1", supplierDeclinedAt: new Date(), supplierDeclineReason: null } as never);
+    const result = await communityCampaignsService.declineSupplierCommitment("supplier-user-1", "vendor-1", "camp-1");
+    expect(result.supplierDeclineReason).toBeNull();
+  });
+});
+
+describe("communityCampaignsService.reassignSupplier — necessary companion to decline", () => {
+  it("reassigns to a new verified supplier and clears prior commitment/decline state", async () => {
+    m.communityCampaign.findUnique.mockResolvedValue({ id: "camp-1", organiserId: "org-1", status: "DRAFT", termsLockedAt: null, supplierId: "sup-1", country: "GB" } as never);
+    m.organiserProfile.findUnique.mockResolvedValue({ id: "org-1" } as never);
+    m.supplierProfile.findUnique.mockResolvedValue({ id: "sup-2", isVerified: true, isRestricted: false, country: "GB" } as never);
+    m.communityCampaign.update.mockResolvedValue({ id: "camp-1", supplierId: "sup-2" } as never);
+
+    await communityCampaignsService.reassignSupplier("organiser-user-1", "camp-1", "sup-2");
+
+    expect(m.communityCampaign.update).toHaveBeenCalledWith({
+      where: { id: "camp-1" },
+      data: { supplierId: "sup-2", supplierCommitted: false, supplierCommittedAt: null, supplierDeclinedAt: null, supplierDeclineReason: null },
+    });
+  });
+
+  it("rejects a non-owning organiser", async () => {
+    m.communityCampaign.findUnique.mockResolvedValue({ id: "camp-1", organiserId: "someone-else" } as never);
+    m.organiserProfile.findUnique.mockResolvedValue({ id: "org-1" } as never);
+    await expect(communityCampaignsService.reassignSupplier("organiser-user-1", "camp-1", "sup-2")).rejects.toMatchObject({ statusCode: 404 });
+  });
+
+  it("rejects reassignment once terms are locked", async () => {
+    m.communityCampaign.findUnique.mockResolvedValue({ id: "camp-1", organiserId: "org-1", status: "DRAFT", termsLockedAt: new Date(), supplierId: "sup-1" } as never);
+    m.organiserProfile.findUnique.mockResolvedValue({ id: "org-1" } as never);
+    await expect(communityCampaignsService.reassignSupplier("organiser-user-1", "camp-1", "sup-2")).rejects.toMatchObject({ statusCode: 409 });
+  });
+
+  it("rejects reassignment once the campaign is no longer in draft", async () => {
+    m.communityCampaign.findUnique.mockResolvedValue({ id: "camp-1", organiserId: "org-1", status: "LIVE", termsLockedAt: null, supplierId: "sup-1" } as never);
+    m.organiserProfile.findUnique.mockResolvedValue({ id: "org-1" } as never);
+    await expect(communityCampaignsService.reassignSupplier("organiser-user-1", "camp-1", "sup-2")).rejects.toMatchObject({ statusCode: 409 });
+  });
+
+  it("rejects an unverified new supplier", async () => {
+    m.communityCampaign.findUnique.mockResolvedValue({ id: "camp-1", organiserId: "org-1", status: "DRAFT", termsLockedAt: null, supplierId: "sup-1", country: "GB" } as never);
+    m.organiserProfile.findUnique.mockResolvedValue({ id: "org-1" } as never);
+    m.supplierProfile.findUnique.mockResolvedValue({ id: "sup-2", isVerified: false, isRestricted: false, country: "GB" } as never);
+    await expect(communityCampaignsService.reassignSupplier("organiser-user-1", "camp-1", "sup-2")).rejects.toMatchObject({ statusCode: 404 });
+  });
+
+  it("rejects a restricted new supplier", async () => {
+    m.communityCampaign.findUnique.mockResolvedValue({ id: "camp-1", organiserId: "org-1", status: "DRAFT", termsLockedAt: null, supplierId: "sup-1", country: "GB" } as never);
+    m.organiserProfile.findUnique.mockResolvedValue({ id: "org-1" } as never);
+    m.supplierProfile.findUnique.mockResolvedValue({ id: "sup-2", isVerified: true, isRestricted: true, country: "GB" } as never);
+    await expect(communityCampaignsService.reassignSupplier("organiser-user-1", "camp-1", "sup-2")).rejects.toMatchObject({ statusCode: 403 });
+  });
+
+  it("rejects a supplier from a different market", async () => {
+    m.communityCampaign.findUnique.mockResolvedValue({ id: "camp-1", organiserId: "org-1", status: "DRAFT", termsLockedAt: null, supplierId: "sup-1", country: "GB" } as never);
+    m.organiserProfile.findUnique.mockResolvedValue({ id: "org-1" } as never);
+    m.supplierProfile.findUnique.mockResolvedValue({ id: "sup-2", isVerified: true, isRestricted: false, country: "FR" } as never);
+    await expect(communityCampaignsService.reassignSupplier("organiser-user-1", "camp-1", "sup-2")).rejects.toMatchObject({ statusCode: 400 });
+  });
+
+  it("rejects reassigning to the same supplier already assigned", async () => {
+    m.communityCampaign.findUnique.mockResolvedValue({ id: "camp-1", organiserId: "org-1", status: "DRAFT", termsLockedAt: null, supplierId: "sup-1", country: "GB" } as never);
+    m.organiserProfile.findUnique.mockResolvedValue({ id: "org-1" } as never);
+    await expect(communityCampaignsService.reassignSupplier("organiser-user-1", "camp-1", "sup-1")).rejects.toMatchObject({ statusCode: 409 });
   });
 });
