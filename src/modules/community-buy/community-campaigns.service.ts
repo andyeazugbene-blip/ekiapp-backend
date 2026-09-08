@@ -23,14 +23,28 @@ export interface CreateCampaignInput {
 
 const MAX_EXTENSIONS = 1;
 
-async function notifyCampaign(userId: string, event: string, title: string, body: string, campaignId: string) {
-  await notificationsService.enqueue({
-    userId,
-    type: "COMMUNITY_CAMPAIGN_UPDATE",
-    title,
-    body,
-    data: { type: "community_campaign_update", event, campaignId },
-  });
+async function notifyCampaign(userId: string, event: string, title: string, body: string, campaignId: string, dedupeKey?: string) {
+  // notificationsService.enqueue() is documented as never throwing (its own
+  // internal try/catches cover the DB insert and the push send) — this is
+  // still wrapped defensively because a notification must never be able to
+  // fail a business transaction that already succeeded, regardless of what
+  // the dependency currently promises.
+  try {
+    await notificationsService.enqueue({
+      userId,
+      type: "COMMUNITY_CAMPAIGN_UPDATE",
+      title,
+      body,
+      data: { type: "community_campaign_update", event, campaignId },
+      dedupeKey,
+    });
+  } catch (error) {
+    logger.error("Community Buy notification failed (non-blocking)", {
+      event,
+      campaignId,
+      errorMessage: error instanceof Error ? error.message : String(error),
+    });
+  }
 }
 
 export const communityCampaignsService = {
@@ -42,7 +56,7 @@ export const communityCampaignsService = {
     const config = await marketConfigurationService.get(input.country);
     if (!config?.communityBuyEnabled) throw new AppError("Community Buy is not available in this market yet", 403);
 
-    const supplier = await prisma.supplierProfile.findUnique({ where: { id: input.supplierId } });
+    const supplier = await prisma.supplierProfile.findUnique({ where: { id: input.supplierId }, include: { vendor: { select: { userId: true } } } });
     if (!supplier || !supplier.isVerified) throw new AppError("Supplier not found or not verified", 404);
     if (supplier.isRestricted) throw new AppError("This supplier is currently restricted and cannot take on new campaigns", 403);
     if (supplier.country !== input.country) {
@@ -69,7 +83,7 @@ export const communityCampaignsService = {
       throw new AppError("Deadline must be a valid future date", 400);
     }
 
-    return prisma.communityCampaign.create({
+    const campaign = await prisma.communityCampaign.create({
       data: {
         organiserId: organiser.id,
         supplierId: input.supplierId,
@@ -89,6 +103,18 @@ export const communityCampaignsService = {
         status: "DRAFT",
       },
     });
+    // Real supplier invitation — fires exactly when the commitment state
+    // actually comes into existence (supplierId assigned, supplierCommitted:
+    // false), not merely because a campaign object exists.
+    await notifyCampaign(
+      supplier.vendor.userId,
+      "supplier_invited",
+      "New Community Buy invitation",
+      `An organiser wants you to supply "${campaign.title}" — ${input.minimumShares} to ${input.maximumShares} shares. Review and accept or decline.`,
+      campaign.id,
+      `supplier_invited:${campaign.id}:${supplier.id}`,
+    );
+    return campaign;
   },
 
   async update(userId: string, campaignId: string, input: Partial<CreateCampaignInput>) {
@@ -152,13 +178,13 @@ export const communityCampaignsService = {
     if (newSupplierId === campaign.supplierId) {
       throw new AppError("This is already the assigned supplier", 409);
     }
-    const supplier = await prisma.supplierProfile.findUnique({ where: { id: newSupplierId } });
+    const supplier = await prisma.supplierProfile.findUnique({ where: { id: newSupplierId }, include: { vendor: { select: { userId: true } } } });
     if (!supplier || !supplier.isVerified) throw new AppError("Supplier not found or not verified", 404);
     if (supplier.isRestricted) throw new AppError("This supplier is currently restricted and cannot take on new campaigns", 403);
     if (supplier.country !== campaign.country) {
       throw new AppError("Supplier must be based in the same market as the campaign", 400);
     }
-    return prisma.communityCampaign.update({
+    const updated = await prisma.communityCampaign.update({
       where: { id: campaignId },
       data: {
         supplierId: newSupplierId,
@@ -168,12 +194,23 @@ export const communityCampaignsService = {
         supplierDeclineReason: null,
       },
     });
+    // Same real invitation event as create() — a fresh commitment state now
+    // exists for this (new) supplier.
+    await notifyCampaign(
+      supplier.vendor.userId,
+      "supplier_invited",
+      "New Community Buy invitation",
+      `An organiser wants you to supply "${campaign.title}" — ${campaign.minimumShares} to ${campaign.maximumShares} shares. Review and accept or decline.`,
+      campaignId,
+      `supplier_invited:${campaignId}:${supplier.id}`,
+    );
+    return updated;
   },
 
   /** Supplier-side commitment — doc screens 115-117. Required before the organiser can submit for admin review. */
   async confirmSupplierCommitment(vendorId: string, campaignId: string) {
     const supplier = await prisma.supplierProfile.findUnique({ where: { vendorId } });
-    const campaign = await prisma.communityCampaign.findUnique({ where: { id: campaignId } });
+    const campaign = await prisma.communityCampaign.findUnique({ where: { id: campaignId }, include: { organiser: true } });
     if (!campaign || !supplier || campaign.supplierId !== supplier.id) {
       throw new AppError("Campaign not found", 404);
     }
@@ -181,10 +218,23 @@ export const communityCampaignsService = {
     if (campaign.status !== "DRAFT" && campaign.status !== "CHANGES_REQUIRED") {
       throw new AppError("This campaign is not awaiting supplier commitment", 409);
     }
-    return prisma.communityCampaign.update({
+    const updated = await prisma.communityCampaign.update({
       where: { id: campaignId },
       data: { supplierCommitted: true, supplierCommittedAt: new Date() },
     });
+    // Fires only after the state transition above actually succeeds —
+    // deduped per (campaign, supplier) so a retried/duplicate accept call
+    // (nothing here currently blocks calling this twice while still DRAFT)
+    // notifies the organiser once, not once per call.
+    await notifyCampaign(
+      campaign.organiser.userId,
+      "supplier_accepted",
+      "Supplier accepted your campaign",
+      `Your supplier accepted "${campaign.title}". You can now submit it for review.`,
+      campaignId,
+      `supplier_accepted:${campaignId}:${supplier.id}`,
+    );
+    return updated;
   },
 
   /**

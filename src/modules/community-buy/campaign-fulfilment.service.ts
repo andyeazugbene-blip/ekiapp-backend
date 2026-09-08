@@ -1,4 +1,5 @@
 import { prisma } from "../../lib/prisma";
+import { logger } from "../../lib/logger";
 import { AppError } from "../../shared/errors/app-error";
 import { notificationsService } from "../notifications/notifications.service";
 
@@ -61,14 +62,27 @@ export const campaignFulfilmentService = {
   },
 
   async confirmInventory(vendorId: string, campaignId: string) {
-    const { fulfilment } = await requireSupplierOwned(vendorId, campaignId);
+    const { campaign, fulfilment } = await requireSupplierOwned(vendorId, campaignId);
     if (fulfilment.status !== "AWAITING_INVENTORY_CONFIRMATION") {
       throw new AppError("Inventory has already been confirmed for this campaign", 409);
     }
-    return prisma.campaignFulfilment.update({
+    const updated = await prisma.campaignFulfilment.update({
       where: { campaignId },
       data: { status: "INVENTORY_CONFIRMED", inventoryConfirmedAt: new Date() },
     });
+    // Fires only after the status transition above actually succeeds. The
+    // AWAITING_INVENTORY_CONFIRMATION -> INVENTORY_CONFIRMED move is
+    // one-directional and already guarded above, so a genuine retry gets a
+    // 409 before reaching here — the dedupeKey is defence in depth, not
+    // the only thing preventing a duplicate.
+    await notifyOrganiser(
+      campaign.id,
+      "inventory_confirmed",
+      "Supplier confirmed inventory",
+      `Your supplier confirmed they can fulfil ${campaign.confirmedShares} confirmed share${campaign.confirmedShares === 1 ? "" : "s"} of "${campaign.title}".`,
+      `inventory_confirmed:${campaign.id}`,
+    );
+    return updated;
   },
 
   /** Fulfilment plan — method (delivery/collection), an optional estimated-ready date, and free-text notes. Settable any time before dispatch/collection. */
@@ -147,6 +161,30 @@ export const campaignFulfilmentService = {
     });
   },
 };
+
+async function notifyOrganiser(campaignId: string, event: string, title: string, body: string, dedupeKey: string) {
+  const campaign = await prisma.communityCampaign.findUnique({ where: { id: campaignId }, include: { organiser: true } });
+  if (!campaign) return;
+  // A notification must never be able to fail a fulfilment transition that
+  // already succeeded — see the identical defensive comment on
+  // notifyCampaign() in community-campaigns.service.ts.
+  try {
+    await notificationsService.enqueue({
+      userId: campaign.organiser.userId,
+      type: "COMMUNITY_CAMPAIGN_UPDATE",
+      title,
+      body,
+      data: { type: "community_campaign_update", event, campaignId },
+      dedupeKey,
+    });
+  } catch (error) {
+    logger.error("Community Buy fulfilment notification failed (non-blocking)", {
+      event,
+      campaignId,
+      errorMessage: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
 
 async function notifyOrganiserAndParticipants(campaignId: string, title: string, notifTitle: string, body: string) {
   const campaign = await prisma.communityCampaign.findUnique({

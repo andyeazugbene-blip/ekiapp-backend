@@ -48,6 +48,7 @@ import { communityCampaignsService } from "../modules/community-buy/community-ca
 import { campaignContributionsService } from "../modules/community-buy/campaign-contributions.service";
 import { marketConfigurationService } from "../modules/community-buy/market-configuration.service";
 import { organiserSupplierService } from "../modules/community-buy/organiser-supplier.service";
+import { campaignFulfilmentService } from "../modules/community-buy/campaign-fulfilment.service";
 
 const m = vi.mocked(prisma, true);
 const mSupportCase = vi.mocked(supportCaseService, true);
@@ -1610,10 +1611,13 @@ describe("communityCampaignsService.declineSupplierCommitment — real decline c
 });
 
 describe("communityCampaignsService.reassignSupplier — necessary companion to decline", () => {
-  it("reassigns to a new verified supplier and clears prior commitment/decline state", async () => {
-    m.communityCampaign.findUnique.mockResolvedValue({ id: "camp-1", organiserId: "org-1", status: "DRAFT", termsLockedAt: null, supplierId: "sup-1", country: "GB" } as never);
+  it("reassigns to a new verified supplier, clears prior commitment/decline state, and notifies the new supplier of a fresh invitation", async () => {
+    m.communityCampaign.findUnique.mockResolvedValue({
+      id: "camp-1", organiserId: "org-1", status: "DRAFT", termsLockedAt: null, supplierId: "sup-1", country: "GB",
+      title: "Bulk rice buy", minimumShares: 5, maximumShares: 15,
+    } as never);
     m.organiserProfile.findUnique.mockResolvedValue({ id: "org-1" } as never);
-    m.supplierProfile.findUnique.mockResolvedValue({ id: "sup-2", isVerified: true, isRestricted: false, country: "GB" } as never);
+    m.supplierProfile.findUnique.mockResolvedValue({ id: "sup-2", isVerified: true, isRestricted: false, country: "GB", vendor: { userId: "supplier-user-2" } } as never);
     m.communityCampaign.update.mockResolvedValue({ id: "camp-1", supplierId: "sup-2" } as never);
 
     await communityCampaignsService.reassignSupplier("organiser-user-1", "camp-1", "sup-2");
@@ -1622,6 +1626,11 @@ describe("communityCampaignsService.reassignSupplier — necessary companion to 
       where: { id: "camp-1" },
       data: { supplierId: "sup-2", supplierCommitted: false, supplierCommittedAt: null, supplierDeclinedAt: null, supplierDeclineReason: null },
     });
+    expect(notificationsService.enqueue).toHaveBeenCalledWith(expect.objectContaining({
+      userId: "supplier-user-2",
+      data: { type: "community_campaign_update", event: "supplier_invited", campaignId: "camp-1" },
+      dedupeKey: "supplier_invited:camp-1:sup-2",
+    }));
   });
 
   it("rejects a non-owning organiser", async () => {
@@ -1667,5 +1676,190 @@ describe("communityCampaignsService.reassignSupplier — necessary companion to 
     m.communityCampaign.findUnique.mockResolvedValue({ id: "camp-1", organiserId: "org-1", status: "DRAFT", termsLockedAt: null, supplierId: "sup-1", country: "GB" } as never);
     m.organiserProfile.findUnique.mockResolvedValue({ id: "org-1" } as never);
     await expect(communityCampaignsService.reassignSupplier("organiser-user-1", "camp-1", "sup-1")).rejects.toMatchObject({ statusCode: 409 });
+  });
+});
+
+describe("Phase 8.1 — supplier notifications (invitation, accept, inventory confirmed)", () => {
+  const validInput = {
+    supplierId: "sup-1",
+    title: "Bulk rice buy",
+    country: "GB",
+    currency: "GBP",
+    minimumShares: 5,
+    goalShares: 10,
+    maximumShares: 15,
+    pricePerShareMinor: 1000,
+    deadline: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
+  };
+
+  describe("Event 1 — supplier invitation (create + reassign)", () => {
+    it("create() notifies the assigned supplier of a real invitation with the correct recipient, event, and deep-link data", async () => {
+      m.organiserProfile.findUnique.mockResolvedValue({ id: "org-1", isVerified: true, isRestricted: false } as never);
+      m.marketConfiguration.findUnique.mockResolvedValue({ countryCode: "GB", communityBuyEnabled: true } as never);
+      m.marketConfiguration.count.mockResolvedValue(1);
+      m.supplierProfile.findUnique.mockResolvedValue({ id: "sup-1", isVerified: true, isRestricted: false, country: "GB", vendor: { userId: "supplier-user-1" } } as never);
+      m.communityCampaign.create.mockResolvedValue({ id: "camp-new", title: "Bulk rice buy" } as never);
+
+      const result = await communityCampaignsService.create("organiser-user-1", validInput);
+
+      expect(result.id).toBe("camp-new");
+      expect(notificationsService.enqueue).toHaveBeenCalledTimes(1);
+      expect(notificationsService.enqueue).toHaveBeenCalledWith(expect.objectContaining({
+        userId: "supplier-user-1",
+        type: "COMMUNITY_CAMPAIGN_UPDATE",
+        data: { type: "community_campaign_update", event: "supplier_invited", campaignId: "camp-new" },
+        dedupeKey: "supplier_invited:camp-new:sup-1",
+      }));
+    });
+
+    it("gives two different invitations (different campaign/supplier pairs) different, deterministic dedupe keys", async () => {
+      m.organiserProfile.findUnique.mockResolvedValue({ id: "org-1", isVerified: true, isRestricted: false } as never);
+      m.marketConfiguration.findUnique.mockResolvedValue({ countryCode: "GB", communityBuyEnabled: true } as never);
+      m.marketConfiguration.count.mockResolvedValue(1);
+      m.supplierProfile.findUnique.mockResolvedValue({ id: "sup-1", isVerified: true, isRestricted: false, country: "GB", vendor: { userId: "supplier-user-1" } } as never);
+      m.communityCampaign.create.mockResolvedValueOnce({ id: "camp-a" } as never).mockResolvedValueOnce({ id: "camp-b" } as never);
+
+      await communityCampaignsService.create("organiser-user-1", validInput);
+      await communityCampaignsService.create("organiser-user-1", validInput);
+
+      const keys = vi.mocked(notificationsService.enqueue).mock.calls.map((c) => c[0].dedupeKey);
+      expect(keys).toEqual(["supplier_invited:camp-a:sup-1", "supplier_invited:camp-b:sup-1"]);
+      expect(new Set(keys).size).toBe(2);
+      // Real duplicate suppression for a repeated identical key is enforced
+      // by notificationsService's own DB-unique-constraint on dedupeKey
+      // (notificationsService is mocked here, not re-tested) — this test
+      // only verifies THIS call site produces the correct, stable key.
+    });
+
+    it("does not notify anyone when campaign creation itself fails validation", async () => {
+      m.organiserProfile.findUnique.mockResolvedValue({ id: "org-1", isVerified: true, isRestricted: false } as never);
+      m.marketConfiguration.findUnique.mockResolvedValue({ countryCode: "GB", communityBuyEnabled: true } as never);
+      m.marketConfiguration.count.mockResolvedValue(1);
+      m.supplierProfile.findUnique.mockResolvedValue({ id: "sup-1", isVerified: true, isRestricted: false, country: "GB", vendor: { userId: "supplier-user-1" } } as never);
+      await expect(
+        communityCampaignsService.create("organiser-user-1", { ...validInput, minimumShares: 0 }),
+      ).rejects.toMatchObject({ statusCode: 400 });
+      expect(notificationsService.enqueue).not.toHaveBeenCalled();
+      expect(m.communityCampaign.create).not.toHaveBeenCalled();
+    });
+
+    it("a notification failure during create() does not roll back the already-created campaign", async () => {
+      m.organiserProfile.findUnique.mockResolvedValue({ id: "org-1", isVerified: true, isRestricted: false } as never);
+      m.marketConfiguration.findUnique.mockResolvedValue({ countryCode: "GB", communityBuyEnabled: true } as never);
+      m.marketConfiguration.count.mockResolvedValue(1);
+      m.supplierProfile.findUnique.mockResolvedValue({ id: "sup-1", isVerified: true, isRestricted: false, country: "GB", vendor: { userId: "supplier-user-1" } } as never);
+      m.communityCampaign.create.mockResolvedValue({ id: "camp-new" } as never);
+      vi.mocked(notificationsService.enqueue).mockRejectedValueOnce(new Error("push provider down"));
+
+      const result = await communityCampaignsService.create("organiser-user-1", validInput);
+
+      expect(result.id).toBe("camp-new");
+    });
+  });
+
+  describe("Event 2 — supplier accepts commitment", () => {
+    const acceptCampaign = { id: "camp-1", supplierId: "sup-1", status: "DRAFT", title: "Bulk rice buy", organiser: { userId: "organiser-1" } };
+
+    it("notifies the organiser with the correct event and deep-link data only after the state transition succeeds", async () => {
+      m.supplierProfile.findUnique.mockResolvedValue({ id: "sup-1" } as never);
+      m.communityCampaign.findUnique.mockResolvedValue(acceptCampaign as never);
+      m.communityCampaign.update.mockResolvedValue({ id: "camp-1", supplierCommitted: true } as never);
+
+      const result = await communityCampaignsService.confirmSupplierCommitment("vendor-1", "camp-1");
+
+      expect(result.supplierCommitted).toBe(true);
+      // Notification fires strictly after the update call above, not before.
+      const updateOrder = vi.mocked(m.communityCampaign.update).mock.invocationCallOrder[0];
+      const notifyOrder = vi.mocked(notificationsService.enqueue).mock.invocationCallOrder[0];
+      expect(updateOrder).toBeLessThan(notifyOrder);
+      expect(notificationsService.enqueue).toHaveBeenCalledWith(expect.objectContaining({
+        userId: "organiser-1",
+        data: { type: "community_campaign_update", event: "supplier_accepted", campaignId: "camp-1" },
+        dedupeKey: "supplier_accepted:camp-1:sup-1",
+      }));
+    });
+
+    it("uses the same dedupe key on a repeated/retried accept call, so the real notification layer collapses it", async () => {
+      m.supplierProfile.findUnique.mockResolvedValue({ id: "sup-1" } as never);
+      m.communityCampaign.findUnique.mockResolvedValue(acceptCampaign as never);
+      m.communityCampaign.update.mockResolvedValue({ id: "camp-1", supplierCommitted: true } as never);
+
+      await communityCampaignsService.confirmSupplierCommitment("vendor-1", "camp-1");
+      await communityCampaignsService.confirmSupplierCommitment("vendor-1", "camp-1");
+
+      const keys = vi.mocked(notificationsService.enqueue).mock.calls.map((c) => c[0].dedupeKey);
+      expect(keys).toEqual(["supplier_accepted:camp-1:sup-1", "supplier_accepted:camp-1:sup-1"]);
+    });
+
+    it("creates no notification when an unrelated supplier attempts to accept (unauthorized)", async () => {
+      m.supplierProfile.findUnique.mockResolvedValue({ id: "sup-2" } as never);
+      m.communityCampaign.findUnique.mockResolvedValue({ ...acceptCampaign, supplierId: "sup-1" } as never);
+      await expect(communityCampaignsService.confirmSupplierCommitment("vendor-2", "camp-1")).rejects.toMatchObject({ statusCode: 404 });
+      expect(notificationsService.enqueue).not.toHaveBeenCalled();
+      expect(m.communityCampaign.update).not.toHaveBeenCalled();
+    });
+
+    it("a notification failure does not roll back the accepted state", async () => {
+      m.supplierProfile.findUnique.mockResolvedValue({ id: "sup-1" } as never);
+      m.communityCampaign.findUnique.mockResolvedValue(acceptCampaign as never);
+      m.communityCampaign.update.mockResolvedValue({ id: "camp-1", supplierCommitted: true } as never);
+      vi.mocked(notificationsService.enqueue).mockRejectedValueOnce(new Error("push provider down"));
+
+      const result = await communityCampaignsService.confirmSupplierCommitment("vendor-1", "camp-1");
+
+      expect(result.supplierCommitted).toBe(true);
+    });
+  });
+
+  describe("Event 3 — supplier confirms fulfilment inventory", () => {
+    const inventoryCampaign = { id: "camp-1", supplierId: "sup-1", confirmedShares: 8, title: "Bulk rice buy", organiser: { userId: "organiser-1" } };
+
+    it("notifies the organiser with the confirmed quantity, correct event, and deep-link data", async () => {
+      m.supplierProfile.findUnique.mockResolvedValue({ vendorId: "vendor-1", id: "sup-1" } as never);
+      m.communityCampaign.findUnique
+        .mockResolvedValueOnce(inventoryCampaign as never) // requireSupplierOwned's own lookup
+        .mockResolvedValueOnce(inventoryCampaign as never); // notifyOrganiser's separate lookup
+      m.campaignFulfilment.findUnique.mockResolvedValue({ campaignId: "camp-1", status: "AWAITING_INVENTORY_CONFIRMATION" } as never);
+      m.campaignFulfilment.update.mockResolvedValue({ campaignId: "camp-1", status: "INVENTORY_CONFIRMED" } as never);
+
+      const result = await campaignFulfilmentService.confirmInventory("vendor-1", "camp-1");
+
+      expect(result.status).toBe("INVENTORY_CONFIRMED");
+      expect(notificationsService.enqueue).toHaveBeenCalledWith(expect.objectContaining({
+        userId: "organiser-1",
+        body: expect.stringContaining("8 confirmed shares"),
+        data: { type: "community_campaign_update", event: "inventory_confirmed", campaignId: "camp-1" },
+        dedupeKey: "inventory_confirmed:camp-1",
+      }));
+    });
+
+    it("rejects a duplicate inventory confirmation and does not send a second notification", async () => {
+      m.supplierProfile.findUnique.mockResolvedValue({ vendorId: "vendor-1", id: "sup-1" } as never);
+      m.communityCampaign.findUnique.mockResolvedValue(inventoryCampaign as never);
+      m.campaignFulfilment.findUnique.mockResolvedValue({ campaignId: "camp-1", status: "INVENTORY_CONFIRMED" } as never);
+
+      await expect(campaignFulfilmentService.confirmInventory("vendor-1", "camp-1")).rejects.toMatchObject({ statusCode: 409 });
+      expect(notificationsService.enqueue).not.toHaveBeenCalled();
+      expect(m.campaignFulfilment.update).not.toHaveBeenCalled();
+    });
+
+    it("creates no notification when an unrelated supplier attempts to confirm inventory (unauthorized)", async () => {
+      m.supplierProfile.findUnique.mockResolvedValue({ vendorId: "vendor-2", id: "sup-2" } as never);
+      m.communityCampaign.findUnique.mockResolvedValue({ ...inventoryCampaign, supplierId: "sup-1" } as never);
+      await expect(campaignFulfilmentService.confirmInventory("vendor-2", "camp-1")).rejects.toMatchObject({ statusCode: 404 });
+      expect(notificationsService.enqueue).not.toHaveBeenCalled();
+    });
+
+    it("a notification failure does not roll back the inventory-confirmed state", async () => {
+      m.supplierProfile.findUnique.mockResolvedValue({ vendorId: "vendor-1", id: "sup-1" } as never);
+      m.communityCampaign.findUnique.mockResolvedValue(inventoryCampaign as never);
+      m.campaignFulfilment.findUnique.mockResolvedValue({ campaignId: "camp-1", status: "AWAITING_INVENTORY_CONFIRMATION" } as never);
+      m.campaignFulfilment.update.mockResolvedValue({ campaignId: "camp-1", status: "INVENTORY_CONFIRMED" } as never);
+      vi.mocked(notificationsService.enqueue).mockRejectedValueOnce(new Error("push provider down"));
+
+      const result = await campaignFulfilmentService.confirmInventory("vendor-1", "camp-1");
+
+      expect(result.status).toBe("INVENTORY_CONFIRMED");
+    });
   });
 });
