@@ -119,7 +119,10 @@ export const buyerSubscriptionsService = {
       where: { id },
       include: {
         items: { include: { product: true } },
-        offer: { include: { vendor: { select: { storeName: true } } } },
+        // products: needed so the buyer can see why a specific item is
+        // currently excluded from renewals (pauseReason/pauseExpectedReturnAt)
+        // instead of it just silently disappearing from their next order.
+        offer: { include: { vendor: { select: { storeName: true } }, products: true } },
         renewals: { orderBy: { cycleDate: "desc" }, take: 12 },
       },
     });
