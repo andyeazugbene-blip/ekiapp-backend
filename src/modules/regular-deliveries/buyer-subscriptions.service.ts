@@ -5,9 +5,15 @@ import { AppError } from "../../shared/errors/app-error";
 import { vendorMarketsService } from "../vendors/vendor-markets.service";
 import { getEnabledRegularDeliveryMarketCodes } from "./subscription-offers.service";
 
+// EVERY_4_WEEKS (28 days, fixed) is deliberately distinct from MONTHLY (30
+// days, fixed) — client spec (Regular Delivery doc) lists "Weekly | Every 2
+// weeks | Every 4 weeks | Monthly" as four separate options. Neither uses
+// real calendar-month arithmetic; both are fixed day-counts, matching the
+// existing WEEKLY/BIWEEKLY pattern.
 const FREQUENCY_DAYS: Record<SubscriptionFrequency, number> = {
   WEEKLY: 7,
   BIWEEKLY: 14,
+  EVERY_4_WEEKS: 28,
   MONTHLY: 30,
 };
 
