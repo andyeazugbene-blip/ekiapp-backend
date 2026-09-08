@@ -306,6 +306,7 @@ export const automationService = {
       where: { vendorId },
       orderBy: { createdAt: "desc" },
       take: Math.min(limit, 100),
+      include: { recipient: { select: { name: true, email: true } } },
     });
   },
 
