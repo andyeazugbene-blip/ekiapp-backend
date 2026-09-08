@@ -582,6 +582,7 @@ export const campaignContributionsService = {
         campaign: {
           select: {
             id: true, title: true, status: true, fundingOutcome: true, currency: true, deadline: true,
+            minimumShares: true, goalShares: true, maximumShares: true, confirmedShares: true, rescueEndsAt: true,
             supplier: { select: { vendor: { select: { storeName: true } } } },
           },
         },

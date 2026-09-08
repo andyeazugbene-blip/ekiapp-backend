@@ -21,6 +21,7 @@ import {
   getMySupplierProfile,
   getMySupportCase,
   getOrganiserFulfilment,
+  getParticipantFulfilment,
   getPublicMarketConfig,
   getSupplierFulfilment,
   joinCampaign,
@@ -57,6 +58,7 @@ communityBuyRouter.get("/my-contributions", authenticate, asyncHandler(listMyCon
 communityBuyRouter.get("/support-cases", authenticate, asyncHandler(listMySupportCases));
 communityBuyRouter.get("/support-cases/:id", authenticate, asyncHandler(getMySupportCase));
 communityBuyRouter.get("/campaigns/:id", asyncHandler(getCampaign));
+communityBuyRouter.get("/campaigns/:id/fulfilment", asyncHandler(getParticipantFulfilment));
 communityBuyRouter.get("/campaigns/:id/updates", authenticate, asyncHandler(getCampaignUpdates));
 // Organiser or supplier posts a real broadcast update — authorization
 // (must be this campaign's organiser or supplier) is enforced in the

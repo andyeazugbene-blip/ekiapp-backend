@@ -37,6 +37,19 @@ async function requireOrganiserOwned(userId: string, campaignId: string) {
 }
 
 export const campaignFulfilmentService = {
+  /**
+   * Participant-facing read — unlike getForSupplier/getForOrganiser, this
+   * has no ownership check (any participant, or a browsing buyer who
+   * hasn't joined yet, may see a campaign's fulfilment plan) and returns
+   * null rather than throwing when no plan exists yet (normal for any
+   * campaign that hasn't succeeded — nothing to invent, nothing to hide).
+   */
+  async getForParticipant(campaignId: string) {
+    const campaign = await prisma.communityCampaign.findUnique({ where: { id: campaignId } });
+    if (!campaign) throw new AppError("Campaign not found", 404);
+    return prisma.campaignFulfilment.findUnique({ where: { campaignId } });
+  },
+
   async getForSupplier(vendorId: string, campaignId: string) {
     const { fulfilment } = await requireSupplierOwned(vendorId, campaignId);
     return fulfilment;

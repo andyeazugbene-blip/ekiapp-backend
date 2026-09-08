@@ -62,6 +62,14 @@ export async function getCampaign(request: Request, response: Response): Promise
   response.json({ campaign: await communityCampaignsService.get(requireIdParam(request)) });
 }
 
+// Public/participant fulfilment read — null (not 404) when no plan exists
+// yet, since that's the normal state for any campaign that hasn't
+// succeeded. Lets a buyer see the real, confirmed fulfilment method before
+// or after pledging, without inventing one.
+export async function getParticipantFulfilment(request: Request, response: Response): Promise<void> {
+  response.json({ fulfilment: await campaignFulfilmentService.getForParticipant(requireIdParam(request)) });
+}
+
 // ─── Participant ────────────────────────────────────────────────────────
 
 export async function joinCampaign(request: Request, response: Response): Promise<void> {
