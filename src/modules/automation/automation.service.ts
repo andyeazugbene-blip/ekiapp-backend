@@ -8,6 +8,20 @@ import { MARKETING_AUTOMATION_TYPES, VENDOR_TOGGLEABLE_AUTOMATION_TYPES, type Sc
 // Server-time quiet hours (UTC). A per-user-timezone version would need a
 // timezone field on User, which doesn't exist yet — documented limitation,
 // not silently pretended away.
+//
+// P0 fix (2026-09): every automation trigger in this codebase is currently
+// batch-detected, reached only via the single daily Vercel Cron entry
+// (vercel.json's "/api/internal/jobs/daily-sweep"). That cron used to run
+// at 03:00 UTC — inside this exact window — so every single automation was
+// silently suppressed, every day, forever, with no error signal (the
+// early-return below fires before any AutomationRun row is even created).
+// The cron was moved to 12:00 UTC to fix this. This constant is left
+// unchanged and still fully enforced: it exists to protect a real user from
+// being messaged at night, and remains meaningful the moment any trigger
+// stops being purely cron-batch-driven (e.g. a future real-time trigger).
+// See src/tests/automation.test.ts's "cron schedule" describe block for the
+// regression test that guards against the cron ever being moved back inside
+// this window.
 const QUIET_HOUR_START_UTC = 22;
 const QUIET_HOUR_END_UTC = 7;
 

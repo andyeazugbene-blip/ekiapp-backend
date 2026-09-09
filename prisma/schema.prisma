@@ -80,6 +80,13 @@ enum PayoutRequestStatus {
   PENDING
   APPROVED
   REJECTED
+  // P0 fix (2026-09): a real Stripe Connect transfer attempt now sits
+  // between APPROVED and PAID — PAID must mean the transfer actually
+  // succeeded, never just that an admin clicked the button. Naming matches
+  // the equivalent CampaignSupplierPayment.status states already used for
+  // exactly this purpose in Community Buy.
+  PROCESSING
+  ON_HOLD
   PAID
 }
 
@@ -308,6 +315,14 @@ model PayoutRequest {
   approvedAt          DateTime?
   paidById            String?
   paidAt              DateTime?
+  // Real Stripe Connect transfer id once a transfer actually succeeds —
+  // never set speculatively. Null for manual (bank/PayPal) payout methods,
+  // which have no provider transfer of ours to reference.
+  stripeTransferId    String?
+  // Why a PROCESSING transfer moved to ON_HOLD instead of PAID (provider
+  // decline, timeout, vendor payout account not ready, etc.) — preserved
+  // for admin review and safe retry, mirroring CampaignSupplierPayment.
+  holdReason          String?
   vendor              Vendor              @relation(fields: [vendorId], references: [id], onDelete: Restrict)
   payoutMethod        PayoutMethod        @relation(fields: [payoutMethodId], references: [id], onDelete: Restrict)
   walletTransactions  WalletTransaction[]

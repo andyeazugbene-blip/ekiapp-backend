@@ -947,11 +947,22 @@ class StripeWebhookService {
               store_name: vendorInfo.storeName ?? "Your store",
               order_number: order.id,
             },
+            // P0 fix: previously no order id at all — tapping went nowhere.
+            data: { orderId: order.id },
           }).catch(() => {});
         }
       }
 
-      // Log buyer order confirmed communication
+      // Log buyer order confirmed communication. NOTE: this is logOnly(),
+      // not send() — the buyer's real notification for this moment is the
+      // paymentConfirmation EMAIL sent directly above; this call exists
+      // purely to record that email in the admin Communications log under
+      // the "buyer_order_confirmed" event key. No push or in-app
+      // notification is actually dispatched for this event today, so —
+      // unlike vendor_first_order/buyer_order_shipped/buyer_order_delivered
+      // above — there is no live dead-tap here to fix: nothing is ever sent
+      // to tap. Left as logOnly() deliberately; converting it to a real
+      // send() would be new notification behavior, not a fix.
       if (buyer) {
         communicationService.logOnly({
           recipientId: buyerId,

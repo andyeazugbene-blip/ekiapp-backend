@@ -175,6 +175,17 @@ interface SendParams {
    * logical event.
    */
   dedupeKey?: string;
+  /**
+   * P0 fix (2026-09): entity ids (orderId, etc.) needed to deep-link a tap
+   * on this notification to the right screen — merged into both the push
+   * and in-app `data` payloads, alongside `type`/`eventKey`. Previously the
+   * push payload was ONLY `{ type: eventKey }`, so the frontend's tap
+   * router had no id to route with even for the events it did recognize,
+   * and several event keys (vendor verification, first order, buyer order
+   * confirmed/shipped/delivered) weren't recognized there at all — every
+   * one of those pushes was a dead tap.
+   */
+  data?: Record<string, unknown>;
 }
 
 /**
@@ -264,7 +275,7 @@ export const communicationService = {
         case "push":
           attemptedAnyChannel = true;
           promises.push(
-            sendPushToUser(params.recipientId, { title, body, data: { type: params.eventKey } })
+            sendPushToUser(params.recipientId, { title, body, data: { type: params.eventKey, ...params.data } })
               .then(() => logCommunication({
                 recipientId: params.recipientId,
                 recipientType: template.recipientType,
@@ -296,7 +307,7 @@ export const communicationService = {
               type: params.notificationType ?? ("ADMIN_BROADCAST" as NotificationType),
               title,
               body,
-              data: { eventKey: params.eventKey },
+              data: { eventKey: params.eventKey, ...params.data },
               dedupeKey: params.dedupeKey,
             })
               .then((created) => logCommunication({

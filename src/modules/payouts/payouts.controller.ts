@@ -75,8 +75,13 @@ export async function adminMarkPayoutRequestPaid(
   const transferProof = typeof body.transferProof === "string" ? body.transferProof.trim() : undefined;
   const adminId = requireUserId(request);
   const id = requireIdParam(request);
+  // Real prior state, not assumed — this can now legitimately start from
+  // APPROVED (first attempt) or ON_HOLD/PROCESSING (retry) since a Stripe
+  // transfer attempt can fail/be interrupted without the payout ever
+  // reaching PAID. See payoutsService.adminMarkPaid for the full flow.
+  const before = await payoutsService.adminGet(id).catch(() => null);
   const payoutRequest = await payoutsService.adminMarkPaid(adminId, id, transferProof);
-  await recordAudit({ actorId: adminId, action: "payout_request.mark_paid", entityType: "PayoutRequest", entityId: id, metadata: { amount: payoutRequest.amount, vendorId: payoutRequest.vendorId, hasTransferProof: Boolean(transferProof) }, beforeState: { status: "APPROVED" }, afterState: { status: payoutRequest.status }, request });
+  await recordAudit({ actorId: adminId, action: "payout_request.mark_paid", entityType: "PayoutRequest", entityId: id, metadata: { amount: payoutRequest.amount, vendorId: payoutRequest.vendorId, hasTransferProof: Boolean(transferProof) }, beforeState: before ? { status: before.status } : undefined, afterState: { status: payoutRequest.status, stripeTransferId: payoutRequest.stripeTransferId, holdReason: payoutRequest.holdReason }, request });
   response.status(200).json({ payoutRequest });
 }
 export async function adminGetPayoutRequest(

@@ -892,6 +892,8 @@ class PaymentsService {
             eventKey: "vendor_first_order",
             recipientId: vendor.userId,
             variables: { store_name: vendor.storeName ?? "Your store", order_number: orderId },
+            // P0 fix: previously no order id at all — tapping went nowhere.
+            data: { orderId },
           }).catch(() => {});
         }
       } catch (error) {

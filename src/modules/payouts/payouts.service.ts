@@ -33,6 +33,47 @@ async function getVendorUserId(vendorId: string): Promise<string | null> {
   return vendor?.userId ?? null;
 }
 
+/** Fires only once a payout is genuinely PAID — shared by the Stripe and manual paths so both notify identically. */
+async function sendPayoutPaidNotificationAndReceipt(payout: PayoutRequest): Promise<void> {
+  const vendorUserId = await getVendorUserId(payout.vendorId);
+  if (vendorUserId) {
+    await notificationsService.enqueue({
+      userId: vendorUserId,
+      type: NotificationType.PAYOUT_PAID,
+      title: "Payout paid",
+      body: `Your payout of ${payout.netAmount ?? payout.amount} ${payout.currency} has been paid.`,
+      data: { payoutRequestId: payout.id },
+    });
+  }
+
+  try {
+    const vendorRecord = await prisma.vendor.findUnique({
+      where: { id: payout.vendorId },
+      select: { storeName: true, user: { select: { email: true, name: true } } },
+    });
+    if (vendorRecord?.user?.email) {
+      const netAmount = payout.netAmount ?? payout.amount;
+      const feeAmount = payout.withdrawalFeeAmount ?? (payout.amount - netAmount);
+      const template = {
+        subject: `Payout completed — ${(netAmount / 100).toFixed(2)} ${payout.currency}`,
+        html: `<p>Hi ${vendorRecord.user.name ?? vendorRecord.storeName},</p>
+<p>Your payout of <strong>${(netAmount / 100).toFixed(2)} ${payout.currency}</strong> has been completed.</p>
+<p><strong>Details:</strong><br/>
+Gross amount: ${(payout.amount / 100).toFixed(2)} ${payout.currency}<br/>
+Fee: ${(feeAmount / 100).toFixed(2)} ${payout.currency}<br/>
+Net amount: ${(netAmount / 100).toFixed(2)} ${payout.currency}</p>
+<p>You can view your payout history in your Eki vendor dashboard.</p>`,
+      };
+      await enqueueEmail({ to: vendorRecord.user.email, subject: template.subject, html: template.html });
+    }
+  } catch (emailError) {
+    logger.error("Failed to send payout completed email", {
+      payoutId: payout.id,
+      errorMessage: emailError instanceof Error ? emailError.message : String(emailError),
+    });
+  }
+}
+
 export const payoutsService = {
   /**
    * Create payout request with atomic balance check.
@@ -211,181 +252,194 @@ export const payoutsService = {
   },
 
   /**
-   * Mark payout as paid with atomic balance deduction.
-   * Uses conditional updateMany on wallet to prevent negative balance.
-   * Idempotent: if already PAID, returns 409.
+   * Mark payout as paid.
    *
-   * For Stripe Connect methods, auto-transfers the net amount to the vendor's
-   * Stripe account. For bank transfers, admin uploads a transfer proof URL.
+   * P0 fix (2026-09): status must never read PAID before the real transfer
+   * has actually succeeded. Previously the DB transition to PAID, the wallet
+   * balance decrement, and the ledger entry all committed BEFORE the Stripe
+   * Connect transfer was even attempted — a thrown/failed transfer left the
+   * request permanently recorded as "paid" (and told the vendor so) with no
+   * real money movement and no recovery path.
+   *
+   * Only the Stripe-auto-transfer path is money-provider-ambiguous, so only
+   * that path changes shape. Manual payout methods (bank/PayPal, where the
+   * admin performs the transfer themselves outside Stripe and supplies
+   * transferProof as evidence) keep their original, correct behavior — the
+   * admin's own confirmation IS the provider confirmation for those; there is
+   * no external API call on that path to fail ambiguously.
+   *
+   * For Stripe: APPROVED (first attempt) or ON_HOLD/PROCESSING (retry after
+   * a prior failure or an interrupted attempt) → PROCESSING → real Stripe
+   * transfer, with a deterministic idempotency key so a retry can never
+   * create a duplicate transfer → PAID only once Stripe confirms, storing
+   * the real transferId. Any thrown error (decline, timeout, network) moves
+   * to ON_HOLD with the reason preserved — never assumed failed, never
+   * assumed paid; safe to retry by calling this again, which replays the
+   * same idempotency key.
+   *
+   * The wallet debit + ledger entry are posted exactly once, at the first
+   * APPROVED → PROCESSING transition (atomic, balance-gated) — a retry from
+   * ON_HOLD/PROCESSING must never re-debit.
    */
   async adminMarkPaid(adminId: string, payoutRequestId: string, transferProof?: string): Promise<PayoutRequest> {
-    try {
-      const payout = await prisma.$transaction(async (tx) => {
-        // Conditional status transition: APPROVED → PAID
-        const notesParts: string[] = [];
-        if (transferProof) notesParts.push(`Transfer proof: ${transferProof}`);
+    const existing = await prisma.payoutRequest.findUnique({ where: { id: payoutRequestId } });
+    if (!existing) throw new AppError("Payout request not found", 404);
+    if (existing.status === PayoutRequestStatus.PAID) return existing; // idempotent no-op — matches releaseSupplierPayment's pattern.
 
-        const transitionResult = await tx.payoutRequest.updateMany({
-          where: { id: payoutRequestId, status: PayoutRequestStatus.APPROVED },
-          data: {
-            status: PayoutRequestStatus.PAID,
-            paidById: adminId,
-            paidAt: new Date(),
-            notes: notesParts.length > 0 ? notesParts.join("; ") : undefined,
-          },
+    const method = await prisma.payoutMethod.findUnique({ where: { id: existing.payoutMethodId } });
+    const methodDetails = (method?.details ?? {}) as Record<string, unknown>;
+    const isStripe = (method?.type ?? "OTHER") === "OTHER" && methodDetails.provider === "stripe";
+    const isPaypal = (method?.type ?? "OTHER") === "OTHER" && methodDetails.provider === "paypal";
+
+    if (!isStripe) {
+      // ─── Manual payout methods — unchanged behavior ──────────────────────
+      // No provider call of ours can fail ambiguously here; the admin's own
+      // transferProof is the confirmation. Only APPROVED can start this path.
+      try {
+        const payout = await prisma.$transaction(async (tx) => {
+          const notesParts: string[] = [];
+          if (transferProof) notesParts.push(`Transfer proof: ${transferProof}`);
+          const transitionResult = await tx.payoutRequest.updateMany({
+            where: { id: payoutRequestId, status: PayoutRequestStatus.APPROVED },
+            data: {
+              status: PayoutRequestStatus.PAID,
+              paidById: adminId,
+              paidAt: new Date(),
+              notes: notesParts.length > 0 ? notesParts.join("; ") : undefined,
+            },
+          });
+          if (transitionResult.count === 0) {
+            const current = await tx.payoutRequest.findUniqueOrThrow({ where: { id: payoutRequestId } });
+            if (current.status === PayoutRequestStatus.PAID) throw new AppError("Payout already marked paid", 409);
+            throw new AppError(`Payout must be approved before being marked paid (currently ${current.status})`, 400);
+          }
+          const payoutRecord = await tx.payoutRequest.findUniqueOrThrow({ where: { id: payoutRequestId } });
+          const walletUpdate = await tx.wallet.updateMany({
+            where: { vendorId: payoutRecord.vendorId, availableBalance: { gte: payoutRecord.amount } },
+            data: { availableBalance: { decrement: payoutRecord.amount } },
+          });
+          if (walletUpdate.count === 0) throw new AppError("Insufficient available balance", 400);
+          const wallet = await tx.wallet.findUniqueOrThrow({ where: { vendorId: payoutRecord.vendorId } });
+          await tx.walletTransaction.create({
+            data: {
+              walletId: wallet.id,
+              vendorId: payoutRecord.vendorId,
+              payoutRequestId: payoutRecord.id,
+              type: WalletTransactionType.PAYOUT_DEBIT,
+              amount: payoutRecord.amount,
+              currency: payoutRecord.currency,
+              description: `Payout paid: ${payoutRecord.id}`,
+            },
+          });
+          return payoutRecord;
         });
+        if (isPaypal) logger.info("PayPal payout marked paid — manual processing performed by admin", { payoutId: payout.id, vendorId: payout.vendorId });
+        await sendPayoutPaidNotificationAndReceipt(payout);
+        return payout;
+      } catch (error) {
+        if ((error as any)?.code === "P2002") throw new AppError("Payout already processed", 409);
+        throw error;
+      }
+    }
 
+    // ─── Stripe Connect auto-transfer path ─────────────────────────────────
+    const startableStatuses: PayoutRequestStatus[] = [PayoutRequestStatus.APPROVED, PayoutRequestStatus.ON_HOLD, PayoutRequestStatus.PROCESSING];
+    if (!startableStatuses.includes(existing.status)) {
+      throw new AppError(`Payout must be approved (or on hold/processing) before being marked paid — currently ${existing.status}`, 400);
+    }
+    const isFirstAttempt = existing.status === PayoutRequestStatus.APPROVED;
+
+    let processing: PayoutRequest;
+    try {
+      processing = await prisma.$transaction(async (tx) => {
+        const transitionResult = await tx.payoutRequest.updateMany({
+          where: { id: payoutRequestId, status: existing.status },
+          data: { status: PayoutRequestStatus.PROCESSING, paidById: adminId },
+        });
         if (transitionResult.count === 0) {
-          const current = await tx.payoutRequest.findUnique({ where: { id: payoutRequestId } });
-          if (!current) throw new AppError("Payout request not found", 404);
-          if (current.status === PayoutRequestStatus.PAID) throw new AppError("Payout already marked paid", 409);
-          throw new AppError("Payout must be approved before being marked paid", 400);
+          const current = await tx.payoutRequest.findUniqueOrThrow({ where: { id: payoutRequestId } });
+          throw new AppError(`Payout is no longer in a startable state (now ${current.status})`, 409);
         }
-
         const payoutRecord = await tx.payoutRequest.findUniqueOrThrow({ where: { id: payoutRequestId } });
 
-        // Atomic conditional balance deduction (prevents negative balance)
-        const walletUpdate = await tx.wallet.updateMany({
-          where: {
-            vendorId: payoutRecord.vendorId,
-            availableBalance: { gte: payoutRecord.amount },
-          },
-          data: { availableBalance: { decrement: payoutRecord.amount } },
-        });
-
-        if (walletUpdate.count === 0) {
-          throw new AppError("Insufficient available balance", 400);
-        }
-
-        // Get wallet ID for ledger entry
-        const wallet = await tx.wallet.findUniqueOrThrow({ where: { vendorId: payoutRecord.vendorId } });
-
-        // Create ledger entry
-        await tx.walletTransaction.create({
-          data: {
-            walletId: wallet.id,
-            vendorId: payoutRecord.vendorId,
-            payoutRequestId: payoutRecord.id,
-            type: WalletTransactionType.PAYOUT_DEBIT,
-            amount: payoutRecord.amount,
-            currency: payoutRecord.currency,
-            description: `Payout paid: ${payoutRecord.id}`,
-          },
-        });
-
-        return { payoutRecord, wallet };
-      });
-
-      // ─── Stripe Connect auto-transfer ───────────────────────────────────
-      const method = await prisma.payoutMethod.findUnique({
-        where: { id: payout.payoutRecord.payoutMethodId },
-      });
-
-      const methodType = method?.type ?? "OTHER";
-      const methodDetails = (method?.details ?? {}) as Record<string, unknown>;
-      const isStripe = methodType === "OTHER" && methodDetails.provider === "stripe";
-      const isPaypal = methodType === "OTHER" && methodDetails.provider === "paypal";
-
-      if (isStripe) {
-        const vendor = await prisma.vendor.findUnique({
-          where: { id: payout.payoutRecord.vendorId },
-          select: { stripeAccountId: true, stripePayoutsEnabled: true },
-        });
-
-        if (vendor?.stripeAccountId && vendor?.stripePayoutsEnabled) {
-          try {
-            const netAmount = payout.payoutRecord.netAmount ?? payout.payoutRecord.amount;
-            await stripe.transfers.create({
-              amount: netAmount,
-              currency: payout.payoutRecord.currency.toLowerCase(),
-              destination: vendor.stripeAccountId,
-              description: `Payout ${payout.payoutRecord.id}`,
-            });
-            logger.info("Stripe Connect auto-transfer completed", {
-              payoutId: payout.payoutRecord.id,
-              vendorId: payout.payoutRecord.vendorId,
-              amount: netAmount,
-              stripeAccountId: vendor.stripeAccountId,
-            });
-
-            await prisma.payoutRequest.update({
-              where: { id: payout.payoutRecord.id },
-              data: {
-                notes: `${payout.payoutRecord.notes ?? ""}${payout.payoutRecord.notes ? "; " : ""}Stripe Connect auto-transfer completed`,
-              },
-            });
-          } catch (stripeError) {
-            logger.error("Stripe Connect auto-transfer failed", {
-              payoutId: payout.payoutRecord.id,
-              error: stripeError instanceof Error ? stripeError.message : String(stripeError),
-            });
-          }
-        } else {
-          logger.warn("Stripe Connect: vendor not eligible for auto-transfer", {
-            vendorId: payout.payoutRecord.vendorId,
-            stripeAccountId: vendor?.stripeAccountId,
-            payoutsEnabled: vendor?.stripePayoutsEnabled,
+        if (isFirstAttempt) {
+          // Hard balance gate — only ever applied once, on the real first attempt.
+          const walletUpdate = await tx.wallet.updateMany({
+            where: { vendorId: payoutRecord.vendorId, availableBalance: { gte: payoutRecord.amount } },
+            data: { availableBalance: { decrement: payoutRecord.amount } },
+          });
+          if (walletUpdate.count === 0) throw new AppError("Insufficient available balance", 400);
+          const wallet = await tx.wallet.findUniqueOrThrow({ where: { vendorId: payoutRecord.vendorId } });
+          await tx.walletTransaction.create({
+            data: {
+              walletId: wallet.id,
+              vendorId: payoutRecord.vendorId,
+              payoutRequestId: payoutRecord.id,
+              type: WalletTransactionType.PAYOUT_DEBIT,
+              amount: payoutRecord.amount,
+              currency: payoutRecord.currency,
+              description: `Payout paid: ${payoutRecord.id}`,
+            },
           });
         }
-      } else if (isPaypal) {
-        logger.info("PayPal payout — manual processing required", {
-          payoutId: payout.payoutRecord.id,
-          vendorId: payout.payoutRecord.vendorId,
-        });
-      }
-
-      // ─── Notifications ──────────────────────────────────────────────────
-      const vendorUserId = await getVendorUserId(payout.payoutRecord.vendorId);
-      if (vendorUserId) {
-        await notificationsService.enqueue({
-          userId: vendorUserId,
-          type: NotificationType.PAYOUT_PAID,
-          title: "Payout paid",
-          body: `Your payout of ${payout.payoutRecord.netAmount ?? payout.payoutRecord.amount} ${payout.payoutRecord.currency} has been paid.`,
-          data: { payoutRequestId: payout.payoutRecord.id },
-        });
-      }
-
-      // ─── Email receipt to vendor ────────────────────────────────────────
-      try {
-        const vendorRecord = await prisma.vendor.findUnique({
-          where: { id: payout.payoutRecord.vendorId },
-          select: { storeName: true, user: { select: { email: true, name: true } } },
-        });
-
-        if (vendorRecord?.user?.email) {
-          const netAmount = payout.payoutRecord.netAmount ?? payout.payoutRecord.amount;
-          const feeAmount = payout.payoutRecord.withdrawalFeeAmount ?? (payout.payoutRecord.amount - netAmount);
-          const template = {
-            subject: `Payout completed — ${(netAmount / 100).toFixed(2)} ${payout.payoutRecord.currency}`,
-            html: `<p>Hi ${vendorRecord.user.name ?? vendorRecord.storeName},</p>
-<p>Your payout of <strong>${(netAmount / 100).toFixed(2)} ${payout.payoutRecord.currency}</strong> has been completed.</p>
-<p><strong>Details:</strong><br/>
-Gross amount: ${(payout.payoutRecord.amount / 100).toFixed(2)} ${payout.payoutRecord.currency}<br/>
-Fee: ${(feeAmount / 100).toFixed(2)} ${payout.payoutRecord.currency}<br/>
-Net amount: ${(netAmount / 100).toFixed(2)} ${payout.payoutRecord.currency}</p>
-<p>You can view your payout history in your Eki vendor dashboard.</p>`,
-          };
-          await enqueueEmail({
-            to: vendorRecord.user.email,
-            subject: template.subject,
-            html: template.html,
-          });
-        }
-      } catch (emailError) {
-        logger.error("Failed to send payout completed email", {
-          payoutId: payout.payoutRecord.id,
-          errorMessage: emailError instanceof Error ? emailError.message : String(emailError),
-        });
-      }
-
-      return payout.payoutRecord;
+        return payoutRecord;
+      });
     } catch (error) {
-      if ((error as any)?.code === "P2002") {
-        throw new AppError("Payout already processed", 409);
-      }
+      if ((error as any)?.code === "P2002") throw new AppError("Payout already processed", 409);
       throw error;
     }
+
+    const vendor = await prisma.vendor.findUnique({
+      where: { id: processing.vendorId },
+      select: { stripeAccountId: true, stripePayoutsEnabled: true },
+    });
+    if (!vendor?.stripeAccountId || !vendor?.stripePayoutsEnabled) {
+      const held = await prisma.payoutRequest.update({
+        where: { id: payoutRequestId },
+        data: { status: PayoutRequestStatus.ON_HOLD, holdReason: "Vendor's Stripe Connect account is not connected or not enabled for payouts." },
+      });
+      logger.warn("Stripe Connect: vendor not eligible for auto-transfer — held for manual review", { payoutId: processing.id, vendorId: processing.vendorId });
+      return held;
+    }
+
+    let transferId: string;
+    try {
+      const netAmount = processing.netAmount ?? processing.amount;
+      const transfer = await stripe.transfers.create(
+        {
+          amount: netAmount,
+          currency: processing.currency.toLowerCase(),
+          destination: vendor.stripeAccountId,
+          description: `Payout ${processing.id}`,
+        },
+        // Deterministic per payout request — a retry after a timeout/crash
+        // (including one where the DB write below never happened) safely
+        // replays this exact key: Stripe returns the original transfer
+        // instead of creating a second, real duplicate.
+        { idempotencyKey: `payout-transfer:${processing.id}` },
+      );
+      transferId = transfer.id;
+    } catch (stripeError) {
+      // Timeout, decline, or any other error — never assume success, never
+      // assume the transfer definitely didn't happen either. ON_HOLD is
+      // safe to retry: retrying replays the same idempotency key above.
+      const message = stripeError instanceof Error ? stripeError.message : String(stripeError);
+      const held = await prisma.payoutRequest.update({
+        where: { id: payoutRequestId },
+        data: { status: PayoutRequestStatus.ON_HOLD, holdReason: `Transfer failed or could not be confirmed: ${message}` },
+      });
+      logger.error("Stripe Connect auto-transfer failed — held for retry", { payoutId: processing.id, vendorId: processing.vendorId, error: message });
+      return held;
+    }
+
+    const paid = await prisma.payoutRequest.update({
+      where: { id: payoutRequestId },
+      data: { status: PayoutRequestStatus.PAID, paidAt: new Date(), stripeTransferId: transferId, holdReason: null },
+    });
+    logger.info("Stripe Connect auto-transfer completed", { payoutId: paid.id, vendorId: paid.vendorId, stripeTransferId: transferId });
+
+    await sendPayoutPaidNotificationAndReceipt(paid);
+    return paid;
   },
 
   /**

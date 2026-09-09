@@ -247,6 +247,11 @@ export const ordersService = {
           recipientId: order.buyerId,
           recipientEmail: buyer.email,
           variables: { name: buyer.name, order_number: order.orderNumber },
+          // P0 fix: this push previously carried no order id at all, so even
+          // once tap-routing recognized the event, there was nothing to
+          // route TO. Real id, same one sendOrderStatusNotification() above
+          // already uses for its own (differently-typed) push.
+          data: { orderId: order.id },
         }).catch((err) => logger.warn("Order communication failed", { orderId, eventKey, error: String(err) }));
       }
     }

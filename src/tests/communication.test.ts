@@ -197,3 +197,70 @@ describe("communicationService.send — real outcome reporting", () => {
     expect(result.outcome).toBe("SENT");
   });
 });
+
+/**
+ * P0-3 regression guard: the push payload used to be ONLY `{ type: eventKey }`
+ * — no entity id at all — so even a recognized event had nothing for the
+ * frontend's tap router to route WITH. `data` is the new passthrough that
+ * fixes this; these tests lock the actual payload shape in place so this
+ * can't silently regress back to id-less pushes.
+ */
+describe("communicationService.send — data payload → deep-link contract (P0-3)", () => {
+  beforeEach(() => {
+    mockEnqueueEmail.mockClear().mockResolvedValue(undefined);
+    mockSendPush.mockClear().mockResolvedValue(undefined);
+    mockNotificationCreate.mockClear().mockResolvedValue({ id: "notif-1" });
+  });
+
+  it("merges caller-supplied data into the push payload alongside type", async () => {
+    await communicationService.send({
+      eventKey: "buyer_order_shipped",
+      recipientId: "buyer-1",
+      recipientEmail: "buyer@example.com",
+      variables: { name: "Amara", order_number: "ORD-1" },
+      data: { orderId: "order-123" },
+    });
+    expect(mockSendPush).toHaveBeenCalledWith(
+      "buyer-1",
+      expect.objectContaining({ data: { type: "buyer_order_shipped", orderId: "order-123" } }),
+    );
+  });
+
+  it("merges caller-supplied data into the in-app notification payload alongside eventKey", async () => {
+    await communicationService.send({
+      eventKey: "buyer_order_delivered",
+      recipientId: "buyer-1",
+      variables: { name: "Amara", order_number: "ORD-1" },
+      data: { orderId: "order-456" },
+    });
+    expect(mockNotificationCreate).toHaveBeenCalledWith(
+      expect.objectContaining({ data: { eventKey: "buyer_order_delivered", orderId: "order-456" } }),
+    );
+  });
+
+  it("push payload is still well-formed (just { type }) when no extra data is supplied — e.g. vendor verification, which needs no entity id", async () => {
+    await communicationService.send({
+      eventKey: "vendor_verification_approved",
+      recipientId: "vendor-user-1",
+      recipientEmail: "vendor@example.com",
+      variables: { store_name: "Test Store" },
+    });
+    expect(mockSendPush).toHaveBeenCalledWith(
+      "vendor-user-1",
+      expect.objectContaining({ data: { type: "vendor_verification_approved" } }),
+    );
+  });
+
+  it("vendor_first_order push carries the real order id", async () => {
+    await communicationService.send({
+      eventKey: "vendor_first_order",
+      recipientId: "vendor-user-1",
+      variables: { store_name: "Test Store", order_number: "order-789" },
+      data: { orderId: "order-789" },
+    });
+    expect(mockSendPush).toHaveBeenCalledWith(
+      "vendor-user-1",
+      expect.objectContaining({ data: { type: "vendor_first_order", orderId: "order-789" } }),
+    );
+  });
+});

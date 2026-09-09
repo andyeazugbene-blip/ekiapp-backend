@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../lib/prisma", () => ({
@@ -42,6 +44,36 @@ const baseInput = {
   requiresMarketingConsent: true,
 };
 
+/**
+ * P0 regression guard: the daily Vercel Cron is the ONLY place that ever
+ * invokes any automation trigger (every detector is batch-driven — see
+ * automation.detectors.ts and internal.routes.ts). If that cron's schedule
+ * ever falls back inside the quiet-hours window (22:00–07:00 UTC), every
+ * automation is silently suppressed again, exactly as it was before this
+ * fix — with zero error signal. This test reads the real vercel.json and
+ * fails loudly if that ever happens again.
+ */
+describe("Automation cron schedule — must never fall inside quiet hours", () => {
+  it("the daily-sweep cron's configured UTC hour is outside 22:00–07:00", () => {
+    const vercelConfigPath = join(__dirname, "..", "..", "vercel.json");
+    const config = JSON.parse(readFileSync(vercelConfigPath, "utf-8"));
+    const dailySweep = config.crons.find((c: { path: string }) => c.path === "/api/internal/jobs/daily-sweep");
+    expect(dailySweep).toBeDefined();
+
+    // Standard 5-field cron: "minute hour day month weekday".
+    const [, hourField] = dailySweep.schedule.split(" ");
+    const hour = Number(hourField);
+    expect(Number.isInteger(hour)).toBe(true);
+    expect(hour).toBeGreaterThanOrEqual(0);
+    expect(hour).toBeLessThan(24);
+
+    const QUIET_HOUR_START_UTC = 22;
+    const QUIET_HOUR_END_UTC = 7;
+    const isInsideQuietHours = hour >= QUIET_HOUR_START_UTC || hour < QUIET_HOUR_END_UTC;
+    expect(isInsideQuietHours).toBe(false);
+  });
+});
+
 describe("automationService.scheduleAutomation", () => {
   it("suppresses during quiet hours without touching the database", async () => {
     vi.setSystemTime(new Date("2026-06-15T23:30:00.000Z")); // 23:30 UTC — quiet hours
@@ -49,6 +81,86 @@ describe("automationService.scheduleAutomation", () => {
     expect(m.user.findUnique).not.toHaveBeenCalled();
     expect(m.automationRun.create).not.toHaveBeenCalled();
     expect(mSend).not.toHaveBeenCalled();
+  });
+
+  it("quiet-hours boundary: 21:59:59 UTC proceeds (not yet quiet hours)", async () => {
+    vi.setSystemTime(new Date("2026-06-15T21:59:59.000Z"));
+    m.user.findUnique.mockResolvedValueOnce({ isSuspended: false, marketingConsentAt: new Date() } as never);
+    m.automationRun.create.mockResolvedValue({ id: "run-boundary-1" } as never);
+    m.user.findUnique.mockResolvedValueOnce({ name: "Buyer", email: "b@eki.app" } as never);
+    mSend.mockResolvedValue({ outcome: "SENT" } as never);
+    await automationService.scheduleAutomation(baseInput);
+    expect(m.automationRun.create).toHaveBeenCalled();
+  });
+
+  it("quiet-hours boundary: exactly 22:00:00 UTC suppresses", async () => {
+    vi.setSystemTime(new Date("2026-06-15T22:00:00.000Z"));
+    await automationService.scheduleAutomation(baseInput);
+    expect(m.automationRun.create).not.toHaveBeenCalled();
+  });
+
+  it("quiet-hours boundary: exactly 06:59:59 UTC still suppresses", async () => {
+    vi.setSystemTime(new Date("2026-06-15T06:59:59.000Z"));
+    await automationService.scheduleAutomation(baseInput);
+    expect(m.automationRun.create).not.toHaveBeenCalled();
+  });
+
+  it("quiet-hours boundary: exactly 07:00:00 UTC proceeds again", async () => {
+    vi.setSystemTime(new Date("2026-06-15T07:00:00.000Z"));
+    m.user.findUnique.mockResolvedValueOnce({ isSuspended: false, marketingConsentAt: new Date() } as never);
+    m.automationRun.create.mockResolvedValue({ id: "run-boundary-2" } as never);
+    m.user.findUnique.mockResolvedValueOnce({ name: "Buyer", email: "b@eki.app" } as never);
+    mSend.mockResolvedValue({ outcome: "SENT" } as never);
+    await automationService.scheduleAutomation(baseInput);
+    expect(m.automationRun.create).toHaveBeenCalled();
+  });
+
+  it("the real, current cron hour (12:00 UTC) is never suppressed", async () => {
+    vi.setSystemTime(new Date("2026-06-15T12:00:00.000Z"));
+    m.user.findUnique.mockResolvedValueOnce({ isSuspended: false, marketingConsentAt: new Date() } as never);
+    m.automationRun.create.mockResolvedValue({ id: "run-cron-hour" } as never);
+    m.user.findUnique.mockResolvedValueOnce({ name: "Buyer", email: "b@eki.app" } as never);
+    mSend.mockResolvedValue({ outcome: "SENT" } as never);
+    await automationService.scheduleAutomation(baseInput);
+    expect(m.automationRun.create).toHaveBeenCalled();
+    expect(mSend).toHaveBeenCalled();
+  });
+
+  it("multiple recipients each get an independent run and an independent send (e.g. a campaign milestone fanning out to several participants)", async () => {
+    m.user.findUnique.mockResolvedValue({ isSuspended: false, marketingConsentAt: new Date() } as never);
+    m.automationRun.create.mockImplementation(async ({ data }: any) => ({ id: `run-${data.recipientUserId}`, dedupeKey: data.dedupeKey }) as never);
+    mSend.mockResolvedValue({ outcome: "SENT" } as never);
+
+    await automationService.scheduleAutomation({ ...baseInput, recipientUserId: "participant-1", subjectKey: "campaign-1:milestone:participant-1", requiresMarketingConsent: false });
+    await automationService.scheduleAutomation({ ...baseInput, recipientUserId: "participant-2", subjectKey: "campaign-1:milestone:participant-2", requiresMarketingConsent: false });
+
+    expect(m.automationRun.create).toHaveBeenCalledTimes(2);
+    expect(mSend).toHaveBeenCalledTimes(2);
+    expect(mSend).toHaveBeenNthCalledWith(1, expect.objectContaining({ recipientId: "participant-1" }));
+    expect(mSend).toHaveBeenNthCalledWith(2, expect.objectContaining({ recipientId: "participant-2" }));
+  });
+
+  it("retries correctly the next day: a fresh, date-scoped subjectKey after a prior FAILED run is not blocked by the old dedupeKey", async () => {
+    m.user.findUnique.mockResolvedValue({ isSuspended: false, marketingConsentAt: new Date() } as never);
+
+    // Day 1: fails.
+    m.automationRun.create.mockResolvedValueOnce({ id: "run-day1" } as never);
+    mSend.mockResolvedValueOnce({ outcome: "FAILED", reason: "channel error" } as never);
+    await automationService.scheduleAutomation({ ...baseInput, subjectKey: "cart-1:2026-06-15", requiresMarketingConsent: false });
+    expect(m.automationRun.update).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: "run-day1" }, data: expect.objectContaining({ status: "FAILED" }) }),
+    );
+
+    // Day 2 (tomorrow's cron sweep re-detects the same cart, new date-scoped
+    // subjectKey — this must NOT be blocked by yesterday's dedupeKey/row).
+    m.automationRun.create.mockResolvedValueOnce({ id: "run-day2" } as never);
+    mSend.mockResolvedValueOnce({ outcome: "SENT" } as never);
+    await automationService.scheduleAutomation({ ...baseInput, subjectKey: "cart-1:2026-06-16", requiresMarketingConsent: false });
+
+    expect(m.automationRun.create).toHaveBeenCalledTimes(2);
+    expect(m.automationRun.update).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: "run-day2" }, data: expect.objectContaining({ status: "SENT" }) }),
+    );
   });
 
   it("skips a recipient without marketing consent for consent-gated types", async () => {
