@@ -32,6 +32,7 @@ export async function listAuditLogs(request: Request, response: Response): Promi
     actorId: typeof query.actorId === "string" && query.actorId.length > 0 ? query.actorId : undefined,
     action: typeof query.action === "string" && query.action.length > 0 ? query.action : undefined,
     entityType: typeof query.entityType === "string" && query.entityType.length > 0 ? query.entityType : undefined,
+    entityId: typeof query.entityId === "string" && query.entityId.length > 0 ? query.entityId : undefined,
     limit,
     cursor: typeof query.cursor === "string" && query.cursor.length > 0 ? query.cursor : undefined,
   });

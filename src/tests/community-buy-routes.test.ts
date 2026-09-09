@@ -63,6 +63,7 @@ const mockRequestChanges = vi.fn();
 const mockRejectCampaign = vi.fn();
 const mockPauseCampaign = vi.fn();
 const mockResumeCampaign = vi.fn();
+const mockCancelCampaign = vi.fn();
 const mockEndRescueAndRefund = vi.fn();
 const mockRequestExtension = vi.fn();
 const mockConfirmSupplierCommitment = vi.fn();
@@ -101,6 +102,7 @@ vi.mock("../modules/community-buy/community-campaigns.service", () => ({
     reject: (...a: unknown[]) => mockRejectCampaign(...a),
     pause: (...a: unknown[]) => mockPauseCampaign(...a),
     resume: (...a: unknown[]) => mockResumeCampaign(...a),
+    cancel: (...a: unknown[]) => mockCancelCampaign(...a),
   },
 }));
 
@@ -114,6 +116,7 @@ const mockReleaseSupplierPayment = vi.fn();
 const mockHoldSupplierPayment = vi.fn();
 const mockGetLedgerSummaryForAdmin = vi.fn();
 const mockGetCampaignLedger = vi.fn();
+const mockListContributionsForAdmin = vi.fn();
 const mockListMyContributions = vi.fn();
 const mockCreateSupportCase = vi.fn();
 const mockListMySupportCases = vi.fn();
@@ -136,6 +139,7 @@ vi.mock("../modules/community-buy/campaign-contributions.service", () => ({
     listRefundsForAdmin: vi.fn().mockResolvedValue([]),
     getLedgerSummaryForAdmin: (...a: unknown[]) => mockGetLedgerSummaryForAdmin(...a),
     getCampaignLedger: (...a: unknown[]) => mockGetCampaignLedger(...a),
+    listContributionsForAdmin: (...a: unknown[]) => mockListContributionsForAdmin(...a),
   },
 }));
 
@@ -256,6 +260,7 @@ vi.mock("../middlewares/authenticate", async () => {
 import request from "supertest";
 import type { Express } from "express";
 import { generateTestToken } from "./helpers";
+import { AppError } from "../shared/errors/app-error";
 
 let app: Express;
 
@@ -293,6 +298,8 @@ beforeEach(() => {
   mockMarketList.mockResolvedValue([{ countryCode: "GB", communityBuyEnabled: true }]);
   mockMarketGet.mockResolvedValue({ countryCode: "GB", communityBuyEnabled: true });
   mockMarketUpdate.mockResolvedValue({ countryCode: "GB", communityBuyEnabled: false });
+  mockCancelCampaign.mockResolvedValue({ id: "camp-55", status: "CANCELLED" });
+  mockListContributionsForAdmin.mockResolvedValue([]);
 });
 
 const buyerToken = () => generateTestToken({ id: "buyer-1", role: "BUYER", email: "b@x.com" });
@@ -871,5 +878,55 @@ describe("Admin routes — permission-gated, id handling", () => {
     const res = await request(app).post("/api/admin/community-buy/suppliers/sup-4/unrestrict").set("Authorization", `Bearer ${adminToken()}`);
     expect(res.status).toBe(200);
     expect(mockUnrestrictSupplier).toHaveBeenCalledWith("sup-4");
+  });
+
+  // ─── Phase 9 — admin cancel/end campaign + contribution records ────────
+
+  it("POST /api/admin/community-campaigns/:id/cancel — 401 without token", async () => {
+    const res = await request(app).post("/api/admin/community-campaigns/camp-55/cancel").send({ reason: "duplicate campaign" });
+    expect(res.status).toBe(401);
+    expect(mockCancelCampaign).not.toHaveBeenCalled();
+  });
+
+  it("POST /api/admin/community-campaigns/:id/cancel — 400 without a reason", async () => {
+    const res = await request(app).post("/api/admin/community-campaigns/camp-55/cancel").set("Authorization", `Bearer ${adminToken()}`).send({});
+    expect(res.status).toBe(400);
+    expect(mockCancelCampaign).not.toHaveBeenCalled();
+  });
+
+  it("POST /api/admin/community-campaigns/:id/cancel — 400 for a whitespace-only reason", async () => {
+    const res = await request(app).post("/api/admin/community-campaigns/camp-55/cancel").set("Authorization", `Bearer ${adminToken()}`).send({ reason: "   " });
+    expect(res.status).toBe(400);
+    expect(mockCancelCampaign).not.toHaveBeenCalled();
+  });
+
+  it("POST /api/admin/community-campaigns/:id/cancel — 200, forwards trimmed reason, id parsed correctly", async () => {
+    const res = await request(app)
+      .post("/api/admin/community-campaigns/camp-55/cancel")
+      .set("Authorization", `Bearer ${adminToken()}`)
+      .send({ reason: "  duplicate campaign  " });
+    expect(res.status).toBe(200);
+    expect(res.body.campaign.status).toBe("CANCELLED");
+    expect(mockCancelCampaign).toHaveBeenCalledWith("admin-1", "camp-55", "duplicate campaign");
+  });
+
+  it("POST /api/admin/community-campaigns/:id/cancel — 409 from the service surfaces correctly (already succeeded)", async () => {
+    mockCancelCampaign.mockRejectedValueOnce(new AppError("This campaign can no longer be cancelled — it has already succeeded, failed, or ended", 409));
+    const res = await request(app)
+      .post("/api/admin/community-campaigns/camp-55/cancel")
+      .set("Authorization", `Bearer ${adminToken()}`)
+      .send({ reason: "test" });
+    expect(res.status).toBe(409);
+  });
+
+  it("GET /api/admin/community-campaigns/:id/contributions — 401 without token, 200 with id parsed correctly for admin", async () => {
+    const unauth = await request(app).get("/api/admin/community-campaigns/camp-55/contributions");
+    expect(unauth.status).toBe(401);
+
+    mockListContributionsForAdmin.mockResolvedValue([{ id: "contrib-1", participant: { userId: "buyer-1", name: "A", email: "a@x.com" }, quantity: 2, amount: 2000, status: "PAID" }]);
+    const res = await request(app).get("/api/admin/community-campaigns/camp-55/contributions").set("Authorization", `Bearer ${adminToken()}`);
+    expect(res.status).toBe(200);
+    expect(mockListContributionsForAdmin).toHaveBeenCalledWith("camp-55");
+    expect(res.body.items).toHaveLength(1);
   });
 });

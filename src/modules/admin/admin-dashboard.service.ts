@@ -194,6 +194,7 @@ export const adminDashboardService = {
         ...(query.actorId ? { actorId: query.actorId } : {}),
         ...(query.action ? { action: query.action } : {}),
         ...(query.entityType ? { entityType: query.entityType } : {}),
+        ...(query.entityId ? { entityId: query.entityId } : {}),
       },
       orderBy: CURSOR_ORDER_BY,
       take: query.limit + 1,

@@ -352,8 +352,11 @@ export const communityCampaignsService = {
   async listRecentlyClosed(limit = 50) {
     return prisma.communityCampaign.findMany({
       // Includes LIVE/PAUSED so admin risk controls (spec §132 "Pause new
-      // contributions") have a real campaign to act on, not just closed ones.
-      where: { status: { in: ["SUCCEEDED", "FAILED", "FULFILLING", "CANCELLED", "LIVE", "PAUSED"] } },
+      // contributions") have a real campaign to act on, not just closed
+      // ones. RESCUE_WINDOW is included too (Phase 9) — without it, a
+      // campaign in its completion period was invisible to admin entirely,
+      // making rescue/deadline monitoring impossible.
+      where: { status: { in: ["SUCCEEDED", "FAILED", "FULFILLING", "CANCELLED", "LIVE", "PAUSED", "RESCUE_WINDOW"] } },
       include: { organiser: { include: { user: { select: { name: true, email: true } } } }, supplier: { include: { vendor: { select: { storeName: true } } } } },
       orderBy: { updatedAt: "desc" },
       take: limit,
@@ -408,6 +411,44 @@ export const communityCampaignsService = {
     if (!campaign) throw new AppError("Campaign not found", 404);
     if (campaign.status !== "PAUSED") throw new AppError("Only a paused campaign can be resumed", 409);
     return prisma.communityCampaign.update({ where: { id: campaignId }, data: { status: "LIVE" } });
+  },
+
+  /**
+   * Admin-initiated cancel/end — Phase 9. Deliberately restricted to
+   * pre-charge statuses only: under PLEDGE_THEN_CHARGE, money is captured
+   * exclusively in chargePledgesAfterSuccess() (see that method's own
+   * comment), which only ever runs once a campaign has already left this
+   * status set (SUCCEEDED/FULFILLING onward). So every contribution here
+   * is guaranteed still PLEDGED, never PAID — cancelling never needs to
+   * create a real refund, only void the pledges, matching exactly what
+   * endRescueAndRefund() already does for an organiser-initiated end. A
+   * campaign that already succeeded (money moved or about to move) is a
+   * different, harder problem — deliberately out of scope here; use the
+   * existing refund tooling once real charges exist.
+   */
+  async cancel(adminId: string, campaignId: string, reason: string) {
+    const campaign = await prisma.communityCampaign.findUnique({
+      where: { id: campaignId },
+      include: { organiser: true, participants: true },
+    });
+    if (!campaign) throw new AppError("Campaign not found", 404);
+    const cancellable = ["DRAFT", "UNDER_REVIEW", "CHANGES_REQUIRED", "APPROVED", "LIVE", "PAUSED", "RESCUE_WINDOW"];
+    if (!cancellable.includes(campaign.status)) {
+      throw new AppError("This campaign can no longer be cancelled — it has already succeeded, failed, or ended", 409);
+    }
+    const updated = await prisma.communityCampaign.update({
+      where: { id: campaignId },
+      data: { status: "CANCELLED", closedAt: new Date(), reviewNotes: reason },
+    });
+    // Defensive, matching endRescueAndRefund() exactly — see method comment
+    // above for why this is always a no-op today, kept as a safety net.
+    await this.createRefundRecordsForFailedCampaign(campaignId);
+    await this.cancelPledgesForFailedCampaign(campaignId);
+    await notifyCampaign(campaign.organiser.userId, "admin_cancelled", "Campaign ended by admin", `${campaign.title} has been ended by an administrator. No participant was charged — pledges have been cancelled. Reason: ${reason}`, campaignId, `admin_cancelled:${campaignId}:${campaign.organiser.userId}`);
+    for (const p of campaign.participants) {
+      await notifyCampaign(p.userId, "admin_cancelled", "Campaign ended", `${campaign.title} has been ended by an administrator. Your saved payment method was never charged — your pledge is cancelled.`, campaignId, `admin_cancelled:${campaignId}:${p.userId}`);
+    }
+    return updated;
   },
 
   // ─── Publishing & discovery ────────────────────────────────────────────

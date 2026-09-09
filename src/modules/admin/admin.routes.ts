@@ -157,6 +157,8 @@ import { adminListSubscriptionExceptions } from "../regular-deliveries/regular-d
 import {
   adminApproveCampaign,
   adminApproveExtension,
+  adminCancelCampaign,
+  adminListCampaignContributions,
   adminGetCampaignLedger,
   adminGetLedgerSummary,
   adminGetSupportCase,
@@ -256,6 +258,12 @@ adminRouter.post("/community-campaigns/:id/request-changes", asyncHandler(requir
 adminRouter.post("/community-campaigns/:id/reject", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(adminRejectCampaign));
 adminRouter.post("/community-campaigns/:id/pause", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(adminPauseCampaign));
 adminRouter.post("/community-campaigns/:id/resume", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(adminResumeCampaign));
+// Cancel/end — Phase 9 (REQ-CB-A-002). No 2FA: matches reject/pause/resume,
+// since cancel is only ever reachable pre-charge (see the service method's
+// own comment) — no money moves, so it sits in the same tier as those,
+// not the 2FA-gated tier reserved for refund/transfer actions.
+adminRouter.post("/community-campaigns/:id/cancel", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(adminCancelCampaign));
+adminRouter.get("/community-campaigns/:id/contributions", asyncHandler(requireAdminPermission("community_buy.read")), asyncHandler(adminListCampaignContributions));
 adminRouter.get("/community-buy/organisers/pending", asyncHandler(requireAdminPermission("community_buy.read")), asyncHandler(adminListPendingOrganisers));
 adminRouter.post("/community-buy/organisers/:id/verify", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(adminVerifyOrganiser));
 adminRouter.get("/community-buy/suppliers/pending", asyncHandler(requireAdminPermission("community_buy.read")), asyncHandler(adminListPendingSuppliers));

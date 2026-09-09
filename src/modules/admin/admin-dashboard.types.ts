@@ -48,6 +48,7 @@ export interface ListAuditLogsQuery {
   actorId?: string;
   action?: string;
   entityType?: string;
+  entityId?: string;
   limit: number;
   cursor?: string;
 }

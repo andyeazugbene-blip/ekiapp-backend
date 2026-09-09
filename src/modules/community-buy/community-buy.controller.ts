@@ -481,6 +481,20 @@ export async function adminResumeCampaign(request: Request, response: Response):
   response.json({ campaign });
 }
 
+export async function adminCancelCampaign(request: Request, response: Response): Promise<void> {
+  const adminId = requireUserId(request);
+  const id = requireIdParam(request);
+  const reason = request.body?.reason;
+  if (typeof reason !== "string" || !reason.trim()) throw new AppError("reason is required", 400);
+  const campaign = await communityCampaignsService.cancel(adminId, id, reason.trim());
+  await recordAudit({ actorId: adminId, action: "community_campaign.cancel", entityType: "CommunityCampaign", entityId: id, reason: reason.trim(), afterState: { status: campaign.status }, request });
+  response.json({ campaign });
+}
+
+export async function adminListCampaignContributions(request: Request, response: Response): Promise<void> {
+  response.json({ items: await campaignContributionsService.listContributionsForAdmin(requireIdParam(request)) });
+}
+
 export async function adminListPendingOrganisers(_request: Request, response: Response): Promise<void> {
   response.json({ items: await organiserSupplierService.listPendingOrganisers() });
 }

@@ -1119,4 +1119,42 @@ export const campaignContributionsService = {
       },
     };
   },
+
+  /**
+   * Admin visibility into every contribution/pledge for a campaign, with
+   * participant identity — Phase 9 (REQ-CB-A-004). Previously an admin had
+   * to cross-reference the ledger (PAID only, no pledge-level detail) and
+   * the refunds table (refunded contributions only) to answer "did this
+   * participant's pledge go through?" — this returns every contribution
+   * regardless of status, so a still-PLEDGED (uncharged) row is visible
+   * too, not just PAID/REFUNDED ones. Modeled on the organiser-facing
+   * listParticipantsForOrganiser() query shape, but per-contribution
+   * rather than per-participant-rollup, and admin-scoped instead of
+   * ownership-scoped.
+   */
+  async listContributionsForAdmin(campaignId: string) {
+    const campaign = await prisma.communityCampaign.findUnique({ where: { id: campaignId }, select: { id: true } });
+    if (!campaign) throw new AppError("Campaign not found", 404);
+    const contributions = await prisma.campaignContribution.findMany({
+      where: { campaignId },
+      include: {
+        participant: { include: { user: { select: { name: true, email: true } } } },
+        refund: { select: { status: true, amount: true, failureReason: true } },
+      },
+      orderBy: { createdAt: "asc" },
+    });
+    return contributions.map((c) => ({
+      id: c.id,
+      participant: { userId: c.participant.userId, name: c.participant.user.name, email: c.participant.user.email },
+      quantity: c.quantity,
+      amount: c.amount,
+      currency: c.currency,
+      status: c.status,
+      isOrganiserTopUp: c.isOrganiserTopUp,
+      stripePaymentIntentId: c.stripePaymentIntentId,
+      refund: c.refund ? { status: c.refund.status, amount: c.refund.amount, failureReason: c.refund.failureReason } : null,
+      createdAt: c.createdAt,
+      updatedAt: c.updatedAt,
+    }));
+  },
 };

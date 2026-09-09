@@ -1863,3 +1863,105 @@ describe("Phase 8.1 — supplier notifications (invitation, accept, inventory co
     });
   });
 });
+
+describe("Phase 9 — admin cancel/end campaign", () => {
+  const baseCampaign = {
+    id: "camp-1", title: "Bulk rice buy",
+    organiser: { userId: "organiser-user-1" },
+    participants: [{ userId: "participant-1" }, { userId: "participant-2" }],
+  };
+
+  it.each(["DRAFT", "UNDER_REVIEW", "CHANGES_REQUIRED", "APPROVED", "LIVE", "PAUSED", "RESCUE_WINDOW"])(
+    "cancels a %s campaign, voids pledges, and notifies the organiser and every participant",
+    async (status) => {
+      m.communityCampaign.findUnique.mockResolvedValue({ ...baseCampaign, status } as never);
+      m.communityCampaign.update.mockResolvedValue({ id: "camp-1", status: "CANCELLED" } as never);
+
+      const result = await communityCampaignsService.cancel("admin-1", "camp-1", "Duplicate of another campaign");
+
+      expect(result.status).toBe("CANCELLED");
+      expect(m.communityCampaign.update).toHaveBeenCalledWith({
+        where: { id: "camp-1" },
+        data: { status: "CANCELLED", closedAt: expect.any(Date), reviewNotes: "Duplicate of another campaign" },
+      });
+      // Nothing was ever charged pre-success (PLEDGE_THEN_CHARGE) — cancel
+      // voids pledges directly rather than creating refunds.
+      expect(m.campaignContribution.updateMany).toHaveBeenCalledWith({
+        where: { campaignId: "camp-1", status: "PLEDGED" },
+        data: { status: "CANCELLED" },
+      });
+      expect(notificationsService.enqueue).toHaveBeenCalledWith(expect.objectContaining({
+        userId: "organiser-user-1",
+        data: expect.objectContaining({ event: "admin_cancelled", campaignId: "camp-1" }),
+        dedupeKey: "admin_cancelled:camp-1:organiser-user-1",
+      }));
+      expect(notificationsService.enqueue).toHaveBeenCalledWith(expect.objectContaining({ userId: "participant-1", dedupeKey: "admin_cancelled:camp-1:participant-1" }));
+      expect(notificationsService.enqueue).toHaveBeenCalledWith(expect.objectContaining({ userId: "participant-2", dedupeKey: "admin_cancelled:camp-1:participant-2" }));
+    },
+  );
+
+  it.each(["SUCCEEDED", "FULFILLING", "COMPLETED", "FINANCIALLY_CLOSED", "FAILED", "REJECTED", "CANCELLED", "REFUNDING"])(
+    "refuses to cancel a %s campaign (already past the point money could have moved) and sends no notification",
+    async (status) => {
+      m.communityCampaign.findUnique.mockResolvedValue({ ...baseCampaign, status } as never);
+
+      await expect(communityCampaignsService.cancel("admin-1", "camp-1", "test")).rejects.toMatchObject({ statusCode: 409 });
+
+      expect(m.communityCampaign.update).not.toHaveBeenCalled();
+      expect(notificationsService.enqueue).not.toHaveBeenCalled();
+    },
+  );
+
+  it("404s for a campaign that does not exist", async () => {
+    m.communityCampaign.findUnique.mockResolvedValue(null as never);
+    await expect(communityCampaignsService.cancel("admin-1", "camp-missing", "test")).rejects.toMatchObject({ statusCode: 404 });
+    expect(notificationsService.enqueue).not.toHaveBeenCalled();
+  });
+
+  it("a notification failure during cancel does not roll back the cancelled state", async () => {
+    m.communityCampaign.findUnique.mockResolvedValue({ ...baseCampaign, status: "LIVE" } as never);
+    m.communityCampaign.update.mockResolvedValue({ id: "camp-1", status: "CANCELLED" } as never);
+    vi.mocked(notificationsService.enqueue).mockRejectedValueOnce(new Error("push provider down"));
+
+    const result = await communityCampaignsService.cancel("admin-1", "camp-1", "test");
+
+    expect(result.status).toBe("CANCELLED");
+  });
+});
+
+describe("Phase 9 — admin contribution/payment records (listContributionsForAdmin)", () => {
+  it("returns every contribution for a campaign with participant identity, regardless of status", async () => {
+    m.communityCampaign.findUnique.mockResolvedValue({ id: "camp-1" } as never);
+    m.campaignContribution.findMany.mockResolvedValue([
+      {
+        id: "contrib-1", quantity: 2, amount: 2000, currency: "GBP", status: "PLEDGED", isOrganiserTopUp: false,
+        stripePaymentIntentId: null, refund: null, createdAt: new Date("2026-01-01"), updatedAt: new Date("2026-01-01"),
+        participant: { userId: "buyer-1", user: { name: "Amaka", email: "amaka@x.com" } },
+      },
+      {
+        id: "contrib-2", quantity: 1, amount: 1000, currency: "GBP", status: "REFUNDED", isOrganiserTopUp: false,
+        stripePaymentIntentId: "pi_123", refund: { status: "REFUNDED", amount: 1000, failureReason: null },
+        createdAt: new Date("2026-01-02"), updatedAt: new Date("2026-01-03"),
+        participant: { userId: "buyer-2", user: { name: "Bode", email: "bode@x.com" } },
+      },
+    ] as never);
+
+    const result = await campaignContributionsService.listContributionsForAdmin("camp-1");
+
+    expect(result).toHaveLength(2);
+    expect(result[0]).toMatchObject({ id: "contrib-1", status: "PLEDGED", participant: { userId: "buyer-1", name: "Amaka", email: "amaka@x.com" }, refund: null });
+    expect(result[1]).toMatchObject({ id: "contrib-2", status: "REFUNDED", refund: { status: "REFUNDED", amount: 1000, failureReason: null } });
+  });
+
+  it("404s for a campaign that does not exist", async () => {
+    m.communityCampaign.findUnique.mockResolvedValue(null as never);
+    await expect(campaignContributionsService.listContributionsForAdmin("camp-missing")).rejects.toMatchObject({ statusCode: 404 });
+    expect(m.campaignContribution.findMany).not.toHaveBeenCalled();
+  });
+
+  it("returns an empty array for a campaign with no contributions yet", async () => {
+    m.communityCampaign.findUnique.mockResolvedValue({ id: "camp-1" } as never);
+    m.campaignContribution.findMany.mockResolvedValue([] as never);
+    expect(await campaignContributionsService.listContributionsForAdmin("camp-1")).toEqual([]);
+  });
+});
