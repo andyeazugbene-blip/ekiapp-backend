@@ -42,7 +42,10 @@ async function sendPayoutPaidNotificationAndReceipt(payout: PayoutRequest): Prom
       type: NotificationType.PAYOUT_PAID,
       title: "Payout paid",
       body: `Your payout of ${payout.netAmount ?? payout.amount} ${payout.currency} has been paid.`,
-      data: { payoutRequestId: payout.id },
+      // NAV-04 fix: data.type is what the frontend's notification tap-router
+      // matches on — this payload previously had no type at all, so tapping
+      // did nothing regardless of what the frontend supported.
+      data: { type: "payout_paid", payoutRequestId: payout.id },
     });
   }
 
@@ -118,7 +121,8 @@ export const payoutsService = {
       type: NotificationType.PAYOUT_REQUESTED,
       title: "Payout requested",
       body: `Your payout of ${created.netAmount ?? created.amount} ${created.currency} is pending review after withdrawal fees.`,
-      data: { payoutRequestId: created.id, amount: created.amount, netAmount: created.netAmount, currency: created.currency },
+      // NAV-04 fix — see PAYOUT_PAID above for context.
+      data: { type: "payout_requested", payoutRequestId: created.id, amount: created.amount, netAmount: created.netAmount, currency: created.currency },
     });
 
     return created;
@@ -179,7 +183,8 @@ export const payoutsService = {
         type: NotificationType.PAYOUT_APPROVED,
         title: "Payout approved",
         body: `Your payout of ${payout.netAmount ?? payout.amount} ${payout.currency} has been approved.`,
-        data: { payoutRequestId: payout.id },
+        // NAV-04 fix — see PAYOUT_PAID above for context.
+        data: { type: "payout_approved", payoutRequestId: payout.id },
       });
     }
 
@@ -244,7 +249,8 @@ export const payoutsService = {
         type: NotificationType.PAYOUT_REJECTED,
         title: "Payout rejected",
         body: payout.rejectionReason ? `Your payout was rejected: ${payout.rejectionReason}` : "Your payout has been rejected.",
-        data: { payoutRequestId: payout.id },
+        // NAV-04 fix — see PAYOUT_PAID above for context.
+        data: { type: "payout_rejected", payoutRequestId: payout.id },
       });
     }
 

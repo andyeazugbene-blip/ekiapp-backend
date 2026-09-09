@@ -39,6 +39,10 @@ vi.mock("../lib/email-queue", () => ({
   enqueueEmail: vi.fn().mockResolvedValue(undefined),
 }));
 
+vi.mock("../modules/subscriptions/subscription-plan-utils", () => ({
+  resolveVendorWithdrawalFeeBps: vi.fn().mockResolvedValue(0),
+}));
+
 import { prisma } from "../lib/prisma";
 import { stripe } from "../lib/stripe";
 import { notificationsService } from "../modules/notifications/notifications.service";
@@ -337,5 +341,75 @@ describe("payoutsService.adminMarkPaid — manual (non-Stripe) payout methods ar
     const result = await payoutsService.adminMarkPaid("admin-1", "payout-1");
     expect(result.status).toBe("PAID");
     expect(m.payoutRequest.updateMany).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * NAV-04 regression guard: all 4 payout lifecycle notifications previously
+ * carried a `data` payload with no `type` field at all, so the frontend's
+ * notification tap-router had nothing to match against — tapping any of
+ * them did nothing, regardless of what frontend branches existed. These
+ * tests lock the real `data.type` string in place for each of the 4 events
+ * so this can't silently regress back to type-less pushes.
+ */
+describe("payoutsService — NAV-04: every payout lifecycle notification carries a routable data.type", () => {
+  it("createRequest() sends PAYOUT_REQUESTED with data.type = 'payout_requested'", async () => {
+    m.vendor.findUnique.mockResolvedValue({ id: "vendor-1" } as never);
+    m.payoutMethod.findUnique.mockResolvedValue({ id: "method-1", vendorId: "vendor-1" } as never);
+    m.wallet.findUnique.mockResolvedValue({ id: "wallet-1", vendorId: "vendor-1", availableBalance: 50000, currency: "GBP" } as never);
+    m.payoutRequest.create.mockResolvedValue({ id: "payout-req-1", amount: 10000, netAmount: 10000, currency: "GBP" } as never);
+
+    await payoutsService.createRequest("user-1", { amount: 10000, payoutMethodId: "method-1" } as never);
+
+    expect(notificationsService.enqueue).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: "user-1",
+        data: expect.objectContaining({ type: "payout_requested", payoutRequestId: "payout-req-1" }),
+      }),
+    );
+  });
+
+  it("adminApprove() sends PAYOUT_APPROVED with data.type = 'payout_approved'", async () => {
+    m.payoutRequest.updateMany.mockResolvedValue({ count: 1 } as never);
+    m.payoutRequest.findUniqueOrThrow.mockResolvedValue(approvedPayout({ status: "APPROVED" }) as never);
+
+    await payoutsService.adminApprove("admin-1", "payout-1");
+
+    expect(notificationsService.enqueue).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ type: "payout_approved", payoutRequestId: "payout-1" }),
+      }),
+    );
+  });
+
+  it("adminReject() sends PAYOUT_REJECTED with data.type = 'payout_rejected'", async () => {
+    m.payoutRequest.updateMany.mockResolvedValue({ count: 1 } as never);
+    m.payoutRequest.findUniqueOrThrow.mockResolvedValue(approvedPayout({ status: "REJECTED", rejectionReason: "Bad details" }) as never);
+
+    await payoutsService.adminReject("admin-1", "payout-1", { reason: "Bad details" });
+
+    expect(notificationsService.enqueue).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ type: "payout_rejected", payoutRequestId: "payout-1" }),
+      }),
+    );
+  });
+
+  it("adminMarkPaid() (Stripe path) sends PAYOUT_PAID with data.type = 'payout_paid'", async () => {
+    const payout = approvedPayout();
+    m.payoutRequest.findUnique.mockResolvedValueOnce(payout as never);
+    m.payoutRequest.updateMany.mockResolvedValue({ count: 1 } as never);
+    m.payoutRequest.findUniqueOrThrow.mockResolvedValueOnce({ ...payout, status: "PROCESSING" } as never);
+    m.wallet.updateMany.mockResolvedValue({ count: 1 } as never);
+    mTransferCreate.mockResolvedValueOnce({ id: "tr_nav04" } as never);
+    m.payoutRequest.update.mockResolvedValueOnce({ ...payout, status: "PAID", stripeTransferId: "tr_nav04" } as never);
+
+    await payoutsService.adminMarkPaid("admin-1", "payout-1");
+
+    expect(notificationsService.enqueue).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ type: "payout_paid", payoutRequestId: "payout-1" }),
+      }),
+    );
   });
 });

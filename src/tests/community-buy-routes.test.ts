@@ -181,12 +181,19 @@ vi.mock("../modules/community-buy/support-case.service", () => ({
 const mockMarketList = vi.fn();
 const mockMarketGet = vi.fn();
 const mockMarketUpdate = vi.fn();
+// SEC-01: the public routes call listPublic()/getPublic() (a restricted
+// shape), not list()/get() (the full row) — separate mocks, matching the
+// real service's separate methods.
+const mockMarketListPublic = vi.fn();
+const mockMarketGetPublic = vi.fn();
 
 vi.mock("../modules/community-buy/market-configuration.service", () => ({
   marketConfigurationService: {
     list: (...a: unknown[]) => mockMarketList(...a),
     get: (...a: unknown[]) => mockMarketGet(...a),
     update: (...a: unknown[]) => mockMarketUpdate(...a),
+    listPublic: (...a: unknown[]) => mockMarketListPublic(...a),
+    getPublic: (...a: unknown[]) => mockMarketGetPublic(...a),
   },
 }));
 
@@ -298,6 +305,8 @@ beforeEach(() => {
   mockMarketList.mockResolvedValue([{ countryCode: "GB", communityBuyEnabled: true }]);
   mockMarketGet.mockResolvedValue({ countryCode: "GB", communityBuyEnabled: true });
   mockMarketUpdate.mockResolvedValue({ countryCode: "GB", communityBuyEnabled: false });
+  mockMarketListPublic.mockResolvedValue([{ countryCode: "GB", currency: "GBP", communityBuyEnabled: true, communityBuyPaymentsEnabled: false, organiserApplicationsEnabled: false, supplierApplicationsEnabled: false, regularDeliveriesEnabled: false }]);
+  mockMarketGetPublic.mockResolvedValue({ countryCode: "GB", currency: "GBP", communityBuyEnabled: true, communityBuyPaymentsEnabled: false, organiserApplicationsEnabled: false, supplierApplicationsEnabled: false, regularDeliveriesEnabled: false });
   mockCancelCampaign.mockResolvedValue({ id: "camp-55", status: "CANCELLED" });
   mockListContributionsForAdmin.mockResolvedValue([]);
 });

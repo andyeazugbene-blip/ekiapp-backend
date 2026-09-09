@@ -8,6 +8,9 @@ vi.mock("../lib/prisma", () => ({
     communicationLog: {
       create: vi.fn().mockResolvedValue({}),
     },
+    notification: {
+      findUnique: vi.fn().mockResolvedValue(null),
+    },
   },
 }));
 
@@ -262,5 +265,72 @@ describe("communicationService.send — data payload → deep-link contract (P0-
       "vendor-user-1",
       expect.objectContaining({ data: { type: "vendor_first_order", orderId: "order-789" } }),
     );
+  });
+});
+
+/**
+ * NOTIF-DUP-01 regression guard: RENEWAL_REMINDER / PRICE_APPROVAL_REMINDER
+ * (renewals.service.ts) call notificationsService.enqueue() directly with a
+ * real dedupeKey, THEN call automationService.scheduleAutomation() with the
+ * SAME dedupeKey. Before this fix, that shared key correctly deduped the
+ * in_app row (via Notification.dedupeKey's DB unique constraint) but did
+ * nothing to stop the push channel below from firing again — a genuine
+ * second push for one already-delivered event. This guard must activate
+ * ONLY when a caller supplies a dedupeKey for a template that includes
+ * in_app, and must be a complete no-op for every other call (the vast
+ * majority, which pass no dedupeKey at all).
+ */
+describe("communicationService.send — NOTIF-DUP-01: push must not re-fire when dedupeKey was already delivered", () => {
+  beforeEach(async () => {
+    mockEnqueueEmail.mockClear().mockResolvedValue(undefined);
+    mockSendPush.mockClear().mockResolvedValue(undefined);
+    mockNotificationCreate.mockClear().mockResolvedValue({ id: "notif-1" });
+    const { prisma } = await import("../lib/prisma");
+    vi.mocked(prisma.notification.findUnique).mockReset().mockResolvedValue(null);
+  });
+
+  it("skips every channel (push, email, in_app) when the dedupeKey was already used by another writer", async () => {
+    const { prisma } = await import("../lib/prisma");
+    vi.mocked(prisma.notification.findUnique).mockResolvedValueOnce({ id: "already-there" } as never);
+
+    const result = await communicationService.send({
+      eventKey: "vendor_verification_approved", // channels: ["email", "push", "in_app"]
+      recipientId: "vendor-user-1",
+      recipientEmail: "vendor@example.com",
+      variables: { store_name: "Test Store" },
+      dedupeKey: "RENEWAL_REMINDER:sub-1:2026-09-15",
+    });
+
+    expect(result).toEqual({ outcome: "SENT" });
+    expect(mockSendPush).not.toHaveBeenCalled();
+    expect(mockEnqueueEmail).not.toHaveBeenCalled();
+    expect(mockNotificationCreate).not.toHaveBeenCalled();
+  });
+
+  it("proceeds normally (all channels attempted) when the dedupeKey has not been used yet", async () => {
+    const result = await communicationService.send({
+      eventKey: "vendor_verification_approved",
+      recipientId: "vendor-user-1",
+      recipientEmail: "vendor@example.com",
+      variables: { store_name: "Test Store" },
+      dedupeKey: "RENEWAL_REMINDER:sub-2:2026-09-15",
+    });
+
+    expect(result).toEqual({ outcome: "SENT" });
+    expect(mockSendPush).toHaveBeenCalled();
+  });
+
+  it("is a complete no-op for calls with no dedupeKey at all (every non-renewal-reminder call site today)", async () => {
+    const { prisma } = await import("../lib/prisma");
+
+    await communicationService.send({
+      eventKey: "vendor_verification_approved",
+      recipientId: "vendor-user-1",
+      recipientEmail: "vendor@example.com",
+      variables: { store_name: "Test Store" },
+    });
+
+    expect(prisma.notification.findUnique).not.toHaveBeenCalled();
+    expect(mockSendPush).toHaveBeenCalled();
   });
 });

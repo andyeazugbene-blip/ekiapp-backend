@@ -5,7 +5,7 @@ vi.mock("../lib/prisma", () => ({
     communityCampaign: { findMany: vi.fn(), update: vi.fn(), updateMany: vi.fn(), findUnique: vi.fn(), findUniqueOrThrow: vi.fn(), create: vi.fn() },
     campaignContribution: { findMany: vi.fn(), update: vi.fn(), updateMany: vi.fn(), findUnique: vi.fn(), findUniqueOrThrow: vi.fn(), create: vi.fn(), groupBy: vi.fn(), aggregate: vi.fn(), count: vi.fn() },
     campaignChargeAttempt: { create: vi.fn(), update: vi.fn(), count: vi.fn(), updateMany: vi.fn(), findFirst: vi.fn() },
-    campaignRefund: { create: vi.fn(), findMany: vi.fn(), findUnique: vi.fn(), update: vi.fn(), groupBy: vi.fn() },
+    campaignRefund: { create: vi.fn(), findMany: vi.fn(), findUnique: vi.fn(), findUniqueOrThrow: vi.fn(), update: vi.fn(), updateMany: vi.fn(), groupBy: vi.fn() },
     campaignParticipant: { findMany: vi.fn(), findUnique: vi.fn(), upsert: vi.fn() },
     buyerPaymentMethod: { findUnique: vi.fn() },
     ledgerAccount: { findUnique: vi.fn(), create: vi.fn() },
@@ -18,7 +18,7 @@ vi.mock("../lib/prisma", () => ({
     organiserProfile: { findUnique: vi.fn(), update: vi.fn() },
     supplierProfile: { findUnique: vi.fn(), findMany: vi.fn(), update: vi.fn() },
     user: { findUnique: vi.fn() },
-    marketConfiguration: { findUnique: vi.fn(), count: vi.fn(), upsert: vi.fn() },
+    marketConfiguration: { findUnique: vi.fn(), findMany: vi.fn(), count: vi.fn(), upsert: vi.fn() },
     auditLog: { create: vi.fn() },
     $transaction: vi.fn(),
   },
@@ -37,7 +37,7 @@ vi.mock("../modules/automation/automation.service", () => ({
 }));
 
 vi.mock("../modules/community-buy/support-case.service", () => ({
-  supportCaseService: { create: vi.fn(), adminUpdate: vi.fn() },
+  supportCaseService: { create: vi.fn(), adminUpdate: vi.fn(), getForAdmin: vi.fn() },
 }));
 
 import { prisma } from "../lib/prisma";
@@ -49,9 +49,11 @@ import { campaignContributionsService } from "../modules/community-buy/campaign-
 import { marketConfigurationService } from "../modules/community-buy/market-configuration.service";
 import { organiserSupplierService } from "../modules/community-buy/organiser-supplier.service";
 import { campaignFulfilmentService } from "../modules/community-buy/campaign-fulfilment.service";
+import { automationService } from "../modules/automation/automation.service";
 
 const m = vi.mocked(prisma, true);
 const mSupportCase = vi.mocked(supportCaseService, true);
+const mAutomation = vi.mocked(automationService, true);
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -259,6 +261,64 @@ describe("communityCampaignsService rescue-window organiser actions", () => {
 
     await expect(communityCampaignsService.approveExtension("admin-1", "ext-1")).rejects.toMatchObject({ statusCode: 400 });
   });
+
+  /**
+   * NOTIF-DUP-01 regression guard: endRescueAndRefund() used to ALSO fire a
+   * CAMPAIGN_REFUND_UPDATE automation per participant, for the identical
+   * event notifyCampaign() (-> notificationsService.enqueue) already
+   * delivers — a genuine duplicate push (one working, one dead per NAV-10).
+   * The real, working notification must still fire exactly once per
+   * participant; the redundant automation call must never fire at all.
+   */
+  it("notifies each participant exactly once and never schedules a CAMPAIGN_REFUND_UPDATE automation", async () => {
+    m.organiserProfile.findUnique.mockResolvedValue({ id: "org-1", userId: "organiser-user-1" } as never);
+    m.communityCampaign.findUnique.mockResolvedValue({ id: "camp-6b", organiserId: "org-1", status: "RESCUE_WINDOW", title: "Ending" } as never);
+    m.communityCampaign.update.mockResolvedValue({ id: "camp-6b", status: "FAILED" } as never);
+    m.campaignContribution.findMany.mockResolvedValue([] as never);
+    m.campaignParticipant.findMany.mockResolvedValue([{ userId: "participant-1" }, { userId: "participant-2" }] as never);
+
+    await communityCampaignsService.endRescueAndRefund("organiser-user-1", "camp-6b");
+
+    // Organiser notification + 2 participant notifications = 3 total.
+    expect(notificationsService.enqueue).toHaveBeenCalledTimes(3);
+    expect(notificationsService.enqueue).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: "participant-1", data: expect.objectContaining({ type: "community_campaign_update", event: "cancelled" }) }),
+    );
+    expect(mAutomation.scheduleAutomation).not.toHaveBeenCalled();
+  });
+});
+
+describe("communityCampaignsService.notifyOutcome — NOTIF-DUP-01: no duplicate CAMPAIGN_MILESTONE push", () => {
+  it("succeeded: notifies organiser + every participant exactly once each, schedules no automation", async () => {
+    m.communityCampaign.findUnique.mockResolvedValue({
+      id: "camp-succ-1",
+      title: "Rice Bulk Buy",
+      organiser: { userId: "organiser-user-1" },
+      supplier: {},
+      participants: [{ userId: "participant-1" }, { userId: "participant-2" }],
+    } as never);
+
+    await communityCampaignsService.notifyOutcome("camp-succ-1", "succeeded");
+
+    // Organiser + 2 participants = 3 real notifications, no more.
+    expect(notificationsService.enqueue).toHaveBeenCalledTimes(3);
+    expect(mAutomation.scheduleAutomation).not.toHaveBeenCalled();
+  });
+
+  it("failed: notifies organiser + every participant, schedules no automation either", async () => {
+    m.communityCampaign.findUnique.mockResolvedValue({
+      id: "camp-fail-1",
+      title: "Rice Bulk Buy",
+      organiser: { userId: "organiser-user-1" },
+      supplier: {},
+      participants: [{ userId: "participant-1" }],
+    } as never);
+
+    await communityCampaignsService.notifyOutcome("camp-fail-1", "failed");
+
+    expect(notificationsService.enqueue).toHaveBeenCalledTimes(2);
+    expect(mAutomation.scheduleAutomation).not.toHaveBeenCalled();
+  });
 });
 
 describe("campaignContributionsService.pledge — PLEDGE_THEN_CHARGE (client mandate 2026-09: no upfront capture)", () => {
@@ -423,25 +483,73 @@ describe("campaignContributionsService.requeryRefund — spec §130 recheck prov
 });
 
 describe("campaignContributionsService.escalateRefund — spec §130 escalate (reuses support-case system)", () => {
+  const REFUND_4 = {
+    id: "refund-4",
+    status: "REFUND_FAILED",
+    failureReason: "card issuer declined",
+    contributionId: "contrib-4",
+    escalated: false,
+    escalatedSupportCaseId: null as string | null,
+    contribution: { campaignId: "camp-4", participant: { userId: "buyer-4" }, campaign: { title: "Rice Bulk Buy" } },
+  };
+
   it("opens a support case on behalf of the affected participant and marks it escalated", async () => {
-    m.campaignRefund.findUnique.mockResolvedValue({
-      id: "refund-4",
-      status: "REFUND_FAILED",
-      failureReason: "card issuer declined",
-      contributionId: "contrib-4",
-      contribution: { campaignId: "camp-4", participant: { userId: "buyer-4" }, campaign: { title: "Rice Bulk Buy" } },
-    } as never);
+    m.campaignRefund.findUnique.mockResolvedValue(REFUND_4 as never);
+    m.campaignRefund.updateMany.mockResolvedValue({ count: 1 } as never);
     mSupportCase.create.mockResolvedValue({ id: "case-9" } as never);
     mSupportCase.adminUpdate.mockResolvedValue({ id: "case-9", escalated: true } as never);
 
     await campaignContributionsService.escalateRefund("admin-1", "refund-4");
 
+    expect(m.campaignRefund.updateMany).toHaveBeenCalledWith({
+      where: { id: "refund-4", escalated: false },
+      data: expect.objectContaining({ escalated: true }),
+    });
     expect(mSupportCase.create).toHaveBeenCalledWith(
       "buyer-4",
       "camp-4",
       expect.objectContaining({ caseType: "REFUND_ISSUE" }),
     );
     expect(mSupportCase.adminUpdate).toHaveBeenCalledWith("admin-1", "case-9", { escalated: true });
+    expect(m.campaignRefund.update).toHaveBeenCalledWith({ where: { id: "refund-4" }, data: { escalatedSupportCaseId: "case-9" } });
+  });
+
+  /**
+   * CBA-06 regression guard: this is the exact bug — a reload + re-click
+   * (or any repeat call) must return the SAME support case, never create
+   * a second CommunityBuySupportCase for the same refund.
+   */
+  it("is idempotent: a repeat call on an already-escalated refund returns the existing case and creates no new one", async () => {
+    m.campaignRefund.findUnique.mockResolvedValue({
+      ...REFUND_4, escalated: true, escalatedSupportCaseId: "case-9",
+    } as never);
+    mSupportCase.getForAdmin.mockResolvedValue({ id: "case-9", escalated: true } as never);
+
+    const result = await campaignContributionsService.escalateRefund("admin-1", "refund-4");
+
+    expect(result).toEqual({ id: "case-9", escalated: true });
+    expect(mSupportCase.create).not.toHaveBeenCalled();
+    expect(m.campaignRefund.updateMany).not.toHaveBeenCalled();
+  });
+
+  it("concurrent race: the losing caller never creates a second support case", async () => {
+    m.campaignRefund.findUnique.mockResolvedValue(REFUND_4 as never);
+    // Lost the atomic claim — another request already flipped escalated=true.
+    m.campaignRefund.updateMany.mockResolvedValue({ count: 0 } as never);
+    m.campaignRefund.findUniqueOrThrow.mockResolvedValue({
+      ...REFUND_4, escalated: true, escalatedSupportCaseId: "case-winner",
+    } as never);
+    mSupportCase.getForAdmin.mockResolvedValue({ id: "case-winner", escalated: true } as never);
+
+    const result = await campaignContributionsService.escalateRefund("admin-1", "refund-4");
+
+    expect(result).toEqual({ id: "case-winner", escalated: true });
+    expect(mSupportCase.create).not.toHaveBeenCalled();
+  });
+
+  it("404s for a refund that does not exist", async () => {
+    m.campaignRefund.findUnique.mockResolvedValue(null as never);
+    await expect(campaignContributionsService.escalateRefund("admin-1", "refund-missing")).rejects.toMatchObject({ statusCode: 404 });
   });
 });
 
@@ -1963,5 +2071,110 @@ describe("Phase 9 — admin contribution/payment records (listContributionsForAd
     m.communityCampaign.findUnique.mockResolvedValue({ id: "camp-1" } as never);
     m.campaignContribution.findMany.mockResolvedValue([] as never);
     expect(await campaignContributionsService.listContributionsForAdmin("camp-1")).toEqual([]);
+  });
+});
+
+/**
+ * SEC-01 regression guard: GET /api/community-buy/markets and /markets/:country
+ * are genuinely unauthenticated — they must never return anything beyond the
+ * feature-gating flags the mobile app needs. Before this fix, listPublicMarketConfigs
+ * /getPublicMarketConfig called list()/get() directly, which return every column
+ * (fee bps, live/test payment mode, provider names, legal-terms versions, ids,
+ * timestamps) to any unauthenticated caller. listPublic()/getPublic() are the
+ * public-safe equivalents added to close that gap — get()/list() themselves are
+ * intentionally unchanged since every internal/authenticated caller needs the
+ * full row.
+ */
+describe("marketConfigurationService.listPublic/getPublic — SEC-01: public endpoints must not over-expose fields", () => {
+  const FULL_ROW = {
+    id: "mc-1",
+    countryCode: "GB",
+    currency: "GBP",
+    communityBuyEnabled: true,
+    communityBuyPaymentsEnabled: true,
+    organiserApplicationsEnabled: true,
+    supplierApplicationsEnabled: true,
+    regularDeliveriesEnabled: true,
+    // Sensitive/internal-only fields that must never reach the public shape:
+    organiserFeeBps: 500,
+    communityBuyFeeBps: 300,
+    paymentMode: "LIVE",
+    paymentProvider: "stripe",
+    identityProvider: "stripe_identity",
+    supplierReleasePolicy: "MANUAL",
+    refundTermsVersion: "v3",
+    legalTermsVersion: "v3",
+    campaignMinDurationHours: 24,
+    campaignMaxDurationHours: 720,
+    campaignMinValueAmount: 1000,
+    campaignMaxValueAmount: 1000000,
+    deliveryMethods: ["DELIVERY", "COLLECTION"],
+    acceptedIdentityDocuments: ["PASSPORT"],
+    createdAt: new Date("2026-01-01"),
+    updatedAt: new Date("2026-01-02"),
+  };
+
+  const PUBLIC_KEYS = [
+    "countryCode",
+    "currency",
+    "communityBuyEnabled",
+    "communityBuyPaymentsEnabled",
+    "organiserApplicationsEnabled",
+    "supplierApplicationsEnabled",
+    "regularDeliveriesEnabled",
+  ].sort();
+
+  beforeEach(() => {
+    m.marketConfiguration.count.mockResolvedValue(1 as never); // skip ensureDefaults() seeding
+  });
+
+  it("listPublic() strips every field outside the documented public shape", async () => {
+    m.marketConfiguration.findMany.mockResolvedValue([FULL_ROW] as never);
+
+    const items = await marketConfigurationService.listPublic();
+
+    expect(items).toHaveLength(1);
+    expect(Object.keys(items[0]).sort()).toEqual(PUBLIC_KEYS);
+    expect(items[0]).toEqual({
+      countryCode: "GB",
+      currency: "GBP",
+      communityBuyEnabled: true,
+      communityBuyPaymentsEnabled: true,
+      organiserApplicationsEnabled: true,
+      supplierApplicationsEnabled: true,
+      regularDeliveriesEnabled: true,
+    });
+    // Explicitly assert the sensitive fields this bug leaked are gone.
+    expect(items[0]).not.toHaveProperty("organiserFeeBps");
+    expect(items[0]).not.toHaveProperty("communityBuyFeeBps");
+    expect(items[0]).not.toHaveProperty("paymentMode");
+    expect(items[0]).not.toHaveProperty("paymentProvider");
+    expect(items[0]).not.toHaveProperty("id");
+  });
+
+  it("getPublic() strips every field outside the documented public shape", async () => {
+    m.marketConfiguration.findUnique.mockResolvedValue(FULL_ROW as never);
+
+    const config = await marketConfigurationService.getPublic("GB");
+
+    expect(config && Object.keys(config).sort()).toEqual(PUBLIC_KEYS);
+    expect(config).not.toHaveProperty("communityBuyFeeBps");
+    expect(config).not.toHaveProperty("paymentMode");
+  });
+
+  it("getPublic() returns null (not a leaked full row) for an unconfigured market", async () => {
+    m.marketConfiguration.findUnique.mockResolvedValue(null as never);
+    expect(await marketConfigurationService.getPublic("XX")).toBeNull();
+  });
+
+  it("list()/get() (the internal/authenticated path) are unaffected — still return the full row", async () => {
+    m.marketConfiguration.findMany.mockResolvedValue([FULL_ROW] as never);
+    m.marketConfiguration.findUnique.mockResolvedValue(FULL_ROW as never);
+
+    const listed = await marketConfigurationService.list();
+    const got = await marketConfigurationService.get("GB");
+
+    expect(listed[0]).toHaveProperty("communityBuyFeeBps", 300);
+    expect(got).toHaveProperty("paymentMode", "LIVE");
   });
 });

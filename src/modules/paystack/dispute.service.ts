@@ -80,8 +80,11 @@ export const disputeService = {
           userId: vendor.userId,
           type: "ORDER_PAID",
           title: isEscrow ? "Dispute Opened ⚠️" : "Issue Reported ⚠️",
+          // PAY-03 fix: "escrow" is never used in user-facing copy — the app
+          // consistently calls this "payment protection" (see order-status
+          // screens: order-confirmation.tsx, orders.tsx, track-order.tsx).
           body: isEscrow
-            ? `A buyer has raised a dispute for order ${order.orderNumber}. The escrow is frozen until resolved.`
+            ? `A buyer has raised a dispute for order ${order.orderNumber}. Payment protection remains active until resolved.`
             : `A buyer has reported an issue for order ${order.orderNumber}. Please review and respond.`,
           data: { orderId, disputeId: dispute.id },
         });

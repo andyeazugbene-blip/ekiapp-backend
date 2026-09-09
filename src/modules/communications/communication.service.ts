@@ -229,6 +229,33 @@ export const communicationService = {
       return { outcome: "SUPPRESSED", reason: `Template "${params.eventKey}" is disabled or does not exist` };
     }
 
+    // NOTIF-DUP-01 fix: a caller that already wrote its own Notification row
+    // for this exact event (passing dedupeKey — e.g. renewals.service.ts's
+    // RENEWAL_REMINDER/PRICE_APPROVAL_REMINDER, which call
+    // notificationsService.enqueue() directly with this SAME key before
+    // scheduling the matching automation) previously still got a second,
+    // genuinely duplicate push here — the in_app channel below already
+    // collides safely against that row via the DB-level dedupeKey unique
+    // constraint, but the push channel fired unconditionally regardless of
+    // that outcome. Checking up front, before any channel is attempted,
+    // means every channel (not just in_app) correctly treats this as
+    // already-delivered. Only activates when a caller actually supplies a
+    // dedupeKey for an in_app-carrying template — every other call site in
+    // this codebase passes no dedupeKey at all and is completely unaffected.
+    if (params.dedupeKey && template.channels.includes("in_app")) {
+      const alreadyDelivered = await prisma.notification.findUnique({
+        where: { dedupeKey: params.dedupeKey },
+        select: { id: true },
+      });
+      if (alreadyDelivered) {
+        logger.info("Communication skipped: dedupeKey already delivered by another writer", {
+          eventKey: params.eventKey,
+          dedupeKey: params.dedupeKey,
+        });
+        return { outcome: "SENT" };
+      }
+    }
+
     const title = interpolate(template.title, params.variables);
     const body = interpolate(template.body, params.variables);
 

@@ -2437,6 +2437,14 @@ model CampaignRefund {
   idempotencyKey String               @unique
   stripeRefundId String?
   failureReason  String?
+  // CBA-06 fix: escalateRefund() previously had no way to tell it had
+  // already run for this refund, so a reload + re-click created a
+  // duplicate CommunityBuySupportCase every time. These mirror the
+  // idempotency-marker pattern already used elsewhere in this codebase
+  // (e.g. PayoutRequest.stripeTransferId) rather than inventing a new one.
+  escalated              Boolean   @default(false)
+  escalatedAt            DateTime?
+  escalatedSupportCaseId String?
   contribution   CampaignContribution @relation(fields: [contributionId], references: [id], onDelete: Restrict)
   createdAt      DateTime             @default(now())
   updatedAt      DateTime             @updatedAt

@@ -703,19 +703,18 @@ export const communityCampaignsService = {
     await notifyCampaign(userId, "cancelled", "Campaign ended", `${campaign.title} has been ended. No participant was charged — pledges have been cancelled.`, campaignId);
     const participants = await prisma.campaignParticipant.findMany({ where: { campaignId }, select: { userId: true } });
     for (const p of participants) {
+      // NOTIF-DUP-01 fix: this used to ALSO fire a CAMPAIGN_REFUND_UPDATE
+      // automation right below, for the identical event/recipient —
+      // notifyCampaign() already delivers a real, immediate, correctly-typed
+      // ("community_campaign_update") notification; the automation path had
+      // no shared dedupeKey with it (unlike renewals.service.ts's reminder
+      // pair), so both the in-app row and the push genuinely duplicated.
+      // Removed rather than wired to share a dedupeKey: this event has no
+      // vendorId/vendor-toggle semantics to preserve (see AUTO-06 — it was
+      // never vendor-scoped), and going through the automation path would
+      // additionally subject a transactional "you were not charged" message
+      // to the quiet-hours suppression notifyCampaign() correctly skips.
       await notifyCampaign(p.userId, "cancelled", "Campaign ended", `${campaign.title} has ended. Your saved payment method was never charged — your pledge is cancelled.`, campaignId);
-      await automationService.scheduleAutomation({
-        type: "CAMPAIGN_REFUND_UPDATE",
-        recipientUserId: p.userId,
-        // subjectKey feeds a globally-unique dedupeKey ("{type}:{subjectKey}") —
-        // must include the recipient, or every participant after the first
-        // in this loop collides on the same key and is silently dropped.
-        subjectKey: `${campaignId}:cancelled:${p.userId}`,
-        requiresMarketingConsent: false,
-        title: "Campaign ended",
-        body: `${campaign.title} has ended. You were not charged.`,
-        data: { campaign_title: campaign.title, refund_status: "not_applicable" },
-      });
     }
     return updated;
   },
@@ -834,19 +833,13 @@ export const communityCampaignsService = {
 
     await notifyCampaign(campaign.organiser.userId, outcome, title, body, campaignId);
     if (outcome === "succeeded") {
+      // NOTIF-DUP-01 fix: this used to ALSO fire a CAMPAIGN_MILESTONE
+      // automation per participant for the identical event — see the
+      // matching removal + comment in cancelAfterFailure above for the
+      // full reasoning (no shared dedupeKey ever existed between the two
+      // paths, no vendorId/vendor-toggle semantics to preserve here).
       for (const participant of campaign.participants) {
         await notifyCampaign(participant.userId, outcome, title, body, campaignId);
-        await automationService.scheduleAutomation({
-          type: "CAMPAIGN_MILESTONE",
-          recipientUserId: participant.userId,
-          // Per-participant — see cancelled-notify note above; a shared key
-          // here meant only the first participant in the loop ever got this.
-          subjectKey: `${campaignId}:${outcome}:${participant.userId}`,
-          requiresMarketingConsent: false,
-          title,
-          body,
-          data: { campaign_title: campaign.title },
-        });
       }
     } else {
       for (const participant of campaign.participants) {

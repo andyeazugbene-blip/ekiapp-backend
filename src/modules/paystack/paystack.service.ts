@@ -50,18 +50,21 @@ export const paystackService = {
     // Domestic escrow is one vendor per secured order. Multi-vendor African
     // carts must be split before reaching this provider-specific checkout.
     const vendorIds = new Set(cart.items.map(i => i.product.vendorId));
+    // PAY-03 fix: buyer-facing error copy uses "secured/protected payment"
+    // (matching order-status screens), never "escrow" — the internal
+    // escrowType/EscrowProviderConfig naming is unchanged, this is copy-only.
     if (vendorIds.size !== 1) {
-      throw new AppError("Escrow checkout supports one vendor per secured order. Please check out each vendor separately.", 400);
+      throw new AppError("Secured checkout supports one vendor per order. Please check out each vendor separately.", 400);
     }
 
     // For domestic escrow, all items must be from same configured country vendor
     const vendorCountries = new Set(cart.items.map(i => i.product.vendor.country?.toLowerCase()).filter(Boolean) as string[]);
     const domesticVendorCountry = [...vendorCountries][0] as string;
     if (!domesticVendorCountry) {
-      throw new AppError("Escrow checkout is not available because the vendor country is not configured", 409);
+      throw new AppError("Secured checkout is not available because the vendor country is not configured", 409);
     }
     if (vendorCountries.size > 1) {
-      throw new AppError("Domestic escrow checkout only supports items from a single vendor country", 400);
+      throw new AppError("Secured checkout only supports items from a single vendor country", 400);
     }
 
     // Determine currency
@@ -79,7 +82,7 @@ export const paystackService = {
         })
       : null;
     if (!providerConfig) {
-      throw new AppError("Escrow checkout is not available for this vendor country yet", 409, { country: domesticVendorCountry, currency });
+      throw new AppError("Secured checkout is not available for this vendor country yet", 409, { country: domesticVendorCountry, currency });
     }
 
     // Calculate totals (single vendor group for domestic)

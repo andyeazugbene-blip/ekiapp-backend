@@ -16,13 +16,13 @@ import { adminApprovalsService } from "../admin/admin-approvals.service";
 // backend is always the source of truth, never a hardcoded country list) ──
 
 export async function listPublicMarketConfigs(_request: Request, response: Response): Promise<void> {
-  response.json({ items: await marketConfigurationService.list() });
+  response.json({ items: await marketConfigurationService.listPublic() });
 }
 
 export async function getPublicMarketConfig(request: Request, response: Response): Promise<void> {
   const country = request.params.country;
   if (typeof country !== "string" || !country) throw new AppError("country is required", 400);
-  const config = await marketConfigurationService.get(country.toUpperCase());
+  const config = await marketConfigurationService.getPublic(country.toUpperCase());
   response.json({
     config: config ?? {
       countryCode: country.toUpperCase(),

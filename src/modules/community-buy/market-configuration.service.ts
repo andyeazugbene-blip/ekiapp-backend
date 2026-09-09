@@ -37,6 +37,45 @@ async function ensure(countryCode: string, currency: string) {
   });
 }
 
+/**
+ * SEC-01 fix: the public, unauthenticated market endpoints must return only
+ * the feature-gating flags the mobile app actually needs to decide whether
+ * to show an entry point — not the full row `get()`/`list()` return for
+ * every authenticated/internal caller (Eki's fee bps, live/test payment
+ * mode, provider names, legal-terms versions, etc.). This shape is additive
+ * to the public surface only; every internal caller keeps using `get()`/
+ * `list()` unchanged.
+ */
+export interface PublicMarketConfiguration {
+  countryCode: string;
+  currency: string;
+  communityBuyEnabled: boolean;
+  communityBuyPaymentsEnabled: boolean;
+  organiserApplicationsEnabled: boolean;
+  supplierApplicationsEnabled: boolean;
+  regularDeliveriesEnabled: boolean;
+}
+
+function toPublicShape(config: {
+  countryCode: string;
+  currency: string;
+  communityBuyEnabled: boolean;
+  communityBuyPaymentsEnabled: boolean;
+  organiserApplicationsEnabled: boolean;
+  supplierApplicationsEnabled: boolean;
+  regularDeliveriesEnabled: boolean;
+}): PublicMarketConfiguration {
+  return {
+    countryCode: config.countryCode,
+    currency: config.currency,
+    communityBuyEnabled: config.communityBuyEnabled,
+    communityBuyPaymentsEnabled: config.communityBuyPaymentsEnabled,
+    organiserApplicationsEnabled: config.organiserApplicationsEnabled,
+    supplierApplicationsEnabled: config.supplierApplicationsEnabled,
+    regularDeliveriesEnabled: config.regularDeliveriesEnabled,
+  };
+}
+
 export const marketConfigurationService = {
   /**
    * Cheap fast-path for the hot call sites (get()/list(), including the
@@ -77,6 +116,18 @@ export const marketConfigurationService = {
   async list() {
     await this.ensureDefaults();
     return prisma.marketConfiguration.findMany({ orderBy: { countryCode: "asc" } });
+  },
+
+  /** SEC-01: public/unauthenticated equivalent of list() — feature-gating flags only. */
+  async listPublic(): Promise<PublicMarketConfiguration[]> {
+    const configs = await this.list();
+    return configs.map(toPublicShape);
+  },
+
+  /** SEC-01: public/unauthenticated equivalent of get() — feature-gating flags only. */
+  async getPublic(countryCode: string): Promise<PublicMarketConfiguration | null> {
+    const config = await this.get(countryCode);
+    return config ? toPublicShape(config) : null;
   },
 
   async update(countryCode: string, data: Partial<{

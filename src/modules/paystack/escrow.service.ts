@@ -9,7 +9,6 @@ import { emailTemplates } from "../../lib/email-templates";
 import { AppError } from "../../shared/errors/app-error";
 import { releaseVendorEarnings } from "../../shared/utils/wallet-release";
 import { notificationsService } from "../notifications/notifications.service";
-import { pushNotifications } from "../../lib/push-notifications";
 
 const VENDOR_TIMEOUT_HOURS = Number(process.env.ESCROW_VENDOR_TIMEOUT_HOURS ?? "48");
 const AUTO_RELEASE_HOURS = Number(process.env.ESCROW_AUTO_RELEASE_HOURS ?? "24");
@@ -403,16 +402,20 @@ export const escrowService = {
     if (order.vendorId) {
       const vendor = await prisma.vendor.findUnique({ where: { id: order.vendorId }, select: { userId: true } });
       if (vendor) {
+        // NAV-05 fix: this used to fire a second, separate push via
+        // pushNotifications.orderStatusUpdate() right below — real and
+        // correctly-routed (data.type: "order_status"), but a genuine
+        // duplicate of this one, which had no data.type at all (dead tap).
+        // Reusing the "order_status" type here (the frontend already routes
+        // it to order-detail/track-order) fixes the dead tap AND removes
+        // the duplicate in one change, rather than making both taps work.
         await notificationsService.enqueue({
           userId: vendor.userId,
           type: "BALANCE_CREDITED",
           title: "Delivery Confirmed",
           body: `Order ${order.orderNumber} delivery confirmed. Payment will be released to your account.`,
-          data: { orderId },
+          data: { type: "order_status", orderId },
         });
-
-        // Push notification to vendor
-        pushNotifications.orderStatusUpdate(vendor.userId, order.orderNumber, "completed", orderId);
       }
     }
 
@@ -476,7 +479,8 @@ export const escrowService = {
               type: "BALANCE_CREDITED",
               title: "Payment Auto-Released",
               body: `Order ${order.orderNumber} - payment of ${order.vendorEarnings / 100} ${order.currency} has been released after the protection window expired.`,
-              data: { orderId: order.id },
+              // NAV-05 fix — see the delivery-confirm notification above for context.
+              data: { type: "order_status", orderId: order.id },
             });
           }
         }

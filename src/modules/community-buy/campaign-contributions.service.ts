@@ -700,11 +700,38 @@ export const campaignContributionsService = {
     });
     if (!refund) throw new AppError("Refund not found", 404);
 
+    // CBA-06 fix: escalateRefund() used to be called unconditionally every
+    // time — a reload + re-click created a genuine duplicate support case,
+    // and the "Escalated" badge was client-session-only (gone on reload).
+    // Idempotent now: a refund that's already escalated returns the SAME
+    // support case instead of creating a second one.
+    if (refund.escalated) {
+      if (refund.escalatedSupportCaseId) return supportCaseService.getForAdmin(refund.escalatedSupportCaseId);
+      throw new AppError("Refund already escalated", 409);
+    }
+
+    // Atomic claim, mirroring the at-most-once pattern already used for
+    // payout/transfer idempotency elsewhere in this codebase: only the
+    // genuine first caller (concurrent request or reload+re-click) proceeds
+    // to create a support case. A caller that loses the race falls through
+    // to the same idempotent branch above on its next read.
+    const claim = await prisma.campaignRefund.updateMany({
+      where: { id: refundId, escalated: false },
+      data: { escalated: true, escalatedAt: new Date() },
+    });
+    if (claim.count === 0) {
+      const current = await prisma.campaignRefund.findUniqueOrThrow({ where: { id: refundId } });
+      if (current.escalatedSupportCaseId) return supportCaseService.getForAdmin(current.escalatedSupportCaseId);
+      throw new AppError("Refund already escalated", 409);
+    }
+
     const supportCase = await supportCaseService.create(refund.contribution.participant.userId, refund.contribution.campaignId, {
       caseType: "REFUND_ISSUE",
       description: note?.trim() || `Refund ${refund.id} for ${refund.contribution.campaign.title} needs attention (status: ${refund.status}${refund.failureReason ? `, reason: ${refund.failureReason}` : ""}).`,
     });
-    return supportCaseService.adminUpdate(adminId, supportCase.id, { escalated: true });
+    const updatedCase = await supportCaseService.adminUpdate(adminId, supportCase.id, { escalated: true });
+    await prisma.campaignRefund.update({ where: { id: refundId }, data: { escalatedSupportCaseId: supportCase.id } });
+    return updatedCase;
   },
 
   async processPendingRefunds(limit = 50): Promise<{ processed: number; failed: number }> {

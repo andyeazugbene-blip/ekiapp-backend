@@ -26,6 +26,27 @@ vi.mock("../shared/utils/wallet-release", () => ({
   releaseVendorEarnings: vi.fn().mockResolvedValue({ released: true, amount: 1000 }),
 }));
 
+/**
+ * REG-01 fix: resolveDispute()'s vendor-favour branch does
+ * `await import("./escrow.service.js")` (dispute.service.ts:255) — a
+ * deliberate lazy import, not a circular-dependency workaround (confirmed:
+ * escrow.service.ts does not import dispute.service.ts anywhere). Left
+ * unmocked, that dynamic import pulls in escrow.service.ts's entire real
+ * dependency graph for the first time inside this test — including
+ * `lib/sms.ts` (Africa's Talking), `lib/email-queue.ts` (BullMQ/ioredis),
+ * and `lib/push-notifications.ts` (Expo) — none of which this test needs
+ * or the rest of this file mocks. That cold, heavy `require()` graph is
+ * what exceeded the test's timeout, not a real hang: in production these
+ * modules are already resident in the module cache from server startup, so
+ * the same dynamic import there always resolves instantly. Mocking
+ * escrowService here (the same way every other dispute.service.ts
+ * dependency above is already mocked) is the correct, minimal fix — no
+ * production code changes needed.
+ */
+vi.mock("../modules/paystack/escrow.service", () => ({
+  escrowService: { initiateVendorPayout: vi.fn().mockResolvedValue(undefined) },
+}));
+
 import { prisma } from "../lib/prisma";
 import { paystack } from "../lib/paystack";
 import { disputeService } from "../modules/paystack/dispute.service";
@@ -98,13 +119,15 @@ describe("disputeService.resolveDispute — refund-before-commit", () => {
     expect(m.$transaction).not.toHaveBeenCalled();
   });
 
-  it("a vendor-favour resolution never calls the refund provider", async () => {
+  it("a vendor-favour resolution never calls the refund provider, and does initiate the vendor payout", async () => {
     m.dispute.findUnique.mockResolvedValue(openDispute() as never);
 
     const result = await disputeService.resolveDispute("dispute-1", "admin-1", { resolution: "vendor", note: "release to vendor" });
 
     expect(result.status).toBe("RESOLVED_VENDOR");
     expect(refundTransaction).not.toHaveBeenCalled();
+    const { escrowService } = await import("../modules/paystack/escrow.service");
+    expect(escrowService.initiateVendorPayout).toHaveBeenCalledWith("order-1");
   });
 
   it("rejects re-resolving an already-resolved dispute", async () => {
