@@ -31,23 +31,44 @@ export const MARKETING_AUTOMATION_TYPES: AutomationType[] = [
   "BUYER_WIN_BACK",
   "REVIEW_REQUEST",
   "BUYER_REFERRAL",
+  "REORDER_REMINDER",
+  "CHECKOUT_PAYMENT_FOLLOW_UP",
 ];
 
-// Automations a vendor can see/toggle from the Automation Center. The three
-// CAMPAIGN_* types are buyer-facing, campaign-lifecycle-triggered
-// notifications with no vendor on/off concept — mirrors the frontend's
-// VENDOR_AUTOMATION_TYPES in services/automationService.ts exactly. Before
-// this list existed, listVendorAutomations() returned all AutomationType
-// keys (including CAMPAIGN_*), so tapping one of those three cards in the
-// Automation Center opened a detail screen for a type the frontend's own
-// validity check rejected, showing "This automation is not available."
+// Final Client Decision 4 §Automations — the 11 required modules split into
+// vendor-controlled (8) and Eki-managed (3):
+//
+// VENDOR-CONTROLLED (vendor can enable/disable/configure):
+//   1. FIRST_SALE
+//   2. CART_RECOVERY
+//   3. BUYER_WIN_BACK
+//   4. REORDER_REMINDER         (new — triggers post-delivery)
+//   5. CHECKOUT_PAYMENT_FOLLOW_UP (new — triggers on failed/abandoned checkout)
+//   6. BUYER_REFERRAL
+//   7. REVIEW_REQUEST
+//   8. LOW_STOCK_ALERT
+//
+// EKI-MANAGED (displayed "Managed by Eki", no vendor toggle):
+//   9.  PAYMENT_RECOVERY
+//   10. RENEWAL_REMINDER
+//   11. PRICE_APPROVAL_REMINDER
+//
+// The CAMPAIGN_* types (MILESTONE / DEADLINE / REFUND_UPDATE) are
+// buyer-facing campaign-lifecycle events, not automation-centre modules.
+
 export const VENDOR_TOGGLEABLE_AUTOMATION_TYPES: AutomationType[] = [
   "FIRST_SALE",
   "CART_RECOVERY",
   "BUYER_WIN_BACK",
+  "REORDER_REMINDER",
+  "CHECKOUT_PAYMENT_FOLLOW_UP",
+  "BUYER_REFERRAL",
   "REVIEW_REQUEST",
   "LOW_STOCK_ALERT",
-  "BUYER_REFERRAL",
+];
+
+// These run on Eki's behalf — vendor can see activity but cannot toggle.
+export const EKI_MANAGED_AUTOMATION_TYPES: AutomationType[] = [
   "PAYMENT_RECOVERY",
   "RENEWAL_REMINDER",
   "PRICE_APPROVAL_REMINDER",

@@ -3,7 +3,17 @@ import { Router } from "express";
 import { authenticate, requireRole } from "../../middlewares/authenticate";
 import { asyncHandler } from "../../shared/utils/async-handler";
 import {
+  adminCancelInvalidPriceChange,
+  adminChangeSubscriptionFrequency,
+  adminContactBuyerFromRenewal,
+  adminContactBuyerFromSubscription,
+  adminForceCancelSubscription,
+  adminListSubscriptionExceptions,
+  adminResendPriceChangeNotification,
+  adminRetryRenewalPayment,
+  adminSkipRenewal,
   cancelBuyerSubscription,
+  changeBuyerSubscriptionFrequency,
   confirmRenewalStock,
   confirmSetupIntent,
   createBuyerSubscription,
@@ -95,3 +105,32 @@ buyerSubscriptionsRouter.post("/:id/pause", asyncHandler(pauseBuyerSubscription)
 buyerSubscriptionsRouter.post("/:id/resume", asyncHandler(resumeBuyerSubscription));
 buyerSubscriptionsRouter.post("/:id/cancel", asyncHandler(cancelBuyerSubscription));
 buyerSubscriptionsRouter.post("/:id/skip-next", asyncHandler(skipNextRenewal));
+// Final Client Decision 3: buyer frequency editing.
+buyerSubscriptionsRouter.post("/:id/change-frequency", asyncHandler(changeBuyerSubscriptionFrequency));
+
+// Admin: Regular Delivery monitoring and intervention — mounted at /admin/subscriptions
+// and /admin/renewals (inside the single main admin app).
+// Final Client Decisions 2 + 3.
+export const adminSubscriptionsRouter = Router();
+adminSubscriptionsRouter.use(authenticate, requireRole("ADMIN"));
+adminSubscriptionsRouter.get("/exceptions", asyncHandler(adminListSubscriptionExceptions));
+// Retry payment (RD-08, existing)
+adminSubscriptionsRouter.post("/:id/retry-payment", asyncHandler(adminRetryRenewalPayment));
+// Forced cancellation (Decision 2 — exceptional support action)
+adminSubscriptionsRouter.post("/:id/force-cancel", asyncHandler(adminForceCancelSubscription));
+// Contact buyer from subscription context (Decision 2)
+adminSubscriptionsRouter.post("/:id/contact-buyer", asyncHandler(adminContactBuyerFromSubscription));
+// Admin frequency correction (Decision 3 — support action only)
+adminSubscriptionsRouter.post("/:id/change-frequency", asyncHandler(adminChangeSubscriptionFrequency));
+
+export const adminRenewalsRouter = Router();
+adminRenewalsRouter.use(authenticate, requireRole("ADMIN"));
+// Contact buyer from renewal context (Decision 2)
+adminRenewalsRouter.post("/:id/contact-buyer", asyncHandler(adminContactBuyerFromRenewal));
+// Resend price-change notification (Decision 2)
+adminRenewalsRouter.post("/:id/resend-price-change", asyncHandler(adminResendPriceChangeNotification));
+// Cancel invalid price-change request (Decision 2)
+adminRenewalsRouter.delete("/:id/price-change", asyncHandler(adminCancelInvalidPriceChange));
+// Admin skip renewal (Decision 2)
+adminRenewalsRouter.post("/:id/admin-skip", asyncHandler(adminSkipRenewal));
+

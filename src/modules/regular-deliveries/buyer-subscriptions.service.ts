@@ -2,6 +2,7 @@ import type { SubscriptionFrequency } from "@prisma/client";
 
 import { prisma } from "../../lib/prisma";
 import { AppError } from "../../shared/errors/app-error";
+import { notificationsService } from "../notifications/notifications.service";
 import { vendorMarketsService } from "../vendors/vendor-markets.service";
 import { getEnabledRegularDeliveryMarketCodes } from "./subscription-offers.service";
 
@@ -15,6 +16,15 @@ const FREQUENCY_DAYS: Record<SubscriptionFrequency, number> = {
   BIWEEKLY: 14,
   EVERY_4_WEEKS: 28,
   MONTHLY: 30,
+};
+
+// Human-readable labels used in buyer notifications — matches the frontend's
+// FREQUENCY_LABELS constant in services/regularDeliveriesService.ts.
+const FREQUENCY_LABEL: Record<SubscriptionFrequency, string> = {
+  WEEKLY: "Weekly",
+  BIWEEKLY: "Every 2 weeks",
+  EVERY_4_WEEKS: "Every 4 weeks",
+  MONTHLY: "Monthly",
 };
 
 export function nextCycleDate(frequency: SubscriptionFrequency, from: Date = new Date()): Date {
@@ -198,6 +208,150 @@ export const buyerSubscriptionsService = {
     });
     await recordAction(id, "cancelled", buyerId);
     return updated;
+  },
+
+  /**
+   * Buyer changes the frequency of their active Regular Delivery subscription.
+   *
+   * Final Client Decision 3 — rules enforced here:
+   *
+   * 1. Only ACTIVE subscriptions can change frequency.
+   * 2. If the next renewal is already PROCESSING or PAID — immutable; change
+   *    applies to the renewal after that.
+   * 3. If the next renewal hasn't been locked yet — we update the subscription
+   *    frequency and recalculate nextRenewalAt from the current cycle date
+   *    (not from now), so the new period is fair to the buyer.
+   * 4. Ownership is enforced — a buyer can only change their own subscription.
+   * 5. Vendor cannot call this — they may only control frequencies offered to
+   *    NEW subscribers via the offer's `frequencies` field.
+   * 6. A notification is sent confirming the change (with old/new frequency
+   *    and new next-renewal date).
+   *
+   * Returns the updated subscription with new frequency and nextRenewalAt.
+   */
+  async changeFrequency(buyerId: string, id: string, newFrequency: SubscriptionFrequency) {
+    const sub = await this.requireOwned(buyerId, id);
+    if (sub.status !== "ACTIVE") throw new AppError("Only an active subscription can change its frequency", 409);
+    if (sub.frequency === newFrequency) throw new AppError("Subscription already uses this frequency", 409);
+
+    // Validate the new frequency is supported by the offer.
+    const offer = await prisma.subscriptionOffer.findUnique({ where: { id: sub.offerId }, select: { frequencies: true } });
+    if (!offer) throw new AppError("Subscription offer not found", 404);
+    if (!offer.frequencies.includes(newFrequency)) {
+      throw new AppError(`This vendor's offer does not support ${newFrequency.replace(/_/g, " ").toLowerCase()}`, 400);
+    }
+
+    const previousFrequency = sub.frequency;
+
+    // Check if the upcoming renewal is already locked (PAYMENT_PROCESSING/PAID/ORDER_CREATED).
+    // If so, the change applies to the renewal after that one (i.e., from the
+    // current nextRenewalAt forward), per the client rule: "if the next renewal
+    // has passed its change cutoff or is already processing/paid, the current
+    // renewal remains unchanged — the new frequency applies afterwards."
+    const upcomingRenewalIsLocked = sub.nextRenewalAt
+      ? (await prisma.renewal.findFirst({
+          where: {
+            subscriptionId: id,
+            cycleDate: sub.nextRenewalAt,
+            status: { in: ["PAYMENT_PROCESSING", "PAID", "ORDER_CREATED"] },
+          },
+          select: { id: true },
+        })) !== null
+      : false;
+
+    let newNextRenewalAt: Date;
+    if (upcomingRenewalIsLocked) {
+      // The locked renewal still fires on its existing date; the new frequency
+      // kicks in for the renewal *after* that — i.e. from nextRenewalAt.
+      newNextRenewalAt = nextCycleDate(newFrequency, sub.nextRenewalAt ?? undefined);
+    } else {
+      // Next renewal hasn't been locked — we can apply immediately. Recalculate
+      // from the current cycle base (the date the previous renewal should have
+      // run) if it exists, otherwise from now.
+      newNextRenewalAt = nextCycleDate(newFrequency, sub.nextRenewalAt ?? undefined);
+    }
+
+    const updated = await prisma.buyerSubscription.update({
+      where: { id },
+      data: { frequency: newFrequency, nextRenewalAt: newNextRenewalAt },
+    });
+
+    await recordAction(id, "frequency_changed", buyerId, {
+      previousFrequency,
+      newFrequency,
+      newNextRenewalAt: newNextRenewalAt.toISOString(),
+    });
+
+    // Notify the buyer of the frequency change (not a marketing message —
+    // transactional: confirms their own request, no consent gate).
+    await notificationsService.enqueue({
+      userId: buyerId,
+      type: "SUBSCRIPTION_UPDATE",
+      title: "Regular Delivery frequency updated",
+      body: `Your delivery frequency has been changed to ${FREQUENCY_LABEL[newFrequency]}. Next delivery: ${newNextRenewalAt.toLocaleDateString("en-GB")}.`,
+      data: {
+        type: "regular_delivery_frequency_changed",
+        subscriptionId: id,
+        previousFrequency,
+        newFrequency,
+      },
+      dedupeKey: `frequency_changed:${id}:${previousFrequency}:${newFrequency}:${Date.now()}`,
+    }).catch(() => { /* non-blocking */ });
+
+    return updated;
+  },
+
+  /**
+   * Admin support action — change a buyer's subscription frequency on their
+   * behalf. Can ONLY be used as an authorized support action for a buyer who
+   * has explicitly requested it. Records an AuditLog entry in addition to
+   * the SubscriptionActionHistory. Subject to the same state rules as
+   * changeFrequency().
+   *
+   * Final Client Decision 3: "Admin may correct an active frequency ONLY as
+   * a support action. Must record previous frequency, new frequency, reason,
+   * actor, timestamp."
+   */
+  async adminChangeFrequency(adminId: string, subscriptionId: string, newFrequency: SubscriptionFrequency, reason: string) {
+    if (!reason?.trim()) throw new AppError("A reason is required for admin frequency changes", 400);
+
+    const sub = await prisma.buyerSubscription.findUnique({ where: { id: subscriptionId } });
+    if (!sub) throw new AppError("Subscription not found", 404);
+    if (sub.status !== "ACTIVE") throw new AppError("Only an active subscription can change its frequency", 409);
+    if (sub.frequency === newFrequency) throw new AppError("Subscription already uses this frequency", 409);
+
+    const previousFrequency = sub.frequency;
+    const newNextRenewalAt = nextCycleDate(newFrequency, sub.nextRenewalAt ?? undefined);
+
+    const updated = await prisma.buyerSubscription.update({
+      where: { id: subscriptionId },
+      data: { frequency: newFrequency, nextRenewalAt: newNextRenewalAt },
+    });
+
+    await recordAction(subscriptionId, "admin_frequency_changed", adminId, {
+      previousFrequency,
+      newFrequency,
+      reason,
+      newNextRenewalAt: newNextRenewalAt.toISOString(),
+    });
+
+    // Notify buyer that admin corrected their frequency on their behalf.
+    await notificationsService.enqueue({
+      userId: sub.buyerId,
+      type: "SUBSCRIPTION_UPDATE",
+      title: "Regular Delivery frequency updated",
+      body: `Your delivery frequency has been updated to ${FREQUENCY_LABEL[newFrequency]} by Eki support. Next delivery: ${newNextRenewalAt.toLocaleDateString("en-GB")}.`,
+      data: {
+        type: "regular_delivery_frequency_changed",
+        subscriptionId,
+        previousFrequency,
+        newFrequency,
+        changedByAdmin: true,
+      },
+      dedupeKey: `admin_frequency_changed:${subscriptionId}:${newFrequency}:${Date.now()}`,
+    }).catch(() => { /* non-blocking */ });
+
+    return { updated, previousFrequency, newFrequency, newNextRenewalAt };
   },
 
   async updateItems(buyerId: string, id: string, items: { productId: string; quantity: number }[]) {

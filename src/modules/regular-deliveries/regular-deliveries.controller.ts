@@ -318,6 +318,17 @@ export async function retryRenewalPayment(request: Request, response: Response):
   response.json({ renewal });
 }
 
+// ─── Buyer: frequency editing (Final Client Decision 3) ────────────────────
+
+export async function changeBuyerSubscriptionFrequency(request: Request, response: Response): Promise<void> {
+  const buyerId = requireUserId(request);
+  const id = requireIdParam(request);
+  const { frequency } = request.body ?? {};
+  if (typeof frequency !== "string") throw new AppError("frequency is required", 400);
+  const subscription = await buyerSubscriptionsService.changeFrequency(buyerId, id, frequency as any);
+  response.json({ subscription });
+}
+
 // ─── Admin ─────────────────────────────────────────────────────────────────
 
 /** RD-08 (retry-payment slice only) — see renewalsService.adminRetryPayment() for scope notes. */
@@ -338,6 +349,148 @@ export async function adminRetryRenewalPayment(request: Request, response: Respo
   response.json({ renewal });
 }
 
+/**
+ * Admin forced cancellation of a Regular Delivery subscription (Final Client Decision 2).
+ * Exceptional action only: support, fraud, compliance, safety.
+ * Cancels ONLY future unpaid renewals. Never touches paid/dispatched orders.
+ */
+export async function adminForceCancelSubscription(request: Request, response: Response): Promise<void> {
+  const adminId = requireUserId(request);
+  const subscriptionId = requireIdParam(request);
+  const { reason, internalNote } = request.body ?? {};
+  if (typeof reason !== "string" || !reason.trim()) throw new AppError("reason is required", 400);
+  if (typeof internalNote !== "string" || !internalNote.trim()) throw new AppError("internalNote is required", 400);
+  const result = await renewalsService.adminForceCancel(adminId, subscriptionId, reason, internalNote);
+  response.json(result);
+}
+
+/**
+ * Admin contact buyer from a subscription context (Final Client Decision 2).
+ * Uses the existing Eki notification infrastructure — does NOT expose card
+ * details, payment credentials, or private secrets. Records: message,
+ * administrator, date/time, subscription, delivery status.
+ */
+export async function adminContactBuyerFromSubscription(request: Request, response: Response): Promise<void> {
+  const adminId = requireUserId(request);
+  const subscriptionId = requireIdParam(request);
+  const { message } = request.body ?? {};
+  if (typeof message !== "string" || !message.trim()) throw new AppError("message is required", 400);
+
+  const sub = await prisma.buyerSubscription.findUnique({
+    where: { id: subscriptionId },
+    select: { buyerId: true, buyer: { select: { id: true } } },
+  });
+  if (!sub) throw new AppError("Subscription not found", 404);
+
+  const notif = await prisma.notification.create({
+    data: {
+      userId: sub.buyerId,
+      type: "SUBSCRIPTION_UPDATE",
+      title: "Message from Eki support",
+      body: message.trim(),
+      data: {
+        type: "admin_contact",
+        context: "subscription",
+        subscriptionId,
+        sentByAdminId: adminId,
+      },
+    },
+  });
+
+  await recordAudit({
+    actorId: adminId,
+    action: "subscription.admin_contact_buyer",
+    entityType: "BuyerSubscription",
+    entityId: subscriptionId,
+    afterState: { message: message.trim(), notificationId: notif.id },
+    request,
+  });
+
+  response.json({ notificationId: notif.id });
+}
+
+/**
+ * Admin contact buyer from a renewal context (Final Client Decision 2).
+ */
+export async function adminContactBuyerFromRenewal(request: Request, response: Response): Promise<void> {
+  const adminId = requireUserId(request);
+  const renewalId = requireIdParam(request);
+  const { message } = request.body ?? {};
+  if (typeof message !== "string" || !message.trim()) throw new AppError("message is required", 400);
+
+  const renewal = await prisma.renewal.findUnique({
+    where: { id: renewalId },
+    include: { subscription: { select: { buyerId: true, id: true } } },
+  });
+  if (!renewal) throw new AppError("Renewal not found", 404);
+
+  const notif = await prisma.notification.create({
+    data: {
+      userId: renewal.subscription.buyerId,
+      type: "SUBSCRIPTION_UPDATE",
+      title: "Message from Eki support",
+      body: message.trim(),
+      data: {
+        type: "admin_contact",
+        context: "renewal",
+        subscriptionId: renewal.subscription.id,
+        renewalId,
+        sentByAdminId: adminId,
+      },
+    },
+  });
+
+  await recordAudit({
+    actorId: adminId,
+    action: "renewal.admin_contact_buyer",
+    entityType: "Renewal",
+    entityId: renewalId,
+    afterState: { message: message.trim(), notificationId: notif.id },
+    request,
+  });
+
+  response.json({ notificationId: notif.id });
+}
+
+/** Admin resend price-change approval notification — Decision 2. */
+export async function adminResendPriceChangeNotification(request: Request, response: Response): Promise<void> {
+  const adminId = requireUserId(request);
+  await renewalsService.adminResendPriceChangeNotification(adminId, requireIdParam(request));
+  response.status(204).send();
+}
+
+/** Admin cancel an invalid vendor price-change request — Decision 2. */
+export async function adminCancelInvalidPriceChange(request: Request, response: Response): Promise<void> {
+  const adminId = requireUserId(request);
+  const { reason } = request.body ?? {};
+  if (typeof reason !== "string" || !reason.trim()) throw new AppError("reason is required", 400);
+  const renewal = await renewalsService.adminCancelInvalidPriceChange(adminId, requireIdParam(request), reason);
+  response.json({ renewal });
+}
+
+/** Admin skip a renewal where policy permits — Decision 2. */
+export async function adminSkipRenewal(request: Request, response: Response): Promise<void> {
+  const adminId = requireUserId(request);
+  const { reason } = request.body ?? {};
+  if (typeof reason !== "string" || !reason.trim()) throw new AppError("reason is required", 400);
+  const renewal = await renewalsService.adminSkipRenewal(adminId, requireIdParam(request), reason);
+  response.json({ renewal });
+}
+
+/**
+ * Admin frequency correction — Final Client Decision 3.
+ * Support action only — must have been requested/authorized by buyer.
+ */
+export async function adminChangeSubscriptionFrequency(request: Request, response: Response): Promise<void> {
+  const adminId = requireUserId(request);
+  const subscriptionId = requireIdParam(request);
+  const { frequency, reason } = request.body ?? {};
+  if (typeof frequency !== "string") throw new AppError("frequency is required", 400);
+  if (typeof reason !== "string" || !reason.trim()) throw new AppError("reason is required — admin frequency changes must have a stated reason", 400);
+  const result = await buyerSubscriptionsService.adminChangeFrequency(adminId, subscriptionId, frequency as any, reason);
+  response.json(result);
+}
+
 export async function adminListSubscriptionExceptions(_request: Request, response: Response): Promise<void> {
   const items = await prisma.renewal.findMany({
     where: { status: { in: ["AWAITING_PRICE_APPROVAL", "PAYMENT_FAILED", "AWAITING_STOCK"] } },
@@ -350,3 +503,4 @@ export async function adminListSubscriptionExceptions(_request: Request, respons
   });
   response.json({ items });
 }
+

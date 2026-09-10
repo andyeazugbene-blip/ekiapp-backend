@@ -21,6 +21,8 @@ import { productsRouter } from "../modules/products/products.routes";
 import { promosRouter, bundlesRouter, flashSalesRouter } from "../modules/promos/promos.routes";
 import { publicStoresRouter } from "../modules/public-stores/public-stores.routes";
 import {
+  adminRenewalsRouter,
+  adminSubscriptionsRouter,
   buyerPaymentMethodsRouter,
   buyerSubscriptionsRouter,
   regularDeliveriesVendorRouter,
@@ -118,6 +120,9 @@ apiRouter.use("/subscription-offers", subscriptionOffersRouter);
 apiRouter.use("/renewals", renewalsRouter);
 apiRouter.use("/buyer/payment-methods", buyerPaymentMethodsRouter);
 apiRouter.use("/buyer/subscriptions", buyerSubscriptionsRouter);
+// Admin RD controls — part of the single main admin panel (Final Client Decisions 2 + 3).
+apiRouter.use("/admin/subscriptions", adminSubscriptionsRouter);
+apiRouter.use("/admin/renewals", adminRenewalsRouter);
 apiRouter.use("/community-buy", communityBuyRouter);
 apiRouter.use("/organiser", organiserRouter);
 apiRouter.use("/supplier", supplierRouter);

@@ -3,7 +3,7 @@ import type { AutomationType } from "@prisma/client";
 import { prisma } from "../../lib/prisma";
 import { logger } from "../../lib/logger";
 import { communicationService } from "../communications/communication.service";
-import { MARKETING_AUTOMATION_TYPES, VENDOR_TOGGLEABLE_AUTOMATION_TYPES, type ScheduleAutomationInput } from "./automation.types";
+import { MARKETING_AUTOMATION_TYPES, VENDOR_TOGGLEABLE_AUTOMATION_TYPES, EKI_MANAGED_AUTOMATION_TYPES, type ScheduleAutomationInput } from "./automation.types";
 
 // Server-time quiet hours (UTC). A per-user-timezone version would need a
 // timezone field on User, which doesn't exist yet — documented limitation,
@@ -71,6 +71,18 @@ const DEFAULT_TEMPLATES: Record<AutomationType, { title: string; body: string; c
   BUYER_REFERRAL: {
     title: "Share Eki, earn rewards",
     body: "Hi {{name}}, share your referral code {{referral_code}} with friends and you'll both get a bonus on their first order.",
+    channels: ["push", "in_app"],
+    recipientType: "BUYER",
+  },
+  REORDER_REMINDER: {
+    title: "Time to reorder?",
+    body: "Hi {{name}}, you ordered {{product_title}} — need more? It's still available.",
+    channels: ["push", "in_app"],
+    recipientType: "BUYER",
+  },
+  CHECKOUT_PAYMENT_FOLLOW_UP: {
+    title: "Complete your purchase",
+    body: "Hi {{name}}, your order {{order_number}} is waiting — complete payment to confirm your items.",
     channels: ["push", "in_app"],
     recipientType: "BUYER",
   },
@@ -293,19 +305,38 @@ export const automationService = {
   async listVendorAutomations(vendorId: string) {
     const settings = await prisma.vendorAutomationSetting.findMany({ where: { vendorId } });
     const settingByType = new Map(settings.map((s) => [s.type, s]));
-    const types = VENDOR_TOGGLEABLE_AUTOMATION_TYPES;
-    return types.map((type) => {
+
+    // Vendor-controlled automations (8): vendor sees toggle + config
+    const vendorControlled = VENDOR_TOGGLEABLE_AUTOMATION_TYPES.map((type) => {
       const setting = settingByType.get(type);
       return {
         type,
+        managedByEki: false,
         enabled: setting?.enabled ?? true,
         description: DEFAULT_TEMPLATES[type].body,
         config: CONFIGURABLE_TYPES.has(type) ? { ...DEFAULT_CONFIG[type], ...(setting?.config as object | undefined) } : null,
       };
     });
+
+    // Eki-managed automations (3): vendor can see activity but cannot toggle.
+    // No enabled/config field exposed — UI must not render a toggle for these.
+    const ekiManaged = EKI_MANAGED_AUTOMATION_TYPES.map((type) => ({
+      type,
+      managedByEki: true,
+      description: DEFAULT_TEMPLATES[type].body,
+    }));
+
+    return [...vendorControlled, ...ekiManaged];
   },
 
   async setVendorAutomation(vendorId: string, type: AutomationType, enabled: boolean, config?: Record<string, number>) {
+    // Final Client Decision 4: Eki-managed types must NOT expose vendor toggles.
+    if ((EKI_MANAGED_AUTOMATION_TYPES as AutomationType[]).includes(type)) {
+      throw new Error(`${type} is managed by Eki and cannot be toggled by vendors`);
+    }
+    if (!VENDOR_TOGGLEABLE_AUTOMATION_TYPES.includes(type)) {
+      throw new Error(`${type} is not a vendor-configurable automation type`);
+    }
     const data: { enabled: boolean; config?: object } = { enabled };
     if (config && CONFIGURABLE_TYPES.has(type)) data.config = config;
     return prisma.vendorAutomationSetting.upsert({

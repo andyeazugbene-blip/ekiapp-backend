@@ -890,6 +890,196 @@ export const renewalsService = {
     }
     return order;
   },
+
+  // ─── Admin actions ────────────────────────────────────────────────────
+
+  /**
+   * Admin forced cancellation — Final Client Decision 2.
+   *
+   * May only be used as an exceptional action for support, fraud, compliance,
+   * or safety reasons. Required: reason + internal note.
+   *
+   * Cancels ONLY future unpaid renewals (SCHEDULED/AWAITING_STOCK/
+   * AWAITING_PRICE_APPROVAL/READY_FOR_PAYMENT). Never cancels, alters, or
+   * refunds an already-paid or dispatched order. Backend enforces this —
+   * not just the frontend.
+   *
+   * Notifies both buyer and vendor.
+   */
+  async adminForceCancel(
+    adminId: string,
+    subscriptionId: string,
+    reason: string,
+    internalNote: string,
+  ): Promise<{ subscription: unknown; cancelledRenewals: number }> {
+    if (!reason?.trim()) throw new AppError("A reason is required for admin forced cancellation", 400);
+    if (!internalNote?.trim()) throw new AppError("An internal note is required for admin forced cancellation", 400);
+
+    const sub = await prisma.buyerSubscription.findUnique({
+      where: { id: subscriptionId },
+      include: {
+        offer: { include: { vendor: { select: { id: true, userId: true, storeName: true } } } },
+        buyer: { select: { id: true, name: true } },
+      },
+    });
+    if (!sub) throw new AppError("Subscription not found", 404);
+    if (sub.status === "CANCELLED") throw new AppError("Subscription is already cancelled", 409);
+
+    // Cancel future unpaid renewals ONLY — spec §6.7 + Decision 2.
+    const { count: cancelledRenewals } = await prisma.renewal.updateMany({
+      where: {
+        subscriptionId,
+        status: { in: ["SCHEDULED", "AWAITING_STOCK", "AWAITING_PRICE_APPROVAL", "READY_FOR_PAYMENT"] },
+      },
+      data: { status: "CANCELLED", cancelledAt: new Date() },
+    });
+
+    const before = { status: sub.status };
+    const subscription = await prisma.buyerSubscription.update({
+      where: { id: subscriptionId },
+      data: { status: "CANCELLED", cancelledAt: new Date(), nextRenewalAt: null },
+    });
+
+    await recordAudit({
+      actorId: adminId,
+      action: "subscription.admin_force_cancel",
+      entityType: "BuyerSubscription",
+      entityId: subscriptionId,
+      beforeState: before,
+      afterState: { status: "CANCELLED", cancelledRenewals, reason, internalNote },
+    });
+
+    // Buyer notification.
+    await notificationsService.enqueue({
+      userId: sub.buyer.id,
+      type: "SUBSCRIPTION_UPDATE",
+      title: "Your Regular Delivery has been cancelled",
+      body: `Your Regular Delivery subscription has been cancelled by Eki support. Only future unprocessed deliveries are affected. Reason: ${reason}.`,
+      data: { type: "subscription_update", event: "admin_force_cancelled", subscriptionId },
+    }).catch(() => { /* non-blocking */ });
+
+    // Vendor notification.
+    await notificationsService.enqueue({
+      userId: sub.offer.vendor.userId,
+      type: "SUBSCRIPTION_UPDATE",
+      title: "Subscription cancelled by admin",
+      body: `A subscription for your Regular Delivery offer has been cancelled by Eki support. Only future unprocessed renewals are affected.`,
+      data: { type: "subscription_update", event: "admin_force_cancelled", subscriptionId },
+    }).catch(() => { /* non-blocking */ });
+
+    return { subscription, cancelledRenewals };
+  },
+
+  /**
+   * Admin resend price-change notification — Decision 2.
+   * Resends the AWAITING_PRICE_APPROVAL notification to the buyer without
+   * changing any state. Does not accept on buyer's behalf.
+   */
+  async adminResendPriceChangeNotification(adminId: string, renewalId: string): Promise<void> {
+    const renewal = await prisma.renewal.findUnique({
+      where: { id: renewalId },
+      include: { subscription: { select: { buyerId: true, id: true } } },
+    });
+    if (!renewal) throw new AppError("Renewal not found", 404);
+    if (renewal.status !== "AWAITING_PRICE_APPROVAL") {
+      throw new AppError("This renewal is not awaiting price approval", 409);
+    }
+
+    await notifySubscriptionEvent(renewal.subscription.buyerId, "price_approval_required", renewalId, renewal.subscription.id);
+
+    await recordAudit({
+      actorId: adminId,
+      action: "renewal.admin_resend_price_notification",
+      entityType: "Renewal",
+      entityId: renewalId,
+      afterState: { action: "resent_price_approval_notification" },
+    });
+  },
+
+  /**
+   * Admin cancel invalid price-change request — Decision 2.
+   * Allows admin to void an erroneous vendor price-change request, resetting
+   * the renewal to SCHEDULED so it proceeds at the original price.
+   */
+  async adminCancelInvalidPriceChange(adminId: string, renewalId: string, reason: string): Promise<unknown> {
+    if (!reason?.trim()) throw new AppError("A reason is required", 400);
+    const renewal = await prisma.renewal.findUnique({
+      where: { id: renewalId },
+      include: { subscription: { select: { buyerId: true, id: true } } },
+    });
+    if (!renewal) throw new AppError("Renewal not found", 404);
+    if (renewal.status !== "AWAITING_PRICE_APPROVAL") {
+      throw new AppError("This renewal is not awaiting price approval", 409);
+    }
+
+    const before = { status: renewal.status };
+    const updated = await prisma.renewal.update({
+      where: { id: renewalId },
+      // Disconnect the PriceChangeRequest — the row is kept for audit purposes
+      // but unlinked from this renewal so it no longer drives AWAITING_PRICE_APPROVAL.
+      data: { status: "SCHEDULED", priceChangeRequest: { disconnect: true } },
+    });
+
+    await recordAudit({
+      actorId: adminId,
+      action: "renewal.admin_cancel_price_change",
+      entityType: "Renewal",
+      entityId: renewalId,
+      beforeState: before,
+      afterState: { status: "SCHEDULED", reason },
+    });
+
+    // Notify buyer that the price change was voided.
+    await notificationsService.enqueue({
+      userId: renewal.subscription.buyerId,
+      type: "SUBSCRIPTION_UPDATE",
+      title: "Price change cancelled",
+      body: "An upcoming price change on your Regular Delivery was cancelled by Eki support. Your delivery will proceed at the original price.",
+      data: { type: "subscription_update", event: "admin_price_change_cancelled", renewalId, subscriptionId: renewal.subscription.id },
+    }).catch(() => { /* non-blocking */ });
+
+    return updated;
+  },
+
+  /**
+   * Admin skip renewal where policy permits — Decision 2.
+   * Skips a specific upcoming renewal. Requires a reason and audit entry.
+   */
+  async adminSkipRenewal(adminId: string, renewalId: string, reason: string): Promise<unknown> {
+    if (!reason?.trim()) throw new AppError("A reason is required", 400);
+    const renewal = await prisma.renewal.findUnique({
+      where: { id: renewalId },
+      include: { subscription: { select: { buyerId: true, id: true, frequency: true } } },
+    });
+    if (!renewal) throw new AppError("Renewal not found", 404);
+    const skippable = ["SCHEDULED", "AWAITING_STOCK", "AWAITING_PRICE_APPROVAL", "READY_FOR_PAYMENT"];
+    if (!skippable.includes(renewal.status)) {
+      throw new AppError("This renewal cannot be skipped — it is already processing, paid, or completed", 409);
+    }
+
+    const before = { status: renewal.status };
+    const updated = await prisma.renewal.update({
+      where: { id: renewalId },
+      data: { status: "SKIPPED" },
+    });
+
+    // Advance nextRenewalAt on the parent subscription.
+    await prisma.buyerSubscription.update({
+      where: { id: renewal.subscriptionId },
+      data: { nextRenewalAt: nextCycleDate(renewal.subscription.frequency, renewal.cycleDate) },
+    });
+
+    await recordAudit({
+      actorId: adminId,
+      action: "renewal.admin_skip",
+      entityType: "Renewal",
+      entityId: renewalId,
+      beforeState: before,
+      afterState: { status: "SKIPPED", reason },
+    });
+
+    return updated;
+  },
 };
 
 async function notifySubscriptionEvent(buyerId: string, event: string, renewalId: string, subscriptionId: string, orderNumber?: string) {

@@ -266,6 +266,171 @@ async function detectPaymentRecovery(): Promise<number> {
   return payments.length;
 }
 
+/**
+ * REORDER_REMINDER — Final Client Decision 4.
+ *
+ * Triggers after a completed+delivered order. For each delivered order in
+ * the configured window, checks whether:
+ *   1. The buyer has marketing consent.
+ *   2. The product is still available (active, in stock).
+ *   3. The buyer hasn't already reordered that product (completed order
+ *      with the same productId after the original order date).
+ *   4. The automation is enabled for that vendor.
+ *   5. The dedupe key prevents a second reminder for the same order.
+ *
+ * Uses a fixed 14-day window from delivery as a default timing — mirrors
+ * the REVIEW_REQUEST 14-day pattern, the simplest timing that works
+ * without requiring a per-vendor "typical order interval" field that
+ * doesn't currently exist in the schema.
+ */
+async function detectReorderReminder(): Promise<number> {
+  const REMINDER_WINDOW_DAYS = 14;
+  const from = new Date(Date.now() - REMINDER_WINDOW_DAYS * DAY_MS);
+  const to = new Date(Date.now() - DAY_MS); // don't remind day-of delivery
+
+  const orders = await prisma.order.findMany({
+    where: {
+      status: { in: ["DELIVERED", "COMPLETED", "AUTO_RELEASED"] },
+      deliveredAt: { gte: from, lte: to },
+    },
+    select: {
+      id: true,
+      orderNumber: true,
+      buyerId: true,
+      vendorId: true,
+      deliveredAt: true,
+      items: {
+        select: {
+          productId: true,
+          product: { select: { title: true, isActive: true, stock: true } },
+        },
+      },
+    },
+    take: 500,
+  });
+
+  let scheduled = 0;
+  for (const order of orders) {
+    for (const item of order.items) {
+      // 1. Product must still be available.
+      if (!item.product.isActive || item.product.stock <= 0) continue;
+
+      // 2. Buyer must not have already reordered this exact product after
+      //    this order was placed (prevents reminders for recent repurchases).
+      const alreadyReordered = await prisma.orderItem.findFirst({
+        where: {
+          productId: item.productId,
+          order: {
+            buyerId: order.buyerId,
+            status: { in: ["PAID", "DELIVERED", "COMPLETED", "AUTO_RELEASED"] },
+            createdAt: { gt: order.deliveredAt ?? new Date(0) },
+          },
+        },
+        select: { id: true },
+      });
+      if (alreadyReordered) continue;
+
+      await automationService.scheduleAutomation({
+        type: "REORDER_REMINDER",
+        recipientUserId: order.buyerId,
+        vendorId: order.vendorId,
+        // Dedupe: one reminder per product per order, never resent.
+        subjectKey: `${order.id}:${item.productId}`,
+        requiresMarketingConsent: true,
+        title: "Time to reorder?",
+        body: `You ordered ${item.product.title} — need more?`,
+        data: {
+          order_number: order.orderNumber,
+          product_title: item.product.title,
+          product_id: item.productId,
+        },
+      });
+      scheduled++;
+    }
+  }
+  return scheduled;
+}
+
+/**
+ * CHECKOUT_PAYMENT_FOLLOW_UP — Final Client Decision 4.
+ *
+ * Triggers when a marketplace Checkout is abandoned or its PaymentIntent
+ * failed (separate from PAYMENT_RECOVERY, which is exclusively for Regular
+ * Delivery subscription renewal payment failures).
+ *
+ * Uses the Checkout model (status: PENDING = not yet paid, SUCCEEDED =
+ * payment captured, FAILED = PI confirmed failed). PaymentStatus enum in
+ * Prisma is: PENDING | SUCCEEDED | FAILED — there is no PROCESSING value.
+ *
+ * CRITICAL: A real freshness recheck re-reads the checkout status from the
+ * DB immediately before sending. If it is now SUCCEEDED, no message is sent.
+ * This prevents messaging buyers whose payment succeeded after the initial
+ * batch query ran (race-condition guard).
+ *
+ * Window: Checkouts that have been PENDING for more than 2 hours but less
+ * than 48 hours. Stale enough to be abandoned, recent enough to be
+ * actionable.
+ */
+async function detectCheckoutPaymentFollowUp(): Promise<number> {
+  const MIN_AGE_MS = 2 * 60 * 60 * 1000;  // 2 hours — not a timing glitch
+  const MAX_AGE_MS = 48 * 60 * 60 * 1000; // 48 hours — still actionable
+  const now = new Date();
+  const minAge = new Date(now.getTime() - MAX_AGE_MS);
+  const maxAge = new Date(now.getTime() - MIN_AGE_MS);
+
+  // Query PENDING Checkouts (the checkout-level entity, not individual orders).
+  // A checkout can span multiple orders, but we dedupe per checkout so the
+  // buyer gets exactly one follow-up regardless of how many orders are in it.
+  const pendingCheckouts = await prisma.checkout.findMany({
+    where: {
+      status: "PENDING",
+      createdAt: { gte: minAge, lte: maxAge },
+    },
+    select: {
+      id: true,
+      buyerId: true,
+      orders: {
+        select: { id: true, orderNumber: true, vendorId: true },
+        take: 1,
+      },
+    },
+    take: 500,
+  });
+
+  let scheduled = 0;
+  for (const checkout of pendingCheckouts) {
+    const order = checkout.orders[0];
+    if (!order) continue;
+
+    // CRITICAL RECHECK — re-read the checkout status immediately before
+    // deciding to send (guards against payment succeeding between the
+    // batch query above and this point). This is the exact guard the client
+    // specified: "immediately before sending, re-check real payment status."
+    const fresh = await prisma.checkout.findUnique({
+      where: { id: checkout.id },
+      select: { status: true },
+    });
+    if (!fresh) continue;
+    // Only send for still-pending checkouts. SUCCEEDED = paid, don't message.
+    if (fresh.status !== "PENDING") continue;
+
+    await automationService.scheduleAutomation({
+      type: "CHECKOUT_PAYMENT_FOLLOW_UP",
+      recipientUserId: checkout.buyerId,
+      vendorId: order.vendorId ?? undefined,
+      // Deterministic dedupe: one follow-up per checkout, never resent.
+      subjectKey: `checkout_followup:${checkout.id}`,
+      requiresMarketingConsent: true,
+      title: "Complete your purchase",
+      body: `Your order ${order.orderNumber} is waiting — complete payment to confirm your items.`,
+      data: { order_number: order.orderNumber, order_id: order.id, checkout_id: checkout.id },
+    });
+    scheduled++;
+  }
+  return scheduled;
+}
+
+
 export const automationDetectors = {
   /**
    * Runs every detector that has no dependency on Regular Deliveries or
@@ -283,6 +448,9 @@ export const automationDetectors = {
       ["LOW_STOCK_ALERT", detectLowStockAlert],
       ["BUYER_REFERRAL", detectBuyerReferral],
       ["PAYMENT_RECOVERY", detectPaymentRecovery],
+      // Final Client Decision 4 — new automation types:
+      ["REORDER_REMINDER", detectReorderReminder],
+      ["CHECKOUT_PAYMENT_FOLLOW_UP", detectCheckoutPaymentFollowUp],
     ];
     for (const [name, job] of jobs) {
       try {
@@ -295,3 +463,4 @@ export const automationDetectors = {
     return results;
   },
 };
+

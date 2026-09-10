@@ -1745,9 +1745,21 @@ enum AutomationType {
   REVIEW_REQUEST
   LOW_STOCK_ALERT
   BUYER_REFERRAL
+  // Vendor-controlled: triggers after a completed+delivered order to suggest
+  // reordering — separate from CART_RECOVERY (abandoned cart) and
+  // PAYMENT_RECOVERY (Regular Delivery payment failure).
+  REORDER_REMINDER
+  // Vendor-controlled: triggers when an ordinary marketplace checkout is
+  // abandoned, incomplete, or finally fails — separate from PAYMENT_RECOVERY
+  // which is exclusively a Regular Delivery payment-failure automation.
+  // A real payment-status recheck runs immediately before send; if the
+  // payment is now verified or still processing, no message is sent.
+  CHECKOUT_PAYMENT_FOLLOW_UP
+  // Managed by Eki — vendor cannot toggle these:
   PAYMENT_RECOVERY
   RENEWAL_REMINDER
   PRICE_APPROVAL_REMINDER
+  // Community Buy campaign lifecycle — backend-triggered, no vendor toggle:
   CAMPAIGN_MILESTONE
   CAMPAIGN_DEADLINE
   CAMPAIGN_REFUND_UPDATE
