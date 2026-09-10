@@ -42,7 +42,7 @@ beforeEach(() => vi.clearAllMocks());
 describe("renewalsService — real audit trail for material transitions", () => {
   it("handlePaymentFailure records a real audit entry with the failure reason", async () => {
     m.renewal.update.mockResolvedValue({} as never);
-    m.buyerSubscription.update.mockResolvedValue({ buyerId: "buyer-1" } as never);
+    m.buyerSubscription.update.mockResolvedValue({ buyerId: "buyer-1", offer: { vendorId: "vendor-1" } } as never);
 
     await renewalsService.handlePaymentFailure("sub-1", "renewal-1", "card_declined");
 

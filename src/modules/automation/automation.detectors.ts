@@ -244,7 +244,7 @@ async function detectPaymentRecovery(): Promise<number> {
   const since = new Date(Date.now() - DAY_MS);
   const payments = await prisma.payment.findMany({
     where: { status: "FAILED", updatedAt: { gte: since }, order: { status: "PENDING" } },
-    select: { id: true, order: { select: { id: true, orderNumber: true, buyerId: true } } },
+    select: { id: true, order: { select: { id: true, orderNumber: true, buyerId: true, vendorId: true } } },
     take: 500,
   });
   for (const payment of payments) {
@@ -252,6 +252,10 @@ async function detectPaymentRecovery(): Promise<number> {
     await automationService.scheduleAutomation({
       type: "PAYMENT_RECOVERY",
       recipientUserId: payment.order.buyerId,
+      // AUTO-06 fix: without vendorId, listVendorActivity(vendorId) could
+      // never show this run to any vendor — it was real and sending, just
+      // permanently invisible in their Automation Activity.
+      vendorId: payment.order.vendorId,
       subjectKey: payment.id,
       requiresMarketingConsent: false,
       title: "Your payment didn't go through",

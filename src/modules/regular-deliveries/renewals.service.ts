@@ -243,7 +243,7 @@ export const renewalsService = {
   async evaluatePriceChange(renewalId: string) {
     const renewal = await prisma.renewal.findUniqueOrThrow({
       where: { id: renewalId },
-      include: { items: true, subscription: true },
+      include: { items: true, subscription: { include: { offer: { select: { vendorId: true } } } } },
     });
     const limitBps = renewal.subscription.priceChangeApprovalLimitBps ?? PRICE_CHANGE_APPROVAL_DEFAULT_BPS;
 
@@ -276,6 +276,8 @@ export const renewalsService = {
       await automationService.scheduleAutomation({
         type: "PRICE_APPROVAL_REMINDER",
         recipientUserId: renewal.subscription.buyerId,
+        // AUTO-06 fix — see the identical fix + comment on detectPaymentRecovery().
+        vendorId: renewal.subscription.offer.vendorId,
         subjectKey: renewalId,
         requiresMarketingConsent: false,
         title: "Price change needs your approval",
@@ -639,6 +641,11 @@ export const renewalsService = {
     const sub = await prisma.buyerSubscription.update({
       where: { id: subscriptionId },
       data: { status: "PAYMENT_ATTENTION" },
+      // AUTO-06 fix: this is a second PAYMENT_RECOVERY call site beyond the
+      // one named in the original finding (automation.detectors.ts) — same
+      // defect (no vendorId, so the run is real and sending but invisible
+      // in the vendor's Automation Activity), fixed the same way.
+      include: { offer: { select: { vendorId: true } } },
     });
     await recordAudit({
       actorId: SYSTEM_CRON_ACTOR,
@@ -651,6 +658,7 @@ export const renewalsService = {
     await automationService.scheduleAutomation({
       type: "PAYMENT_RECOVERY",
       recipientUserId: sub.buyerId,
+      vendorId: sub.offer.vendorId,
       subjectKey: `renewal:${renewalId}`,
       requiresMarketingConsent: false,
       title: "Your Regular Delivery payment didn't go through",
@@ -723,6 +731,27 @@ export const renewalsService = {
   async retryPayment(buyerId: string, renewalId: string) {
     const renewal = await prisma.renewal.findUnique({ where: { id: renewalId }, include: { subscription: true } });
     if (!renewal || renewal.subscription.buyerId !== buyerId) throw new AppError("Renewal not found", 404);
+    if (renewal.status !== "PAYMENT_FAILED") throw new AppError("This renewal is not in a retryable state", 409);
+    return this.attemptPayment(renewalId);
+  },
+
+  /**
+   * RD-08 (retry-payment slice — the only sub-part of RD-08 approved for
+   * this phase; approve/deny price-change-on-buyer's-behalf, force-cancel,
+   * and contact-buyer remain BLOCKED-CLIENT-DECISION, not built here).
+   *
+   * Admin remediation for a stuck PAYMENT_FAILED renewal — this is
+   * deliberately just a third caller of the same attemptPayment() every
+   * other path already uses (buyer-initiated retryPayment, cron sweep):
+   * no separate charge logic, no bypass of the atomic claim / Stripe
+   * idempotency key that already makes attemptPayment() safe against
+   * concurrent/duplicate triggers. No ownership check (unlike
+   * retryPayment) since an admin can act on any buyer's renewal — route-
+   * level admin permission is the authorization boundary here.
+   */
+  async adminRetryPayment(renewalId: string) {
+    const renewal = await prisma.renewal.findUnique({ where: { id: renewalId } });
+    if (!renewal) throw new AppError("Renewal not found", 404);
     if (renewal.status !== "PAYMENT_FAILED") throw new AppError("This renewal is not in a retryable state", 409);
     return this.attemptPayment(renewalId);
   },

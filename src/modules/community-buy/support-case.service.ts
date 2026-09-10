@@ -1,7 +1,9 @@
 import type { SupportCaseStatus, SupportCaseType } from "@prisma/client";
 
 import { prisma } from "../../lib/prisma";
+import { logger } from "../../lib/logger";
 import { AppError } from "../../shared/errors/app-error";
+import { notificationsService } from "../notifications/notifications.service";
 
 /**
  * Community Buy support cases — doc Phase 9. Distinct from ContentReport
@@ -110,12 +112,36 @@ export const supportCaseService = {
       }
     }
     if (input.internalNotes !== undefined) data.internalNotes = input.internalNotes;
+    // NOTIF-08 fix: a customer previously found out their case was answered
+    // only by manually reopening the app — no push, no in-app row, no
+    // email was ever sent. Only notify on a genuine transition (a new or
+    // changed response), not a no-op re-save of the same text.
+    const respondedNow = input.customerVisibleResponse !== undefined && input.customerVisibleResponse !== existing.customerVisibleResponse;
     if (input.customerVisibleResponse !== undefined) data.customerVisibleResponse = input.customerVisibleResponse;
     if (input.escalated !== undefined) {
       data.escalated = input.escalated;
       if (input.escalated) data.escalatedAt = new Date();
     }
 
-    return prisma.communityBuySupportCase.update({ where: { id: caseId }, data });
+    const updated = await prisma.communityBuySupportCase.update({ where: { id: caseId }, data });
+
+    if (respondedNow) {
+      try {
+        await notificationsService.enqueue({
+          userId: existing.participantId,
+          type: "COMMUNITY_CAMPAIGN_UPDATE",
+          title: "Your support case has a response",
+          body: input.customerVisibleResponse!.length > 140 ? `${input.customerVisibleResponse!.slice(0, 140)}…` : input.customerVisibleResponse!,
+          data: { type: "support_case_response", campaignId: existing.campaignId, caseId },
+        });
+      } catch (error) {
+        logger.error("Support case response notification failed (non-blocking)", {
+          caseId,
+          errorMessage: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+
+    return updated;
   },
 };

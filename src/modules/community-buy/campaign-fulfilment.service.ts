@@ -194,12 +194,18 @@ async function notifyOrganiserAndParticipants(campaignId: string, title: string,
   if (!campaign) return;
   const recipients = [campaign.organiser.userId, ...campaign.participants.map((p) => p.userId)];
   for (const userId of recipients) {
+    // NAV-08 fix: "fulfilment_update" fires under the IDENTICAL event name
+    // to both the organiser and every participant — tagging the organiser's
+    // own copy with audience:"organiser" is what lets the frontend route
+    // them to the management screen without misrouting participants, who
+    // share this exact event name and get no audience field at all.
+    const audience = userId === campaign.organiser.userId ? "organiser" : undefined;
     await notificationsService.enqueue({
       userId,
       type: "COMMUNITY_CAMPAIGN_UPDATE",
       title: notifTitle,
       body,
-      data: { type: "community_campaign_update", event: "fulfilment_update", campaignId },
+      data: { type: "community_campaign_update", event: "fulfilment_update", campaignId, ...(audience ? { audience } : {}) },
     });
   }
 }

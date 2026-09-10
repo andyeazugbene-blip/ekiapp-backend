@@ -262,6 +262,47 @@ describe("communityCampaignsService rescue-window organiser actions", () => {
     await expect(communityCampaignsService.approveExtension("admin-1", "ext-1")).rejects.toMatchObject({ statusCode: 400 });
   });
 
+  /** NAV-08 regression guard: extension_approved fires to organiser + every participant under the same event name. */
+  it("approveExtension tags the organiser's notification audience:organiser, not the participants'", async () => {
+    m.campaignExtensionRequest.findUnique.mockResolvedValue({
+      id: "ext-2", status: "PENDING", campaignId: "camp-10x", requestedDeadline: new Date(Date.now() + 100000),
+      supplierReconfirmed: true, priceUnchangedConfirmed: true,
+      campaign: {
+        id: "camp-10x", title: "Rice Bulk Buy", extensionCount: 0,
+        organiser: { userId: "organiser-user-1" },
+        participants: [{ userId: "participant-1" }],
+      },
+    } as never);
+
+    await communityCampaignsService.approveExtension("admin-1", "ext-2");
+
+    expect(notificationsService.enqueue).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: "organiser-user-1", data: expect.objectContaining({ event: "extension_approved", audience: "organiser" }) }),
+    );
+    expect(notificationsService.enqueue).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: "participant-1", data: expect.not.objectContaining({ audience: "organiser" }) }),
+    );
+  });
+
+  /** NAV-08 regression guard: rescue_opened fires to organiser + every participant under the same event name. */
+  it("notifyRescueOpened tags the organiser's notification audience:organiser, not the participants'", async () => {
+    m.communityCampaign.findUnique.mockResolvedValue({
+      id: "camp-11x", title: "Rice Bulk Buy", minimumShares: 10, confirmedShares: 4,
+      organiser: { userId: "organiser-user-1" },
+      participants: [{ userId: "participant-1" }, { userId: "participant-2" }],
+    } as never);
+
+    await communityCampaignsService.notifyRescueOpened("camp-11x", new Date(Date.now() + 100000));
+
+    expect(notificationsService.enqueue).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: "organiser-user-1", data: expect.objectContaining({ event: "rescue_opened", audience: "organiser" }) }),
+    );
+    expect(notificationsService.enqueue).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: "participant-1", data: expect.not.objectContaining({ audience: "organiser" }) }),
+    );
+    expect(notificationsService.enqueue).toHaveBeenCalledTimes(3);
+  });
+
   /**
    * NOTIF-DUP-01 regression guard: endRescueAndRefund() used to ALSO fire a
    * CAMPAIGN_REFUND_UPDATE automation per participant, for the identical
@@ -284,7 +325,107 @@ describe("communityCampaignsService rescue-window organiser actions", () => {
     expect(notificationsService.enqueue).toHaveBeenCalledWith(
       expect.objectContaining({ userId: "participant-1", data: expect.objectContaining({ type: "community_campaign_update", event: "cancelled" }) }),
     );
+    // NAV-08: participant must NOT be tagged organiser.
+    expect(notificationsService.enqueue).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: "participant-1", data: expect.not.objectContaining({ audience: "organiser" }) }),
+    );
     expect(mAutomation.scheduleAutomation).not.toHaveBeenCalled();
+  });
+
+  /** NAV-08 regression guard: the organiser's own "cancelled" notification must be tagged audience:"organiser" — participants sharing this exact event name are not. */
+  it("tags the organiser's own 'cancelled' notification with audience:organiser", async () => {
+    m.organiserProfile.findUnique.mockResolvedValue({ id: "org-1", userId: "organiser-user-1" } as never);
+    m.communityCampaign.findUnique.mockResolvedValue({ id: "camp-6c", organiserId: "org-1", status: "RESCUE_WINDOW", title: "Ending" } as never);
+    m.communityCampaign.update.mockResolvedValue({ id: "camp-6c", status: "FAILED" } as never);
+    m.campaignContribution.findMany.mockResolvedValue([] as never);
+    m.campaignParticipant.findMany.mockResolvedValue([] as never);
+
+    await communityCampaignsService.endRescueAndRefund("organiser-user-1", "camp-6c");
+
+    expect(notificationsService.enqueue).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: "organiser-user-1", data: expect.objectContaining({ event: "cancelled", audience: "organiser" }) }),
+    );
+  });
+});
+
+/**
+ * NAV-08 regression guard: campaign-fulfilment.service.ts's
+ * notifyOrganiserAndParticipants() sends "fulfilment_update" to the
+ * organiser AND every participant under the IDENTICAL event name — the
+ * organiser's own copy must be tagged audience:"organiser", participants'
+ * must not, or one of the two roles gets misrouted on tap.
+ */
+describe("campaignFulfilmentService.markDispatched — NAV-08: fulfilment_update audience tagging", () => {
+  it("tags only the organiser's notification with audience:organiser", async () => {
+    m.supplierProfile.findUnique.mockResolvedValue({ id: "sup-1", vendorId: "vendor-1" } as never);
+    m.communityCampaign.findUnique
+      .mockResolvedValueOnce({ id: "camp-fd-1", supplierId: "sup-1", title: "Rice Bulk Buy" } as never)
+      .mockResolvedValueOnce({
+        id: "camp-fd-1", title: "Rice Bulk Buy",
+        organiser: { userId: "organiser-user-1" },
+        participants: [{ userId: "participant-1" }, { userId: "participant-2" }],
+      } as never);
+    m.campaignFulfilment.findUnique.mockResolvedValue({ status: "READY_FOR_DISPATCH_OR_COLLECTION", method: "DELIVERY" } as never);
+    m.campaignFulfilment.update.mockResolvedValue({ status: "DISPATCHED" } as never);
+
+    await campaignFulfilmentService.markDispatched("vendor-1", "camp-fd-1");
+
+    expect(notificationsService.enqueue).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: "organiser-user-1", data: expect.objectContaining({ event: "fulfilment_update", audience: "organiser" }) }),
+    );
+    expect(notificationsService.enqueue).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: "participant-1", data: expect.not.objectContaining({ audience: "organiser" }) }),
+    );
+    expect(notificationsService.enqueue).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: "participant-2", data: expect.not.objectContaining({ audience: "organiser" }) }),
+    );
+    // Duplicate-prevention: exactly 3 notifications (organiser + 2 participants), never more.
+    expect(notificationsService.enqueue).toHaveBeenCalledTimes(3);
+  });
+});
+
+/**
+ * CBA-09 regression guard: pause()/resume() previously never notified
+ * anyone — unlike every other admin state transition on a campaign
+ * (approve/reject/changes-requested/cancel). The organiser must now be
+ * notified, tagged audience:"organiser" (NAV-08's routing fix) so they
+ * land on the management screen, not the read-only participant view.
+ */
+describe("communityCampaignsService.pause/resume — CBA-09: organiser notification", () => {
+  it("pause() notifies the organiser, tagged audience:organiser", async () => {
+    m.communityCampaign.findUnique.mockResolvedValue({ id: "camp-p1", status: "LIVE", title: "Rice Bulk Buy", organiser: { userId: "organiser-user-1" } } as never);
+    m.communityCampaign.update.mockResolvedValue({ id: "camp-p1", status: "PAUSED" } as never);
+
+    const result = await communityCampaignsService.pause("admin-1", "camp-p1");
+
+    expect(result.status).toBe("PAUSED");
+    expect(notificationsService.enqueue).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: "organiser-user-1", data: expect.objectContaining({ event: "admin_paused", campaignId: "camp-p1", audience: "organiser" }) }),
+    );
+  });
+
+  it("pause() rejects a campaign that isn't LIVE, and sends no notification", async () => {
+    m.communityCampaign.findUnique.mockResolvedValue({ id: "camp-p2", status: "PAUSED", organiser: { userId: "organiser-user-1" } } as never);
+    await expect(communityCampaignsService.pause("admin-1", "camp-p2")).rejects.toMatchObject({ statusCode: 409 });
+    expect(notificationsService.enqueue).not.toHaveBeenCalled();
+  });
+
+  it("resume() notifies the organiser, tagged audience:organiser", async () => {
+    m.communityCampaign.findUnique.mockResolvedValue({ id: "camp-r1", status: "PAUSED", title: "Rice Bulk Buy", organiser: { userId: "organiser-user-1" } } as never);
+    m.communityCampaign.update.mockResolvedValue({ id: "camp-r1", status: "LIVE" } as never);
+
+    const result = await communityCampaignsService.resume("admin-1", "camp-r1");
+
+    expect(result.status).toBe("LIVE");
+    expect(notificationsService.enqueue).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: "organiser-user-1", data: expect.objectContaining({ event: "admin_resumed", campaignId: "camp-r1", audience: "organiser" }) }),
+    );
+  });
+
+  it("resume() rejects a campaign that isn't PAUSED, and sends no notification", async () => {
+    m.communityCampaign.findUnique.mockResolvedValue({ id: "camp-r2", status: "LIVE", organiser: { userId: "organiser-user-1" } } as never);
+    await expect(communityCampaignsService.resume("admin-1", "camp-r2")).rejects.toMatchObject({ statusCode: 409 });
+    expect(notificationsService.enqueue).not.toHaveBeenCalled();
   });
 });
 
@@ -303,6 +444,13 @@ describe("communityCampaignsService.notifyOutcome — NOTIF-DUP-01: no duplicate
     // Organiser + 2 participants = 3 real notifications, no more.
     expect(notificationsService.enqueue).toHaveBeenCalledTimes(3);
     expect(mAutomation.scheduleAutomation).not.toHaveBeenCalled();
+    // NAV-08: organiser's copy tagged; participants' copies are not.
+    expect(notificationsService.enqueue).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: "organiser-user-1", data: expect.objectContaining({ event: "succeeded", audience: "organiser" }) }),
+    );
+    expect(notificationsService.enqueue).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: "participant-1", data: expect.not.objectContaining({ audience: "organiser" }) }),
+    );
   });
 
   it("failed: notifies organiser + every participant, schedules no automation either", async () => {
@@ -318,6 +466,26 @@ describe("communityCampaignsService.notifyOutcome — NOTIF-DUP-01: no duplicate
 
     expect(notificationsService.enqueue).toHaveBeenCalledTimes(2);
     expect(mAutomation.scheduleAutomation).not.toHaveBeenCalled();
+  });
+});
+
+/** NAV-10 regression guard: CAMPAIGN_DEADLINE previously carried no campaignId, so even a matching frontend branch would have nowhere real to link to. */
+describe("communityCampaignsService.remindApproachingDeadlines — NAV-10: campaignId present for deep-linking", () => {
+  it("includes campaignId in the CAMPAIGN_DEADLINE automation's data payload", async () => {
+    m.communityCampaign.findMany.mockResolvedValue([
+      { id: "camp-dl-1", title: "Rice Bulk Buy", participants: [{ userId: "participant-1" }] },
+    ] as never);
+
+    const notified = await communityCampaignsService.remindApproachingDeadlines();
+
+    expect(notified).toBe(1);
+    expect(mAutomation.scheduleAutomation).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: "CAMPAIGN_DEADLINE",
+        recipientUserId: "participant-1",
+        data: expect.objectContaining({ campaignId: "camp-dl-1" }),
+      }),
+    );
   });
 });
 
@@ -2000,11 +2168,27 @@ describe("Phase 9 — admin cancel/end campaign", () => {
       });
       expect(notificationsService.enqueue).toHaveBeenCalledWith(expect.objectContaining({
         userId: "organiser-user-1",
-        data: expect.objectContaining({ event: "admin_cancelled", campaignId: "camp-1" }),
+        // NAV-08: the organiser's own copy of this event must carry
+        // audience:"organiser" — this is what lets the frontend route them
+        // to the management screen instead of the participant screen both
+        // recipients would otherwise share the exact same event name for.
+        data: expect.objectContaining({ event: "admin_cancelled", campaignId: "camp-1", audience: "organiser" }),
         dedupeKey: "admin_cancelled:camp-1:organiser-user-1",
       }));
-      expect(notificationsService.enqueue).toHaveBeenCalledWith(expect.objectContaining({ userId: "participant-1", dedupeKey: "admin_cancelled:camp-1:participant-1" }));
-      expect(notificationsService.enqueue).toHaveBeenCalledWith(expect.objectContaining({ userId: "participant-2", dedupeKey: "admin_cancelled:camp-1:participant-2" }));
+      // NAV-08: participants get the SAME event name with no audience field
+      // at all — they must never be tagged "organiser".
+      expect(notificationsService.enqueue).toHaveBeenCalledWith(expect.objectContaining({
+        userId: "participant-1",
+        data: expect.not.objectContaining({ audience: "organiser" }),
+        dedupeKey: "admin_cancelled:camp-1:participant-1",
+      }));
+      expect(notificationsService.enqueue).toHaveBeenCalledWith(expect.objectContaining({
+        userId: "participant-2",
+        data: expect.not.objectContaining({ audience: "organiser" }),
+        dedupeKey: "admin_cancelled:camp-1:participant-2",
+      }));
+      // Duplicate-prevention: exactly 3 notifications for this event (organiser + 2 participants), never more.
+      expect(notificationsService.enqueue).toHaveBeenCalledTimes(3);
     },
   );
 

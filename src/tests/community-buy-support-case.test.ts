@@ -8,10 +8,16 @@ vi.mock("../lib/prisma", () => ({
   },
 }));
 
+vi.mock("../modules/notifications/notifications.service", () => ({
+  notificationsService: { enqueue: vi.fn().mockResolvedValue(undefined) },
+}));
+
 import { prisma } from "../lib/prisma";
+import { notificationsService } from "../modules/notifications/notifications.service";
 import { supportCaseService } from "../modules/community-buy/support-case.service";
 
 const m = vi.mocked(prisma, true);
+const mNotify = vi.mocked(notificationsService, true);
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -130,11 +136,72 @@ describe("supportCaseService.adminUpdate — every field independently settable,
   });
 
   it("can set internalNotes and customerVisibleResponse independently", async () => {
-    m.communityBuySupportCase.findUnique.mockResolvedValue({ id: "case-1" } as never);
+    m.communityBuySupportCase.findUnique.mockResolvedValue({ id: "case-1", participantId: "buyer-1", campaignId: "camp-1", customerVisibleResponse: null } as never);
     m.communityBuySupportCase.update.mockResolvedValue({} as never);
     await supportCaseService.adminUpdate("admin-1", "case-1", { internalNotes: "checked with supplier", customerVisibleResponse: "We're looking into this." });
     expect(m.communityBuySupportCase.update).toHaveBeenCalledWith(
       expect.objectContaining({ data: { internalNotes: "checked with supplier", customerVisibleResponse: "We're looking into this." } }),
     );
+  });
+});
+
+/**
+ * NOTIF-08 regression guard: a customer previously found out their support
+ * case had a response only by manually reopening the app — no push, no
+ * in-app row, no email was ever sent. Must fire exactly on a genuine
+ * transition (new/changed response text), never on a no-op re-save, and
+ * never for admin-only field changes (internalNotes, status, escalated)
+ * that a customer has no visibility into anyway.
+ */
+describe("supportCaseService.adminUpdate — NOTIF-08: customer notified when a response is set", () => {
+  it("notifies the reporter when customerVisibleResponse transitions from unset to set", async () => {
+    m.communityBuySupportCase.findUnique.mockResolvedValue({ id: "case-1", participantId: "buyer-1", campaignId: "camp-1", customerVisibleResponse: null } as never);
+    m.communityBuySupportCase.update.mockResolvedValue({} as never);
+
+    await supportCaseService.adminUpdate("admin-1", "case-1", { customerVisibleResponse: "We've issued your refund." });
+
+    expect(mNotify.enqueue).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: "buyer-1",
+        data: { type: "support_case_response", campaignId: "camp-1", caseId: "case-1" },
+      }),
+    );
+  });
+
+  it("notifies again when an already-answered case gets a CHANGED response", async () => {
+    m.communityBuySupportCase.findUnique.mockResolvedValue({ id: "case-1", participantId: "buyer-1", campaignId: "camp-1", customerVisibleResponse: "First answer." } as never);
+    m.communityBuySupportCase.update.mockResolvedValue({} as never);
+
+    await supportCaseService.adminUpdate("admin-1", "case-1", { customerVisibleResponse: "Updated answer." });
+
+    expect(mNotify.enqueue).toHaveBeenCalledTimes(1);
+  });
+
+  it("does NOT notify when customerVisibleResponse is re-saved with the identical text (no-op)", async () => {
+    m.communityBuySupportCase.findUnique.mockResolvedValue({ id: "case-1", participantId: "buyer-1", campaignId: "camp-1", customerVisibleResponse: "Same answer." } as never);
+    m.communityBuySupportCase.update.mockResolvedValue({} as never);
+
+    await supportCaseService.adminUpdate("admin-1", "case-1", { customerVisibleResponse: "Same answer." });
+
+    expect(mNotify.enqueue).not.toHaveBeenCalled();
+  });
+
+  it("does NOT notify for admin-only field changes (status/internalNotes/escalated) with no customerVisibleResponse involved", async () => {
+    m.communityBuySupportCase.findUnique.mockResolvedValue({ id: "case-1", participantId: "buyer-1", campaignId: "camp-1", customerVisibleResponse: null } as never);
+    m.communityBuySupportCase.update.mockResolvedValue({} as never);
+
+    await supportCaseService.adminUpdate("admin-1", "case-1", { status: "IN_PROGRESS", internalNotes: "checking", escalated: true });
+
+    expect(mNotify.enqueue).not.toHaveBeenCalled();
+  });
+
+  it("a notification failure does not roll back or fail the update", async () => {
+    m.communityBuySupportCase.findUnique.mockResolvedValue({ id: "case-1", participantId: "buyer-1", campaignId: "camp-1", customerVisibleResponse: null } as never);
+    m.communityBuySupportCase.update.mockResolvedValue({ id: "case-1" } as never);
+    mNotify.enqueue.mockRejectedValueOnce(new Error("push provider down"));
+
+    const result = await supportCaseService.adminUpdate("admin-1", "case-1", { customerVisibleResponse: "We're on it." });
+
+    expect(result).toEqual({ id: "case-1" });
   });
 });

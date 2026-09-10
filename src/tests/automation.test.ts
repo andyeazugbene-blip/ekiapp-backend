@@ -126,6 +126,44 @@ describe("automationService.scheduleAutomation", () => {
     expect(mSend).toHaveBeenCalled();
   });
 
+  /**
+   * NAV-10 regression guard: input.data was previously only merged into
+   * `variables` (template text interpolation) — it never reached the push/
+   * in-app `data` payload the frontend's tap-router reads, so even a
+   * caller that supplied an entity id (e.g. campaignId) produced a
+   * notification with nowhere real to deep-link to. This locks the actual
+   * passthrough in place so it can't silently regress.
+   */
+  it("forwards input.data into communicationService.send()'s data param, for deep-linking", async () => {
+    vi.setSystemTime(new Date("2026-06-15T12:00:00.000Z"));
+    m.user.findUnique.mockResolvedValueOnce({ isSuspended: false, marketingConsentAt: new Date() } as never);
+    m.automationRun.create.mockResolvedValue({ id: "run-data-passthrough", dedupeKey: "CAMPAIGN_DEADLINE:campaign-1:deadline:buyer-1" } as never);
+    m.user.findUnique.mockResolvedValueOnce({ name: "Buyer", email: "b@eki.app" } as never);
+    mSend.mockResolvedValue({ outcome: "SENT" } as never);
+
+    await automationService.scheduleAutomation({
+      ...baseInput,
+      type: "CAMPAIGN_DEADLINE",
+      data: { campaign_title: "Rice Bulk Buy", campaignId: "campaign-1" },
+    });
+
+    expect(mSend).toHaveBeenCalledWith(
+      expect.objectContaining({ data: { campaign_title: "Rice Bulk Buy", campaignId: "campaign-1" } }),
+    );
+  });
+
+  it("passes data: undefined through cleanly when a caller supplies no data at all (e.g. BUYER_WIN_BACK)", async () => {
+    vi.setSystemTime(new Date("2026-06-15T12:00:00.000Z"));
+    m.user.findUnique.mockResolvedValueOnce({ isSuspended: false, marketingConsentAt: new Date() } as never);
+    m.automationRun.create.mockResolvedValue({ id: "run-no-data" } as never);
+    m.user.findUnique.mockResolvedValueOnce({ name: "Buyer", email: "b@eki.app" } as never);
+    mSend.mockResolvedValue({ outcome: "SENT" } as never);
+
+    await automationService.scheduleAutomation({ ...baseInput, type: "BUYER_WIN_BACK", requiresMarketingConsent: true });
+
+    expect(mSend).toHaveBeenCalledWith(expect.objectContaining({ data: undefined }));
+  });
+
   it("multiple recipients each get an independent run and an independent send (e.g. a campaign milestone fanning out to several participants)", async () => {
     m.user.findUnique.mockResolvedValue({ isSuspended: false, marketingConsentAt: new Date() } as never);
     m.automationRun.create.mockImplementation(async ({ data }: any) => ({ id: `run-${data.recipientUserId}`, dedupeKey: data.dedupeKey }) as never);

@@ -320,6 +320,24 @@ export async function retryRenewalPayment(request: Request, response: Response):
 
 // ─── Admin ─────────────────────────────────────────────────────────────────
 
+/** RD-08 (retry-payment slice only) — see renewalsService.adminRetryPayment() for scope notes. */
+export async function adminRetryRenewalPayment(request: Request, response: Response): Promise<void> {
+  const adminId = requireUserId(request);
+  const renewalId = requireIdParam(request);
+  const before = await prisma.renewal.findUnique({ where: { id: renewalId }, select: { status: true, failureReason: true } });
+  const renewal = await renewalsService.adminRetryPayment(renewalId);
+  await recordAudit({
+    actorId: adminId,
+    action: "renewal.admin_retry_payment",
+    entityType: "Renewal",
+    entityId: renewalId,
+    beforeState: before ? { status: before.status, failureReason: before.failureReason } : undefined,
+    afterState: renewal ? { status: renewal.status } : undefined,
+    request,
+  });
+  response.json({ renewal });
+}
+
 export async function adminListSubscriptionExceptions(_request: Request, response: Response): Promise<void> {
   const items = await prisma.renewal.findMany({
     where: { status: { in: ["AWAITING_PRICE_APPROVAL", "PAYMENT_FAILED", "AWAITING_STOCK"] } },

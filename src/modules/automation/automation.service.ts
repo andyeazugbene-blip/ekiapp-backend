@@ -230,6 +230,15 @@ export const automationService = {
           recipientEmail: recipient?.email,
           variables: { name: recipient?.name ?? "there", ...(input.data as Record<string, string> | undefined) },
           notificationType: "AUTOMATION_MESSAGE",
+          // NAV-10 fix: input.data was only ever merged into `variables`
+          // (template text interpolation) — it never reached the push/
+          // in-app `data` payload the frontend's tap-router reads, so even
+          // a caller that supplied an entity id (e.g. campaignId) had no
+          // way to make a resulting notification deep-link anywhere.
+          // Additive only: every automation type's push previously carried
+          // exactly `{ type: eventKey }` and nothing else, so merging this
+          // in only adds fields, never changes or removes an existing one.
+          data: input.data,
           // Same key as this run's own dedupeKey (below). If a caller already
           // created its own in-app Notification for this exact event (e.g.
           // renewals.service.ts calling notificationsService.enqueue()

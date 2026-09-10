@@ -161,7 +161,7 @@ describe("renewalsService.evaluatePriceChange", () => {
   it("requires approval for a material price increase above the limit", async () => {
     m.renewal.findUniqueOrThrow.mockResolvedValue({
       id: "renewal-2",
-      subscription: { priceChangeApprovalLimitBps: 500, buyerId: "buyer-1" },
+      subscription: { priceChangeApprovalLimitBps: 500, buyerId: "buyer-1", offer: { vendorId: "vendor-1" } },
       items: [{ id: "i1", previousUnitPrice: 1000, currentUnitPrice: 1200 }], // +20%
     } as never);
     m.priceChangeRequest.create.mockResolvedValue({ id: "pcr-1" } as never);
@@ -175,8 +175,10 @@ describe("renewalsService.evaluatePriceChange", () => {
         data: expect.objectContaining({ status: "AWAITING_PRICE_APPROVAL", priceChangeRequestId: "pcr-1" }),
       }),
     );
+    // AUTO-06 regression guard: without vendorId, this run is real and
+    // sending but permanently invisible in the vendor's Automation Activity.
     expect(automationService.scheduleAutomation).toHaveBeenCalledWith(
-      expect.objectContaining({ type: "PRICE_APPROVAL_REMINDER" }),
+      expect.objectContaining({ type: "PRICE_APPROVAL_REMINDER", vendorId: "vendor-1" }),
     );
   });
 });
@@ -306,7 +308,7 @@ describe("renewalsService.attemptPayment", () => {
     m.subscriptionPaymentAttempt.count.mockResolvedValue(1); // this will be attempt #2
     m.subscriptionPaymentAttempt.create.mockResolvedValue({ id: "attempt-2" } as never);
     mCreateIntent.mockRejectedValue(Object.assign(new Error("Your card was declined"), { code: "card_declined" }));
-    m.buyerSubscription.update.mockResolvedValue({ buyerId: "buyer-1" } as never);
+    m.buyerSubscription.update.mockResolvedValue({ buyerId: "buyer-1", offer: { vendorId: "vendor-1" } } as never);
     m.renewal.findUnique.mockResolvedValue({ id: "renewal-6", status: "PAYMENT_FAILED" } as never);
 
     await renewalsService.attemptPayment("renewal-6");
@@ -320,8 +322,10 @@ describe("renewalsService.attemptPayment", () => {
     expect(m.buyerSubscription.update).toHaveBeenCalledWith(
       expect.objectContaining({ where: { id: "sub-1" }, data: { status: "PAYMENT_ATTENTION" } }),
     );
+    // AUTO-06 regression guard: without vendorId, this run is real and
+    // sending but permanently invisible in the vendor's Automation Activity.
     expect(automationService.scheduleAutomation).toHaveBeenCalledWith(
-      expect.objectContaining({ type: "PAYMENT_RECOVERY" }),
+      expect.objectContaining({ type: "PAYMENT_RECOVERY", vendorId: "vendor-1" }),
     );
   });
 
@@ -330,7 +334,7 @@ describe("renewalsService.attemptPayment", () => {
     m.renewal.updateMany.mockResolvedValue({ count: 1 } as never);
     m.subscriptionPaymentAttempt.count.mockResolvedValue(3); // MAX_PAYMENT_ATTEMPTS already used
     m.renewal.update.mockResolvedValue({ id: "renewal-6", subscriptionId: "sub-1" } as never);
-    m.buyerSubscription.update.mockResolvedValue({ buyerId: "buyer-1" } as never);
+    m.buyerSubscription.update.mockResolvedValue({ buyerId: "buyer-1", offer: { vendorId: "vendor-1" } } as never);
 
     await renewalsService.attemptPayment("renewal-6");
 
@@ -349,7 +353,7 @@ describe("renewalsService.attemptPayment", () => {
     m.renewal.updateMany.mockResolvedValue({ count: 1 } as never);
     m.subscriptionPaymentAttempt.count.mockResolvedValue(0);
     m.subscriptionPaymentAttempt.create.mockResolvedValue({ id: "attempt-ghs" } as never);
-    m.buyerSubscription.update.mockResolvedValue({ buyerId: "buyer-1" } as never);
+    m.buyerSubscription.update.mockResolvedValue({ buyerId: "buyer-1", offer: { vendorId: "vendor-1" } } as never);
     m.renewal.findUnique.mockResolvedValue({ id: "renewal-6", status: "PAYMENT_FAILED" } as never);
 
     await renewalsService.attemptPayment("renewal-6");
@@ -372,6 +376,56 @@ describe("renewalsService.attemptPayment", () => {
 
     await expect(renewalsService.attemptPayment("renewal-6")).rejects.toMatchObject({ statusCode: 409 });
     expect(mCreateIntent).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * RD-08 (retry-payment slice) regression guard: adminRetryPayment() is a
+ * thin wrapper — no ownership check (admin can act on any renewal, unlike
+ * buyer retryPayment), same PAYMENT_FAILED-only guard, delegates to the
+ * exact same attemptPayment() every other caller uses. These tests cover
+ * the wrapper's own guard logic; attemptPayment's idempotency/race/Stripe
+ * behavior is already exhaustively covered above and unchanged.
+ */
+describe("renewalsService.adminRetryPayment — RD-08 admin remediation (retry-payment slice only)", () => {
+  it("404s for a renewal that does not exist", async () => {
+    m.renewal.findUnique.mockResolvedValue(null as never);
+    await expect(renewalsService.adminRetryPayment("renewal-missing")).rejects.toMatchObject({ statusCode: 404 });
+  });
+
+  it("rejects a renewal that is not in PAYMENT_FAILED status", async () => {
+    m.renewal.findUnique.mockResolvedValue({ id: "renewal-6", status: "READY_FOR_PAYMENT" } as never);
+    await expect(renewalsService.adminRetryPayment("renewal-6")).rejects.toMatchObject({ statusCode: 409 });
+  });
+
+  it("delegates to the real, idempotent attemptPayment() on a genuinely stuck PAYMENT_FAILED renewal — no ownership check required", async () => {
+    m.renewal.findUnique.mockResolvedValue({ id: "renewal-6", status: "PAYMENT_FAILED" } as never);
+    m.renewal.findUniqueOrThrow.mockResolvedValue({
+      id: "renewal-6", status: "PAYMENT_FAILED", subscriptionId: "sub-1", currency: "GBP",
+      items: [{ currentUnitPrice: 1500, quantity: 2 }],
+      subscription: {
+        status: "ACTIVE", buyerId: "buyer-1", frequency: "WEEKLY",
+        paymentMethod: { stripeCustomerId: "cus_1", stripePaymentMethodId: "pm_1" },
+        offer: { fulfilmentMethod: "COLLECTION" },
+        deliveryAddress: { country: "United Kingdom" },
+      },
+    } as never);
+    m.renewal.updateMany.mockResolvedValue({ count: 1 } as never);
+    m.subscriptionPaymentAttempt.count.mockResolvedValue(0);
+    m.subscriptionPaymentAttempt.create.mockResolvedValue({ id: "attempt-admin-1" } as never);
+    mCreateIntent.mockResolvedValue({ id: "pi_admin_1", status: "succeeded" } as never);
+    const convertSpy = vi.spyOn(renewalsService, "convertPaidRenewalToOrder").mockResolvedValue({ id: "order-admin-1" } as never);
+
+    await renewalsService.adminRetryPayment("renewal-6");
+
+    // Same real idempotency key attemptPayment() always uses — an admin
+    // retry can never produce a different, non-deduplicated Stripe charge.
+    expect(mCreateIntent).toHaveBeenCalledWith(
+      expect.objectContaining({ off_session: true, confirm: true }),
+      { idempotencyKey: "renewal-6:1" },
+    );
+    expect(convertSpy).toHaveBeenCalledWith("renewal-6", "pi_admin_1");
+    convertSpy.mockRestore();
   });
 });
 
@@ -694,7 +748,7 @@ describe("renewalsService.attemptPayment — malformed/unexpected provider respo
     m.subscriptionPaymentAttempt.create.mockResolvedValue({ id: "attempt-weird" } as never);
     // A malformed/unexpected response — not a status this integration knows.
     mCreateIntent.mockResolvedValue({ id: "pi_weird", status: "some_unexpected_future_status" } as never);
-    m.buyerSubscription.update.mockResolvedValue({ buyerId: "buyer-weird" } as never);
+    m.buyerSubscription.update.mockResolvedValue({ buyerId: "buyer-weird", offer: { vendorId: "vendor-weird" } } as never);
     m.renewal.findUnique.mockResolvedValue({ id: "renewal-weird", status: "PAYMENT_FAILED" } as never);
     const convertSpy = vi.spyOn(renewalsService, "convertPaidRenewalToOrder");
 
@@ -736,7 +790,7 @@ describe("renewalsService.attemptPayment — expired saved card (reliability sce
     m.subscriptionPaymentAttempt.count.mockResolvedValue(0);
     m.subscriptionPaymentAttempt.create.mockResolvedValue({ id: "attempt-expired" } as never);
     mCreateIntent.mockRejectedValue(Object.assign(new Error("Your card has expired."), { type: "StripeCardError", code: "expired_card" }));
-    m.buyerSubscription.update.mockResolvedValue({ buyerId: "buyer-expired" } as never);
+    m.buyerSubscription.update.mockResolvedValue({ buyerId: "buyer-expired", offer: { vendorId: "vendor-expired" } } as never);
     m.renewal.findUnique.mockResolvedValue({ id: "renewal-expired", status: "PAYMENT_FAILED" } as never);
     const convertSpy = vi.spyOn(renewalsService, "convertPaidRenewalToOrder");
 
@@ -809,7 +863,7 @@ describe("renewalsService.resolveProcessingPayment — reliability scenario #5",
     m.subscriptionPaymentAttempt.findFirst.mockResolvedValue({ id: "attempt-5d", status: "PENDING" } as never);
     m.renewal.findUnique.mockResolvedValue({ id: "renewal-5d", status: "PAYMENT_PROCESSING", subscriptionId: "sub-5d" } as never);
     m.subscriptionPaymentAttempt.updateMany.mockResolvedValue({ count: 1 } as never);
-    m.buyerSubscription.update.mockResolvedValue({ buyerId: "buyer-5d" } as never);
+    m.buyerSubscription.update.mockResolvedValue({ buyerId: "buyer-5d", offer: { vendorId: "vendor-5d" } } as never);
 
     const result = await renewalsService.resolveProcessingPayment("renewal-5d", "pi_proc_5d", false, "Bank debit failed");
 

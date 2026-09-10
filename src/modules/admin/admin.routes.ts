@@ -153,7 +153,7 @@ import {
   unsuspendVendor,
 } from "./admin-vendors.controller";
 import { getAdminAutomationSummary } from "../automation/automation.controller";
-import { adminListSubscriptionExceptions } from "../regular-deliveries/regular-deliveries.controller";
+import { adminListSubscriptionExceptions, adminRetryRenewalPayment } from "../regular-deliveries/regular-deliveries.controller";
 import {
   adminApproveCampaign,
   adminApproveExtension,
@@ -249,6 +249,13 @@ adminRouter.get("/revenue", asyncHandler(requireAdminPermission("analytics.read"
 adminRouter.get("/audit-logs", asyncHandler(requireAdminPermission("audit.read")), asyncHandler(listAuditLogs));
 adminRouter.get("/automation/summary", asyncHandler(requireAdminPermission("analytics.read")), asyncHandler(getAdminAutomationSummary));
 adminRouter.get("/subscription-exceptions", asyncHandler(requireAdminPermission("orders.read")), asyncHandler(adminListSubscriptionExceptions));
+// RD-08 (retry-payment slice only) — a third caller of the same idempotent
+// attemptPayment() path buyer-initiated retryPayment and the cron sweep
+// already use. Matches the orders.mutate permission tier of its closest
+// sibling (force-process/complete order) rather than payouts.mutate's 2FA
+// tier — this re-attempts an already-authorized charge, it doesn't move
+// settled funds irreversibly the way a payout transfer does.
+adminRouter.post("/subscription-exceptions/:id/retry-payment", asyncHandler(requireAdminPermission("orders.mutate")), asyncHandler(adminRetryRenewalPayment));
 
 // Community Buy
 adminRouter.get("/community-campaigns/review", asyncHandler(requireAdminPermission("community_buy.read")), asyncHandler(adminListCampaignsForReview));

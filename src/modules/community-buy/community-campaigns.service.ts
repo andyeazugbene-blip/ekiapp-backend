@@ -23,7 +23,24 @@ export interface CreateCampaignInput {
 
 const MAX_EXTENSIONS = 1;
 
-async function notifyCampaign(userId: string, event: string, title: string, body: string, campaignId: string, dedupeKey?: string) {
+async function notifyCampaign(
+  userId: string,
+  event: string,
+  title: string,
+  body: string,
+  campaignId: string,
+  dedupeKey?: string,
+  // NAV-08 fix: several events (admin_cancelled, cancelled, rescue_opened,
+  // extension_approved, succeeded, failed) fire under the IDENTICAL event
+  // name to both the organiser and every participant — the frontend's
+  // tap-router can't tell them apart by event name alone, since an
+  // organiser is just a buyer-role account like any participant. Passing
+  // "organiser" only on the organiser-directed call (participant calls
+  // pass nothing, unchanged) lets the router send the organiser to their
+  // management screen without misrouting participants who share the exact
+  // same event name.
+  audience?: "organiser",
+) {
   // notificationsService.enqueue() is documented as never throwing (its own
   // internal try/catches cover the DB insert and the push send) — this is
   // still wrapped defensively because a notification must never be able to
@@ -35,7 +52,7 @@ async function notifyCampaign(userId: string, event: string, title: string, body
       type: "COMMUNITY_CAMPAIGN_UPDATE",
       title,
       body,
-      data: { type: "community_campaign_update", event, campaignId },
+      data: { type: "community_campaign_update", event, campaignId, ...(audience ? { audience } : {}) },
       dedupeKey,
     });
   } catch (error) {
@@ -400,17 +417,25 @@ export const communityCampaignsService = {
   },
 
   async pause(adminId: string, campaignId: string) {
-    const campaign = await prisma.communityCampaign.findUnique({ where: { id: campaignId } });
+    const campaign = await prisma.communityCampaign.findUnique({ where: { id: campaignId }, include: { organiser: true } });
     if (!campaign) throw new AppError("Campaign not found", 404);
     if (campaign.status !== "LIVE") throw new AppError("Only a live campaign can be paused", 409);
-    return prisma.communityCampaign.update({ where: { id: campaignId }, data: { status: "PAUSED" } });
+    const updated = await prisma.communityCampaign.update({ where: { id: campaignId }, data: { status: "PAUSED" } });
+    // CBA-09 fix: unlike every other admin state transition on a campaign
+    // (approve/reject/changes-requested/cancel), pause()/resume() never
+    // notified the organiser at all — they'd have no explanation for why
+    // their live campaign suddenly stopped accepting pledges.
+    await notifyCampaign(campaign.organiser.userId, "admin_paused", "Campaign paused by admin", `${campaign.title} has been paused by an administrator. Pledging is temporarily unavailable.`, campaignId, undefined, "organiser");
+    return updated;
   },
 
   async resume(adminId: string, campaignId: string) {
-    const campaign = await prisma.communityCampaign.findUnique({ where: { id: campaignId } });
+    const campaign = await prisma.communityCampaign.findUnique({ where: { id: campaignId }, include: { organiser: true } });
     if (!campaign) throw new AppError("Campaign not found", 404);
     if (campaign.status !== "PAUSED") throw new AppError("Only a paused campaign can be resumed", 409);
-    return prisma.communityCampaign.update({ where: { id: campaignId }, data: { status: "LIVE" } });
+    const updated = await prisma.communityCampaign.update({ where: { id: campaignId }, data: { status: "LIVE" } });
+    await notifyCampaign(campaign.organiser.userId, "admin_resumed", "Campaign resumed by admin", `${campaign.title} has been resumed by an administrator. Pledging is available again.`, campaignId, undefined, "organiser");
+    return updated;
   },
 
   /**
@@ -444,7 +469,7 @@ export const communityCampaignsService = {
     // above for why this is always a no-op today, kept as a safety net.
     await this.createRefundRecordsForFailedCampaign(campaignId);
     await this.cancelPledgesForFailedCampaign(campaignId);
-    await notifyCampaign(campaign.organiser.userId, "admin_cancelled", "Campaign ended by admin", `${campaign.title} has been ended by an administrator. No participant was charged — pledges have been cancelled. Reason: ${reason}`, campaignId, `admin_cancelled:${campaignId}:${campaign.organiser.userId}`);
+    await notifyCampaign(campaign.organiser.userId, "admin_cancelled", "Campaign ended by admin", `${campaign.title} has been ended by an administrator. No participant was charged — pledges have been cancelled. Reason: ${reason}`, campaignId, `admin_cancelled:${campaignId}:${campaign.organiser.userId}`, "organiser");
     for (const p of campaign.participants) {
       await notifyCampaign(p.userId, "admin_cancelled", "Campaign ended", `${campaign.title} has been ended by an administrator. Your saved payment method was never charged — your pledge is cancelled.`, campaignId, `admin_cancelled:${campaignId}:${p.userId}`);
     }
@@ -601,7 +626,7 @@ export const communityCampaignsService = {
     if (!campaign) return;
     const remaining = Math.max(0, (campaign.minimumShares ?? 0) - campaign.confirmedShares);
     const body = `${campaign.title} needs ${remaining} more share(s) to proceed. The organiser has until ${rescueEndsAt.toISOString()} to act.`;
-    await notifyCampaign(campaign.organiser.userId, "rescue_opened", "Campaign needs more participants", body, campaignId);
+    await notifyCampaign(campaign.organiser.userId, "rescue_opened", "Campaign needs more participants", body, campaignId, undefined, "organiser");
     for (const p of campaign.participants) {
       await notifyCampaign(p.userId, "rescue_opened", "Campaign needs more participants", body, campaignId);
     }
@@ -700,7 +725,7 @@ export const communityCampaignsService = {
     // harmless no-op safety net, not the primary path any more.
     await this.createRefundRecordsForFailedCampaign(campaignId);
     await this.cancelPledgesForFailedCampaign(campaignId);
-    await notifyCampaign(userId, "cancelled", "Campaign ended", `${campaign.title} has been ended. No participant was charged — pledges have been cancelled.`, campaignId);
+    await notifyCampaign(userId, "cancelled", "Campaign ended", `${campaign.title} has been ended. No participant was charged — pledges have been cancelled.`, campaignId, undefined, "organiser");
     const participants = await prisma.campaignParticipant.findMany({ where: { campaignId }, select: { userId: true } });
     for (const p of participants) {
       // NOTIF-DUP-01 fix: this used to ALSO fire a CAMPAIGN_REFUND_UPDATE
@@ -767,7 +792,7 @@ export const communityCampaignsService = {
     ]);
 
     const body = `${request.campaign.title}'s deadline has been extended to ${request.requestedDeadline.toISOString()}.`;
-    await notifyCampaign(request.campaign.organiser.userId, "extension_approved", "Campaign extended", body, request.campaignId);
+    await notifyCampaign(request.campaign.organiser.userId, "extension_approved", "Campaign extended", body, request.campaignId, undefined, "organiser");
     for (const p of request.campaign.participants) {
       await notifyCampaign(p.userId, "extension_approved", "Campaign extended", body, request.campaignId);
     }
@@ -831,7 +856,7 @@ export const communityCampaignsService = {
     // organiser actually decides to cancel (see cancelAfterFailure above).
     const body = outcome === "succeeded" ? `${campaign.title} reached its target.` : `${campaign.title} did not reach its target. The organiser will decide what happens next.`;
 
-    await notifyCampaign(campaign.organiser.userId, outcome, title, body, campaignId);
+    await notifyCampaign(campaign.organiser.userId, outcome, title, body, campaignId, undefined, "organiser");
     if (outcome === "succeeded") {
       // NOTIF-DUP-01 fix: this used to ALSO fire a CAMPAIGN_MILESTONE
       // automation per participant for the identical event — see the
@@ -867,7 +892,9 @@ export const communityCampaignsService = {
           requiresMarketingConsent: false,
           title: "Campaign deadline approaching",
           body: `${campaign.title} closes soon.`,
-          data: { campaign_title: campaign.title },
+          // NAV-10 fix: campaignId is what the new frontend branch needs to
+          // deep-link to the actual campaign, not just open a generic screen.
+          data: { campaign_title: campaign.title, campaignId: campaign.id },
         });
         notified++;
       }
