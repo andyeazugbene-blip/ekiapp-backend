@@ -2017,6 +2017,15 @@ model Renewal {
   orderId              String?                      @unique
   failureReason        String?
   cancelledAt          DateTime?
+  // Regular Delivery Admin Escalation — mirrors CampaignRefund's escalation
+  // fields (same idempotency-marker pattern, not a new case system). There is
+  // no participant-facing "case" entity for Regular Delivery to link to
+  // (unlike CommunityBuySupportCase), so the escalation state lives directly
+  // on the Renewal it concerns.
+  escalated            Boolean                      @default(false)
+  escalatedAt          DateTime?
+  escalatedById        String?
+  escalatedReason      String?
   subscription         BuyerSubscription            @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
   order                Order?                       @relation(fields: [orderId], references: [id], onDelete: SetNull)
   priceChangeRequest   PriceChangeRequest?          @relation("RenewalPriceChange", fields: [priceChangeRequestId], references: [id], onDelete: SetNull)

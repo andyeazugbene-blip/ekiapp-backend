@@ -477,6 +477,15 @@ export async function adminSkipRenewal(request: Request, response: Response): Pr
   response.json({ renewal });
 }
 
+/** Admin escalate a stuck exception for higher-tier support attention — approved client requirement. */
+export async function adminEscalateRenewal(request: Request, response: Response): Promise<void> {
+  const adminId = requireUserId(request);
+  const { reason } = request.body ?? {};
+  if (typeof reason !== "string" || !reason.trim()) throw new AppError("reason is required", 400);
+  const renewal = await renewalsService.adminEscalate(adminId, requireIdParam(request), reason);
+  response.json({ renewal });
+}
+
 /**
  * Admin frequency correction — Final Client Decision 3.
  * Support action only — must have been requested/authorized by buyer.

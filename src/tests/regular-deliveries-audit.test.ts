@@ -26,6 +26,7 @@ const mockRecordAudit = vi.fn().mockResolvedValue(undefined);
 vi.mock("../shared/utils/audit", () => ({ recordAudit: (...a: unknown[]) => mockRecordAudit(...a) }));
 
 import { prisma } from "../lib/prisma";
+import { notificationsService } from "../modules/notifications/notifications.service";
 import { renewalsService } from "../modules/regular-deliveries/renewals.service";
 
 const m = vi.mocked(prisma, true);
@@ -120,5 +121,109 @@ describe("renewalsService — real audit trail for material transitions", () => 
       entityId: "renewal-5",
       metadata: { decision: "accepted" },
     }));
+  });
+});
+
+/**
+ * Regular Delivery Admin Escalation — approved client requirement.
+ * Route-level authorization ("unauthorized admin role → 403") is not
+ * re-tested here: adminEscalateRenewal is gated by the identical
+ * requireAdminPermission("orders.mutate") every other RD admin route uses,
+ * and admin-roles-permissions.test.ts already proves assertPermission
+ * rejects an unassigned admin for exactly this permission string with 403.
+ * These tests cover what's new — the service logic itself.
+ */
+describe("renewalsService.adminEscalate — Regular Delivery Admin Escalation", () => {
+  const escalatableRenewal = {
+    id: "renewal-9",
+    status: "PAYMENT_FAILED",
+    escalated: false,
+  };
+
+  it("requires a non-empty reason", async () => {
+    await expect(renewalsService.adminEscalate("admin-1", "renewal-9", "")).rejects.toMatchObject({ statusCode: 400 });
+    expect(m.renewal.findUnique).not.toHaveBeenCalled();
+  });
+
+  it("rejects a whitespace-only reason", async () => {
+    await expect(renewalsService.adminEscalate("admin-1", "renewal-9", "   ")).rejects.toMatchObject({ statusCode: 400 });
+  });
+
+  it("rejects a non-existent renewal", async () => {
+    m.renewal.findUnique.mockResolvedValue(null as never);
+    await expect(renewalsService.adminEscalate("admin-1", "missing", "stuck for a week")).rejects.toMatchObject({ statusCode: 404 });
+  });
+
+  it("rejects escalation of a renewal not in an escalatable state (e.g. already PAID)", async () => {
+    m.renewal.findUnique.mockResolvedValue({ ...escalatableRenewal, status: "PAID" } as never);
+    await expect(renewalsService.adminEscalate("admin-1", "renewal-9", "reason")).rejects.toMatchObject({ statusCode: 409 });
+    expect(m.renewal.updateMany).not.toHaveBeenCalled();
+  });
+
+  it.each(["AWAITING_PRICE_APPROVAL", "PAYMENT_FAILED", "AWAITING_STOCK"])(
+    "escalates a renewal in the %s exception state, sets actor/reason/timestamp, and records one audit entry",
+    async (status) => {
+      m.renewal.findUnique.mockResolvedValue({ ...escalatableRenewal, status } as never);
+      m.renewal.updateMany.mockResolvedValue({ count: 1 } as never);
+      m.renewal.findUniqueOrThrow.mockResolvedValue({ ...escalatableRenewal, status, escalated: true } as never);
+
+      const result = await renewalsService.adminEscalate("admin-1", "renewal-9", "Buyer has called 3 times, needs supervisor review");
+
+      expect(m.renewal.updateMany).toHaveBeenCalledWith({
+        where: { id: "renewal-9", escalated: false },
+        data: expect.objectContaining({
+          escalated: true,
+          escalatedById: "admin-1",
+          escalatedReason: "Buyer has called 3 times, needs supervisor review",
+        }),
+      });
+      expect((result as any).escalated).toBe(true);
+      expect(mockRecordAudit).toHaveBeenCalledTimes(1);
+      expect(mockRecordAudit).toHaveBeenCalledWith(expect.objectContaining({
+        actorId: "admin-1",
+        action: "renewal.admin_escalate",
+        entityType: "Renewal",
+        entityId: "renewal-9",
+        beforeState: { status, escalated: false },
+        afterState: expect.objectContaining({ escalated: true, reason: "Buyer has called 3 times, needs supervisor review" }),
+      }));
+    },
+  );
+
+  it("does not send any buyer notification — escalation is an internal admin action, distinct from the separate contact-buyer action", async () => {
+    m.renewal.findUnique.mockResolvedValue(escalatableRenewal as never);
+    m.renewal.updateMany.mockResolvedValue({ count: 1 } as never);
+    m.renewal.findUniqueOrThrow.mockResolvedValue({ ...escalatableRenewal, escalated: true } as never);
+
+    await renewalsService.adminEscalate("admin-1", "renewal-9", "reason");
+
+    expect(notificationsService.enqueue).not.toHaveBeenCalled();
+  });
+
+  it("is idempotent — a reload/re-click on an already-escalated renewal returns the same state without a duplicate audit entry", async () => {
+    m.renewal.findUnique.mockResolvedValue({ ...escalatableRenewal, escalated: true } as never);
+    // Atomic claim loses the race because escalated is already true.
+    m.renewal.updateMany.mockResolvedValue({ count: 0 } as never);
+    m.renewal.findUniqueOrThrow.mockResolvedValue({ ...escalatableRenewal, escalated: true, escalatedById: "admin-1", escalatedReason: "original reason" } as never);
+
+    const result = await renewalsService.adminEscalate("admin-2", "renewal-9", "a different admin trying again");
+
+    expect((result as any).escalated).toBe(true);
+    expect((result as any).escalatedReason).toBe("original reason");
+    expect(mockRecordAudit).not.toHaveBeenCalled();
+  });
+
+  it("concurrent escalation requests resolve to a single winner — only one audit entry is ever created", async () => {
+    m.renewal.findUnique.mockResolvedValue(escalatableRenewal as never);
+    // First caller wins the atomic claim, second loses.
+    m.renewal.updateMany.mockResolvedValueOnce({ count: 1 } as never).mockResolvedValueOnce({ count: 0 } as never);
+    m.renewal.findUniqueOrThrow.mockResolvedValue({ ...escalatableRenewal, escalated: true } as never);
+
+    await Promise.all([
+      renewalsService.adminEscalate("admin-1", "renewal-9", "first"),
+      renewalsService.adminEscalate("admin-2", "renewal-9", "second"),
+    ]);
+
+    expect(mockRecordAudit).toHaveBeenCalledTimes(1);
   });
 });

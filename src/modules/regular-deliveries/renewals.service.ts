@@ -1080,6 +1080,53 @@ export const renewalsService = {
 
     return updated;
   },
+
+  /**
+   * Admin escalation — Regular Delivery Admin, approved client requirement.
+   * Flags a stuck exception (AWAITING_PRICE_APPROVAL / PAYMENT_FAILED /
+   * AWAITING_STOCK) for higher-tier support attention. This is an internal
+   * tracking action, not a state transition on the renewal itself and not a
+   * buyer-facing notification — "contact buyer" is the separate action for
+   * that. No participant-facing case entity exists for Regular Delivery
+   * (unlike Community Buy's CommunityBuySupportCase), so escalation state
+   * lives directly on the Renewal, mirroring CampaignRefund's escalation
+   * fields exactly.
+   *
+   * Idempotent by design: mirrors campaignContributionsService.escalateRefund()'s
+   * atomic-claim pattern. A reload/re-click, or two concurrent requests,
+   * both resolve to the SAME escalation (one audit entry, not two) — the
+   * loser of the race just reads back what the winner wrote.
+   */
+  async adminEscalate(adminId: string, renewalId: string, reason: string): Promise<unknown> {
+    if (!reason?.trim()) throw new AppError("A reason is required", 400);
+    const renewal = await prisma.renewal.findUnique({ where: { id: renewalId } });
+    if (!renewal) throw new AppError("Renewal not found", 404);
+
+    const escalatable = ["AWAITING_PRICE_APPROVAL", "PAYMENT_FAILED", "AWAITING_STOCK"];
+    if (!escalatable.includes(renewal.status)) {
+      throw new AppError("This renewal is not in a state that can be escalated", 409);
+    }
+
+    const claim = await prisma.renewal.updateMany({
+      where: { id: renewalId, escalated: false },
+      data: { escalated: true, escalatedAt: new Date(), escalatedById: adminId, escalatedReason: reason.trim() },
+    });
+
+    const updated = await prisma.renewal.findUniqueOrThrow({ where: { id: renewalId } });
+
+    if (claim.count > 0) {
+      await recordAudit({
+        actorId: adminId,
+        action: "renewal.admin_escalate",
+        entityType: "Renewal",
+        entityId: renewalId,
+        beforeState: { status: renewal.status, escalated: false },
+        afterState: { status: updated.status, escalated: true, reason: reason.trim() },
+      });
+    }
+
+    return updated;
+  },
 };
 
 async function notifySubscriptionEvent(buyerId: string, event: string, renewalId: string, subscriptionId: string, orderNumber?: string) {

@@ -8,6 +8,7 @@ import {
   adminChangeSubscriptionFrequency,
   adminContactBuyerFromRenewal,
   adminContactBuyerFromSubscription,
+  adminEscalateRenewal,
   adminForceCancelSubscription,
   adminListSubscriptionExceptions,
   adminResendPriceChangeNotification,
@@ -141,4 +142,8 @@ adminRenewalsRouter.post("/:id/resend-price-change", asyncHandler(requireAdminPe
 adminRenewalsRouter.post("/:id/cancel-price-change", asyncHandler(requireAdminPermission("orders.mutate")), asyncHandler(adminCancelInvalidPriceChange));
 // Admin skip renewal (Decision 2)
 adminRenewalsRouter.post("/:id/admin-skip", asyncHandler(requireAdminPermission("orders.mutate")), asyncHandler(adminSkipRenewal));
+// Admin escalate a stuck exception (approved client requirement) — same
+// risk tier as the other RD admin actions above, not a financial mutation
+// (unlike Community Buy's refund escalation, which requires 2FA).
+adminRenewalsRouter.post("/:id/escalate", asyncHandler(requireAdminPermission("orders.mutate")), asyncHandler(adminEscalateRenewal));
 
