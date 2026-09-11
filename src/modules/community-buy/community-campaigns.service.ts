@@ -395,12 +395,37 @@ export const communityCampaignsService = {
   async requestChanges(adminId: string, campaignId: string, notes: string) {
     const campaign = await prisma.communityCampaign.findUnique({ where: { id: campaignId }, include: { organiser: true } });
     if (!campaign) throw new AppError("Campaign not found", 404);
-    if (campaign.status !== "UNDER_REVIEW") throw new AppError("Campaign is not under review", 409);
+
+    // Final Client Decision 1: admin can request changes on UNDER_REVIEW, APPROVED, and LIVE.
+    // LIVE campaigns are paused (pledging frozen) while the organiser corrects the issue.
+    // Financial terms (termsLockedAt) are NOT reset — contributions already confirmed are immutable.
+    const allowedStatuses = ["UNDER_REVIEW", "APPROVED", "LIVE"] as const;
+    type AllowedStatus = typeof allowedStatuses[number];
+    const isAllowed = (allowedStatuses as ReadonlyArray<string>).includes(campaign.status);
+    if (!isAllowed) {
+      throw new AppError("Changes can only be requested on a campaign that is under review, approved, or live", 409);
+    }
+
+    // Determine the next status: LIVE → CHANGES_REQUIRED (pledging paused implicitly
+    // by status; organiser notified their live campaign has been frozen).
+    // APPROVED / UNDER_REVIEW → CHANGES_REQUIRED directly (no pledging to freeze).
+    const wasLive = campaign.status === "LIVE";
+
     const updated = await prisma.communityCampaign.update({
       where: { id: campaignId },
-      data: { status: "CHANGES_REQUIRED", reviewNotes: notes, reviewedById: adminId, reviewedAt: new Date() },
+      data: {
+        status: "CHANGES_REQUIRED",
+        reviewNotes: notes,
+        reviewedById: adminId,
+        reviewedAt: new Date(),
+      },
     });
-    await notifyCampaign(campaign.organiser.userId, "changes_requested", "Campaign changes requested", notes, campaignId);
+
+    const notificationBody = wasLive
+      ? `Your campaign "${campaign.title}" has been temporarily paused by Eki admin. Please review and action the following feedback before it can resume accepting pledges: ${notes}`
+      : notes;
+
+    await notifyCampaign(campaign.organiser.userId, "changes_requested", "Campaign changes requested", notificationBody, campaignId);
     return updated;
   },
 
