@@ -130,7 +130,7 @@ adminRenewalsRouter.post("/:id/contact-buyer", asyncHandler(adminContactBuyerFro
 // Resend price-change notification (Decision 2)
 adminRenewalsRouter.post("/:id/resend-price-change", asyncHandler(adminResendPriceChangeNotification));
 // Cancel invalid price-change request (Decision 2)
-adminRenewalsRouter.delete("/:id/price-change", asyncHandler(adminCancelInvalidPriceChange));
+adminRenewalsRouter.post("/:id/cancel-price-change", asyncHandler(adminCancelInvalidPriceChange));
 // Admin skip renewal (Decision 2)
 adminRenewalsRouter.post("/:id/admin-skip", asyncHandler(adminSkipRenewal));
 
