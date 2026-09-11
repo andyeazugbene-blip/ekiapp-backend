@@ -1477,6 +1477,79 @@ describe("communityCampaignsService.update — 'Edit Live Campaign'", () => {
   });
 });
 
+describe("communityCampaignsService.requestChanges — Final Client Decision 1", () => {
+  const baseCampaign = {
+    id: "camp-1",
+    title: "Test Campaign",
+    termsLockedAt: new Date("2026-01-01T00:00:00.000Z"),
+    organiser: { userId: "organiser-user-1" },
+  };
+
+  it("allows changes-requested on UNDER_REVIEW (pre-existing path, unchanged)", async () => {
+    m.communityCampaign.findUnique.mockResolvedValue({ ...baseCampaign, status: "UNDER_REVIEW", termsLockedAt: null } as never);
+    m.communityCampaign.update.mockResolvedValue({ id: "camp-1", status: "CHANGES_REQUIRED" } as never);
+
+    await communityCampaignsService.requestChanges("admin-1", "camp-1", "Fix the description");
+
+    expect(m.communityCampaign.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ status: "CHANGES_REQUIRED" }) }),
+    );
+    expect(notificationsService.enqueue).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: "organiser-user-1", body: "Fix the description" }),
+    );
+  });
+
+  it("allows changes-requested on APPROVED (new — Decision 1 extension)", async () => {
+    m.communityCampaign.findUnique.mockResolvedValue({ ...baseCampaign, status: "APPROVED", termsLockedAt: null } as never);
+    m.communityCampaign.update.mockResolvedValue({ id: "camp-1", status: "CHANGES_REQUIRED" } as never);
+
+    await communityCampaignsService.requestChanges("admin-1", "camp-1", "Supplier changed, needs reassignment");
+
+    expect(m.communityCampaign.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ status: "CHANGES_REQUIRED" }) }),
+    );
+  });
+
+  it("allows changes-requested on LIVE, pauses pledging via status, and does NOT reset termsLockedAt — confirmed contributions stay immutable", async () => {
+    m.communityCampaign.findUnique.mockResolvedValue({ ...baseCampaign, status: "LIVE" } as never);
+    m.communityCampaign.update.mockResolvedValue({ id: "camp-1", status: "CHANGES_REQUIRED" } as never);
+
+    await communityCampaignsService.requestChanges("admin-1", "camp-1", "Price discrepancy found");
+
+    const call = m.communityCampaign.update.mock.calls[0]![0] as any;
+    expect(call.data.status).toBe("CHANGES_REQUIRED");
+    expect(call.data.termsLockedAt).toBeUndefined();
+    expect(notificationsService.enqueue).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: "organiser-user-1",
+        body: expect.stringContaining("temporarily paused"),
+      }),
+    );
+  });
+
+  it("rejects requestChanges on a campaign that hasn't been submitted yet (DRAFT)", async () => {
+    m.communityCampaign.findUnique.mockResolvedValue({ ...baseCampaign, status: "DRAFT" } as never);
+
+    await expect(communityCampaignsService.requestChanges("admin-1", "camp-1", "notes")).rejects.toMatchObject({ statusCode: 409 });
+    expect(m.communityCampaign.update).not.toHaveBeenCalled();
+  });
+
+  it("rejects requestChanges on a campaign already in a terminal state (COMPLETED)", async () => {
+    m.communityCampaign.findUnique.mockResolvedValue({ ...baseCampaign, status: "COMPLETED" } as never);
+
+    await expect(communityCampaignsService.requestChanges("admin-1", "camp-1", "notes")).rejects.toMatchObject({ statusCode: 409 });
+    expect(m.communityCampaign.update).not.toHaveBeenCalled();
+  });
+
+  it("rejects requestChanges on a non-existent campaign (unauthorized/invalid target, not a 500)", async () => {
+    m.communityCampaign.findUnique.mockResolvedValue(null as never);
+
+    await expect(communityCampaignsService.requestChanges("admin-1", "missing-campaign", "notes")).rejects.toMatchObject({
+      statusCode: 404,
+    });
+  });
+});
+
 describe("communityCampaignsService.listParticipantsForOrganiser — 'Participants'", () => {
   it("only returns participants with an actual PAID contribution, with real totals", async () => {
     m.organiserProfile.findUnique.mockResolvedValue({ id: "org-1" } as never);

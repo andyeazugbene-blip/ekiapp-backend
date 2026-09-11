@@ -373,6 +373,8 @@ describe("automationService — per-vendor tunable config (CART_RECOVERY, BUYER_
         "FIRST_SALE",
         "CART_RECOVERY",
         "BUYER_WIN_BACK",
+        "REORDER_REMINDER",
+        "CHECKOUT_PAYMENT_FOLLOW_UP",
         "REVIEW_REQUEST",
         "LOW_STOCK_ALERT",
         "BUYER_REFERRAL",

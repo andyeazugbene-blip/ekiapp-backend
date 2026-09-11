@@ -1,6 +1,7 @@
 import { Router } from "express";
 
 import { authenticate, requireRole } from "../../middlewares/authenticate";
+import { requireAdminPermission } from "../../middlewares/require-admin-permission";
 import { asyncHandler } from "../../shared/utils/async-handler";
 import {
   adminCancelInvalidPriceChange,
@@ -111,26 +112,33 @@ buyerSubscriptionsRouter.post("/:id/change-frequency", asyncHandler(changeBuyerS
 // Admin: Regular Delivery monitoring and intervention — mounted at /admin/subscriptions
 // and /admin/renewals (inside the single main admin app).
 // Final Client Decisions 2 + 3.
+// Every mutation here is gated by the same orders.mutate admin permission
+// used for the closest sibling action elsewhere in the admin system
+// (force-process/complete order, subscription-exceptions retry-payment) —
+// requireRole("ADMIN") alone would let ANY admin role force-cancel a
+// subscription or contact a buyer, bypassing this codebase's established
+// permission-per-mutation convention (every other admin.routes.ts mutation
+// is gated this way).
 export const adminSubscriptionsRouter = Router();
 adminSubscriptionsRouter.use(authenticate, requireRole("ADMIN"));
-adminSubscriptionsRouter.get("/exceptions", asyncHandler(adminListSubscriptionExceptions));
+adminSubscriptionsRouter.get("/exceptions", asyncHandler(requireAdminPermission("orders.read")), asyncHandler(adminListSubscriptionExceptions));
 // Retry payment (RD-08, existing)
-adminSubscriptionsRouter.post("/:id/retry-payment", asyncHandler(adminRetryRenewalPayment));
+adminSubscriptionsRouter.post("/:id/retry-payment", asyncHandler(requireAdminPermission("orders.mutate")), asyncHandler(adminRetryRenewalPayment));
 // Forced cancellation (Decision 2 — exceptional support action)
-adminSubscriptionsRouter.post("/:id/force-cancel", asyncHandler(adminForceCancelSubscription));
+adminSubscriptionsRouter.post("/:id/force-cancel", asyncHandler(requireAdminPermission("orders.mutate")), asyncHandler(adminForceCancelSubscription));
 // Contact buyer from subscription context (Decision 2)
-adminSubscriptionsRouter.post("/:id/contact-buyer", asyncHandler(adminContactBuyerFromSubscription));
+adminSubscriptionsRouter.post("/:id/contact-buyer", asyncHandler(requireAdminPermission("orders.mutate")), asyncHandler(adminContactBuyerFromSubscription));
 // Admin frequency correction (Decision 3 — support action only)
-adminSubscriptionsRouter.post("/:id/change-frequency", asyncHandler(adminChangeSubscriptionFrequency));
+adminSubscriptionsRouter.post("/:id/change-frequency", asyncHandler(requireAdminPermission("orders.mutate")), asyncHandler(adminChangeSubscriptionFrequency));
 
 export const adminRenewalsRouter = Router();
 adminRenewalsRouter.use(authenticate, requireRole("ADMIN"));
 // Contact buyer from renewal context (Decision 2)
-adminRenewalsRouter.post("/:id/contact-buyer", asyncHandler(adminContactBuyerFromRenewal));
+adminRenewalsRouter.post("/:id/contact-buyer", asyncHandler(requireAdminPermission("orders.mutate")), asyncHandler(adminContactBuyerFromRenewal));
 // Resend price-change notification (Decision 2)
-adminRenewalsRouter.post("/:id/resend-price-change", asyncHandler(adminResendPriceChangeNotification));
+adminRenewalsRouter.post("/:id/resend-price-change", asyncHandler(requireAdminPermission("orders.mutate")), asyncHandler(adminResendPriceChangeNotification));
 // Cancel invalid price-change request (Decision 2)
-adminRenewalsRouter.post("/:id/cancel-price-change", asyncHandler(adminCancelInvalidPriceChange));
+adminRenewalsRouter.post("/:id/cancel-price-change", asyncHandler(requireAdminPermission("orders.mutate")), asyncHandler(adminCancelInvalidPriceChange));
 // Admin skip renewal (Decision 2)
-adminRenewalsRouter.post("/:id/admin-skip", asyncHandler(adminSkipRenewal));
+adminRenewalsRouter.post("/:id/admin-skip", asyncHandler(requireAdminPermission("orders.mutate")), asyncHandler(adminSkipRenewal));
 
