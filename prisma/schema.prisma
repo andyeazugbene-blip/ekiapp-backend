@@ -2114,6 +2114,14 @@ model SubscriptionActionHistory {
 // implementation gated behind that flag; Modes B and C are not built.
 // ═══════════════════════════════════════════════════════════════════════
 
+// Client-corrected Community Buy flow: supplier is an optional fulfilment
+// choice, never a prerequisite for publication — see CommunityCampaign
+// below.
+enum CampaignFulfilmentOwner {
+  SELF
+  SUPPLIER
+}
+
 enum CampaignStatus {
   DRAFT
   UNDER_REVIEW
@@ -2185,7 +2193,13 @@ model SupplierProfile {
 model CommunityCampaign {
   id            String                 @id @default(cuid())
   organiserId   String
-  supplierId    String
+  // Nullable — a campaign may be self-fulfilled by the organiser with no
+  // supplier at all. When set, fulfilmentOwner is SUPPLIER; when null,
+  // fulfilmentOwner is SELF. Supplier acceptance/decline is fulfilment
+  // workflow state only and never gates publication/LIVE — see submit()
+  // and publish() in community-campaigns.service.ts.
+  supplierId    String?
+  fulfilmentOwner CampaignFulfilmentOwner @default(SUPPLIER)
   title         String
   description   String?
   country       String
@@ -2224,7 +2238,7 @@ model CommunityCampaign {
   extensionCount            Int              @default(0)
   termsLockedAt             DateTime?
   organiser     OrganiserProfile       @relation(fields: [organiserId], references: [id], onDelete: Restrict)
-  supplier      SupplierProfile        @relation(fields: [supplierId], references: [id], onDelete: Restrict)
+  supplier      SupplierProfile?       @relation(fields: [supplierId], references: [id], onDelete: Restrict)
   participants  CampaignParticipant[]
   contributions CampaignContribution[]
   extensionRequests CampaignExtensionRequest[]

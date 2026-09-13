@@ -1633,6 +1633,7 @@ describe("campaignContributionsService.getMyPaymentForCampaign — supplier's ow
 
 describe("Community Buy risk controls — restrict/unrestrict organiser and supplier", () => {
   const validInput = {
+    fulfilmentOwner: "SUPPLIER" as const,
     supplierId: "sup-1",
     title: "Bulk rice buy",
     country: "GB",
@@ -1919,9 +1920,26 @@ describe("communityCampaignsService.declineSupplierCommitment — real decline c
     expect(m.communityCampaign.update).not.toHaveBeenCalled();
   });
 
-  it("rejects declining a campaign that is no longer in a valid state (already LIVE)", async () => {
+  // Client-corrected flow (test D): a supplier can still decline after the
+  // campaign has gone LIVE — decline is fulfilment workflow state, not a
+  // publication gate. Superseded the old "LIVE is never valid" rule.
+  it("lets a supplier decline a campaign that is already LIVE, awaiting their response", async () => {
     m.supplierProfile.findUnique.mockResolvedValue({ id: "sup-1", vendorId: "vendor-1" } as never);
-    m.communityCampaign.findUnique.mockResolvedValue({ id: "camp-1", supplierId: "sup-1", status: "LIVE", supplierCommitted: true } as never);
+    m.communityCampaign.findUnique.mockResolvedValue({
+      id: "camp-1", supplierId: "sup-1", status: "LIVE", supplierCommitted: false, supplierDeclinedAt: null,
+      organiser: { userId: "organiser-1" },
+    } as never);
+    m.communityCampaign.update.mockResolvedValue({ id: "camp-1", status: "LIVE", supplierDeclinedAt: new Date(), supplierDeclineReason: "Out of stock" } as never);
+
+    const result = await communityCampaignsService.declineSupplierCommitment("supplier-user-1", "vendor-1", "camp-1", "Out of stock");
+
+    expect(result.status).toBe("LIVE");
+    expect(result.supplierDeclineReason).toBe("Out of stock");
+  });
+
+  it("rejects declining a campaign that has already closed out (FULFILLING)", async () => {
+    m.supplierProfile.findUnique.mockResolvedValue({ id: "sup-1", vendorId: "vendor-1" } as never);
+    m.communityCampaign.findUnique.mockResolvedValue({ id: "camp-1", supplierId: "sup-1", status: "FULFILLING", supplierCommitted: true } as never);
     await expect(
       communityCampaignsService.declineSupplierCommitment("supplier-user-1", "vendor-1", "camp-1"),
     ).rejects.toMatchObject({ statusCode: 409 });
@@ -1963,7 +1981,7 @@ describe("communityCampaignsService.reassignSupplier — necessary companion to 
   it("reassigns to a new verified supplier, clears prior commitment/decline state, and notifies the new supplier of a fresh invitation", async () => {
     m.communityCampaign.findUnique.mockResolvedValue({
       id: "camp-1", organiserId: "org-1", status: "DRAFT", termsLockedAt: null, supplierId: "sup-1", country: "GB",
-      title: "Bulk rice buy", minimumShares: 5, maximumShares: 15,
+      title: "Bulk rice buy", minimumShares: 5, maximumShares: 15, fulfilmentOwner: "SUPPLIER",
     } as never);
     m.organiserProfile.findUnique.mockResolvedValue({ id: "org-1" } as never);
     m.supplierProfile.findUnique.mockResolvedValue({ id: "sup-2", isVerified: true, isRestricted: false, country: "GB", vendor: { userId: "supplier-user-2" } } as never);
@@ -1989,47 +2007,254 @@ describe("communityCampaignsService.reassignSupplier — necessary companion to 
   });
 
   it("rejects reassignment once terms are locked", async () => {
-    m.communityCampaign.findUnique.mockResolvedValue({ id: "camp-1", organiserId: "org-1", status: "DRAFT", termsLockedAt: new Date(), supplierId: "sup-1" } as never);
+    m.communityCampaign.findUnique.mockResolvedValue({ id: "camp-1", organiserId: "org-1", status: "DRAFT", termsLockedAt: new Date(), supplierId: "sup-1", fulfilmentOwner: "SUPPLIER" } as never);
     m.organiserProfile.findUnique.mockResolvedValue({ id: "org-1" } as never);
     await expect(communityCampaignsService.reassignSupplier("organiser-user-1", "camp-1", "sup-2")).rejects.toMatchObject({ statusCode: 409 });
   });
 
-  it("rejects reassignment once the campaign is no longer in draft", async () => {
-    m.communityCampaign.findUnique.mockResolvedValue({ id: "camp-1", organiserId: "org-1", status: "LIVE", termsLockedAt: null, supplierId: "sup-1" } as never);
+  // Client-corrected flow: supplier acceptance/decline/reassignment is
+  // fulfilment workflow state, not a publication gate, so reassignment must
+  // keep working after the campaign is already LIVE (a decline no longer
+  // has to happen before publish) — superseded the old DRAFT-only rule.
+  it("rejects reassignment once the campaign has closed out (FULFILLING)", async () => {
+    m.communityCampaign.findUnique.mockResolvedValue({ id: "camp-1", organiserId: "org-1", status: "FULFILLING", termsLockedAt: null, supplierId: "sup-1", fulfilmentOwner: "SUPPLIER" } as never);
     m.organiserProfile.findUnique.mockResolvedValue({ id: "org-1" } as never);
     await expect(communityCampaignsService.reassignSupplier("organiser-user-1", "camp-1", "sup-2")).rejects.toMatchObject({ statusCode: 409 });
   });
 
   it("rejects an unverified new supplier", async () => {
-    m.communityCampaign.findUnique.mockResolvedValue({ id: "camp-1", organiserId: "org-1", status: "DRAFT", termsLockedAt: null, supplierId: "sup-1", country: "GB" } as never);
+    m.communityCampaign.findUnique.mockResolvedValue({ id: "camp-1", organiserId: "org-1", status: "DRAFT", termsLockedAt: null, supplierId: "sup-1", country: "GB", fulfilmentOwner: "SUPPLIER" } as never);
     m.organiserProfile.findUnique.mockResolvedValue({ id: "org-1" } as never);
     m.supplierProfile.findUnique.mockResolvedValue({ id: "sup-2", isVerified: false, isRestricted: false, country: "GB" } as never);
     await expect(communityCampaignsService.reassignSupplier("organiser-user-1", "camp-1", "sup-2")).rejects.toMatchObject({ statusCode: 404 });
   });
 
   it("rejects a restricted new supplier", async () => {
-    m.communityCampaign.findUnique.mockResolvedValue({ id: "camp-1", organiserId: "org-1", status: "DRAFT", termsLockedAt: null, supplierId: "sup-1", country: "GB" } as never);
+    m.communityCampaign.findUnique.mockResolvedValue({ id: "camp-1", organiserId: "org-1", status: "DRAFT", termsLockedAt: null, supplierId: "sup-1", country: "GB", fulfilmentOwner: "SUPPLIER" } as never);
     m.organiserProfile.findUnique.mockResolvedValue({ id: "org-1" } as never);
     m.supplierProfile.findUnique.mockResolvedValue({ id: "sup-2", isVerified: true, isRestricted: true, country: "GB" } as never);
     await expect(communityCampaignsService.reassignSupplier("organiser-user-1", "camp-1", "sup-2")).rejects.toMatchObject({ statusCode: 403 });
   });
 
   it("rejects a supplier from a different market", async () => {
-    m.communityCampaign.findUnique.mockResolvedValue({ id: "camp-1", organiserId: "org-1", status: "DRAFT", termsLockedAt: null, supplierId: "sup-1", country: "GB" } as never);
+    m.communityCampaign.findUnique.mockResolvedValue({ id: "camp-1", organiserId: "org-1", status: "DRAFT", termsLockedAt: null, supplierId: "sup-1", country: "GB", fulfilmentOwner: "SUPPLIER" } as never);
     m.organiserProfile.findUnique.mockResolvedValue({ id: "org-1" } as never);
     m.supplierProfile.findUnique.mockResolvedValue({ id: "sup-2", isVerified: true, isRestricted: false, country: "FR" } as never);
     await expect(communityCampaignsService.reassignSupplier("organiser-user-1", "camp-1", "sup-2")).rejects.toMatchObject({ statusCode: 400 });
   });
 
   it("rejects reassigning to the same supplier already assigned", async () => {
-    m.communityCampaign.findUnique.mockResolvedValue({ id: "camp-1", organiserId: "org-1", status: "DRAFT", termsLockedAt: null, supplierId: "sup-1", country: "GB" } as never);
+    m.communityCampaign.findUnique.mockResolvedValue({ id: "camp-1", organiserId: "org-1", status: "DRAFT", termsLockedAt: null, supplierId: "sup-1", country: "GB", fulfilmentOwner: "SUPPLIER" } as never);
     m.organiserProfile.findUnique.mockResolvedValue({ id: "org-1" } as never);
     await expect(communityCampaignsService.reassignSupplier("organiser-user-1", "camp-1", "sup-1")).rejects.toMatchObject({ statusCode: 409 });
   });
 });
 
+// ═══════════════════════════════════════════════════════════════════════
+// Client correction: Community Buy supplier is an optional fulfilment
+// choice, never a prerequisite for campaign publication/LIVE. The 13
+// scenarios below are the client's own required regression list.
+// ═══════════════════════════════════════════════════════════════════════
+
+describe("Client correction — supplier is optional, never a publication gate", () => {
+  const baseInput = {
+    title: "Bulk rice buy",
+    country: "GB",
+    currency: "GBP",
+    minimumShares: 5,
+    goalShares: 10,
+    maximumShares: 15,
+    pricePerShareMinor: 1000,
+    deadline: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
+  };
+
+  // 1. campaign can publish without supplier
+  it("1. publish() succeeds for an APPROVED self-fulfilled campaign with no supplier at all", async () => {
+    m.communityCampaign.findUnique.mockResolvedValue({ id: "camp-1", organiserId: "org-1", status: "APPROVED", fulfilmentOwner: "SELF", supplierId: null, country: "GB" } as never);
+    m.organiserProfile.findUnique.mockResolvedValue({ id: "org-1" } as never);
+    m.marketConfiguration.findUnique.mockResolvedValue({ countryCode: "GB", communityBuyEnabled: true } as never);
+    m.marketConfiguration.count.mockResolvedValue(1);
+    m.communityCampaign.update.mockResolvedValue({ id: "camp-1", status: "LIVE" } as never);
+
+    const result = await communityCampaignsService.publish("organiser-user-1", "camp-1");
+
+    expect(result.status).toBe("LIVE");
+    expect(m.communityCampaign.update).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ status: "LIVE" }) }));
+  });
+
+  // 2. campaign can become LIVE without supplier acceptance
+  it("2. publish() succeeds for a SUPPLIER-mode campaign whose supplier has not yet accepted", async () => {
+    m.communityCampaign.findUnique.mockResolvedValue({ id: "camp-2", organiserId: "org-1", status: "APPROVED", fulfilmentOwner: "SUPPLIER", supplierId: "sup-1", supplierCommitted: false, country: "GB" } as never);
+    m.organiserProfile.findUnique.mockResolvedValue({ id: "org-1" } as never);
+    m.marketConfiguration.findUnique.mockResolvedValue({ countryCode: "GB", communityBuyEnabled: true } as never);
+    m.marketConfiguration.count.mockResolvedValue(1);
+    m.communityCampaign.update.mockResolvedValue({ id: "camp-2", status: "LIVE" } as never);
+
+    const result = await communityCampaignsService.publish("organiser-user-1", "camp-2");
+
+    expect(result.status).toBe("LIVE");
+  });
+
+  // 3. self-fulfilment campaign publishes (create + submit, no supplier anywhere)
+  it("3. create() accepts fulfilmentOwner SELF with no supplierId, and submit() moves it to UNDER_REVIEW with no supplier check", async () => {
+    m.organiserProfile.findUnique.mockResolvedValue({ id: "org-1", isVerified: true, isRestricted: false } as never);
+    m.marketConfiguration.findUnique.mockResolvedValue({ countryCode: "GB", communityBuyEnabled: true } as never);
+    m.marketConfiguration.count.mockResolvedValue(1);
+    m.communityCampaign.create.mockResolvedValue({ id: "camp-3", fulfilmentOwner: "SELF", supplierId: null } as never);
+
+    const created = await communityCampaignsService.create("organiser-user-1", { ...baseInput, fulfilmentOwner: "SELF" });
+
+    expect(created.id).toBe("camp-3");
+    expect(m.supplierProfile.findUnique).not.toHaveBeenCalled();
+    expect(notificationsService.enqueue).not.toHaveBeenCalled(); // no supplier to invite
+
+    m.communityCampaign.findUnique.mockResolvedValue({ id: "camp-3", organiserId: "org-1", status: "DRAFT", fulfilmentOwner: "SELF", supplierId: null } as never);
+    m.communityCampaign.update.mockResolvedValue({ id: "camp-3", status: "UNDER_REVIEW" } as never);
+
+    const submitted = await communityCampaignsService.submit("organiser-user-1", "camp-3");
+    expect(submitted.status).toBe("UNDER_REVIEW");
+  });
+
+  // 4. supplier-selected campaign publishes before acceptance
+  it("4. submit() moves a SUPPLIER-mode campaign to UNDER_REVIEW even though supplierCommitted is still false", async () => {
+    m.communityCampaign.findUnique.mockResolvedValue({ id: "camp-4", organiserId: "org-1", status: "DRAFT", fulfilmentOwner: "SUPPLIER", supplierId: "sup-1", supplierCommitted: false } as never);
+    m.organiserProfile.findUnique.mockResolvedValue({ id: "org-1" } as never);
+    m.communityCampaign.update.mockResolvedValue({ id: "camp-4", status: "UNDER_REVIEW" } as never);
+
+    const result = await communityCampaignsService.submit("organiser-user-1", "camp-4");
+
+    expect(result.status).toBe("UNDER_REVIEW");
+    expect(m.communityCampaign.update).toHaveBeenCalledWith({ where: { id: "camp-4" }, data: { status: "UNDER_REVIEW" } });
+  });
+
+  // 5. supplier accepts after campaign is LIVE
+  it("5. confirmSupplierCommitment() succeeds while the campaign is already LIVE", async () => {
+    m.supplierProfile.findUnique.mockResolvedValue({ id: "sup-1", isRestricted: false } as never);
+    m.communityCampaign.findUnique.mockResolvedValue({ id: "camp-5", supplierId: "sup-1", status: "LIVE", organiser: { userId: "organiser-1" } } as never);
+    m.communityCampaign.update.mockResolvedValue({ id: "camp-5", status: "LIVE", supplierCommitted: true } as never);
+
+    const result = await communityCampaignsService.confirmSupplierCommitment("vendor-1", "camp-5");
+
+    expect(result.supplierCommitted).toBe(true);
+    expect(result.status).toBe("LIVE");
+  });
+
+  // 6. supplier declines after campaign is LIVE
+  it("6. declineSupplierCommitment() succeeds while the campaign is already LIVE, and the campaign stays LIVE", async () => {
+    m.supplierProfile.findUnique.mockResolvedValue({ id: "sup-1", vendorId: "vendor-1" } as never);
+    m.communityCampaign.findUnique.mockResolvedValue({
+      id: "camp-6", supplierId: "sup-1", status: "LIVE", supplierCommitted: false, supplierDeclinedAt: null,
+      organiser: { userId: "organiser-1" },
+    } as never);
+    m.communityCampaign.update.mockResolvedValue({ id: "camp-6", status: "LIVE", supplierDeclinedAt: new Date(), supplierDeclineReason: "Can't fulfil this quantity" } as never);
+
+    const result = await communityCampaignsService.declineSupplierCommitment("supplier-user-1", "vendor-1", "camp-6", "Can't fulfil this quantity");
+
+    expect(result.status).toBe("LIVE");
+    expect(m.communityCampaign.update).toHaveBeenCalledWith({ where: { id: "camp-6" }, data: expect.objectContaining({ supplierDeclinedAt: expect.any(Date) }) });
+  });
+
+  // 7. organiser reassigns supplier after decline (campaign stays LIVE throughout)
+  it("7. reassignSupplier() succeeds on a LIVE campaign after a decline, clearing decline state and inviting the new supplier", async () => {
+    m.communityCampaign.findUnique.mockResolvedValue({
+      id: "camp-7", organiserId: "org-1", status: "LIVE", termsLockedAt: null, fulfilmentOwner: "SUPPLIER",
+      supplierId: "sup-1", supplierDeclinedAt: new Date(), supplierDeclineReason: "Out of stock", country: "GB",
+      title: "Bulk rice buy", minimumShares: 5, maximumShares: 15,
+    } as never);
+    m.organiserProfile.findUnique.mockResolvedValue({ id: "org-1" } as never);
+    m.supplierProfile.findUnique.mockResolvedValue({ id: "sup-2", isVerified: true, isRestricted: false, country: "GB", vendor: { userId: "supplier-user-2" } } as never);
+    m.communityCampaign.update.mockResolvedValue({ id: "camp-7", status: "LIVE", supplierId: "sup-2" } as never);
+
+    const result = await communityCampaignsService.reassignSupplier("organiser-user-1", "camp-7", "sup-2");
+
+    expect(result.status).toBe("LIVE");
+    expect(m.communityCampaign.update).toHaveBeenCalledWith({
+      where: { id: "camp-7" },
+      data: { supplierId: "sup-2", supplierCommitted: false, supplierCommittedAt: null, supplierDeclinedAt: null, supplierDeclineReason: null },
+    });
+    expect(notificationsService.enqueue).toHaveBeenCalledWith(expect.objectContaining({ userId: "supplier-user-2" }));
+  });
+
+  // 8. participant can discover/join a LIVE campaign while supplier pending
+  it("8. join() and listLive() never look at supplierCommitted — a participant can join while the supplier hasn't responded", async () => {
+    m.communityCampaign.findUnique.mockResolvedValue({ id: "camp-8", status: "LIVE", supplierId: "sup-1", supplierCommitted: false } as never);
+    m.campaignParticipant.upsert.mockResolvedValue({ campaignId: "camp-8", userId: "buyer-1" } as never);
+
+    const joined = await campaignContributionsService.join("buyer-1", "camp-8");
+    expect(joined).toEqual({ campaignId: "camp-8", userId: "buyer-1" });
+
+    m.communityCampaign.findMany.mockResolvedValue([{ id: "camp-8", status: "LIVE", supplierId: "sup-1", supplierCommitted: false }] as never);
+    const live = await communityCampaignsService.listLive("GB");
+    expect(live).toHaveLength(1);
+    expect(m.communityCampaign.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: { status: "LIVE", country: "GB" } }));
+  });
+
+  // 9. unauthorized supplier assignment still rejected (unverified supplier at create time)
+  it("9. create() with fulfilmentOwner SUPPLIER still rejects an unverified supplier", async () => {
+    m.organiserProfile.findUnique.mockResolvedValue({ id: "org-1", isVerified: true, isRestricted: false } as never);
+    m.marketConfiguration.findUnique.mockResolvedValue({ countryCode: "GB", communityBuyEnabled: true } as never);
+    m.marketConfiguration.count.mockResolvedValue(1);
+    m.supplierProfile.findUnique.mockResolvedValue({ id: "sup-1", isVerified: false, isRestricted: false, country: "GB" } as never);
+
+    await expect(
+      communityCampaignsService.create("organiser-user-1", { ...baseInput, fulfilmentOwner: "SUPPLIER", supplierId: "sup-1" }),
+    ).rejects.toMatchObject({ statusCode: 404 });
+    expect(m.communityCampaign.create).not.toHaveBeenCalled();
+  });
+
+  // 10. wrong-market supplier still rejected at create time
+  it("10. create() with fulfilmentOwner SUPPLIER still rejects a supplier from a different market", async () => {
+    m.organiserProfile.findUnique.mockResolvedValue({ id: "org-1", isVerified: true, isRestricted: false } as never);
+    m.marketConfiguration.findUnique.mockResolvedValue({ countryCode: "GB", communityBuyEnabled: true } as never);
+    m.marketConfiguration.count.mockResolvedValue(1);
+    m.supplierProfile.findUnique.mockResolvedValue({ id: "sup-1", isVerified: true, isRestricted: false, country: "FR" } as never);
+
+    await expect(
+      communityCampaignsService.create("organiser-user-1", { ...baseInput, fulfilmentOwner: "SUPPLIER", supplierId: "sup-1" }),
+    ).rejects.toMatchObject({ statusCode: 400 });
+    expect(m.communityCampaign.create).not.toHaveBeenCalled();
+  });
+
+  // 11. financial locks remain intact regardless of fulfilment mode
+  it("11. update() still refuses to touch financial fields once terms are locked, for a self-fulfilled campaign too", async () => {
+    m.communityCampaign.findUnique.mockResolvedValue({
+      id: "camp-11", organiserId: "org-1", status: "LIVE", fulfilmentOwner: "SELF", supplierId: null, termsLockedAt: new Date(),
+    } as never);
+    m.organiserProfile.findUnique.mockResolvedValue({ id: "org-1" } as never);
+
+    await expect(
+      communityCampaignsService.update("organiser-user-1", "camp-11", { goalShares: 999 }),
+    ).rejects.toMatchObject({ statusCode: 409 });
+    expect(m.communityCampaign.update).not.toHaveBeenCalled();
+  });
+
+  // 12. contribution/payment state unchanged — a participant can still pledge against a self-fulfilled LIVE campaign exactly as before
+  it("12. pledge() still requires LIVE status only — self-fulfilment doesn't change contribution/payment eligibility", async () => {
+    m.communityCampaign.findUnique.mockResolvedValue({ id: "camp-12", status: "DRAFT", fulfilmentOwner: "SELF", supplierId: null, deadline: new Date(Date.now() + 86400000) } as never);
+    await expect(
+      campaignContributionsService.pledge("buyer-1", "camp-12", 1, "pm_1"),
+    ).rejects.toMatchObject({ statusCode: 404 });
+  });
+
+  // 13. notification dedupe remains intact under the new required fulfilmentOwner field
+  it("13. create() with fulfilmentOwner SUPPLIER still produces the same deterministic supplier_invited dedupe key", async () => {
+    m.organiserProfile.findUnique.mockResolvedValue({ id: "org-1", isVerified: true, isRestricted: false } as never);
+    m.marketConfiguration.findUnique.mockResolvedValue({ countryCode: "GB", communityBuyEnabled: true } as never);
+    m.marketConfiguration.count.mockResolvedValue(1);
+    m.supplierProfile.findUnique.mockResolvedValue({ id: "sup-1", isVerified: true, isRestricted: false, country: "GB", vendor: { userId: "supplier-user-1" } } as never);
+    m.communityCampaign.create.mockResolvedValue({ id: "camp-13", title: "Bulk rice buy" } as never);
+
+    await communityCampaignsService.create("organiser-user-1", { ...baseInput, fulfilmentOwner: "SUPPLIER", supplierId: "sup-1" });
+
+    expect(notificationsService.enqueue).toHaveBeenCalledWith(expect.objectContaining({
+      dedupeKey: "supplier_invited:camp-13:sup-1",
+    }));
+  });
+});
+
 describe("Phase 8.1 — supplier notifications (invitation, accept, inventory confirmed)", () => {
   const validInput = {
+    fulfilmentOwner: "SUPPLIER" as const,
     supplierId: "sup-1",
     title: "Bulk rice buy",
     country: "GB",

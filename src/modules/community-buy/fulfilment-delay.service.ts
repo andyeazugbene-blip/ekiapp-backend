@@ -96,7 +96,10 @@ export const fulfilmentDelayService = {
     if (!alert) throw new AppError("Fulfilment alert not found", 404);
 
     await notificationsService.enqueue({
-      userId: alert.campaign.supplier.vendor.userId,
+      // Non-null: a SupplierFulfilmentAlert is only ever raised against a
+      // CampaignFulfilment row, which createSupplierOrder() only creates
+      // for SUPPLIER-fulfilment campaigns.
+      userId: alert.campaign.supplier!.vendor.userId,
       type: "COMMUNITY_CAMPAIGN_UPDATE",
       title: "Fulfilment follow-up",
       body: `Eki is following up on fulfilment for "${alert.campaign.title}": ${note}`,

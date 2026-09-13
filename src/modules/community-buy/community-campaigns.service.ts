@@ -8,7 +8,11 @@ import { campaignContributionsService } from "./campaign-contributions.service";
 import { recordAudit } from "../../shared/utils/audit";
 
 export interface CreateCampaignInput {
-  supplierId: string;
+  // Client-corrected flow: supplier is an optional fulfilment choice, never
+  // a prerequisite for publication. SUPPLIER requires supplierId; SELF
+  // requires it be absent.
+  fulfilmentOwner: "SELF" | "SUPPLIER";
+  supplierId?: string;
   title: string;
   description?: string;
   country: string;
@@ -22,6 +26,21 @@ export interface CreateCampaignInput {
 }
 
 const MAX_EXTENSIONS = 1;
+
+// Client-corrected flow: supplier acceptance/decline/reassignment is
+// fulfilment workflow state, not a publication gate — so unlike before
+// (DRAFT/CHANGES_REQUIRED only), a supplier can respond at any point up to
+// the campaign actually closing out. Excludes only the terminal/closing
+// statuses where a supplier decision no longer means anything.
+const SUPPLIER_RESPONSE_STATUSES = [
+  "DRAFT",
+  "CHANGES_REQUIRED",
+  "UNDER_REVIEW",
+  "APPROVED",
+  "LIVE",
+  "PAUSED",
+  "RESCUE_WINDOW",
+] as const;
 
 async function notifyCampaign(
   userId: string,
@@ -73,13 +92,27 @@ export const communityCampaignsService = {
     const config = await marketConfigurationService.get(input.country);
     if (!config?.communityBuyEnabled) throw new AppError("Community Buy is not available in this market yet", 403);
 
-    const supplier = await prisma.supplierProfile.findUnique({ where: { id: input.supplierId }, include: { vendor: { select: { userId: true } } } });
-    if (!supplier || !supplier.isVerified) throw new AppError("Supplier not found or not verified", 404);
-    if (supplier.isRestricted) throw new AppError("This supplier is currently restricted and cannot take on new campaigns", 403);
-    if (supplier.country !== input.country) {
-      // spec §8.2: campaigns operate as a local-market feature only — no
-      // cross-border organiser/supplier pairing in this version.
-      throw new AppError("Supplier must be based in the same market as the campaign", 400);
+    if (input.fulfilmentOwner !== "SELF" && input.fulfilmentOwner !== "SUPPLIER") {
+      throw new AppError("fulfilmentOwner must be SELF or SUPPLIER", 400);
+    }
+
+    // Client-corrected flow: choosing a supplier is optional. SELF means the
+    // organiser fulfils it themselves — no supplier, no invitation, no
+    // eligibility checks to run. SUPPLIER keeps every existing eligibility
+    // check exactly as before.
+    let supplier: (Awaited<ReturnType<typeof prisma.supplierProfile.findUnique>> & { vendor: { userId: string } }) | null = null;
+    if (input.fulfilmentOwner === "SUPPLIER") {
+      if (!input.supplierId) throw new AppError("supplierId is required when choosing a supplier", 400);
+      supplier = await prisma.supplierProfile.findUnique({ where: { id: input.supplierId }, include: { vendor: { select: { userId: true } } } });
+      if (!supplier || !supplier.isVerified) throw new AppError("Supplier not found or not verified", 404);
+      if (supplier.isRestricted) throw new AppError("This supplier is currently restricted and cannot take on new campaigns", 403);
+      if (supplier.country !== input.country) {
+        // spec §8.2: campaigns operate as a local-market feature only — no
+        // cross-border organiser/supplier pairing in this version.
+        throw new AppError("Supplier must be based in the same market as the campaign", 400);
+      }
+    } else if (input.supplierId) {
+      throw new AppError("supplierId must not be set when self-fulfilling", 400);
     }
 
     // Flexible-fulfilment quantity model validation — doc §5.
@@ -103,7 +136,8 @@ export const communityCampaignsService = {
     const campaign = await prisma.communityCampaign.create({
       data: {
         organiserId: organiser.id,
-        supplierId: input.supplierId,
+        fulfilmentOwner: input.fulfilmentOwner,
+        supplierId: input.fulfilmentOwner === "SUPPLIER" ? input.supplierId : null,
         title: input.title,
         description: input.description,
         country: input.country,
@@ -122,15 +156,18 @@ export const communityCampaignsService = {
     });
     // Real supplier invitation — fires exactly when the commitment state
     // actually comes into existence (supplierId assigned, supplierCommitted:
-    // false), not merely because a campaign object exists.
-    await notifyCampaign(
-      supplier.vendor.userId,
-      "supplier_invited",
-      "New Community Buy invitation",
-      `An organiser wants you to supply "${campaign.title}" — ${input.minimumShares} to ${input.maximumShares} shares. Review and accept or decline.`,
-      campaign.id,
-      `supplier_invited:${campaign.id}:${supplier.id}`,
-    );
+    // false), not merely because a campaign object exists. Self-fulfilled
+    // campaigns have no supplier, so there is nothing to invite.
+    if (input.fulfilmentOwner === "SUPPLIER" && supplier) {
+      await notifyCampaign(
+        supplier.vendor.userId,
+        "supplier_invited",
+        "New Community Buy invitation",
+        `An organiser wants you to supply "${campaign.title}" — ${input.minimumShares} to ${input.maximumShares} shares. Review and accept or decline.`,
+        campaign.id,
+        `supplier_invited:${campaign.id}:${supplier.id}`,
+      );
+    }
     return campaign;
   },
 
@@ -186,8 +223,11 @@ export const communityCampaignsService = {
    */
   async reassignSupplier(userId: string, campaignId: string, newSupplierId: string) {
     const campaign = await this.requireOwnedByOrganiser(userId, campaignId);
-    if (campaign.status !== "DRAFT" && campaign.status !== "CHANGES_REQUIRED") {
-      throw new AppError("The supplier can only be changed while a campaign is in draft", 409);
+    if (campaign.fulfilmentOwner !== "SUPPLIER") {
+      throw new AppError("This campaign is self-fulfilled and has no supplier to reassign", 409);
+    }
+    if (!(SUPPLIER_RESPONSE_STATUSES as readonly string[]).includes(campaign.status)) {
+      throw new AppError("The supplier can no longer be changed once the campaign has closed out", 409);
     }
     if (campaign.termsLockedAt) {
       throw new AppError("This campaign's terms are locked after the first confirmed contribution", 409);
@@ -232,7 +272,7 @@ export const communityCampaignsService = {
       throw new AppError("Campaign not found", 404);
     }
     if (supplier.isRestricted) throw new AppError("Your supplier account is currently restricted from committing to campaigns", 403);
-    if (campaign.status !== "DRAFT" && campaign.status !== "CHANGES_REQUIRED") {
+    if (!(SUPPLIER_RESPONSE_STATUSES as readonly string[]).includes(campaign.status)) {
       throw new AppError("This campaign is not awaiting supplier commitment", 409);
     }
     const updated = await prisma.communityCampaign.update({
@@ -247,7 +287,9 @@ export const communityCampaignsService = {
       campaign.organiser.userId,
       "supplier_accepted",
       "Supplier accepted your campaign",
-      `Your supplier accepted "${campaign.title}". You can now submit it for review.`,
+      // Client-corrected flow: submission/publication never waited on this,
+      // so the copy no longer implies it did.
+      `Your supplier accepted "${campaign.title}".`,
       campaignId,
       `supplier_accepted:${campaignId}:${supplier.id}`,
     );
@@ -268,7 +310,7 @@ export const communityCampaignsService = {
     if (!campaign || !supplier || campaign.supplierId !== supplier.id) {
       throw new AppError("Campaign not found", 404);
     }
-    if (campaign.status !== "DRAFT" && campaign.status !== "CHANGES_REQUIRED") {
+    if (!(SUPPLIER_RESPONSE_STATUSES as readonly string[]).includes(campaign.status)) {
       throw new AppError("This campaign is not awaiting your decision", 409);
     }
     if (campaign.supplierCommitted) {
@@ -299,13 +341,14 @@ export const communityCampaignsService = {
     return updated;
   },
 
+  // Client-corrected flow: supplier acceptance is fulfilment workflow state,
+  // never a publication gate. A campaign can be submitted for review — and
+  // go on to be approved, published, and LIVE — regardless of whether a
+  // selected supplier has responded yet, or whether one was selected at all.
   async submit(userId: string, campaignId: string) {
     const campaign = await this.requireOwnedByOrganiser(userId, campaignId);
     if (campaign.status !== "DRAFT" && campaign.status !== "CHANGES_REQUIRED") {
       throw new AppError("Only a draft campaign can be submitted for review", 409);
-    }
-    if (!campaign.supplierCommitted) {
-      throw new AppError("The supplier must accept this campaign before it can be submitted for review", 409);
     }
     return prisma.communityCampaign.update({ where: { id: campaignId }, data: { status: "UNDER_REVIEW" } });
   },
@@ -616,8 +659,9 @@ export const communityCampaignsService = {
     return { closed: due.length, succeeded, failed, rescued };
   },
 
-  /** One supplier order per campaign, using the actual final confirmedShares — never the goal — doc §11. */
-  async createSupplierOrder(campaign: { id: string; supplierId: string; title: string; currency: string; confirmedShares: number; pricePerShareMinor: number | null }): Promise<void> {
+  /** One supplier order per campaign, using the actual final confirmedShares — never the goal — doc §11. Self-fulfilled campaigns have no supplier, so no order/payment/fulfilment record applies — the organiser handles it themselves outside this tracked workflow. */
+  async createSupplierOrder(campaign: { id: string; supplierId: string | null; title: string; currency: string; confirmedShares: number; pricePerShareMinor: number | null }): Promise<void> {
+    if (!campaign.supplierId) return;
     if (!campaign.pricePerShareMinor) return;
     const existing = await prisma.campaignSupplierPayment.findUnique({ where: { campaignId: campaign.id } });
     if (existing) return; // idempotent — never create a second supplier order/payment record.
@@ -1007,7 +1051,7 @@ export const communityCampaignsService = {
     if (!campaign) throw new AppError("Campaign not found", 404);
 
     const isOrganiser = campaign.organiser.userId === userId;
-    const isSupplier = campaign.supplier.vendor.userId === userId;
+    const isSupplier = campaign.supplier?.vendor.userId === userId;
     if (!isOrganiser && !isSupplier) throw new AppError("Only this campaign's organiser or supplier can post an update", 403);
 
     if (!(this._postableUpdateStatuses as readonly string[]).includes(campaign.status)) {

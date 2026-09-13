@@ -20,7 +20,7 @@ async function requireRealRelationshipToCampaign(userId: string, campaignId: str
   if (!campaign) throw new AppError("Campaign not found", 404);
 
   if (campaign.organiser.userId === userId) return;
-  if (campaign.supplier.vendor.userId === userId) return;
+  if (campaign.supplier?.vendor.userId === userId) return;
   const participant = await prisma.campaignParticipant.findUnique({ where: { campaignId_userId: { campaignId, userId } } });
   if (participant) return;
 

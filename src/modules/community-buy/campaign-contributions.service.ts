@@ -827,7 +827,10 @@ export const campaignContributionsService = {
     }
     // Doc Screen 131: never release if the payout account changed after
     // campaign approval without reverification.
-    const vendor = payment.campaign.supplier.vendor;
+    // Non-null: a CampaignSupplierPayment row only ever exists for a
+    // SUPPLIER-fulfilment campaign — createSupplierOrder() returns early for
+    // self-fulfilled ones, so this campaign's supplier is guaranteed set.
+    const vendor = payment.campaign.supplier!.vendor;
     if (payment.payoutStripeAccountIdAtApproval && vendor.stripeAccountId !== payment.payoutStripeAccountIdAtApproval) {
       throw new AppError("The supplier's payout account has changed since approval — reverification is required before release", 409, undefined, "PAYOUT_ACCOUNT_CHANGED");
     }
@@ -963,10 +966,13 @@ export const campaignContributionsService = {
         amount: p.amount, status: p.status, releasedAt: p.releasedAt,
       });
 
-      const supplierKey = `${p.campaign.supplierId}:${p.currency}`;
+      // Non-null: a CampaignSupplierPayment row only ever exists for a
+      // SUPPLIER-fulfilment campaign — see releaseSupplierPayment() above.
+      const supplierId = p.campaign.supplierId!;
+      const supplierKey = `${supplierId}:${p.currency}`;
       const sup = bySupplier.get(supplierKey) ?? {
-        supplierId: p.campaign.supplierId,
-        supplierName: p.campaign.supplier.vendor.storeName,
+        supplierId,
+        supplierName: p.campaign.supplier!.vendor.storeName,
         currency: p.currency, count: 0, totalAmount: 0, totalReleased: 0,
       };
       sup.count += 1;
