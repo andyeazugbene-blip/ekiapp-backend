@@ -348,7 +348,15 @@ describe("Public discovery routes", () => {
   it("GET /api/community-buy/campaigns — public, no auth required", async () => {
     const res = await request(app).get("/api/community-buy/campaigns?country=GB");
     expect(res.status).toBe(200);
-    expect(mockListLive).toHaveBeenCalledWith("GB");
+    // Community Buy Workstream 2: listLive also takes an optional search
+    // term now — undefined here since none was passed on the query string.
+    expect(mockListLive).toHaveBeenCalledWith("GB", undefined);
+  });
+
+  it("GET /api/community-buy/campaigns?q= — passes the search term through", async () => {
+    const res = await request(app).get("/api/community-buy/campaigns?country=GB&q=rice");
+    expect(res.status).toBe(200);
+    expect(mockListLive).toHaveBeenCalledWith("GB", "rice");
   });
 
   it("GET /api/community-buy/campaigns/:id — id parsed correctly, public", async () => {

@@ -73,8 +73,14 @@ async function assertCapacityAvailable(campaign: { maximumShares: number | null;
   }
 }
 
-function assertContributableCampaign(campaign: { pricePerShareMinor: number | null; currency: string; maximumShares: number | null; confirmedShares: number }, quantity: number): asserts campaign is { pricePerShareMinor: number; currency: string; maximumShares: number | null; confirmedShares: number } {
+// country/currency/deadline are nullable on CommunityCampaign (Workstream
+// 2 — a draft may not have chosen them yet), but submit()/publish() never
+// let a campaign reach LIVE without all three set — this assertion is the
+// runtime proof of that guarantee at the one place it actually matters,
+// not a UI-only assumption.
+function assertContributableCampaign(campaign: { pricePerShareMinor: number | null; currency: string | null; maximumShares: number | null; confirmedShares: number }, quantity: number): asserts campaign is { pricePerShareMinor: number; currency: string; maximumShares: number | null; confirmedShares: number } {
   if (!campaign.pricePerShareMinor) throw new AppError("This campaign has no price configured", 409);
+  if (!campaign.currency) throw new AppError("Campaign not found or not live", 404);
 
   // resolveStripeCurrency() falls back to EUR for currencies Stripe doesn't
   // support (e.g. GHS) without converting the amount — submitting it as-is
@@ -176,7 +182,9 @@ export const campaignContributionsService = {
    */
   async pledge(userId: string, campaignId: string, quantity: number, paymentMethodId: string): Promise<PledgeResult> {
     const campaign = await prisma.communityCampaign.findUnique({ where: { id: campaignId } });
-    if (!campaign || campaign.status !== "LIVE") throw new AppError("Campaign not found or not live", 404);
+    if (!campaign || campaign.status !== "LIVE" || !campaign.country || !campaign.deadline) {
+      throw new AppError("Campaign not found or not live", 404);
+    }
     if (new Date() >= campaign.deadline) throw new AppError("This campaign is no longer accepting contributions", 409);
 
     const paymentsEnabled = await marketConfigurationService.isCommunityBuyPaymentsEnabled(campaign.country);
@@ -208,6 +216,9 @@ export const campaignContributionsService = {
     if (campaign.status !== "RESCUE_WINDOW") {
       throw new AppError("A top-up can only be pledged while the campaign is in its rescue window", 409);
     }
+    // Non-null: reaching RESCUE_WINDOW requires having passed submit()'s
+    // full requirement check, which never lets country stay unset.
+    if (!campaign.country) throw new AppError("Campaign is missing its market configuration", 409);
 
     const paymentsEnabled = await marketConfigurationService.isCommunityBuyPaymentsEnabled(campaign.country);
     if (!paymentsEnabled) {
@@ -844,6 +855,10 @@ export const campaignContributionsService = {
       throw new AppError("No contributions have been successfully charged for this campaign yet", 409, undefined, "NOTHING_COLLECTED_YET");
     }
 
+    // Non-null for the same reason as vendor above — a payment record only
+    // exists for a campaign that made it through submit()/publish(), which
+    // never let country stay unset.
+    if (!payment.campaign.country) throw new AppError("Campaign is missing its market configuration", 409);
     const config = await marketConfigurationService.get(payment.campaign.country);
     if (config?.communityBuyFeeBps == null) {
       throw new AppError("This market has no configured Community Buy processing fee — set one before releasing supplier payments", 409, undefined, "FEE_NOT_CONFIGURED");

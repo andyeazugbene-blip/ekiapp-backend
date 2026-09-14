@@ -56,7 +56,8 @@ async function requireVendorId(userId: string): Promise<string> {
 
 export async function listCampaigns(request: Request, response: Response): Promise<void> {
   const country = typeof request.query.country === "string" ? request.query.country : undefined;
-  response.json({ items: await communityCampaignsService.listLive(country) });
+  const q = typeof request.query.q === "string" ? request.query.q : undefined;
+  response.json({ items: await communityCampaignsService.listLive(country, q) });
 }
 
 export async function getCampaign(request: Request, response: Response): Promise<void> {

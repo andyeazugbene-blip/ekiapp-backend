@@ -7,22 +7,111 @@ import { marketConfigurationService } from "./market-configuration.service";
 import { campaignContributionsService } from "./campaign-contributions.service";
 import { recordAudit } from "../../shared/utils/audit";
 
+// Community Buy Workstream 2: only `title` and `country` are hard
+// requirements to start a draft (spec §7 — "any authenticated user can
+// create and save a draft; gates apply only when an action creates
+// supplier, payment or public obligations"). Everything else is optional
+// at creation and filled in incrementally via update(); submit() is the
+// authoritative gate that requires the rest before review.
 export interface CreateCampaignInput {
+  title: string;
+  country: string;
   // Client-corrected flow: supplier is an optional fulfilment choice, never
   // a prerequisite for publication. SUPPLIER requires supplierId; SELF
   // requires it be absent.
-  fulfilmentOwner: "SELF" | "SUPPLIER";
+  fulfilmentOwner?: "SELF" | "SUPPLIER";
   supplierId?: string;
-  title: string;
   description?: string;
-  country: string;
-  currency: string;
-  minimumShares: number;
-  goalShares: number;
-  maximumShares: number;
-  pricePerShareMinor: number;
-  deadline: string;
+  currency?: string;
+  minimumShares?: number;
+  goalShares?: number;
+  maximumShares?: number;
+  pricePerShareMinor?: number;
+  deadline?: string;
   rescueDurationMinutes?: number;
+  // Product step (spec §7 step 1).
+  images?: string[];
+  unit?: string;
+  quantityPerOrder?: number;
+  qualityNotes?: string;
+  // Delivery step (spec §7 step 5) — organiser intent only, no address data.
+  deliveryPreference?: "COLLECTION" | "DELIVERY";
+}
+
+type SupplyRoute = {
+  fulfilmentOwner: "SELF" | "SUPPLIER";
+  supplierId: string | null;
+  supplier: (Awaited<ReturnType<typeof prisma.supplierProfile.findUnique>> & { vendor: { userId: string } }) | null;
+};
+
+/** Shared by create()/update() — every rule here already existed in create() verbatim; only the "must be provided" requirement moved to submit(). */
+async function resolveSupplyRoute(
+  fulfilmentOwner: "SELF" | "SUPPLIER" | undefined,
+  supplierId: string | null | undefined,
+  country: string | null | undefined,
+): Promise<SupplyRoute | null> {
+  if (fulfilmentOwner === undefined) {
+    if (supplierId) throw new AppError("supplierId requires fulfilmentOwner to be set to SUPPLIER", 400);
+    return null;
+  }
+  if (fulfilmentOwner !== "SELF" && fulfilmentOwner !== "SUPPLIER") {
+    throw new AppError("fulfilmentOwner must be SELF or SUPPLIER", 400);
+  }
+  if (fulfilmentOwner === "SELF") {
+    if (supplierId) throw new AppError("supplierId must not be set when self-fulfilling", 400);
+    return { fulfilmentOwner: "SELF", supplierId: null, supplier: null };
+  }
+  if (!supplierId) throw new AppError("supplierId is required when choosing a supplier", 400);
+  const supplier = await prisma.supplierProfile.findUnique({ where: { id: supplierId }, include: { vendor: { select: { userId: true } } } });
+  if (!supplier || !supplier.isVerified) throw new AppError("Supplier not found or not verified", 404);
+  if (supplier.isRestricted) throw new AppError("This supplier is currently restricted and cannot take on new campaigns", 403);
+  if (country && supplier.country !== country) {
+    // spec §8.2: campaigns operate as a local-market feature only — no
+    // cross-border organiser/supplier pairing in this version.
+    throw new AppError("Supplier must be based in the same market as the campaign", 400);
+  }
+  return { fulfilmentOwner: "SUPPLIER", supplierId, supplier };
+}
+
+/** Every numeric rule create() already enforced, made conditional on the field actually being provided so a partial draft save only validates what it touches. */
+function validateSharesAndPricing(fields: { minimumShares?: number; goalShares?: number; maximumShares?: number; pricePerShareMinor?: number }): void {
+  const { minimumShares, goalShares, maximumShares, pricePerShareMinor } = fields;
+  if (minimumShares !== undefined && (!Number.isInteger(minimumShares) || minimumShares < 1)) {
+    throw new AppError("Minimum shares must be at least 1", 400);
+  }
+  if (goalShares !== undefined) {
+    if (!Number.isInteger(goalShares) || goalShares < 1) throw new AppError("Campaign goal must be at least 1", 400);
+    if (minimumShares !== undefined && goalShares < minimumShares) throw new AppError("Campaign goal must be at least the minimum shares", 400);
+  }
+  if (maximumShares !== undefined) {
+    if (!Number.isInteger(maximumShares) || maximumShares < 1) throw new AppError("Maximum capacity must be at least 1", 400);
+    if (goalShares !== undefined && maximumShares < goalShares) throw new AppError("Maximum capacity must be at least the campaign goal", 400);
+  }
+  if (pricePerShareMinor !== undefined && (!Number.isInteger(pricePerShareMinor) || pricePerShareMinor <= 0)) {
+    throw new AppError("Price per share must be positive", 400);
+  }
+}
+
+function validateDeadline(deadline: string | undefined): Date | undefined {
+  if (deadline === undefined) return undefined;
+  const parsed = new Date(deadline);
+  if (Number.isNaN(parsed.getTime()) || parsed <= new Date()) {
+    throw new AppError("Deadline must be a valid future date", 400);
+  }
+  return parsed;
+}
+
+function validateQuantityPerOrder(quantityPerOrder: number | undefined): void {
+  if (quantityPerOrder !== undefined && (!Number.isInteger(quantityPerOrder) || quantityPerOrder < 1)) {
+    throw new AppError("Quantity per order must be at least 1", 400);
+  }
+}
+
+/** A raw JSON body isn't TS-checked at runtime — reject anything outside the real enum with a clean 400 instead of letting an invalid value reach Prisma as a DB-level enum error. */
+function validateDeliveryPreference(deliveryPreference: string | undefined): void {
+  if (deliveryPreference !== undefined && deliveryPreference !== "COLLECTION" && deliveryPreference !== "DELIVERY") {
+    throw new AppError("deliveryPreference must be COLLECTION or DELIVERY", 400);
+  }
 }
 
 const MAX_EXTENSIONS = 1;
@@ -85,70 +174,59 @@ async function notifyCampaign(
 
 export const communityCampaignsService = {
   async create(userId: string, input: CreateCampaignInput) {
-    const organiser = await prisma.organiserProfile.findUnique({ where: { userId } });
-    if (!organiser || !organiser.isVerified) throw new AppError("Verified organiser profile required", 403);
+    if (!input.title?.trim()) throw new AppError("Title is required", 400);
+    if (!input.country) throw new AppError("Country is required", 400);
+
+    // Community Buy Workstream 2: organising is available to every
+    // authenticated user (WS1 canOrganise:true) — an OrganiserProfile is
+    // created on first draft, the same lightweight/instant/non-admin-gated
+    // record applyAsOrganiser() already produces, isVerified:false until
+    // admin review. Verification is enforced at submit(), not here.
+    let organiser = await prisma.organiserProfile.findUnique({ where: { userId } });
+    if (!organiser) {
+      const applicationConfig = await marketConfigurationService.get(input.country);
+      if (!applicationConfig?.organiserApplicationsEnabled) {
+        throw new AppError("Organiser applications are not open in this market yet", 403);
+      }
+      organiser = await prisma.organiserProfile.create({ data: { userId, country: input.country } });
+    }
     if (organiser.isRestricted) throw new AppError("Your organiser account is currently restricted from creating new campaigns", 403);
 
     const config = await marketConfigurationService.get(input.country);
     if (!config?.communityBuyEnabled) throw new AppError("Community Buy is not available in this market yet", 403);
 
-    if (input.fulfilmentOwner !== "SELF" && input.fulfilmentOwner !== "SUPPLIER") {
-      throw new AppError("fulfilmentOwner must be SELF or SUPPLIER", 400);
-    }
-
-    // Client-corrected flow: choosing a supplier is optional. SELF means the
-    // organiser fulfils it themselves — no supplier, no invitation, no
-    // eligibility checks to run. SUPPLIER keeps every existing eligibility
-    // check exactly as before.
-    let supplier: (Awaited<ReturnType<typeof prisma.supplierProfile.findUnique>> & { vendor: { userId: string } }) | null = null;
-    if (input.fulfilmentOwner === "SUPPLIER") {
-      if (!input.supplierId) throw new AppError("supplierId is required when choosing a supplier", 400);
-      supplier = await prisma.supplierProfile.findUnique({ where: { id: input.supplierId }, include: { vendor: { select: { userId: true } } } });
-      if (!supplier || !supplier.isVerified) throw new AppError("Supplier not found or not verified", 404);
-      if (supplier.isRestricted) throw new AppError("This supplier is currently restricted and cannot take on new campaigns", 403);
-      if (supplier.country !== input.country) {
-        // spec §8.2: campaigns operate as a local-market feature only — no
-        // cross-border organiser/supplier pairing in this version.
-        throw new AppError("Supplier must be based in the same market as the campaign", 400);
-      }
-    } else if (input.supplierId) {
-      throw new AppError("supplierId must not be set when self-fulfilling", 400);
-    }
-
-    // Flexible-fulfilment quantity model validation — doc §5.
-    if (!Number.isInteger(input.minimumShares) || input.minimumShares < 1) {
-      throw new AppError("Minimum shares must be at least 1", 400);
-    }
-    if (!Number.isInteger(input.goalShares) || input.goalShares < input.minimumShares) {
-      throw new AppError("Campaign goal must be at least the minimum shares", 400);
-    }
-    if (!Number.isInteger(input.maximumShares) || input.maximumShares < input.goalShares) {
-      throw new AppError("Maximum capacity must be at least the campaign goal", 400);
-    }
-    if (!Number.isInteger(input.pricePerShareMinor) || input.pricePerShareMinor <= 0) {
-      throw new AppError("Price per share must be positive", 400);
-    }
-    const deadline = new Date(input.deadline);
-    if (Number.isNaN(deadline.getTime()) || deadline <= new Date()) {
-      throw new AppError("Deadline must be a valid future date", 400);
-    }
+    // Client-corrected flow: choosing a supplier is optional, and — new
+    // this workstream — so is choosing a supply route at all while still
+    // drafting. Every eligibility rule below is unchanged from before;
+    // only "must be provided" moved to submit().
+    const route = await resolveSupplyRoute(input.fulfilmentOwner, input.supplierId, input.country);
+    validateSharesAndPricing(input);
+    validateQuantityPerOrder(input.quantityPerOrder);
+    validateDeliveryPreference(input.deliveryPreference);
+    const deadline = validateDeadline(input.deadline);
 
     const campaign = await prisma.communityCampaign.create({
       data: {
         organiserId: organiser.id,
-        fulfilmentOwner: input.fulfilmentOwner,
-        supplierId: input.fulfilmentOwner === "SUPPLIER" ? input.supplierId : null,
-        title: input.title,
+        fulfilmentOwner: route?.fulfilmentOwner ?? "SELF",
+        supplierId: route?.supplierId ?? null,
+        title: input.title.trim(),
         description: input.description,
         country: input.country,
         currency: input.currency,
         // targetAmount kept in sync with goalShares × price for anything
-        // still reading the amount-based field during the UI migration.
-        targetAmount: input.goalShares * input.pricePerShareMinor,
+        // still reading the amount-based field during the UI migration —
+        // 0 (not a fabricated guess) until both are known.
+        targetAmount: input.goalShares && input.pricePerShareMinor ? input.goalShares * input.pricePerShareMinor : 0,
         minimumShares: input.minimumShares,
         goalShares: input.goalShares,
         maximumShares: input.maximumShares,
         pricePerShareMinor: input.pricePerShareMinor,
+        images: input.images ?? [],
+        unit: input.unit,
+        quantityPerOrder: input.quantityPerOrder,
+        qualityNotes: input.qualityNotes,
+        deliveryPreference: input.deliveryPreference ?? "COLLECTION",
         rescueDurationMinutes: input.rescueDurationMinutes ?? 2880,
         deadline,
         status: "DRAFT",
@@ -158,14 +236,14 @@ export const communityCampaignsService = {
     // actually comes into existence (supplierId assigned, supplierCommitted:
     // false), not merely because a campaign object exists. Self-fulfilled
     // campaigns have no supplier, so there is nothing to invite.
-    if (input.fulfilmentOwner === "SUPPLIER" && supplier) {
+    if (route?.fulfilmentOwner === "SUPPLIER" && route.supplier) {
       await notifyCampaign(
-        supplier.vendor.userId,
+        route.supplier.vendor.userId,
         "supplier_invited",
         "New Community Buy invitation",
-        `An organiser wants you to supply "${campaign.title}" — ${input.minimumShares} to ${input.maximumShares} shares. Review and accept or decline.`,
+        `An organiser wants you to supply "${campaign.title}"${input.minimumShares && input.maximumShares ? ` — ${input.minimumShares} to ${input.maximumShares} shares` : ""}. Review and accept or decline.`,
         campaign.id,
-        `supplier_invited:${campaign.id}:${supplier.id}`,
+        `supplier_invited:${campaign.id}:${route.supplier.id}`,
       );
     }
     return campaign;
@@ -176,6 +254,11 @@ export const communityCampaignsService = {
 
     const financialFieldsTouched = input.minimumShares !== undefined || input.goalShares !== undefined
       || input.maximumShares !== undefined || input.pricePerShareMinor !== undefined || input.deadline !== undefined;
+    // Community Buy Workstream 2: the wizard's Supply step must stay
+    // editable on a draft, same as every other step — but only while
+    // still DRAFT/CHANGES_REQUIRED; a LIVE campaign's supplier can only
+    // change via reassignSupplier(), which also resets commitment state.
+    const supplyRouteTouched = input.fulfilmentOwner !== undefined || input.supplierId !== undefined;
 
     // spec §8.10 / doc §Screen 102: an organiser cannot edit financial
     // terms after contributions begin — termsLockedAt is set on the first
@@ -197,11 +280,29 @@ export const communityCampaignsService = {
         409,
       );
     }
-    return prisma.communityCampaign.update({
+    if (supplyRouteTouched && !isDraftLike) {
+      throw new AppError("The supply route can only be changed while a campaign is in draft — reassign the supplier once live", 409);
+    }
+
+    const route = supplyRouteTouched
+      ? await resolveSupplyRoute(
+          input.fulfilmentOwner ?? (campaign.supplierId ? "SUPPLIER" : "SELF"),
+          input.supplierId !== undefined ? input.supplierId : campaign.supplierId,
+          input.country !== undefined ? input.country : campaign.country,
+        )
+      : null;
+    validateSharesAndPricing(input);
+    validateQuantityPerOrder(input.quantityPerOrder);
+    validateDeliveryPreference(input.deliveryPreference);
+    const deadline = validateDeadline(input.deadline);
+
+    const updated = await prisma.communityCampaign.update({
       where: { id: campaignId },
       data: {
         ...(input.title !== undefined && { title: input.title }),
         ...(input.description !== undefined && { description: input.description }),
+        ...(input.country !== undefined && { country: input.country }),
+        ...(input.currency !== undefined && { currency: input.currency }),
         ...(input.minimumShares !== undefined && { minimumShares: input.minimumShares }),
         ...(input.goalShares !== undefined && { goalShares: input.goalShares }),
         ...(input.maximumShares !== undefined && { maximumShares: input.maximumShares }),
@@ -209,9 +310,31 @@ export const communityCampaignsService = {
           pricePerShareMinor: input.pricePerShareMinor,
           targetAmount: (input.goalShares ?? campaign.goalShares ?? 0) * input.pricePerShareMinor,
         }),
-        ...(input.deadline !== undefined && { deadline: new Date(input.deadline) }),
+        ...(deadline !== undefined && { deadline }),
+        ...(input.images !== undefined && { images: input.images }),
+        ...(input.unit !== undefined && { unit: input.unit }),
+        ...(input.quantityPerOrder !== undefined && { quantityPerOrder: input.quantityPerOrder }),
+        ...(input.qualityNotes !== undefined && { qualityNotes: input.qualityNotes }),
+        ...(input.deliveryPreference !== undefined && { deliveryPreference: input.deliveryPreference }),
+        ...(route && { fulfilmentOwner: route.fulfilmentOwner, supplierId: route.supplierId }),
       },
     });
+
+    if (route?.fulfilmentOwner === "SUPPLIER" && route.supplier) {
+      // Same real invitation as create()/reassignSupplier() — deduped by
+      // notificationsService's dedupeKey, so re-saving the same supplier
+      // choice on a later draft edit is a safe no-op, not a repeat spam.
+      await notifyCampaign(
+        route.supplier.vendor.userId,
+        "supplier_invited",
+        "New Community Buy invitation",
+        `An organiser wants you to supply "${updated.title}"${updated.minimumShares && updated.maximumShares ? ` — ${updated.minimumShares} to ${updated.maximumShares} shares` : ""}. Review and accept or decline.`,
+        campaignId,
+        `supplier_invited:${campaignId}:${route.supplier.id}`,
+      );
+    }
+
+    return updated;
   },
 
   /**
@@ -345,11 +468,54 @@ export const communityCampaignsService = {
   // never a publication gate. A campaign can be submitted for review — and
   // go on to be approved, published, and LIVE — regardless of whether a
   // selected supplier has responded yet, or whether one was selected at all.
+  // Community Buy Workstream 2: this is now the authoritative gate that
+  // create()/update() no longer are — organiser verification and every
+  // required campaign field are checked here, once, right before the
+  // action that actually creates a public/admin obligation. A draft that
+  // fails this never gets deleted or invalidated — it stays exactly as
+  // saved, editable, with the caller told precisely what's missing.
   async submit(userId: string, campaignId: string) {
     const campaign = await this.requireOwnedByOrganiser(userId, campaignId);
     if (campaign.status !== "DRAFT" && campaign.status !== "CHANGES_REQUIRED") {
       throw new AppError("Only a draft campaign can be submitted for review", 409);
     }
+
+    const organiser = await prisma.organiserProfile.findUnique({ where: { id: campaign.organiserId } });
+    const missing: string[] = [];
+
+    if (!organiser) missing.push("organiser_profile");
+    else {
+      if (organiser.isRestricted) missing.push("organiser_restricted");
+      if (!organiser.isVerified) missing.push("organiser_verification");
+    }
+    if (!campaign.country) missing.push("country");
+    if (!campaign.currency) missing.push("currency");
+    if (!campaign.deadline || campaign.deadline <= new Date()) missing.push("deadline");
+    if (!campaign.minimumShares || campaign.minimumShares < 1) missing.push("minimumShares");
+    if (!campaign.goalShares || (campaign.minimumShares != null && campaign.goalShares < campaign.minimumShares)) missing.push("goalShares");
+    if (!campaign.maximumShares || (campaign.goalShares != null && campaign.maximumShares < campaign.goalShares)) missing.push("maximumShares");
+    if (!campaign.pricePerShareMinor || campaign.pricePerShareMinor <= 0) missing.push("pricePerShareMinor");
+    if (!campaign.unit) missing.push("unit");
+    if (!campaign.quantityPerOrder || campaign.quantityPerOrder < 1) missing.push("quantityPerOrder");
+
+    if (campaign.fulfilmentOwner === "SUPPLIER") {
+      if (!campaign.supplierId) {
+        missing.push("supplierId");
+      } else {
+        const supplier = await prisma.supplierProfile.findUnique({ where: { id: campaign.supplierId } });
+        if (!supplier || !supplier.isVerified || supplier.isRestricted) missing.push("supplier_eligibility");
+      }
+    }
+
+    if (campaign.country) {
+      const config = await marketConfigurationService.get(campaign.country);
+      if (!config?.communityBuyEnabled) missing.push("market_not_enabled");
+    }
+
+    if (missing.length > 0) {
+      throw new AppError("This campaign is not ready to submit for review.", 400, { missing }, "SUBMIT_REQUIREMENTS_NOT_MET");
+    }
+
     return prisma.communityCampaign.update({ where: { id: campaignId }, data: { status: "UNDER_REVIEW" } });
   },
 
@@ -549,14 +715,31 @@ export const communityCampaignsService = {
   async publish(userId: string, campaignId: string) {
     const campaign = await this.requireOwnedByOrganiser(userId, campaignId);
     if (campaign.status !== "APPROVED") throw new AppError("Campaign must be approved before it can be published", 409);
+    // Non-null: reaching APPROVED requires having passed submit()'s full
+    // requirement check, which never lets country stay unset.
+    if (!campaign.country) throw new AppError("Campaign is missing its market configuration", 409);
     const config = await marketConfigurationService.get(campaign.country);
     if (!config?.communityBuyEnabled) throw new AppError("Community Buy is not available in this market yet", 403);
     return prisma.communityCampaign.update({ where: { id: campaignId }, data: { status: "LIVE", publishedAt: new Date() } });
   },
 
-  async listLive(country?: string) {
+  // Community Buy Workstream 2 — participant discovery search (spec Phase
+  // 4). Real DB query against title/description; no invented category
+  // field (none exists on the model, and Figma access is still blocked so
+  // the exact taxonomy the client wants isn't confirmed).
+  async listLive(country?: string, q?: string) {
+    const search = q?.trim();
     return prisma.communityCampaign.findMany({
-      where: { status: "LIVE", ...(country && { country }) },
+      where: {
+        status: "LIVE",
+        ...(country && { country }),
+        ...(search && {
+          OR: [
+            { title: { contains: search, mode: "insensitive" } },
+            { description: { contains: search, mode: "insensitive" } },
+          ],
+        }),
+      },
       include: { supplier: { include: { vendor: { select: { storeName: true } } } } },
       orderBy: { deadline: "asc" },
     });
@@ -660,9 +843,10 @@ export const communityCampaignsService = {
   },
 
   /** One supplier order per campaign, using the actual final confirmedShares — never the goal — doc §11. Self-fulfilled campaigns have no supplier, so no order/payment/fulfilment record applies — the organiser handles it themselves outside this tracked workflow. */
-  async createSupplierOrder(campaign: { id: string; supplierId: string | null; title: string; currency: string; confirmedShares: number; pricePerShareMinor: number | null }): Promise<void> {
+  async createSupplierOrder(campaign: { id: string; supplierId: string | null; title: string; currency: string | null; confirmedShares: number; pricePerShareMinor: number | null }): Promise<void> {
     if (!campaign.supplierId) return;
     if (!campaign.pricePerShareMinor) return;
+    if (!campaign.currency) return;
     const existing = await prisma.campaignSupplierPayment.findUnique({ where: { campaignId: campaign.id } });
     if (existing) return; // idempotent — never create a second supplier order/payment record.
 

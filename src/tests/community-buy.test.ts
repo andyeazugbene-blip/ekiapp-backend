@@ -2144,7 +2144,15 @@ describe("Client correction — supplier is optional, never a publication gate",
     expect(m.supplierProfile.findUnique).not.toHaveBeenCalled();
     expect(notificationsService.enqueue).not.toHaveBeenCalled(); // no supplier to invite
 
-    m.communityCampaign.findUnique.mockResolvedValue({ id: "camp-3", organiserId: "org-1", status: "DRAFT", fulfilmentOwner: "SELF", supplierId: null } as never);
+    // Community Buy Workstream 2: submit() is now the authoritative gate
+    // that requires the full campaign shape (Product/Pricing/Dates fields)
+    // — this mock represents a draft that has completed every wizard step.
+    m.communityCampaign.findUnique.mockResolvedValue({
+      id: "camp-3", organiserId: "org-1", status: "DRAFT", fulfilmentOwner: "SELF", supplierId: null,
+      country: "GB", currency: "GBP", deadline: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+      minimumShares: 5, goalShares: 10, maximumShares: 15, pricePerShareMinor: 1000,
+      unit: "kg", quantityPerOrder: 1,
+    } as never);
     m.communityCampaign.update.mockResolvedValue({ id: "camp-3", status: "UNDER_REVIEW" } as never);
 
     const submitted = await communityCampaignsService.submit("organiser-user-1", "camp-3");
@@ -2153,8 +2161,15 @@ describe("Client correction — supplier is optional, never a publication gate",
 
   // 4. supplier-selected campaign publishes before acceptance
   it("4. submit() moves a SUPPLIER-mode campaign to UNDER_REVIEW even though supplierCommitted is still false", async () => {
-    m.communityCampaign.findUnique.mockResolvedValue({ id: "camp-4", organiserId: "org-1", status: "DRAFT", fulfilmentOwner: "SUPPLIER", supplierId: "sup-1", supplierCommitted: false } as never);
-    m.organiserProfile.findUnique.mockResolvedValue({ id: "org-1" } as never);
+    m.communityCampaign.findUnique.mockResolvedValue({
+      id: "camp-4", organiserId: "org-1", status: "DRAFT", fulfilmentOwner: "SUPPLIER", supplierId: "sup-1", supplierCommitted: false,
+      country: "GB", currency: "GBP", deadline: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
+      minimumShares: 5, goalShares: 10, maximumShares: 15, pricePerShareMinor: 1000,
+      unit: "kg", quantityPerOrder: 1,
+    } as never);
+    m.organiserProfile.findUnique.mockResolvedValue({ id: "org-1", isVerified: true, isRestricted: false } as never);
+    m.supplierProfile.findUnique.mockResolvedValue({ id: "sup-1", isVerified: true, isRestricted: false } as never);
+    m.marketConfiguration.findUnique.mockResolvedValue({ countryCode: "GB", communityBuyEnabled: true } as never);
     m.communityCampaign.update.mockResolvedValue({ id: "camp-4", status: "UNDER_REVIEW" } as never);
 
     const result = await communityCampaignsService.submit("organiser-user-1", "camp-4");

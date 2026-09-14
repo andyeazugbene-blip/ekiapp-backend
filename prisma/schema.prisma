@@ -2144,6 +2144,15 @@ enum CampaignFulfilmentOwner {
   SUPPLIER
 }
 
+// Community Buy Workstream 2 — organiser's stated delivery intent at
+// creation time (spec §7 step 5). Collection-point is the safe default
+// (spec §14.2). No address/courier data lives here — that's
+// DeliveryReference, Workstream 5.
+enum CampaignDeliveryPreference {
+  COLLECTION
+  DELIVERY
+}
+
 enum CampaignStatus {
   DRAFT
   UNDER_REVIEW
@@ -2256,10 +2265,17 @@ model CommunityCampaign {
   fulfilmentOwner       CampaignFulfilmentOwner    @default(SUPPLIER)
   title                 String
   description           String?
-  country               String
-  currency              String
+  // Community Buy Workstream 2: loosened from required to nullable so a
+  // draft can exist before the organiser has decided these — real "not yet
+  // chosen" (null), never a fabricated placeholder value. submit() is the
+  // authoritative gate that requires all three before review (spec §7 —
+  // "any authenticated user can create a draft; gates apply only when an
+  // action creates supplier, payment or public obligations"). Existing
+  // rows are unaffected; this is a pure nullability loosening.
+  country               String?
+  currency              String?
   targetAmount          Int
-  deadline              DateTime
+  deadline              DateTime?
   status                CampaignStatus             @default(DRAFT)
   reviewNotes           String?
   reviewedById          String?
@@ -2276,6 +2292,18 @@ model CommunityCampaign {
   goalShares            Int?
   maximumShares         Int?
   pricePerShareMinor    Int?
+  // Community Buy Workstream 2 — Product step (spec §7 step 1). Additive;
+  // pricePerShareMinor above stays the sole authoritative price, never
+  // reinterpreted by these.
+  images                String[]                   @default([])
+  unit                  String?
+  quantityPerOrder      Int?
+  qualityNotes          String?
+  // Community Buy Workstream 2 — Delivery step (spec §7 step 5). This is
+  // only the organiser's stated intent at creation time — no address,
+  // courier token, or DeliveryReference (that's Workstream 5's privacy
+  // infrastructure, deliberately untouched here).
+  deliveryPreference    CampaignDeliveryPreference @default(COLLECTION)
   confirmedShares       Int                        @default(0)
   fundingOutcome        FundingOutcome             @default(PENDING)
   supplierCommitted     Boolean                    @default(false)
