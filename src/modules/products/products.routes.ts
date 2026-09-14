@@ -1,6 +1,7 @@
 import { Router } from "express";
 
-import { authenticate, requireRole } from "../../middlewares/authenticate";
+import { authenticate } from "../../middlewares/authenticate";
+import { requireVendorProfile } from "../../middlewares/require-capability";
 import { asyncHandler } from "../../shared/utils/async-handler";
 import {
   createProduct,
@@ -15,10 +16,10 @@ import {
 export const productsRouter = Router();
 
 productsRouter.get("/", asyncHandler(listProducts));
-productsRouter.get("/me", authenticate, requireRole("VENDOR"), asyncHandler(listMyProducts));
-productsRouter.get("/me/:id", authenticate, requireRole("VENDOR"), asyncHandler(getMyProduct));
+productsRouter.get("/me", authenticate, requireVendorProfile(), asyncHandler(listMyProducts));
+productsRouter.get("/me/:id", authenticate, requireVendorProfile(), asyncHandler(getMyProduct));
 productsRouter.get("/:id", asyncHandler(getProduct));
 
-productsRouter.post("/", authenticate, requireRole("VENDOR"), asyncHandler(createProduct));
-productsRouter.patch("/:id", authenticate, requireRole("VENDOR"), asyncHandler(updateProduct));
-productsRouter.delete("/:id", authenticate, requireRole("VENDOR"), asyncHandler(disableProduct));
+productsRouter.post("/", authenticate, requireVendorProfile(), asyncHandler(createProduct));
+productsRouter.patch("/:id", authenticate, requireVendorProfile(), asyncHandler(updateProduct));
+productsRouter.delete("/:id", authenticate, requireVendorProfile(), asyncHandler(disableProduct));

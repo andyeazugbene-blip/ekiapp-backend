@@ -55,6 +55,11 @@ type AuthUserRecord = {
     currency: string;
     verificationStatus: string;
   } | null;
+  supplierAccount?: {
+    supplierState: string;
+    chargesEnabled: boolean;
+    payoutsEnabled: boolean;
+  } | null;
 };
 
 interface AuthRequestMeta {
@@ -104,6 +109,28 @@ async function writeAuditLogSafe(data: {
   await auditModel.create({ data }).catch(() => undefined);
 }
 
+// Community Buy Workstream 1 — see AuthCapabilities' own doc comment for
+// why canSelfSupply is independent of canSupply.
+function deriveCapabilities(user: AuthUserRecord): AuthUser["capabilities"] {
+  const canSupply = user.supplierAccount?.supplierState === "APPROVED";
+  return {
+    canBuy: true,
+    canOrganise: true,
+    canSell: user.vendor?.verificationStatus === "VERIFIED",
+    canSupply,
+    canSelfSupply: true,
+    canReceiveSupplierPayouts: canSupply
+      && Boolean(user.supplierAccount?.chargesEnabled)
+      && Boolean(user.supplierAccount?.payoutsEnabled),
+  };
+}
+
+function deriveLastDestination(user: AuthUserRecord): AuthUser["lastDestination"] {
+  if (user.supplierAccount?.supplierState === "APPROVED") return "SUPPLY";
+  if (user.vendor) return "SELL";
+  return "BUY";
+}
+
 export function toAuthUser(user: AuthUserRecord): AuthUser {
   const authUser: AuthUser = {
     id: user.id,
@@ -117,6 +144,8 @@ export function toAuthUser(user: AuthUserRecord): AuthUser {
     hasVendor: user.vendor !== null && user.vendor !== undefined,
     trustScore: user.trustScore,
     createdAt: user.createdAt,
+    capabilities: deriveCapabilities(user),
+    lastDestination: deriveLastDestination(user),
   };
 
   if (user.vendor) {
@@ -180,7 +209,7 @@ export const authService = {
     });
     const registeredUser = await prisma.user.findUnique({
       where: { id: user.id },
-      include: { vendor: true },
+      include: { vendor: true, supplierAccount: { select: { supplierState: true, chargesEnabled: true, payoutsEnabled: true } } },
     });
 
     // Send welcome email (non-blocking)
@@ -219,7 +248,7 @@ export const authService = {
   async login(input: LoginInput, meta?: AuthRequestMeta): Promise<{ user: AuthUser; token: string }> {
     const user = await prisma.user.findUnique({
       where: { email: input.email },
-      include: { vendor: true },
+      include: { vendor: true, supplierAccount: { select: { supplierState: true, chargesEnabled: true, payoutsEnabled: true } } },
     });
 
     // Do not reveal whether email exists
@@ -318,7 +347,7 @@ export const authService = {
   async getCurrentUser(userId: string): Promise<AuthUser> {
     const user = await prisma.user.findUnique({
       where: { id: userId },
-      include: { vendor: true },
+      include: { vendor: true, supplierAccount: { select: { supplierState: true, chargesEnabled: true, payoutsEnabled: true } } },
     });
     if (!user) {
       throw new AppError("User not found", 404);
@@ -341,7 +370,7 @@ export const authService = {
       updated = await prisma.user.update({
         where: { id: userId },
         data: input,
-        include: { vendor: true },
+        include: { vendor: true, supplierAccount: { select: { supplierState: true, chargesEnabled: true, payoutsEnabled: true } } },
       });
     } catch (error) {
       if (isUniqueViolation(error, "phone")) {
@@ -495,7 +524,7 @@ export const authService = {
   async switchRole(userId: string): Promise<{ user: AuthUser; token: string }> {
     const user = await prisma.user.findUnique({
       where: { id: userId },
-      include: { vendor: true },
+      include: { vendor: true, supplierAccount: { select: { supplierState: true, chargesEnabled: true, payoutsEnabled: true } } },
     });
 
     if (!user) {
@@ -514,7 +543,7 @@ export const authService = {
         role: newRole,
         tokenVersion: { increment: 1 },
       },
-      include: { vendor: true },
+      include: { vendor: true, supplierAccount: { select: { supplierState: true, chargesEnabled: true, payoutsEnabled: true } } },
     });
 
     return {

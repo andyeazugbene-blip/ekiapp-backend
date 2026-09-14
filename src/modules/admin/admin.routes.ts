@@ -156,6 +156,9 @@ import { getAdminAutomationSummary } from "../automation/automation.controller";
 import {
   adminApproveCampaign,
   adminApproveExtension,
+  adminApproveSupplierAccount,
+  adminRestrictSupplierAccount,
+  adminUnrestrictSupplierAccount,
   adminCancelCampaign,
   adminListCampaignContributions,
   adminGetCampaignLedger,
@@ -335,6 +338,12 @@ adminRouter.post("/community-buy/organisers/:id/unrestrict", asyncHandler(requir
 adminRouter.get("/community-buy/suppliers", asyncHandler(requireAdminPermission("community_buy.read")), asyncHandler(adminListVerifiedSuppliers));
 adminRouter.post("/community-buy/suppliers/:id/restrict", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(adminRestrictSupplier));
 adminRouter.post("/community-buy/suppliers/:id/unrestrict", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(adminUnrestrictSupplier));
+// Community Buy Workstream 1 — admin actions on the new, no-Vendor-required
+// SupplierAccount (distinct from /community-buy/suppliers above, which
+// still operates on the legacy Vendor-keyed SupplierProfile).
+adminRouter.post("/community-buy/supplier-accounts/:id/approve", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(adminApproveSupplierAccount));
+adminRouter.post("/community-buy/supplier-accounts/:id/restrict", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(adminRestrictSupplierAccount));
+adminRouter.post("/community-buy/supplier-accounts/:id/unrestrict", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(adminUnrestrictSupplierAccount));
 adminRouter.get("/community-buy/support-cases", asyncHandler(requireAdminPermission("community_buy.read")), asyncHandler(adminListSupportCases));
 adminRouter.get("/community-buy/support-cases/:id", asyncHandler(requireAdminPermission("community_buy.read")), asyncHandler(adminGetSupportCase));
 adminRouter.patch("/community-buy/support-cases/:id", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(adminUpdateSupportCase));

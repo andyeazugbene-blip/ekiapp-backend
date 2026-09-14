@@ -17,6 +17,11 @@ vi.mock("../lib/prisma", () => ({
     campaignFulfilment: { upsert: vi.fn(), findUnique: vi.fn(), update: vi.fn() },
     organiserProfile: { findUnique: vi.fn(), update: vi.fn() },
     supplierProfile: { findUnique: vi.fn(), findMany: vi.fn(), update: vi.fn() },
+    // Community Buy Workstream 1: verify/restrict/unrestrictSupplier now
+    // call syncSupplierAccountForProfile, which reads the linked vendor via
+    // supplierProfile.findUnique's own `vendor` select (already mocked
+    // below per-test) and writes here.
+    supplierAccount: { findUnique: vi.fn(), upsert: vi.fn() },
     user: { findUnique: vi.fn() },
     marketConfiguration: { findUnique: vi.fn(), findMany: vi.fn(), count: vi.fn(), upsert: vi.fn() },
     auditLog: { create: vi.fn() },
@@ -1659,13 +1664,44 @@ describe("Community Buy risk controls — restrict/unrestrict organiser and supp
   });
 
   it("organiserSupplierService.restrictSupplier / unrestrictSupplier mirror the organiser behavior", async () => {
+    // Community Buy Workstream 1: restrict/unrestrictSupplier now also
+    // call syncSupplierAccountForProfile(id), which re-fetches the profile
+    // (with its linked vendor) to keep SupplierAccount in sync — set up
+    // that read explicitly rather than relying on another test's leftover
+    // mock state.
+    m.supplierProfile.findUnique.mockResolvedValue({
+      id: "sup-1",
+      isVerified: true,
+      isRestricted: true,
+      restrictedReason: "quality complaints",
+      verifiedAt: new Date(),
+      country: "GB",
+      vendor: { userId: "supplier-user-1", stripeAccountId: "acct_1", stripeChargesEnabled: true, stripePayoutsEnabled: true },
+    } as never);
     m.supplierProfile.update.mockResolvedValueOnce({ id: "sup-1", isRestricted: true } as never);
     await organiserSupplierService.restrictSupplier("sup-1", "quality complaints");
     expect(m.supplierProfile.update).toHaveBeenCalledWith({ where: { id: "sup-1" }, data: { isRestricted: true, restrictedReason: "quality complaints" } });
+    expect(m.supplierAccount.upsert).toHaveBeenCalledWith(expect.objectContaining({
+      where: { userId: "supplier-user-1" },
+      update: expect.objectContaining({ supplierState: "RESTRICTED" }),
+    }));
 
+    m.supplierProfile.findUnique.mockResolvedValue({
+      id: "sup-1",
+      isVerified: true,
+      isRestricted: false,
+      restrictedReason: null,
+      verifiedAt: new Date(),
+      country: "GB",
+      vendor: { userId: "supplier-user-1", stripeAccountId: "acct_1", stripeChargesEnabled: true, stripePayoutsEnabled: true },
+    } as never);
     m.supplierProfile.update.mockResolvedValueOnce({ id: "sup-1", isRestricted: false } as never);
     await organiserSupplierService.unrestrictSupplier("sup-1");
     expect(m.supplierProfile.update).toHaveBeenCalledWith({ where: { id: "sup-1" }, data: { isRestricted: false, restrictedReason: null } });
+    expect(m.supplierAccount.upsert).toHaveBeenCalledWith(expect.objectContaining({
+      where: { userId: "supplier-user-1" },
+      update: expect.objectContaining({ supplierState: "APPROVED" }),
+    }));
   });
 
   it("create() rejects a restricted organiser even though they're verified", async () => {

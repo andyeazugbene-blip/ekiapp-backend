@@ -1,6 +1,7 @@
 import { Router } from "express";
 
 import { authenticate, requireRole } from "../../middlewares/authenticate";
+import { requireVendorProfile } from "../../middlewares/require-capability";
 import { requireAdminPermission } from "../../middlewares/require-admin-permission";
 import { asyncHandler } from "../../shared/utils/async-handler";
 import {
@@ -58,20 +59,20 @@ export const subscriptionOffersRouter = Router();
 // "/public" as an :id param and this route would never be reached.
 subscriptionOffersRouter.get("/public", asyncHandler(listPublicSubscriptionOffers));
 subscriptionOffersRouter.get("/:id", asyncHandler(getPublicSubscriptionOffer));
-subscriptionOffersRouter.patch("/:id", authenticate, requireRole("VENDOR"), asyncHandler(updateSubscriptionOffer));
-subscriptionOffersRouter.post("/:id/publish", authenticate, requireRole("VENDOR"), asyncHandler(publishSubscriptionOffer));
-subscriptionOffersRouter.post("/:id/unpublish", authenticate, requireRole("VENDOR"), asyncHandler(unpublishSubscriptionOffer));
-subscriptionOffersRouter.post("/:id/pause-renewals", authenticate, requireRole("VENDOR"), asyncHandler(pauseSubscriptionOfferRenewals));
-subscriptionOffersRouter.post("/:id/resume-renewals", authenticate, requireRole("VENDOR"), asyncHandler(resumeSubscriptionOfferRenewals));
-subscriptionOffersRouter.post("/:id/products/:productId/pause", authenticate, requireRole("VENDOR"), asyncHandler(pauseSubscriptionOfferProduct));
-subscriptionOffersRouter.post("/:id/products/:productId/resume", authenticate, requireRole("VENDOR"), asyncHandler(resumeSubscriptionOfferProduct));
+subscriptionOffersRouter.patch("/:id", authenticate, requireVendorProfile(), asyncHandler(updateSubscriptionOffer));
+subscriptionOffersRouter.post("/:id/publish", authenticate, requireVendorProfile(), asyncHandler(publishSubscriptionOffer));
+subscriptionOffersRouter.post("/:id/unpublish", authenticate, requireVendorProfile(), asyncHandler(unpublishSubscriptionOffer));
+subscriptionOffersRouter.post("/:id/pause-renewals", authenticate, requireVendorProfile(), asyncHandler(pauseSubscriptionOfferRenewals));
+subscriptionOffersRouter.post("/:id/resume-renewals", authenticate, requireVendorProfile(), asyncHandler(resumeSubscriptionOfferRenewals));
+subscriptionOffersRouter.post("/:id/products/:productId/pause", authenticate, requireVendorProfile(), asyncHandler(pauseSubscriptionOfferProduct));
+subscriptionOffersRouter.post("/:id/products/:productId/resume", authenticate, requireVendorProfile(), asyncHandler(resumeSubscriptionOfferProduct));
 
 // Vendor-owned resources — mounted at /vendor alongside the other vendor
 // routers (automation, account, etc.), consistent with this codebase's
 // convention of deriving the vendor from the authenticated user rather
 // than taking a vendorId path param.
 export const regularDeliveriesVendorRouter = Router();
-regularDeliveriesVendorRouter.use(authenticate, requireRole("VENDOR"));
+regularDeliveriesVendorRouter.use(authenticate, requireVendorProfile());
 regularDeliveriesVendorRouter.post("/subscription-offers", asyncHandler(createSubscriptionOffer));
 regularDeliveriesVendorRouter.get("/subscription-offers", asyncHandler(listVendorSubscriptionOffers));
 regularDeliveriesVendorRouter.get("/subscribers", asyncHandler(listVendorSubscribers));
@@ -82,7 +83,7 @@ regularDeliveriesVendorRouter.get("/insights", asyncHandler(getVendorRegularDeli
 // Renewal actions (vendor stock confirmation, buyer decisions) — mounted
 // at /renewals. Per-route auth since the action taken determines the role.
 export const renewalsRouter = Router();
-renewalsRouter.post("/:id/stock-confirmation", authenticate, requireRole("VENDOR"), asyncHandler(confirmRenewalStock));
+renewalsRouter.post("/:id/stock-confirmation", authenticate, requireVendorProfile(), asyncHandler(confirmRenewalStock));
 renewalsRouter.post("/:id/price-change", authenticate, asyncHandler(decideRenewalPriceChange));
 renewalsRouter.post("/:id/retry-payment", authenticate, asyncHandler(retryRenewalPayment));
 

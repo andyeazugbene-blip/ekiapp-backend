@@ -4,6 +4,7 @@ import { prisma } from "../../lib/prisma";
 import { AppError } from "../../shared/errors/app-error";
 import { recordAudit } from "../../shared/utils/audit";
 import { organiserSupplierService } from "./organiser-supplier.service";
+import { supplierAccountService } from "./supplier-account.service";
 import { communityCampaignsService } from "./community-campaigns.service";
 import { campaignContributionsService } from "./campaign-contributions.service";
 import { campaignFulfilmentService } from "./campaign-fulfilment.service";
@@ -411,16 +412,32 @@ export async function legacyCancelFailedCampaignShim(request: Request, response:
 
 // ─── Supplier ───────────────────────────────────────────────────────────
 
+// Community Buy Workstream 1: Supplier Centre no longer requires a Vendor
+// to even start onboarding — applyAsSupplier/getMySupplierProfile now
+// operate on the user-keyed SupplierAccount. The legacy Vendor-keyed
+// organiserSupplierService.applyAsSupplier(vendorId, country) function is
+// untouched and still used internally by syncSupplierAccountForProfile's
+// callers (verify/restrict/unrestrict) for existing Vendor-backed
+// suppliers — it's just no longer reachable from this public route.
 export async function applyAsSupplier(request: Request, response: Response): Promise<void> {
-  const vendorId = await requireVendorId(requireUserId(request));
+  const userId = requireUserId(request);
   const country = request.body?.country;
   if (typeof country !== "string") throw new AppError("country is required", 400);
-  response.status(201).json({ profile: await organiserSupplierService.applyAsSupplier(vendorId, country) });
+  const categories = Array.isArray(request.body?.categories) ? request.body.categories : undefined;
+  const coverageRegions = Array.isArray(request.body?.coverageRegions) ? request.body.coverageRegions : undefined;
+  response.status(201).json({
+    account: await supplierAccountService.applyAsSupplier(userId, { country, categories, coverageRegions }),
+  });
 }
 
 export async function getMySupplierProfile(request: Request, response: Response): Promise<void> {
-  const vendorId = await requireVendorId(requireUserId(request));
-  response.json({ profile: await organiserSupplierService.getSupplierProfile(vendorId) });
+  const userId = requireUserId(request);
+  const vendor = await prisma.vendor.findUnique({ where: { userId }, select: { id: true } });
+  const legacyProfile = vendor ? await organiserSupplierService.getSupplierProfile(vendor.id) : null;
+  const account = await supplierAccountService.getView(userId);
+  // `profile` kept for the currently-deployed mobile client (dual-read);
+  // `account` is the new SupplierAccount-based shape a future client reads.
+  response.json({ profile: legacyProfile, account });
 }
 
 export async function listMySupplierCampaigns(request: Request, response: Response): Promise<void> {
@@ -517,6 +534,35 @@ export async function adminVerifySupplier(request: Request, response: Response):
   const profile = await organiserSupplierService.verifySupplier(id);
   await recordAudit({ actorId: adminId, action: "community_supplier.verify", entityType: "CommunitySupplierProfile", entityId: id, afterState: { isVerified: true }, request });
   response.json({ profile });
+}
+
+// Community Buy Workstream 1 — admin actions on the new, no-Vendor-required
+// SupplierAccount (distinct from the legacy Vendor-keyed SupplierProfile
+// above). Backend-only for now; an admin-web review screen is Workstream 3.
+export async function adminApproveSupplierAccount(request: Request, response: Response): Promise<void> {
+  const adminId = requireUserId(request);
+  const id = requireIdParam(request);
+  const account = await supplierAccountService.approve(id);
+  await recordAudit({ actorId: adminId, action: "community_supplier_account.approve", entityType: "SupplierAccount", entityId: id, afterState: { supplierState: account.supplierState }, request });
+  response.json({ account });
+}
+
+export async function adminRestrictSupplierAccount(request: Request, response: Response): Promise<void> {
+  const adminId = requireUserId(request);
+  const id = requireIdParam(request);
+  const { reason } = request.body ?? {};
+  if (typeof reason !== "string" || reason.length === 0) throw new AppError("reason is required", 400);
+  const account = await supplierAccountService.restrict(id, reason);
+  await recordAudit({ actorId: adminId, action: "community_supplier_account.restrict", entityType: "SupplierAccount", entityId: id, reason, afterState: { supplierState: account.supplierState }, request });
+  response.json({ account });
+}
+
+export async function adminUnrestrictSupplierAccount(request: Request, response: Response): Promise<void> {
+  const adminId = requireUserId(request);
+  const id = requireIdParam(request);
+  const account = await supplierAccountService.unrestrict(id);
+  await recordAudit({ actorId: adminId, action: "community_supplier_account.unrestrict", entityType: "SupplierAccount", entityId: id, afterState: { supplierState: account.supplierState }, request });
+  response.json({ account });
 }
 
 export async function adminListRefunds(_request: Request, response: Response): Promise<void> {

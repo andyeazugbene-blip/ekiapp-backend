@@ -163,7 +163,13 @@ beforeAll(async () => {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  mockVendorFindUnique.mockResolvedValue({ id: "vendor-db-1" });
+  // Community Buy Workstream 1: vendor-only routes now gate on a real
+  // Vendor row (requireVendorProfile) instead of role alone — argument-
+  // differentiated so buyer-1 (used by this file's "wrong role" 403
+  // assertions) doesn't inherit vendor-user-1's vendor row.
+  mockVendorFindUnique.mockImplementation(async ({ where }: any) =>
+    where?.userId === "vendor-user-1" ? { id: "vendor-db-1" } : null,
+  );
   mockOfferFindMany.mockResolvedValue([{ id: "offer-1" }]);
   mockSubscriptionFindMany.mockResolvedValue([]);
   mockRenewalFindMany.mockResolvedValue([]);

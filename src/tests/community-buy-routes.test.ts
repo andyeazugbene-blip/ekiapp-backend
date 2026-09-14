@@ -48,6 +48,18 @@ vi.mock("../modules/community-buy/organiser-supplier.service", () => ({
   },
 }));
 
+// Community Buy Workstream 1: POST /applications and GET /profile on the
+// Supplier Centre router now go through this user-keyed service instead of
+// the vendor-keyed organiserSupplierService above.
+const mockApplyAsSupplierAccount = vi.fn();
+const mockGetSupplierAccountView = vi.fn();
+vi.mock("../modules/community-buy/supplier-account.service", () => ({
+  supplierAccountService: {
+    applyAsSupplier: (...a: unknown[]) => mockApplyAsSupplierAccount(...a),
+    getView: (...a: unknown[]) => mockGetSupplierAccountView(...a),
+  },
+}));
+
 const mockListLive = vi.fn();
 const mockGetCampaign = vi.fn();
 const mockCreateCampaign = vi.fn();
@@ -198,6 +210,12 @@ vi.mock("../modules/community-buy/market-configuration.service", () => ({
 }));
 
 const mockVendorFindUnique = vi.fn();
+// Community Buy Workstream 1: supplier ACTIONS now gate on an approved
+// SupplierAccount (requireApprovedSupplier), not on a Vendor role — the
+// vendor-user-1 identity these "vendor-only" tests already use is treated
+// as the approved supplier; buyer-1 (and anyone else) is not, preserving
+// this file's existing "403 for a buyer, 200 for a vendor" assertions.
+const mockSupplierAccountFindUnique = vi.fn();
 // Four-eyes gate on supplier-payment release (see admin-approvals.service.ts)
 // looks up the payment amount before deciding whether to release directly
 // or create a pending approval.
@@ -219,6 +237,7 @@ vi.mock("../lib/prisma", async () => {
     prisma: new Proxy(actual.prisma, {
       get(target, prop) {
         if (prop === "vendor") return { findUnique: (...a: unknown[]) => mockVendorFindUnique(...a) };
+        if (prop === "supplierAccount") return { findUnique: (...a: unknown[]) => mockSupplierAccountFindUnique(...a) };
         if (prop === "campaignSupplierPayment") return { findUnique: (...a: unknown[]) => mockCampaignSupplierPaymentFindUnique(...a) };
         // require2fa (gates the two supplier-payment routes below) looks
         // this up for every request — without a mock it falls through to
@@ -278,7 +297,17 @@ beforeAll(async () => {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  mockVendorFindUnique.mockResolvedValue({ id: "vendor-db-1" });
+  // Argument-differentiated so buyer-1 (used by the Supplier Centre
+  // "open to any authenticated user, no Vendor required" tests) doesn't
+  // inherit vendor-user-1's vendor row.
+  mockVendorFindUnique.mockImplementation(async ({ where }: any) =>
+    where?.userId === "vendor-user-1" ? { id: "vendor-db-1" } : null,
+  );
+  mockSupplierAccountFindUnique.mockImplementation(async ({ where }: any) =>
+    where?.userId === "vendor-user-1" ? { supplierState: "APPROVED" } : null,
+  );
+  mockApplyAsSupplierAccount.mockResolvedValue({ supplierState: "UNDER_REVIEW", requirementsDue: [] });
+  mockGetSupplierAccountView.mockResolvedValue({ supplierState: "NOT_STARTED", requirementsDue: ["categories", "coverageRegions"] });
   mockListLive.mockResolvedValue([]);
   mockGetCampaign.mockResolvedValue({ id: "camp-1", status: "LIVE", paidTotal: 0, progressPct: 0 });
   mockJoin.mockResolvedValue({ id: "participant-1" });
@@ -619,17 +648,29 @@ describe("Organiser routes — role/id handling", () => {
   });
 });
 
-describe("Supplier routes — vendor-only", () => {
-  it("POST /api/supplier/applications — 403 for a buyer token (vendor-only route)", async () => {
+describe("Supplier routes — Centre landing/apply open to any authenticated user, actions require an approved SupplierAccount", () => {
+  // Community Buy Workstream 1 correction: Supplier Centre must never
+  // require a Vendor merely to start onboarding (spec AT-03). These two
+  // tests previously asserted the old vendor-gated behavior — rewritten to
+  // assert the corrected one instead of preserving a since-removed rule.
+  it("POST /api/supplier/applications — succeeds for a buyer with no Vendor at all", async () => {
     const res = await request(app).post("/api/supplier/applications").set("Authorization", `Bearer ${buyerToken()}`).send({ country: "GB" });
-    expect(res.status).toBe(403);
+    expect(res.status).toBe(201);
+    expect(mockApplyAsSupplierAccount).toHaveBeenCalledWith("buyer-1", { country: "GB", categories: undefined, coverageRegions: undefined });
     expect(mockApplyAsSupplier).not.toHaveBeenCalled();
   });
 
-  it("POST /api/supplier/applications — 201 for a vendor token, resolves vendor id from the user", async () => {
+  it("POST /api/supplier/applications — 201 for a vendor token too, resolves user id (not vendor id) from the token", async () => {
     const res = await request(app).post("/api/supplier/applications").set("Authorization", `Bearer ${vendorToken()}`).send({ country: "GB" });
     expect(res.status).toBe(201);
-    expect(mockApplyAsSupplier).toHaveBeenCalledWith("vendor-db-1", "GB");
+    expect(mockApplyAsSupplierAccount).toHaveBeenCalledWith("vendor-user-1", { country: "GB", categories: undefined, coverageRegions: undefined });
+  });
+
+  it("GET /api/supplier/profile — a fresh buyer with no application gets NOT_STARTED, not a 403", async () => {
+    const res = await request(app).get("/api/supplier/profile").set("Authorization", `Bearer ${buyerToken()}`);
+    expect(res.status).toBe(200);
+    expect(res.body.account.supplierState).toBe("NOT_STARTED");
+    expect(res.body.profile).toBeNull();
   });
 
   it("GET /api/supplier/campaigns — 403 for a buyer token", async () => {

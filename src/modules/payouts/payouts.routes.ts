@@ -1,6 +1,7 @@
 import { Router } from "express";
 
-import { authenticate, requireRole } from "../../middlewares/authenticate";
+import { authenticate } from "../../middlewares/authenticate";
+import { requireVendorProfileOrAdmin } from "../../middlewares/require-capability";
 import { asyncHandler } from "../../shared/utils/async-handler";
 import {
   createPayoutRequest,
@@ -10,7 +11,7 @@ import {
 
 export const payoutRequestsRouter = Router();
 
-payoutRequestsRouter.use(authenticate, requireRole("VENDOR", "ADMIN"));
+payoutRequestsRouter.use(authenticate, requireVendorProfileOrAdmin());
 
 payoutRequestsRouter.post("/", asyncHandler(createPayoutRequest));
 payoutRequestsRouter.get("/me", asyncHandler(listOwnPayoutRequests));

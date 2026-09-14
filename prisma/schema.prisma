@@ -96,6 +96,25 @@ enum VendorVerificationStatus {
   REJECTED
 }
 
+// Community Buy Workstream 1 (identity/capability foundation, spec §6.4).
+// Backfilled from the existing Vendor-dependent SupplierProfile's
+// isVerified/isRestricted booleans (NOT_STARTED/UNDER_REVIEW/APPROVED/
+// RESTRICTED only, for now) — DRAFT/VERIFICATION_REQUIRED/
+// INFORMATION_REQUIRED/PAUSED/SUSPENDED/CLOSED have no legacy equivalent
+// yet and are reachable only via new code going forward (Workstream 3).
+enum SupplierAccountState {
+  NOT_STARTED
+  DRAFT
+  VERIFICATION_REQUIRED
+  UNDER_REVIEW
+  INFORMATION_REQUIRED
+  APPROVED
+  PAUSED
+  RESTRICTED
+  SUSPENDED
+  CLOSED
+}
+
 enum PayoutMethodType {
   BANK_TRANSFER
   MOBILE_MONEY
@@ -133,51 +152,52 @@ enum ReviewStatus {
 }
 
 model User {
-  id                      String                @id @default(cuid())
-  email                   String                @unique
-  name                    String
+  id                       String                    @id @default(cuid())
+  email                    String                    @unique
+  name                     String
   // Nullable: an OAuth-only account (Google/Apple) has no Eki password.
   // authService.login() (email/password) explicitly rejects null rather
   // than letting bcrypt.compare receive it.
-  password                String?
-  phone                   String?               @unique
-  avatar                  String?
-  country                 String?
-  referralCode            String?               @unique
-  referredBy              String?
-  tokenVersion            Int                   @default(0)
-  failedLoginAttempts     Int                   @default(0)
-  lockedUntil             DateTime?
-  isSuspended             Boolean               @default(false)
-  suspendedReason         String?
-  emailVerifiedAt         DateTime?
-  trustScore              Int                   @default(50)
-  smsMarketingConsentAt   DateTime?
-  smsTransactionalEnabled Boolean               @default(true)
+  password                 String?
+  phone                    String?                   @unique
+  avatar                   String?
+  country                  String?
+  referralCode             String?                   @unique
+  referredBy               String?
+  tokenVersion             Int                       @default(0)
+  failedLoginAttempts      Int                       @default(0)
+  lockedUntil              DateTime?
+  isSuspended              Boolean                   @default(false)
+  suspendedReason          String?
+  emailVerifiedAt          DateTime?
+  trustScore               Int                       @default(50)
+  smsMarketingConsentAt    DateTime?
+  smsTransactionalEnabled  Boolean                   @default(true)
   // Diaspora Expansion: consent for automated marketing messages (push +
   // email) sent by the Automation Engine — e.g. cart recovery, win-back,
   // review requests. Distinct from smsMarketingConsentAt (SMS-only) and
   // never gates transactional messages (order/payment status).
-  marketingConsentAt      DateTime?
-  role                    UserRole              @default(BUYER)
-  vendor                  Vendor?
-  orders                  Order[]               @relation("BuyerOrders")
-  cart                    Cart?
-  notifications           Notification[]
-  purchasedGiftCards      PurchasedGiftCard[]
-  adminTwoFactor          AdminTwoFactor?
-  adminRoleAssignments    AdminRoleAssignment[]
-  approvalsRequested      AdminApproval[]       @relation("AdminApprovalRequestedBy")
-  approvalsDecided        AdminApproval[]       @relation("AdminApprovalDecidedBy")
-  organiserProfile        OrganiserProfile?
-  buyerSubscriptions      BuyerSubscription[]
-  buyerPaymentMethods     BuyerPaymentMethod[]
-  automationRuns          AutomationRun[]
-  campaignParticipations  CampaignParticipant[]
+  marketingConsentAt       DateTime?
+  role                     UserRole                  @default(BUYER)
+  vendor                   Vendor?
+  orders                   Order[]                   @relation("BuyerOrders")
+  cart                     Cart?
+  notifications            Notification[]
+  purchasedGiftCards       PurchasedGiftCard[]
+  adminTwoFactor           AdminTwoFactor?
+  adminRoleAssignments     AdminRoleAssignment[]
+  approvalsRequested       AdminApproval[]           @relation("AdminApprovalRequestedBy")
+  approvalsDecided         AdminApproval[]           @relation("AdminApprovalDecidedBy")
+  organiserProfile         OrganiserProfile?
+  supplierAccount          SupplierAccount?
+  buyerSubscriptions       BuyerSubscription[]
+  buyerPaymentMethods      BuyerPaymentMethod[]
+  automationRuns           AutomationRun[]
+  campaignParticipations   CampaignParticipant[]
   communityBuySupportCases CommunityBuySupportCase[]
-  oauthIdentities         OAuthIdentity[]
-  createdAt               DateTime              @default(now())
-  updatedAt               DateTime              @updatedAt
+  oauthIdentities          OAuthIdentity[]
+  createdAt                DateTime                  @default(now())
+  updatedAt                DateTime                  @updatedAt
 
   @@index([role, createdAt])
   @@index([createdAt])
@@ -190,15 +210,15 @@ model User {
 // subject identifier (Google's `sub` / Apple's `sub`), never the email —
 // Apple's email can be a private-relay address that isn't a real identity.
 model OAuthIdentity {
-  id             String       @id @default(cuid())
+  id             String        @id @default(cuid())
   provider       OAuthProvider
   providerUserId String
   userId         String
-  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user           User          @relation(fields: [userId], references: [id], onDelete: Cascade)
   // Email as reported by the provider at link time — informational only,
   // never re-derived as the identity key. Nullable for Apple private relay.
   email          String?
-  createdAt      DateTime     @default(now())
+  createdAt      DateTime      @default(now())
 
   @@unique([provider, providerUserId])
   @@unique([provider, userId])
@@ -394,28 +414,28 @@ model CartItem {
 }
 
 model Order {
-  id                  String               @id @default(cuid())
-  orderNumber         String               @unique @default(cuid())
-  checkoutId          String?
-  buyerId             String
-  vendorId            String?
-  status              OrderStatus          @default(PENDING)
-  escrowType          EscrowType           @default(NONE)
-  escrowExpiresAt     DateTime?
-  vendorConfirmedAt   DateTime?
-  disputedAt          DateTime?
-  autoReleasedAt      DateTime?
-  subtotalAmount      Int                  @default(0)
-  deliveryFeeAmount   Int                  @default(0)
-  platformFeeAmount   Int                  @default(0)
-  vendorEarnings      Int                  @default(0)
-  sellerPlanId        String?
-  sellerPlanSlug      String?
-  commissionTierId    String?
-  commissionBps       Int?
-  withdrawalFeeBps    Int?
-  totalAmount         Int
-  currency            String               @default("EUR")
+  id                    String               @id @default(cuid())
+  orderNumber           String               @unique @default(cuid())
+  checkoutId            String?
+  buyerId               String
+  vendorId              String?
+  status                OrderStatus          @default(PENDING)
+  escrowType            EscrowType           @default(NONE)
+  escrowExpiresAt       DateTime?
+  vendorConfirmedAt     DateTime?
+  disputedAt            DateTime?
+  autoReleasedAt        DateTime?
+  subtotalAmount        Int                  @default(0)
+  deliveryFeeAmount     Int                  @default(0)
+  platformFeeAmount     Int                  @default(0)
+  vendorEarnings        Int                  @default(0)
+  sellerPlanId          String?
+  sellerPlanSlug        String?
+  commissionTierId      String?
+  commissionBps         Int?
+  withdrawalFeeBps      Int?
+  totalAmount           Int
+  currency              String               @default("EUR")
   // Multi-currency checkout audit trail. `currency` above stays the
   // vendor's NATIVE currency for this order (unchanged — wallet/ledger
   // crediting still happens in it). These are only set when the buyer's
@@ -424,29 +444,29 @@ model Order {
   // native total into the ONE currency actually charged via Stripe.
   // Never recomputed later — refunds must reference these exact values,
   // not a freshly fetched rate (see fx-rates.ts).
-  checkoutCurrency       String?
-  normalizedTotalAmount  Int?
-  exchangeRate           Float?
-  exchangeRateTimestamp  DateTime?
-  exchangeRateSource     String?
-  deliveryZoneId      String?
-  deliveryAddress     String?
-  notes               String?
-  deliveredAt         DateTime?
-  checkout            Checkout?            @relation(fields: [checkoutId], references: [id], onDelete: SetNull)
-  buyer               User                 @relation("BuyerOrders", fields: [buyerId], references: [id], onDelete: Restrict)
-  deliveryZone        DeliveryZone?        @relation(fields: [deliveryZoneId], references: [id], onDelete: SetNull)
-  sellerPlan          SellerPlan?          @relation(fields: [sellerPlanId], references: [id], onDelete: SetNull)
-  commissionTier      CommissionTier?      @relation(fields: [commissionTierId], references: [id], onDelete: SetNull)
-  items               OrderItem[]
-  payment             Payment?
-  paystackTransaction PaystackTransaction?
-  deliveryOtp         DeliveryOtp?
-  dispute             Dispute?
-  walletTransactions  WalletTransaction[]
-  renewal             Renewal?
-  createdAt           DateTime             @default(now())
-  updatedAt           DateTime             @updatedAt
+  checkoutCurrency      String?
+  normalizedTotalAmount Int?
+  exchangeRate          Float?
+  exchangeRateTimestamp DateTime?
+  exchangeRateSource    String?
+  deliveryZoneId        String?
+  deliveryAddress       String?
+  notes                 String?
+  deliveredAt           DateTime?
+  checkout              Checkout?            @relation(fields: [checkoutId], references: [id], onDelete: SetNull)
+  buyer                 User                 @relation("BuyerOrders", fields: [buyerId], references: [id], onDelete: Restrict)
+  deliveryZone          DeliveryZone?        @relation(fields: [deliveryZoneId], references: [id], onDelete: SetNull)
+  sellerPlan            SellerPlan?          @relation(fields: [sellerPlanId], references: [id], onDelete: SetNull)
+  commissionTier        CommissionTier?      @relation(fields: [commissionTierId], references: [id], onDelete: SetNull)
+  items                 OrderItem[]
+  payment               Payment?
+  paystackTransaction   PaystackTransaction?
+  deliveryOtp           DeliveryOtp?
+  dispute               Dispute?
+  walletTransactions    WalletTransaction[]
+  renewal               Renewal?
+  createdAt             DateTime             @default(now())
+  updatedAt             DateTime             @updatedAt
 
   @@index([checkoutId])
   @@index([buyerId, status])
@@ -727,7 +747,9 @@ enum FulfilmentAlertStatus {
   ESCALATED
 }
 
-/** Admin supplier-fulfilment delay queue (architecture gap closure) — real findings from actual CampaignFulfilment rows. */
+/**
+ * Admin supplier-fulfilment delay queue (architecture gap closure) — real findings from actual CampaignFulfilment rows.
+ */
 model SupplierFulfilmentAlert {
   id           String                @id @default(cuid())
   campaignId   String
@@ -1873,54 +1895,54 @@ enum SubscriptionPaymentAttemptStatus {
 // A buyer's saved, reusable Stripe payment method — does not exist
 // anywhere in the current app (checkout today is always one-shot).
 model BuyerPaymentMethod {
-  id                    String              @id @default(cuid())
+  id                    String                 @id @default(cuid())
   buyerId               String
   stripeCustomerId      String
-  stripePaymentMethodId String              @unique
+  stripePaymentMethodId String                 @unique
   brand                 String?
   last4                 String?
-  isDefault             Boolean             @default(false)
-  buyer                 User                @relation(fields: [buyerId], references: [id], onDelete: Cascade)
+  isDefault             Boolean                @default(false)
+  buyer                 User                   @relation(fields: [buyerId], references: [id], onDelete: Cascade)
   subscriptions         BuyerSubscription[]
   campaignContributions CampaignContribution[]
-  createdAt             DateTime            @default(now())
-  updatedAt             DateTime            @updatedAt
+  createdAt             DateTime               @default(now())
+  updatedAt             DateTime               @updatedAt
 
   @@index([buyerId])
 }
 
 model SubscriptionOffer {
-  id                 String                     @id @default(cuid())
-  vendorId           String
-  title              String
-  description        String?
-  frequencies        SubscriptionFrequency[]
-  substitutionPolicy String?
-  substitutionMode   OfferSubstitutionMode      @default(ASK_BUYER)
-  renewalCutoffHours Int                        @default(24)
-  fulfilmentMethod   FulfilmentMethod           @default(DELIVERY)
-  preparationHours   Int?
+  id                          String                     @id @default(cuid())
+  vendorId                    String
+  title                       String
+  description                 String?
+  frequencies                 SubscriptionFrequency[]
+  substitutionPolicy          String?
+  substitutionMode            OfferSubstitutionMode      @default(ASK_BUYER)
+  renewalCutoffHours          Int                        @default(24)
+  fulfilmentMethod            FulfilmentMethod           @default(DELIVERY)
+  preparationHours            Int?
   // Percentage off the live product price applied at each renewal, e.g. 10
   // means renewals are charged at 90% of the product's current price. Null
   // means renewals use the plain current product price (spec §22 "Use
   // current product prices at each renewal").
-  discountPercent    Int?
+  discountPercent             Int?
   // Copied onto BuyerSubscription.priceChangeApprovalLimitBps at subscribe
   // time (spec §22 "Maximum price increase without buyer approval") — null
   // leaves the subscription on the system default (renewals.service.ts).
   maxPriceIncreaseApprovalBps Int?
-  isActive           Boolean                    @default(true)
+  isActive                    Boolean                    @default(true)
   // Distinct from isActive (unpublish removes the listing for new
   // subscribers). Pausing renewals keeps existing subscribers listed and
   // subscribed, it just stops new renewal cycles from being generated —
   // e.g. a vendor going away for two weeks without losing subscribers.
-  renewalsPaused     Boolean                    @default(false)
-  renewalsPausedAt   DateTime?
-  vendor             Vendor                     @relation(fields: [vendorId], references: [id], onDelete: Cascade)
-  products           SubscriptionOfferProduct[]
-  subscriptions      BuyerSubscription[]
-  createdAt          DateTime                   @default(now())
-  updatedAt          DateTime                   @updatedAt
+  renewalsPaused              Boolean                    @default(false)
+  renewalsPausedAt            DateTime?
+  vendor                      Vendor                     @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+  products                    SubscriptionOfferProduct[]
+  subscriptions               BuyerSubscription[]
+  createdAt                   DateTime                   @default(now())
+  updatedAt                   DateTime                   @updatedAt
 
   @@index([vendorId, isActive])
 }
@@ -1932,18 +1954,18 @@ enum OfferSubstitutionMode {
 }
 
 model SubscriptionOfferProduct {
-  id        String            @id @default(cuid())
-  offerId   String
-  productId String
+  id                    String            @id @default(cuid())
+  offerId               String
+  productId             String
   // spec §31 "Pause Product Renewals" — stops this product from being
   // included in any subscriber's future renewals without touching the
   // rest of their subscription or the offer's other products.
-  pausedAt       DateTime?
-  pauseReason    String?
+  pausedAt              DateTime?
+  pauseReason           String?
   pauseExpectedReturnAt DateTime?
-  offer     SubscriptionOffer @relation(fields: [offerId], references: [id], onDelete: Cascade)
-  product   Product           @relation(fields: [productId], references: [id], onDelete: Cascade)
-  createdAt DateTime          @default(now())
+  offer                 SubscriptionOffer @relation(fields: [offerId], references: [id], onDelete: Cascade)
+  product               Product           @relation(fields: [productId], references: [id], onDelete: Cascade)
+  createdAt             DateTime          @default(now())
 
   @@unique([offerId, productId])
   @@index([productId])
@@ -2190,65 +2212,97 @@ model SupplierProfile {
   updatedAt        DateTime            @updatedAt
 }
 
+// Community Buy Workstream 1 — target identity/capability model (spec §3,
+// §6.4, §15.4). Additive: does NOT replace SupplierProfile, which stays the
+// source of truth for existing Vendor-backed campaign assignment until
+// Workstream 3 cuts CommunityCampaign.supplierId over to this table.
+// userId-keyed by design — a supplier account never requires a Vendor.
+model SupplierAccount {
+  id                         String               @id @default(cuid())
+  userId                     String               @unique
+  user                       User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  // Bridges to the legacy Vendor-dependent SupplierProfile during the
+  // Workstream 1-3 transition, when one exists — kept in sync by
+  // syncSupplierAccountForProfile(), never authoritative on its own.
+  legacySupplierProfileId    String?              @unique
+  providerConnectedAccountId String?
+  supplierState              SupplierAccountState @default(NOT_STARTED)
+  chargesEnabled             Boolean              @default(false)
+  payoutsEnabled             Boolean              @default(false)
+  detailsSubmitted           Boolean              @default(false)
+  requirementsDue            String[]             @default([])
+  categories                 String[]             @default([])
+  coverageRegions            String[]             @default([])
+  collectionAreas            String[]             @default([])
+  approvedAt                 DateTime?
+  pausedAt                   DateTime?
+  controlScope               String?
+  reasonCode                 String?
+  createdAt                  DateTime             @default(now())
+  updatedAt                  DateTime             @updatedAt
+
+  @@index([supplierState])
+}
+
 model CommunityCampaign {
-  id            String                 @id @default(cuid())
-  organiserId   String
+  id                    String                     @id @default(cuid())
+  organiserId           String
   // Nullable — a campaign may be self-fulfilled by the organiser with no
   // supplier at all. When set, fulfilmentOwner is SUPPLIER; when null,
   // fulfilmentOwner is SELF. Supplier acceptance/decline is fulfilment
   // workflow state only and never gates publication/LIVE — see submit()
   // and publish() in community-campaigns.service.ts.
-  supplierId    String?
-  fulfilmentOwner CampaignFulfilmentOwner @default(SUPPLIER)
-  title         String
-  description   String?
-  country       String
-  currency      String
-  targetAmount  Int
-  deadline      DateTime
-  status        CampaignStatus         @default(DRAFT)
-  reviewNotes   String?
-  reviewedById  String?
-  reviewedAt    DateTime?
-  publishedAt   DateTime?
-  closedAt      DateTime?
-  paidTotal     Int                    @default(0)
+  supplierId            String?
+  fulfilmentOwner       CampaignFulfilmentOwner    @default(SUPPLIER)
+  title                 String
+  description           String?
+  country               String
+  currency              String
+  targetAmount          Int
+  deadline              DateTime
+  status                CampaignStatus             @default(DRAFT)
+  reviewNotes           String?
+  reviewedById          String?
+  reviewedAt            DateTime?
+  publishedAt           DateTime?
+  closedAt              DateTime?
+  paidTotal             Int                        @default(0)
   // Flexible-fulfilment quantity model (minimum/goal/maximum shares) —
   // added alongside the original amount-based targetAmount rather than
   // replacing it, since existing reads of targetAmount (admin list views)
   // still work during the UI migration; all NEW campaign creation and
   // state-machine logic treats these as authoritative.
-  minimumShares            Int?
-  goalShares                Int?
-  maximumShares             Int?
-  pricePerShareMinor        Int?
-  confirmedShares           Int              @default(0)
-  fundingOutcome            FundingOutcome   @default(PENDING)
-  supplierCommitted         Boolean          @default(false)
-  supplierCommittedAt       DateTime?
+  minimumShares         Int?
+  goalShares            Int?
+  maximumShares         Int?
+  pricePerShareMinor    Int?
+  confirmedShares       Int                        @default(0)
+  fundingOutcome        FundingOutcome             @default(PENDING)
+  supplierCommitted     Boolean                    @default(false)
+  supplierCommittedAt   DateTime?
   // Distinct from CHANGES_REQUIRED (which always means "admin sent this
   // back to the organiser") — a supplier decline never touches campaign
   // status, since the organiser still needs to reassign a new supplier
   // (reassignSupplier() below) before doing anything else. Cleared on
   // reassignment so a fresh supplier starts from a clean slate.
-  supplierDeclinedAt        DateTime?
-  supplierDeclineReason     String?
-  rescueDurationMinutes     Int              @default(2880)
-  rescueEndsAt              DateTime?
-  extensionCount            Int              @default(0)
-  termsLockedAt             DateTime?
-  organiser     OrganiserProfile       @relation(fields: [organiserId], references: [id], onDelete: Restrict)
-  supplier      SupplierProfile?       @relation(fields: [supplierId], references: [id], onDelete: Restrict)
-  participants  CampaignParticipant[]
-  contributions CampaignContribution[]
-  extensionRequests CampaignExtensionRequest[]
-  supplierPayment   CampaignSupplierPayment?
-  fulfilment        CampaignFulfilment?
-  supportCases      CommunityBuySupportCase[]
-  updates           CampaignUpdate[]
-  fulfilmentAlerts  SupplierFulfilmentAlert[]
-  createdAt     DateTime               @default(now())
-  updatedAt     DateTime               @updatedAt
+  supplierDeclinedAt    DateTime?
+  supplierDeclineReason String?
+  rescueDurationMinutes Int                        @default(2880)
+  rescueEndsAt          DateTime?
+  extensionCount        Int                        @default(0)
+  termsLockedAt         DateTime?
+  organiser             OrganiserProfile           @relation(fields: [organiserId], references: [id], onDelete: Restrict)
+  supplier              SupplierProfile?           @relation(fields: [supplierId], references: [id], onDelete: Restrict)
+  participants          CampaignParticipant[]
+  contributions         CampaignContribution[]
+  extensionRequests     CampaignExtensionRequest[]
+  supplierPayment       CampaignSupplierPayment?
+  fulfilment            CampaignFulfilment?
+  supportCases          CommunityBuySupportCase[]
+  updates               CampaignUpdate[]
+  fulfilmentAlerts      SupplierFulfilmentAlert[]
+  createdAt             DateTime                   @default(now())
+  updatedAt             DateTime                   @updatedAt
 
   @@index([status, country])
   @@index([organiserId])
@@ -2300,20 +2354,20 @@ enum ExtensionRequestStatus {
 }
 
 model CampaignExtensionRequest {
-  id                        String                  @id @default(cuid())
+  id                        String                 @id @default(cuid())
   campaignId                String
   requestedDeadline         DateTime
   reason                    String
-  supplierReconfirmed       Boolean                 @default(false)
-  priceUnchangedConfirmed   Boolean                 @default(false)
-  participantTermsUnchanged Boolean                 @default(false)
-  status                    ExtensionRequestStatus  @default(PENDING)
+  supplierReconfirmed       Boolean                @default(false)
+  priceUnchangedConfirmed   Boolean                @default(false)
+  participantTermsUnchanged Boolean                @default(false)
+  status                    ExtensionRequestStatus @default(PENDING)
   reviewedById              String?
   reviewedAt                DateTime?
   reviewNotes               String?
-  campaign                  CommunityCampaign       @relation(fields: [campaignId], references: [id], onDelete: Cascade)
-  createdAt                 DateTime                @default(now())
-  updatedAt                 DateTime                @updatedAt
+  campaign                  CommunityCampaign      @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  createdAt                 DateTime               @default(now())
+  updatedAt                 DateTime               @updatedAt
 
   @@index([campaignId, status])
 }
@@ -2327,17 +2381,17 @@ enum SupplierPaymentStatus {
 }
 
 model CampaignSupplierPayment {
-  id                       String                 @id @default(cuid())
-  campaignId               String                 @unique
+  id                              String                @id @default(cuid())
+  campaignId                      String                @unique
   // Amount starts as the pledged estimate (confirmedShares × price) at
   // campaign-success time, then is kept in sync with the sum of actually
   // PAID contributions as charges resolve — see chargeAllPledgesForCampaign
   // in campaign-contributions.service.ts. releaseSupplierPayment() always
   // recomputes it live from PAID contributions before transferring, so a
   // stale value here can never cause an over/under transfer.
-  amount                   Int
-  currency                 String
-  status                   SupplierPaymentStatus  @default(NOT_RELEASED)
+  amount                          Int
+  currency                        String
+  status                          SupplierPaymentStatus @default(NOT_RELEASED)
   payoutStripeAccountIdAtApproval String?
   // Eki's processing fee taken out of `amount` at release time (client
   // mandate 2026-09: "Eki takes its configured processing fee"), and what
@@ -2345,15 +2399,15 @@ model CampaignSupplierPayment {
   // not estimated earlier, since the market's fee bps could change before
   // release. stripeTransferId is the real Stripe Connect transfer that
   // moved netAmount to the supplier's connected account.
-  feeAmount                Int?
-  netAmount                Int?
-  stripeTransferId         String?
-  holdReason               String?
-  releasedById             String?
-  releasedAt               DateTime?
-  campaign                 CommunityCampaign      @relation(fields: [campaignId], references: [id], onDelete: Restrict)
-  createdAt                DateTime               @default(now())
-  updatedAt                DateTime               @updatedAt
+  feeAmount                       Int?
+  netAmount                       Int?
+  stripeTransferId                String?
+  holdReason                      String?
+  releasedById                    String?
+  releasedAt                      DateTime?
+  campaign                        CommunityCampaign     @relation(fields: [campaignId], references: [id], onDelete: Restrict)
+  createdAt                       DateTime              @default(now())
+  updatedAt                       DateTime              @updatedAt
 
   @@index([status])
 }
@@ -2364,20 +2418,20 @@ model CampaignSupplierPayment {
 // this state machine never moves money; supplier payment release/hold
 // stays a distinct, admin-controlled action.
 model CampaignFulfilment {
-  id                   String              @id @default(cuid())
-  campaignId            String             @unique
-  status                FulfilmentStatus   @default(AWAITING_INVENTORY_CONFIRMATION)
-  method                FulfilmentMethod?
-  notes                 String?
-  estimatedReadyAt      DateTime?
-  inventoryConfirmedAt  DateTime?
-  packingStartedAt      DateTime?
-  readyAt               DateTime?
-  dispatchedAt          DateTime?
-  collectedAt           DateTime?
-  campaign              CommunityCampaign @relation(fields: [campaignId], references: [id], onDelete: Restrict)
-  createdAt             DateTime          @default(now())
-  updatedAt             DateTime          @updatedAt
+  id                   String            @id @default(cuid())
+  campaignId           String            @unique
+  status               FulfilmentStatus  @default(AWAITING_INVENTORY_CONFIRMATION)
+  method               FulfilmentMethod?
+  notes                String?
+  estimatedReadyAt     DateTime?
+  inventoryConfirmedAt DateTime?
+  packingStartedAt     DateTime?
+  readyAt              DateTime?
+  dispatchedAt         DateTime?
+  collectedAt          DateTime?
+  campaign             CommunityCampaign @relation(fields: [campaignId], references: [id], onDelete: Restrict)
+  createdAt            DateTime          @default(now())
+  updatedAt            DateTime          @updatedAt
 
   @@index([status])
 }
@@ -2411,14 +2465,14 @@ model CampaignParticipant {
 }
 
 model CampaignContribution {
-  id                    String              @id @default(cuid())
+  id                    String                  @id @default(cuid())
   campaignId            String
   participantId         String
   amount                Int
   currency              String
-  quantity              Int                 @default(1)
-  isOrganiserTopUp      Boolean             @default(false)
-  status                ContributionStatus  @default(INITIATED)
+  quantity              Int                     @default(1)
+  isOrganiserTopUp      Boolean                 @default(false)
+  status                ContributionStatus      @default(INITIATED)
   stripePaymentIntentId String?
   // Client mandate (2026-09): "Eki never takes the fund upfront... payment
   // go to the owner [only] at end of campaign" — PLEDGE_THEN_CHARGE model.
@@ -2428,13 +2482,13 @@ model CampaignContribution {
   // pledge time; nothing is captured until the campaign succeeds and
   // chargeAllPledgesForCampaign() runs the actual off-session charge.
   paymentMethodId       String?
-  campaign              CommunityCampaign   @relation(fields: [campaignId], references: [id], onDelete: Restrict)
-  participant           CampaignParticipant @relation(fields: [participantId], references: [id], onDelete: Restrict)
-  paymentMethod         BuyerPaymentMethod? @relation(fields: [paymentMethodId], references: [id], onDelete: SetNull)
+  campaign              CommunityCampaign       @relation(fields: [campaignId], references: [id], onDelete: Restrict)
+  participant           CampaignParticipant     @relation(fields: [participantId], references: [id], onDelete: Restrict)
+  paymentMethod         BuyerPaymentMethod?     @relation(fields: [paymentMethodId], references: [id], onDelete: SetNull)
   refund                CampaignRefund?
   chargeAttempts        CampaignChargeAttempt[]
-  createdAt             DateTime            @default(now())
-  updatedAt             DateTime            @updatedAt
+  createdAt             DateTime                @default(now())
+  updatedAt             DateTime                @updatedAt
 
   @@index([campaignId, status])
   @@index([participantId])
@@ -2446,43 +2500,43 @@ model CampaignContribution {
 // (Regular Deliveries renewals.service.ts), the same pattern already
 // proven for "charge a saved card while the buyer isn't present".
 model CampaignChargeAttempt {
-  id                    String                        @id @default(cuid())
+  id                    String                           @id @default(cuid())
   contributionId        String
   attemptNumber         Int
   status                SubscriptionPaymentAttemptStatus @default(PENDING)
   // Idempotency key sent to Stripe: "{contributionId}:{attemptNumber}".
-  idempotencyKey        String                        @unique
+  idempotencyKey        String                           @unique
   stripePaymentIntentId String?
   failureCode           String?
   failureMessage        String?
-  contribution          CampaignContribution          @relation(fields: [contributionId], references: [id], onDelete: Cascade)
-  createdAt             DateTime                      @default(now())
-  updatedAt             DateTime                      @updatedAt
+  contribution          CampaignContribution             @relation(fields: [contributionId], references: [id], onDelete: Cascade)
+  createdAt             DateTime                         @default(now())
+  updatedAt             DateTime                         @updatedAt
 
   @@unique([contributionId, attemptNumber])
   @@index([contributionId])
 }
 
 model CampaignRefund {
-  id             String               @id @default(cuid())
-  contributionId String               @unique
-  amount         Int
-  currency       String
-  status         ContributionStatus   @default(REFUND_PENDING)
-  idempotencyKey String               @unique
-  stripeRefundId String?
-  failureReason  String?
+  id                     String               @id @default(cuid())
+  contributionId         String               @unique
+  amount                 Int
+  currency               String
+  status                 ContributionStatus   @default(REFUND_PENDING)
+  idempotencyKey         String               @unique
+  stripeRefundId         String?
+  failureReason          String?
   // CBA-06 fix: escalateRefund() previously had no way to tell it had
   // already run for this refund, so a reload + re-click created a
   // duplicate CommunityBuySupportCase every time. These mirror the
   // idempotency-marker pattern already used elsewhere in this codebase
   // (e.g. PayoutRequest.stripeTransferId) rather than inventing a new one.
-  escalated              Boolean   @default(false)
+  escalated              Boolean              @default(false)
   escalatedAt            DateTime?
   escalatedSupportCaseId String?
-  contribution   CampaignContribution @relation(fields: [contributionId], references: [id], onDelete: Restrict)
-  createdAt      DateTime             @default(now())
-  updatedAt      DateTime             @updatedAt
+  contribution           CampaignContribution @relation(fields: [contributionId], references: [id], onDelete: Restrict)
+  createdAt              DateTime             @default(now())
+  updatedAt              DateTime             @updatedAt
 
   @@index([status])
 }
@@ -2490,32 +2544,32 @@ model CampaignRefund {
 // Per-country configuration gate. Every market defaults to Community Buy
 // fully disabled — see scope note above.
 model MarketConfiguration {
-  id                           String   @id @default(cuid())
-  countryCode                  String   @unique
+  id                           String  @id @default(cuid())
+  countryCode                  String  @unique
   currency                     String
-  communityBuyEnabled          Boolean  @default(false)
-  communityBuyPaymentsEnabled  Boolean  @default(false)
-  organiserApplicationsEnabled Boolean  @default(false)
-  supplierApplicationsEnabled  Boolean  @default(false)
-  regularDeliveriesEnabled     Boolean  @default(false)
+  communityBuyEnabled          Boolean @default(false)
+  communityBuyPaymentsEnabled  Boolean @default(false)
+  organiserApplicationsEnabled Boolean @default(false)
+  supplierApplicationsEnabled  Boolean @default(false)
+  regularDeliveriesEnabled     Boolean @default(false)
 
   // Architecture doc §8 (Market Controls) — added in the A→Z gap-closure pass.
   // paymentProvider/identityProvider are read by feature evaluation to reject
   // an operation the country has no working rail/verifier for (e.g. no pooled
   // Community Buy payment in a market with paymentMode=DISABLED).
-  paymentMode                 MarketPaymentMode @default(DISABLED)
-  paymentProvider              String?  // "stripe" | "paystack" | null (no provider configured yet)
-  identityProvider              String?  // "stripe_identity" | null
-  acceptedIdentityDocuments     String[] @default([])
-  campaignMinDurationHours       Int?
-  campaignMaxDurationHours       Int?
-  campaignMinValueAmount         Int?
-  campaignMaxValueAmount         Int?
-  refundTermsVersion             String?
-  organiserFeeBps                 Int?
-  supplierReleasePolicy          SupplierReleasePolicy @default(ON_DELIVERY_CONFIRMED)
-  deliveryMethods                 String[] @default([])
-  legalTermsVersion               String?
+  paymentMode               MarketPaymentMode     @default(DISABLED)
+  paymentProvider           String? // "stripe" | "paystack" | null (no provider configured yet)
+  identityProvider          String? // "stripe_identity" | null
+  acceptedIdentityDocuments String[]              @default([])
+  campaignMinDurationHours  Int?
+  campaignMaxDurationHours  Int?
+  campaignMinValueAmount    Int?
+  campaignMaxValueAmount    Int?
+  refundTermsVersion        String?
+  organiserFeeBps           Int?
+  supplierReleasePolicy     SupplierReleasePolicy @default(ON_DELIVERY_CONFIRMED)
+  deliveryMethods           String[]              @default([])
+  legalTermsVersion         String?
 
   // Client mandate (2026-09): "Eki does not hold customer funds... payment
   // mode must be country-configurable... if a market has no explicit
@@ -2529,7 +2583,7 @@ model MarketConfiguration {
   // two modes (AUTHORISE_THEN_CAPTURE, PLEDGE_THEN_CHARGE) are NOT
   // implemented — a market set to either is treated as unsupported and
   // payments stay blocked, same as null.
-  communityBuyPaymentMode      CommunityBuyPaymentMode?
+  communityBuyPaymentMode CommunityBuyPaymentMode?
 
   // Client mandate (2026-09): "Community Buy must support Eki's configured
   // processing/commission fee... do not hardcode an arbitrary fee." Taken
@@ -2538,10 +2592,10 @@ model MarketConfiguration {
   // means "not configured" and blocks release the same way an unset
   // communityBuyPaymentMode blocks payments — never falls back to a guessed
   // percentage.
-  communityBuyFeeBps           Int?
+  communityBuyFeeBps Int?
 
-  createdAt                    DateTime @default(now())
-  updatedAt                    DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }
 
 enum MarketPaymentMode {
@@ -2600,18 +2654,18 @@ enum LedgerOwnerType {
 }
 
 model LedgerEntry {
-  id                String          @id @default(cuid())
-  accountId         String
-  account           LedgerAccount   @relation(fields: [accountId], references: [id])
-  direction         LedgerDirection
-  amount            Int // minor units, always positive; direction carries the sign
-  currency          String
-  businessRefType   String // "Payment" | "Refund" | "Payout" | "Transfer" | "CampaignRefund" | ...
-  businessRefId     String
-  providerRef       String? // Stripe/Paystack charge, refund, or transfer id
-  description       String
-  reversesEntryId   String? // set when this entry reverses a prior one (correction, never edited/deleted)
-  postedAt          DateTime        @default(now())
+  id              String          @id @default(cuid())
+  accountId       String
+  account         LedgerAccount   @relation(fields: [accountId], references: [id])
+  direction       LedgerDirection
+  amount          Int // minor units, always positive; direction carries the sign
+  currency        String
+  businessRefType String // "Payment" | "Refund" | "Payout" | "Transfer" | "CampaignRefund" | ...
+  businessRefId   String
+  providerRef     String? // Stripe/Paystack charge, refund, or transfer id
+  description     String
+  reversesEntryId String? // set when this entry reverses a prior one (correction, never edited/deleted)
+  postedAt        DateTime        @default(now())
 
   @@index([accountId, postedAt])
   @@index([businessRefType, businessRefId])
@@ -2624,15 +2678,15 @@ enum LedgerDirection {
 }
 
 model ReconciliationRun {
-  id            String                     @id @default(cuid())
-  provider      String // "stripe" | "paystack"
-  periodStart   DateTime
-  periodEnd     DateTime
-  status        ReconciliationRunStatus    @default(RUNNING)
-  differences   ReconciliationDifference[]
-  totalChecked  Int                        @default(0)
-  startedAt     DateTime                   @default(now())
-  completedAt   DateTime?
+  id           String                     @id @default(cuid())
+  provider     String // "stripe" | "paystack"
+  periodStart  DateTime
+  periodEnd    DateTime
+  status       ReconciliationRunStatus    @default(RUNNING)
+  differences  ReconciliationDifference[]
+  totalChecked Int                        @default(0)
+  startedAt    DateTime                   @default(now())
+  completedAt  DateTime?
 
   @@index([provider, startedAt])
 }
@@ -2644,9 +2698,9 @@ enum ReconciliationRunStatus {
 }
 
 model ReconciliationDifference {
-  id              String                        @id @default(cuid())
+  id              String                         @id @default(cuid())
   runId           String
-  run             ReconciliationRun             @relation(fields: [runId], references: [id], onDelete: Cascade)
+  run             ReconciliationRun              @relation(fields: [runId], references: [id], onDelete: Cascade)
   businessRefType String
   businessRefId   String
   providerRef     String?
@@ -2655,7 +2709,7 @@ model ReconciliationDifference {
   kind            String // "MISSING_LOCALLY" | "MISSING_AT_PROVIDER" | "AMOUNT_MISMATCH" | "STATUS_MISMATCH"
   status          ReconciliationDifferenceStatus @default(OPEN)
   note            String?
-  createdAt       DateTime                      @default(now())
+  createdAt       DateTime                       @default(now())
   resolvedAt      DateTime?
 
   @@index([runId, status])
@@ -2671,31 +2725,31 @@ enum ReconciliationDifferenceStatus {
 // The monetary/severity threshold that decides whether an action REQUIRES
 // this is configurable — see AdminApprovalRule — never hardcoded.
 model AdminApprovalRule {
-  id            String   @id @default(cuid())
-  actionType    String   @unique // e.g. "refund.large", "payout.large", "role.grant_super_admin"
-  thresholdAmount Int?   // minor units; null = always requires approval regardless of amount
-  currency      String?
-  enabled       Boolean  @default(true)
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  id              String   @id @default(cuid())
+  actionType      String   @unique // e.g. "refund.large", "payout.large", "role.grant_super_admin"
+  thresholdAmount Int? // minor units; null = always requires approval regardless of amount
+  currency        String?
+  enabled         Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
 }
 
 model AdminApproval {
-  id             String               @id @default(cuid())
-  actionType     String
+  id              String              @id @default(cuid())
+  actionType      String
   businessRefType String
-  businessRefId  String
-  amount         Int?
-  currency       String?
-  requestedById  String
-  requestedBy    User                 @relation("AdminApprovalRequestedBy", fields: [requestedById], references: [id])
-  reason         String
-  status         AdminApprovalStatus  @default(PENDING)
-  decidedById    String?
-  decidedBy      User?                @relation("AdminApprovalDecidedBy", fields: [decidedById], references: [id])
-  decidedAt      DateTime?
-  decisionNote   String?
-  createdAt      DateTime             @default(now())
+  businessRefId   String
+  amount          Int?
+  currency        String?
+  requestedById   String
+  requestedBy     User                @relation("AdminApprovalRequestedBy", fields: [requestedById], references: [id])
+  reason          String
+  status          AdminApprovalStatus @default(PENDING)
+  decidedById     String?
+  decidedBy       User?               @relation("AdminApprovalDecidedBy", fields: [decidedById], references: [id])
+  decidedAt       DateTime?
+  decisionNote    String?
+  createdAt       DateTime            @default(now())
 
   @@index([status, actionType])
   @@index([businessRefType, businessRefId])

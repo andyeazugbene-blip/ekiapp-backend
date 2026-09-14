@@ -90,7 +90,12 @@ beforeAll(async () => {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  mockVendorFindUnique.mockResolvedValue({ id: "vendor-db-1" });
+  // Community Buy Workstream 1: requireVendorProfile() now queries a real
+  // Vendor row instead of trusting role alone — differentiated so
+  // buyer-1 doesn't inherit vendor-user-1's vendor row.
+  mockVendorFindUnique.mockImplementation(async ({ where }: any) =>
+    where?.userId === "vendor-user-1" ? { id: "vendor-db-1" } : null,
+  );
   mockListVendorAutomations.mockResolvedValue([{ type: "FIRST_SALE", enabled: true, description: "..." }]);
   mockSetVendorAutomation.mockResolvedValue({ id: "s1", vendorId: "vendor-db-1", type: "FIRST_SALE", enabled: false });
   mockListVendorActivity.mockResolvedValue([]);

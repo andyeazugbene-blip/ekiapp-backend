@@ -1,6 +1,7 @@
 import { Router } from "express";
 
-import { authenticate, requireRole } from "../../middlewares/authenticate";
+import { authenticate } from "../../middlewares/authenticate";
+import { requireApprovedSupplier } from "../../middlewares/require-capability";
 import { asyncHandler } from "../../shared/utils/async-handler";
 import {
   applyAsOrganiser,
@@ -111,19 +112,25 @@ organiserRouter.post("/campaigns/:id/fulfilment/confirm-completion", asyncHandle
 organiserRouter.post("/campaigns/:id/fulfil-anyway", asyncHandler(legacyFulfilCampaignAnywayShim));
 organiserRouter.post("/campaigns/:id/cancel", asyncHandler(legacyCancelFailedCampaignShim));
 
-// Supplier — mounted at /supplier. Only a verified vendor may apply.
+// Supplier — mounted at /supplier. Community Buy Workstream 1: the
+// Supplier Centre landing (profile) and applying are open to ANY
+// authenticated user — no Vendor, no verification, no role required (spec
+// AT-03: opening Supplier Centre without approval shows a setup state, not
+// an authorization error). Only genuinely protected supplier ACTIONS
+// (accepting/declining obligations, fulfilment, payment views) require an
+// approved SupplierAccount, via requireApprovedSupplier() below.
 export const supplierRouter = Router();
-supplierRouter.use(authenticate, requireRole("VENDOR"));
+supplierRouter.use(authenticate);
 supplierRouter.get("/profile", asyncHandler(getMySupplierProfile));
 supplierRouter.post("/applications", asyncHandler(applyAsSupplier));
-supplierRouter.get("/campaigns", asyncHandler(listMySupplierCampaigns));
-supplierRouter.post("/campaigns/:id/supplier-commitment", asyncHandler(confirmSupplierCommitment));
-supplierRouter.post("/campaigns/:id/decline", asyncHandler(declineSupplierCommitment));
-supplierRouter.get("/campaigns/:id/fulfilment", asyncHandler(getSupplierFulfilment));
-supplierRouter.post("/campaigns/:id/fulfilment/confirm-inventory", asyncHandler(confirmFulfilmentInventory));
-supplierRouter.post("/campaigns/:id/fulfilment/plan", asyncHandler(setFulfilmentPlan));
-supplierRouter.post("/campaigns/:id/fulfilment/start-packing", asyncHandler(startFulfilmentPacking));
-supplierRouter.post("/campaigns/:id/fulfilment/ready", asyncHandler(markFulfilmentReady));
-supplierRouter.post("/campaigns/:id/fulfilment/dispatch", asyncHandler(markFulfilmentDispatched));
-supplierRouter.post("/campaigns/:id/fulfilment/collect", asyncHandler(markFulfilmentCollected));
-supplierRouter.get("/campaigns/:id/payment", asyncHandler(getMySupplierPayment));
+supplierRouter.get("/campaigns", requireApprovedSupplier(), asyncHandler(listMySupplierCampaigns));
+supplierRouter.post("/campaigns/:id/supplier-commitment", requireApprovedSupplier(), asyncHandler(confirmSupplierCommitment));
+supplierRouter.post("/campaigns/:id/decline", requireApprovedSupplier(), asyncHandler(declineSupplierCommitment));
+supplierRouter.get("/campaigns/:id/fulfilment", requireApprovedSupplier(), asyncHandler(getSupplierFulfilment));
+supplierRouter.post("/campaigns/:id/fulfilment/confirm-inventory", requireApprovedSupplier(), asyncHandler(confirmFulfilmentInventory));
+supplierRouter.post("/campaigns/:id/fulfilment/plan", requireApprovedSupplier(), asyncHandler(setFulfilmentPlan));
+supplierRouter.post("/campaigns/:id/fulfilment/start-packing", requireApprovedSupplier(), asyncHandler(startFulfilmentPacking));
+supplierRouter.post("/campaigns/:id/fulfilment/ready", requireApprovedSupplier(), asyncHandler(markFulfilmentReady));
+supplierRouter.post("/campaigns/:id/fulfilment/dispatch", requireApprovedSupplier(), asyncHandler(markFulfilmentDispatched));
+supplierRouter.post("/campaigns/:id/fulfilment/collect", requireApprovedSupplier(), asyncHandler(markFulfilmentCollected));
+supplierRouter.get("/campaigns/:id/payment", requireApprovedSupplier(), asyncHandler(getMySupplierPayment));

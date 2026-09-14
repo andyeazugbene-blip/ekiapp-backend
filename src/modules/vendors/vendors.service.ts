@@ -1,4 +1,4 @@
-import { Prisma, UserRole } from "@prisma/client";
+import { Prisma } from "@prisma/client";
 import type { PayoutMethod, Vendor } from "@prisma/client";
 
 import { env } from "../../config/env";
@@ -240,11 +240,14 @@ export const vendorsService = {
             await vendorMarketsService.ensureInitialAssignment(vendor.id, market, tx);
           }
 
-          // Only promote buyers to vendors; never demote admins or other elevated roles.
-          await tx.user.updateMany({
-            where: { id: userId, role: UserRole.BUYER },
-            data: { role: UserRole.VENDOR },
-          });
+          // Community Buy Workstream 1: opening a store no longer converts
+          // BUYER -> VENDOR. Selling is now derived from an eligible Vendor
+          // row (see authService.deriveCapabilities' canSell), not from
+          // User.role — a buyer keeps buying/organising access after
+          // opening a store instead of losing it until they switch back.
+          // requireVendorProfile()/requireVendorProfileOrAdmin() (see
+          // middlewares/require-capability.ts) gate vendor-portal routes on
+          // this Vendor row directly, not on role.
 
           return vendor;
         });

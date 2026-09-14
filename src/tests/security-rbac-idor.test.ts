@@ -13,6 +13,26 @@
 import { describe, it, expect, vi, beforeAll, beforeEach } from "vitest";
 import jwt from "jsonwebtoken";
 
+// Community Buy Workstream 1: vendor-portal routes now gate on a real
+// Vendor row (requireVendorProfile/requireVendorProfileOrAdmin,
+// middlewares/require-capability.ts) instead of role alone, so this file's
+// original "stub auth so we don't need the DB" premise needs one addition —
+// none of buyer-a/vendor-a/admin-1 are real rows, so a real lookup would
+// hit the (unreachable in this test env) database. Only `vendor` is
+// stubbed; everything else still falls through to the real client exactly
+// as before this change.
+vi.mock("../lib/prisma", async () => {
+  const actual = await vi.importActual<typeof import("../lib/prisma")>("../lib/prisma");
+  return {
+    prisma: new Proxy(actual.prisma, {
+      get(target, prop) {
+        if (prop === "vendor") return { findUnique: vi.fn().mockResolvedValue(null) };
+        return (target as any)[prop];
+      },
+    }),
+  };
+});
+
 // Stub auth so we don't need the DB. Real authenticate would go through
 // Prisma; we only need the role-gate behavior to be the same.
 vi.mock("../middlewares/authenticate", async () => {

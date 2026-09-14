@@ -2,6 +2,7 @@ import { prisma } from "../../lib/prisma";
 import { AppError } from "../../shared/errors/app-error";
 import { vendorMarketsService } from "../vendors/vendor-markets.service";
 import { marketConfigurationService } from "./market-configuration.service";
+import { supplierAccountService } from "./supplier-account.service";
 
 /**
  * spec §5 permission rule: a role must be granted independently. Being a
@@ -38,7 +39,12 @@ export const organiserSupplierService = {
     }
     const existing = await prisma.supplierProfile.findUnique({ where: { vendorId } });
     if (existing) throw new AppError("Supplier application already exists", 409);
-    return prisma.supplierProfile.create({ data: { vendorId, country } });
+    const created = await prisma.supplierProfile.create({ data: { vendorId, country } });
+    // Workstream 1: keep the new user-keyed SupplierAccount in sync with
+    // this legacy Vendor-backed application so requireApprovedSupplier()
+    // and canSupply never drift from it.
+    await supplierAccountService.syncSupplierAccountForProfile(created.id);
+    return created;
   },
 
   async getOrganiserProfile(userId: string) {
@@ -81,7 +87,9 @@ export const organiserSupplierService = {
   },
 
   async verifySupplier(id: string) {
-    return prisma.supplierProfile.update({ where: { id }, data: { isVerified: true, verifiedAt: new Date() } });
+    const updated = await prisma.supplierProfile.update({ where: { id }, data: { isVerified: true, verifiedAt: new Date() } });
+    await supplierAccountService.syncSupplierAccountForProfile(id);
+    return updated;
   },
 
   // ─── Risk controls — restrict/unrestrict a verified organiser or
@@ -124,10 +132,14 @@ export const organiserSupplierService = {
   },
 
   async restrictSupplier(id: string, reason: string) {
-    return prisma.supplierProfile.update({ where: { id }, data: { isRestricted: true, restrictedReason: reason } });
+    const updated = await prisma.supplierProfile.update({ where: { id }, data: { isRestricted: true, restrictedReason: reason } });
+    await supplierAccountService.syncSupplierAccountForProfile(id);
+    return updated;
   },
 
   async unrestrictSupplier(id: string) {
-    return prisma.supplierProfile.update({ where: { id }, data: { isRestricted: false, restrictedReason: null } });
+    const updated = await prisma.supplierProfile.update({ where: { id }, data: { isRestricted: false, restrictedReason: null } });
+    await supplierAccountService.syncSupplierAccountForProfile(id);
+    return updated;
   },
 };

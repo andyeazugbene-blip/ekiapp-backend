@@ -1,6 +1,7 @@
 import { Router } from "express";
 
-import { authenticate, requireRole } from "../../middlewares/authenticate";
+import { authenticate } from "../../middlewares/authenticate";
+import { requireVendorProfileOrAdmin } from "../../middlewares/require-capability";
 import { requireSellerPlanFeature } from "../../middlewares/require-seller-plan-feature";
 import { asyncHandler } from "../../shared/utils/async-handler";
 import {
@@ -62,17 +63,17 @@ vendorsRouter.use(authenticate);
 vendorsRouter.post("/", asyncHandler(createVendor));
 
 // All routes below require VENDOR role
-vendorsRouter.get("/me", requireRole("VENDOR", "ADMIN"), asyncHandler(getOwnVendor));
-vendorsRouter.patch("/me", requireRole("VENDOR", "ADMIN"), asyncHandler(updateOwnVendor));
-vendorsRouter.get("/me/dashboard", requireRole("VENDOR", "ADMIN"), asyncHandler(getVendorDashboard));
-vendorsRouter.get("/me/markets", requireRole("VENDOR", "ADMIN"), asyncHandler(listOwnVendorMarkets));
-vendorsRouter.post("/me/markets", requireRole("VENDOR", "ADMIN"), asyncHandler(addOwnVendorMarket));
-vendorsRouter.patch("/me/markets/:marketCode", requireRole("VENDOR", "ADMIN"), asyncHandler(setOwnVendorMarketEnabled));
-vendorsRouter.delete("/me/markets/:marketCode", requireRole("VENDOR", "ADMIN"), asyncHandler(removeOwnVendorMarket));
-vendorsRouter.get("/me/earnings", requireRole("VENDOR", "ADMIN"), asyncHandler(getVendorEarnings));
+vendorsRouter.get("/me", requireVendorProfileOrAdmin(), asyncHandler(getOwnVendor));
+vendorsRouter.patch("/me", requireVendorProfileOrAdmin(), asyncHandler(updateOwnVendor));
+vendorsRouter.get("/me/dashboard", requireVendorProfileOrAdmin(), asyncHandler(getVendorDashboard));
+vendorsRouter.get("/me/markets", requireVendorProfileOrAdmin(), asyncHandler(listOwnVendorMarkets));
+vendorsRouter.post("/me/markets", requireVendorProfileOrAdmin(), asyncHandler(addOwnVendorMarket));
+vendorsRouter.patch("/me/markets/:marketCode", requireVendorProfileOrAdmin(), asyncHandler(setOwnVendorMarketEnabled));
+vendorsRouter.delete("/me/markets/:marketCode", requireVendorProfileOrAdmin(), asyncHandler(removeOwnVendorMarket));
+vendorsRouter.get("/me/earnings", requireVendorProfileOrAdmin(), asyncHandler(getVendorEarnings));
 vendorsRouter.get(
   "/me/analytics",
-  requireRole("VENDOR", "ADMIN"),
+  requireVendorProfileOrAdmin(),
   asyncHandler(requireSellerPlanFeature("analytics")),
   asyncHandler(getVendorAnalytics),
 );
@@ -81,44 +82,44 @@ vendorsRouter.get(
 // for the previous round of frontend code that already shipped that path.
 vendorsRouter.get(
   "/me/analytics/revenue",
-  requireRole("VENDOR", "ADMIN"),
+  requireVendorProfileOrAdmin(),
   asyncHandler(requireSellerPlanFeature("analytics")),
   asyncHandler(getVendorRevenue),
 );
 vendorsRouter.get(
   "/me/revenue",
-  requireRole("VENDOR", "ADMIN"),
+  requireVendorProfileOrAdmin(),
   asyncHandler(requireSellerPlanFeature("analytics")),
   asyncHandler(getVendorRevenue),
 );
-vendorsRouter.get("/me/public-store-analytics", requireRole("VENDOR", "ADMIN"), asyncHandler(getVendorPublicStoreAnalytics));
-vendorsRouter.get("/me/buyers", requireRole("VENDOR", "ADMIN"), asyncHandler(listVendorBuyers));
-vendorsRouter.get("/me/buyers/:id", requireRole("VENDOR", "ADMIN"), asyncHandler(getVendorBuyer));
-vendorsRouter.post("/me/payout-methods", requireRole("VENDOR", "ADMIN"), asyncHandler(createPayoutMethod));
-vendorsRouter.get("/me/payout-methods", requireRole("VENDOR", "ADMIN"), asyncHandler(listPayoutMethods));
-vendorsRouter.patch("/me/payout-methods/:id", requireRole("VENDOR", "ADMIN"), asyncHandler(updatePayoutMethod));
-vendorsRouter.delete("/me/payout-methods/:id", requireRole("VENDOR", "ADMIN"), asyncHandler(deletePayoutMethod));
-vendorsRouter.patch("/me/payout-methods/:id/default", requireRole("VENDOR", "ADMIN"), asyncHandler(setDefaultPayoutMethod));
+vendorsRouter.get("/me/public-store-analytics", requireVendorProfileOrAdmin(), asyncHandler(getVendorPublicStoreAnalytics));
+vendorsRouter.get("/me/buyers", requireVendorProfileOrAdmin(), asyncHandler(listVendorBuyers));
+vendorsRouter.get("/me/buyers/:id", requireVendorProfileOrAdmin(), asyncHandler(getVendorBuyer));
+vendorsRouter.post("/me/payout-methods", requireVendorProfileOrAdmin(), asyncHandler(createPayoutMethod));
+vendorsRouter.get("/me/payout-methods", requireVendorProfileOrAdmin(), asyncHandler(listPayoutMethods));
+vendorsRouter.patch("/me/payout-methods/:id", requireVendorProfileOrAdmin(), asyncHandler(updatePayoutMethod));
+vendorsRouter.delete("/me/payout-methods/:id", requireVendorProfileOrAdmin(), asyncHandler(deletePayoutMethod));
+vendorsRouter.patch("/me/payout-methods/:id/default", requireVendorProfileOrAdmin(), asyncHandler(setDefaultPayoutMethod));
 
 // Stripe Connect
-vendorsRouter.post("/me/stripe-connect/onboard", requireRole("VENDOR", "ADMIN"), asyncHandler(onboardStripeConnect));
-vendorsRouter.get("/me/stripe-connect/status", requireRole("VENDOR", "ADMIN"), asyncHandler(getStripeConnectStatus));
-vendorsRouter.post("/me/stripe-connect/refresh", requireRole("VENDOR", "ADMIN"), asyncHandler(refreshStripeConnect));
+vendorsRouter.post("/me/stripe-connect/onboard", requireVendorProfileOrAdmin(), asyncHandler(onboardStripeConnect));
+vendorsRouter.get("/me/stripe-connect/status", requireVendorProfileOrAdmin(), asyncHandler(getStripeConnectStatus));
+vendorsRouter.post("/me/stripe-connect/refresh", requireVendorProfileOrAdmin(), asyncHandler(refreshStripeConnect));
 
 // Vendor verification (KYC)
-vendorsRouter.post("/me/verification", requireRole("VENDOR", "ADMIN"), asyncHandler(submitVerificationDocument));
-vendorsRouter.get("/me/verification", requireRole("VENDOR", "ADMIN"), asyncHandler(getOwnVerification));
-vendorsRouter.delete("/me/verification", requireRole("VENDOR", "ADMIN"), asyncHandler(resetVerification));
+vendorsRouter.post("/me/verification", requireVendorProfileOrAdmin(), asyncHandler(submitVerificationDocument));
+vendorsRouter.get("/me/verification", requireVendorProfileOrAdmin(), asyncHandler(getOwnVerification));
+vendorsRouter.delete("/me/verification", requireVendorProfileOrAdmin(), asyncHandler(resetVerification));
 
 // Stripe Identity verification
-vendorsRouter.post("/me/verification/stripe-session", requireRole("VENDOR", "ADMIN"), asyncHandler(createStripeVerificationSession));
-vendorsRouter.get("/me/verification/stripe-status", requireRole("VENDOR", "ADMIN"), asyncHandler(getStripeVerificationStatus));
+vendorsRouter.post("/me/verification/stripe-session", requireVendorProfileOrAdmin(), asyncHandler(createStripeVerificationSession));
+vendorsRouter.get("/me/verification/stripe-status", requireVendorProfileOrAdmin(), asyncHandler(getStripeVerificationStatus));
 
 // Vendor order management
-vendorsRouter.get("/me/orders", requireRole("VENDOR", "ADMIN"), asyncHandler(listVendorOrders));
-vendorsRouter.get("/me/orders/:id", requireRole("VENDOR", "ADMIN"), asyncHandler(getVendorOrder));
-vendorsRouter.patch("/me/orders/:id/status", requireRole("VENDOR", "ADMIN"), asyncHandler(updateVendorOrderStatus));
-vendorsRouter.post("/me/orders/:id/confirm-escrow", requireRole("VENDOR", "ADMIN"), asyncHandler(vendorConfirmEscrowOrder));
-vendorsRouter.post("/me/orders/:id/dispatch", requireRole("VENDOR", "ADMIN"), asyncHandler(vendorDispatchOrder));
-vendorsRouter.post("/me/bank-accounts", requireRole("VENDOR", "ADMIN"), asyncHandler(registerBankAccount));
-vendorsRouter.get("/me/bank-accounts", requireRole("VENDOR", "ADMIN"), asyncHandler(listBankAccounts));
+vendorsRouter.get("/me/orders", requireVendorProfileOrAdmin(), asyncHandler(listVendorOrders));
+vendorsRouter.get("/me/orders/:id", requireVendorProfileOrAdmin(), asyncHandler(getVendorOrder));
+vendorsRouter.patch("/me/orders/:id/status", requireVendorProfileOrAdmin(), asyncHandler(updateVendorOrderStatus));
+vendorsRouter.post("/me/orders/:id/confirm-escrow", requireVendorProfileOrAdmin(), asyncHandler(vendorConfirmEscrowOrder));
+vendorsRouter.post("/me/orders/:id/dispatch", requireVendorProfileOrAdmin(), asyncHandler(vendorDispatchOrder));
+vendorsRouter.post("/me/bank-accounts", requireVendorProfileOrAdmin(), asyncHandler(registerBankAccount));
+vendorsRouter.get("/me/bank-accounts", requireVendorProfileOrAdmin(), asyncHandler(listBankAccounts));
