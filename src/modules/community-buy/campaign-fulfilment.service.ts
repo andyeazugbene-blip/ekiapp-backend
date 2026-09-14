@@ -84,10 +84,17 @@ export const campaignFulfilmentService = {
     if (fulfilment.status !== "AWAITING_INVENTORY_CONFIRMATION") {
       throw new AppError("Inventory has already been confirmed for this campaign", 409);
     }
-    const updated = await prisma.campaignFulfilment.update({
-      where: { campaignId },
+    // WS5: atomic claim — the pre-check above reads a snapshot that can be
+    // stale by the time this write runs (two concurrent calls, e.g. a
+    // double-tap). Guarding the write itself on the still-expected prior
+    // status means only one caller's write actually lands; the loser gets
+    // the same 409 as if it had lost the read-time check.
+    const claim = await prisma.campaignFulfilment.updateMany({
+      where: { campaignId, status: "AWAITING_INVENTORY_CONFIRMATION" },
       data: { status: "INVENTORY_CONFIRMED", inventoryConfirmedAt: new Date() },
     });
+    if (claim.count !== 1) throw new AppError("Inventory has already been confirmed for this campaign", 409);
+    const updated = await prisma.campaignFulfilment.findUniqueOrThrow({ where: { campaignId } });
     // Fires only after the status transition above actually succeeds. The
     // AWAITING_INVENTORY_CONFIRMATION -> INVENTORY_CONFIRMED move is
     // one-directional and already guarded above, so a genuine retry gets a
@@ -112,14 +119,19 @@ export const campaignFulfilmentService = {
     if (fulfilment.status === "DISPATCHED" || fulfilment.status === "COLLECTED" || fulfilment.status === "COMPLETED") {
       throw new AppError("This campaign has already been dispatched or collected", 409);
     }
-    return prisma.campaignFulfilment.update({
-      where: { campaignId },
+    // WS5: same atomic-claim guard — a concurrent dispatch/collect call
+    // must not have this plan change land after the campaign has already
+    // moved past the point where a plan still makes sense.
+    const claim = await prisma.campaignFulfilment.updateMany({
+      where: { campaignId, status: { notIn: ["AWAITING_INVENTORY_CONFIRMATION", "DISPATCHED", "COLLECTED", "COMPLETED"] } },
       data: {
         method: input.method,
         estimatedReadyAt: input.estimatedReadyAt ? new Date(input.estimatedReadyAt) : undefined,
         notes: input.notes,
       },
     });
+    if (claim.count !== 1) throw new AppError("This campaign has already been dispatched or collected", 409);
+    return prisma.campaignFulfilment.findUniqueOrThrow({ where: { campaignId } });
   },
 
   async startPacking(vendorId: string, campaignId: string) {
@@ -128,29 +140,39 @@ export const campaignFulfilmentService = {
       throw new AppError("Confirm inventory before starting packing", 409);
     }
     if (!fulfilment.method) throw new AppError("Set a fulfilment plan (delivery or collection) before starting packing", 409);
-    return prisma.campaignFulfilment.update({
-      where: { campaignId },
+    const claim = await prisma.campaignFulfilment.updateMany({
+      where: { campaignId, status: "INVENTORY_CONFIRMED" },
       data: { status: "PACKING", packingStartedAt: new Date() },
     });
+    if (claim.count !== 1) throw new AppError("Confirm inventory before starting packing", 409);
+    return prisma.campaignFulfilment.findUniqueOrThrow({ where: { campaignId } });
   },
 
   async markReady(vendorId: string, campaignId: string) {
     const { fulfilment } = await requireSupplierOwned(vendorId, campaignId);
     if (fulfilment.status !== "PACKING") throw new AppError("Start packing before marking this campaign ready", 409);
-    return prisma.campaignFulfilment.update({
-      where: { campaignId },
+    const claim = await prisma.campaignFulfilment.updateMany({
+      where: { campaignId, status: "PACKING" },
       data: { status: "READY_FOR_DISPATCH_OR_COLLECTION", readyAt: new Date() },
     });
+    if (claim.count !== 1) throw new AppError("Start packing before marking this campaign ready", 409);
+    return prisma.campaignFulfilment.findUniqueOrThrow({ where: { campaignId } });
   },
 
   async markDispatched(vendorId: string, campaignId: string) {
     const { campaign, fulfilment } = await requireSupplierOwned(vendorId, campaignId);
     if (fulfilment.status !== "READY_FOR_DISPATCH_OR_COLLECTION") throw new AppError("This campaign is not ready for dispatch", 409);
     if (fulfilment.method !== "DELIVERY") throw new AppError("This campaign's fulfilment plan is collection, not delivery", 409);
-    const updated = await prisma.campaignFulfilment.update({
-      where: { campaignId },
+    // WS5: method is folded into the guard itself, not just the pre-check —
+    // a concurrent setPlan() flipping method between the read above and
+    // this write can no longer sneak a COLLECTION-planned campaign through
+    // as DISPATCHED.
+    const claim = await prisma.campaignFulfilment.updateMany({
+      where: { campaignId, status: "READY_FOR_DISPATCH_OR_COLLECTION", method: "DELIVERY" },
       data: { status: "DISPATCHED", dispatchedAt: new Date() },
     });
+    if (claim.count !== 1) throw new AppError("This campaign is not ready for dispatch", 409);
+    const updated = await prisma.campaignFulfilment.findUniqueOrThrow({ where: { campaignId } });
     await notifyOrganiserAndParticipants(campaign.id, campaign.title, "Your Community Buy has been dispatched", `${campaign.title} has been dispatched by the supplier.`);
     return updated;
   },
@@ -159,10 +181,12 @@ export const campaignFulfilmentService = {
     const { campaign, fulfilment } = await requireSupplierOwned(vendorId, campaignId);
     if (fulfilment.status !== "READY_FOR_DISPATCH_OR_COLLECTION") throw new AppError("This campaign is not ready for collection", 409);
     if (fulfilment.method !== "COLLECTION") throw new AppError("This campaign's fulfilment plan is delivery, not collection", 409);
-    const updated = await prisma.campaignFulfilment.update({
-      where: { campaignId },
+    const claim = await prisma.campaignFulfilment.updateMany({
+      where: { campaignId, status: "READY_FOR_DISPATCH_OR_COLLECTION", method: "COLLECTION" },
       data: { status: "COLLECTED", collectedAt: new Date() },
     });
+    if (claim.count !== 1) throw new AppError("This campaign is not ready for collection", 409);
+    const updated = await prisma.campaignFulfilment.findUniqueOrThrow({ where: { campaignId } });
     await notifyOrganiserAndParticipants(campaign.id, campaign.title, "Your Community Buy is ready for collection", `${campaign.title} is ready for collection from the supplier.`);
     return updated;
   },
@@ -173,10 +197,12 @@ export const campaignFulfilmentService = {
     if (fulfilment.status !== "DISPATCHED" && fulfilment.status !== "COLLECTED") {
       throw new AppError("This campaign hasn't been dispatched or collected yet", 409);
     }
-    return prisma.campaignFulfilment.update({
-      where: { campaignId },
+    const claim = await prisma.campaignFulfilment.updateMany({
+      where: { campaignId, status: { in: ["DISPATCHED", "COLLECTED"] } },
       data: { status: "COMPLETED" },
     });
+    if (claim.count !== 1) throw new AppError("This campaign hasn't been dispatched or collected yet", 409);
+    return prisma.campaignFulfilment.findUniqueOrThrow({ where: { campaignId } });
   },
 
   // ─── Workstream 3 — no-Vendor SupplierAccount path. Each method below is
@@ -195,10 +221,12 @@ export const campaignFulfilmentService = {
     if (fulfilment.status !== "AWAITING_INVENTORY_CONFIRMATION") {
       throw new AppError("Inventory has already been confirmed for this campaign", 409);
     }
-    const updated = await prisma.campaignFulfilment.update({
-      where: { campaignId },
+    const claim = await prisma.campaignFulfilment.updateMany({
+      where: { campaignId, status: "AWAITING_INVENTORY_CONFIRMATION" },
       data: { status: "INVENTORY_CONFIRMED", inventoryConfirmedAt: new Date() },
     });
+    if (claim.count !== 1) throw new AppError("Inventory has already been confirmed for this campaign", 409);
+    const updated = await prisma.campaignFulfilment.findUniqueOrThrow({ where: { campaignId } });
     await notifyOrganiser(
       campaign.id,
       "inventory_confirmed",
@@ -217,14 +245,16 @@ export const campaignFulfilmentService = {
     if (fulfilment.status === "DISPATCHED" || fulfilment.status === "COLLECTED" || fulfilment.status === "COMPLETED") {
       throw new AppError("This campaign has already been dispatched or collected", 409);
     }
-    return prisma.campaignFulfilment.update({
-      where: { campaignId },
+    const claim = await prisma.campaignFulfilment.updateMany({
+      where: { campaignId, status: { notIn: ["AWAITING_INVENTORY_CONFIRMATION", "DISPATCHED", "COLLECTED", "COMPLETED"] } },
       data: {
         method: input.method,
         estimatedReadyAt: input.estimatedReadyAt ? new Date(input.estimatedReadyAt) : undefined,
         notes: input.notes,
       },
     });
+    if (claim.count !== 1) throw new AppError("This campaign has already been dispatched or collected", 409);
+    return prisma.campaignFulfilment.findUniqueOrThrow({ where: { campaignId } });
   },
 
   async startPackingForAccount(userId: string, campaignId: string) {
@@ -233,29 +263,35 @@ export const campaignFulfilmentService = {
       throw new AppError("Confirm inventory before starting packing", 409);
     }
     if (!fulfilment.method) throw new AppError("Set a fulfilment plan (delivery or collection) before starting packing", 409);
-    return prisma.campaignFulfilment.update({
-      where: { campaignId },
+    const claim = await prisma.campaignFulfilment.updateMany({
+      where: { campaignId, status: "INVENTORY_CONFIRMED" },
       data: { status: "PACKING", packingStartedAt: new Date() },
     });
+    if (claim.count !== 1) throw new AppError("Confirm inventory before starting packing", 409);
+    return prisma.campaignFulfilment.findUniqueOrThrow({ where: { campaignId } });
   },
 
   async markReadyForAccount(userId: string, campaignId: string) {
     const { fulfilment } = await requireSupplierAccountOwned(userId, campaignId);
     if (fulfilment.status !== "PACKING") throw new AppError("Start packing before marking this campaign ready", 409);
-    return prisma.campaignFulfilment.update({
-      where: { campaignId },
+    const claim = await prisma.campaignFulfilment.updateMany({
+      where: { campaignId, status: "PACKING" },
       data: { status: "READY_FOR_DISPATCH_OR_COLLECTION", readyAt: new Date() },
     });
+    if (claim.count !== 1) throw new AppError("Start packing before marking this campaign ready", 409);
+    return prisma.campaignFulfilment.findUniqueOrThrow({ where: { campaignId } });
   },
 
   async markDispatchedForAccount(userId: string, campaignId: string) {
     const { campaign, fulfilment } = await requireSupplierAccountOwned(userId, campaignId);
     if (fulfilment.status !== "READY_FOR_DISPATCH_OR_COLLECTION") throw new AppError("This campaign is not ready for dispatch", 409);
     if (fulfilment.method !== "DELIVERY") throw new AppError("This campaign's fulfilment plan is collection, not delivery", 409);
-    const updated = await prisma.campaignFulfilment.update({
-      where: { campaignId },
+    const claim = await prisma.campaignFulfilment.updateMany({
+      where: { campaignId, status: "READY_FOR_DISPATCH_OR_COLLECTION", method: "DELIVERY" },
       data: { status: "DISPATCHED", dispatchedAt: new Date() },
     });
+    if (claim.count !== 1) throw new AppError("This campaign is not ready for dispatch", 409);
+    const updated = await prisma.campaignFulfilment.findUniqueOrThrow({ where: { campaignId } });
     await notifyOrganiserAndParticipants(campaign.id, campaign.title, "Your Community Buy has been dispatched", `${campaign.title} has been dispatched by the supplier.`);
     return updated;
   },
@@ -264,10 +300,12 @@ export const campaignFulfilmentService = {
     const { campaign, fulfilment } = await requireSupplierAccountOwned(userId, campaignId);
     if (fulfilment.status !== "READY_FOR_DISPATCH_OR_COLLECTION") throw new AppError("This campaign is not ready for collection", 409);
     if (fulfilment.method !== "COLLECTION") throw new AppError("This campaign's fulfilment plan is delivery, not collection", 409);
-    const updated = await prisma.campaignFulfilment.update({
-      where: { campaignId },
+    const claim = await prisma.campaignFulfilment.updateMany({
+      where: { campaignId, status: "READY_FOR_DISPATCH_OR_COLLECTION", method: "COLLECTION" },
       data: { status: "COLLECTED", collectedAt: new Date() },
     });
+    if (claim.count !== 1) throw new AppError("This campaign is not ready for collection", 409);
+    const updated = await prisma.campaignFulfilment.findUniqueOrThrow({ where: { campaignId } });
     await notifyOrganiserAndParticipants(campaign.id, campaign.title, "Your Community Buy is ready for collection", `${campaign.title} is ready for collection from the supplier.`);
     return updated;
   },

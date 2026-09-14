@@ -5,7 +5,7 @@ vi.mock("../lib/prisma", () => ({
     supplierProfile: { findUnique: vi.fn() },
     organiserProfile: { findUnique: vi.fn() },
     communityCampaign: { findUnique: vi.fn() },
-    campaignFulfilment: { findUnique: vi.fn(), update: vi.fn(), upsert: vi.fn() },
+    campaignFulfilment: { findUnique: vi.fn(), findUniqueOrThrow: vi.fn(), update: vi.fn(), updateMany: vi.fn(), upsert: vi.fn() },
   },
 }));
 
@@ -21,6 +21,11 @@ const m = vi.mocked(prisma, true);
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // WS5: every mutating transition now claims its write via updateMany
+  // before re-reading the row — default to "claim succeeded" so existing
+  // success-path tests don't need to know about this plumbing; tests that
+  // specifically exercise the race override this to { count: 0 }.
+  m.campaignFulfilment.updateMany.mockResolvedValue({ count: 1 } as never);
 });
 
 function ownedBySupplier(status: string, extra: Record<string, unknown> = {}) {
@@ -53,16 +58,27 @@ describe("campaignFulfilmentService — ownership checks", () => {
 describe("campaignFulfilmentService — state machine (supplier side)", () => {
   it("confirmInventory moves AWAITING_INVENTORY_CONFIRMATION -> INVENTORY_CONFIRMED", async () => {
     ownedBySupplier("AWAITING_INVENTORY_CONFIRMATION");
-    m.campaignFulfilment.update.mockResolvedValue({ status: "INVENTORY_CONFIRMED" } as never);
+    m.campaignFulfilment.findUniqueOrThrow.mockResolvedValue({ status: "INVENTORY_CONFIRMED" } as never);
     await campaignFulfilmentService.confirmInventory("vendor-1", "camp-1");
-    expect(m.campaignFulfilment.update).toHaveBeenCalledWith(
-      expect.objectContaining({ data: expect.objectContaining({ status: "INVENTORY_CONFIRMED" }) }),
+    expect(m.campaignFulfilment.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { campaignId: "camp-1", status: "AWAITING_INVENTORY_CONFIRMATION" }, data: expect.objectContaining({ status: "INVENTORY_CONFIRMED" }) }),
     );
   });
 
   it("confirmInventory rejects a second confirmation", async () => {
     ownedBySupplier("INVENTORY_CONFIRMED");
     await expect(campaignFulfilmentService.confirmInventory("vendor-1", "camp-1")).rejects.toMatchObject({ statusCode: 409 });
+  });
+
+  // WS5: two concurrent confirmInventory calls (e.g. a double-tap) both
+  // pass the read-time status check — only the guarded write's atomic
+  // claim decides the real winner. The loser must not notify twice.
+  it("WS5: a losing concurrent confirmInventory call gets 409 and never fires a duplicate notification", async () => {
+    ownedBySupplier("AWAITING_INVENTORY_CONFIRMATION");
+    m.campaignFulfilment.updateMany.mockResolvedValue({ count: 0 } as never); // another call already won
+
+    await expect(campaignFulfilmentService.confirmInventory("vendor-1", "camp-1")).rejects.toMatchObject({ statusCode: 409 });
+    expect(notificationsService.enqueue).not.toHaveBeenCalled();
   });
 
   it("setPlan rejects being set before inventory is confirmed", async () => {
@@ -81,9 +97,9 @@ describe("campaignFulfilmentService — state machine (supplier side)", () => {
 
   it("setPlan succeeds once inventory is confirmed", async () => {
     ownedBySupplier("INVENTORY_CONFIRMED");
-    m.campaignFulfilment.update.mockResolvedValue({ method: "DELIVERY" } as never);
+    m.campaignFulfilment.findUniqueOrThrow.mockResolvedValue({ method: "DELIVERY" } as never);
     await campaignFulfilmentService.setPlan("vendor-1", "camp-1", { method: "DELIVERY", notes: "Fragile" });
-    expect(m.campaignFulfilment.update).toHaveBeenCalledWith(
+    expect(m.campaignFulfilment.updateMany).toHaveBeenCalledWith(
       expect.objectContaining({ data: expect.objectContaining({ method: "DELIVERY", notes: "Fragile" }) }),
     );
   });
@@ -95,9 +111,9 @@ describe("campaignFulfilmentService — state machine (supplier side)", () => {
 
   it("startPacking succeeds once a plan is set", async () => {
     ownedBySupplier("INVENTORY_CONFIRMED", { method: "DELIVERY" });
-    m.campaignFulfilment.update.mockResolvedValue({ status: "PACKING" } as never);
+    m.campaignFulfilment.findUniqueOrThrow.mockResolvedValue({ status: "PACKING" } as never);
     await campaignFulfilmentService.startPacking("vendor-1", "camp-1");
-    expect(m.campaignFulfilment.update).toHaveBeenCalledWith(
+    expect(m.campaignFulfilment.updateMany).toHaveBeenCalledWith(
       expect.objectContaining({ data: expect.objectContaining({ status: "PACKING" }) }),
     );
   });
@@ -114,7 +130,7 @@ describe("campaignFulfilmentService — state machine (supplier side)", () => {
 
   it("markDispatched succeeds for a DELIVERY plan and notifies organiser + participants", async () => {
     ownedBySupplier("READY_FOR_DISPATCH_OR_COLLECTION", { method: "DELIVERY" });
-    m.campaignFulfilment.update.mockResolvedValue({ status: "DISPATCHED" } as never);
+    m.campaignFulfilment.findUniqueOrThrow.mockResolvedValue({ status: "DISPATCHED" } as never);
     m.communityCampaign.findUnique.mockResolvedValueOnce({ id: "camp-1", supplierId: "sup-1", organiserId: "org-1", title: "Rice bulk buy" } as never);
     m.communityCampaign.findUnique.mockResolvedValueOnce({
       id: "camp-1", organiser: { userId: "organiser-user" }, participants: [{ userId: "buyer-1" }, { userId: "buyer-2" }],
@@ -122,10 +138,22 @@ describe("campaignFulfilmentService — state machine (supplier side)", () => {
 
     await campaignFulfilmentService.markDispatched("vendor-1", "camp-1");
 
-    expect(m.campaignFulfilment.update).toHaveBeenCalledWith(
-      expect.objectContaining({ data: expect.objectContaining({ status: "DISPATCHED" }) }),
+    expect(m.campaignFulfilment.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { campaignId: "camp-1", status: "READY_FOR_DISPATCH_OR_COLLECTION", method: "DELIVERY" }, data: expect.objectContaining({ status: "DISPATCHED" }) }),
     );
     expect(notificationsService.enqueue).toHaveBeenCalledTimes(3); // organiser + 2 participants
+  });
+
+  // WS5: the pre-check reads `method` once; folding method into the guarded
+  // write itself means a concurrent setPlan() flip (DELIVERY -> COLLECTION)
+  // landing between the read and this write can no longer sneak a
+  // COLLECTION-planned campaign through as DISPATCHED.
+  it("WS5: a concurrent setPlan flipping the method away from DELIVERY makes the guarded dispatch claim 0 rows, not a stale success", async () => {
+    ownedBySupplier("READY_FOR_DISPATCH_OR_COLLECTION", { method: "DELIVERY" });
+    m.campaignFulfilment.updateMany.mockResolvedValue({ count: 0 } as never); // method/status no longer matches by write time
+
+    await expect(campaignFulfilmentService.markDispatched("vendor-1", "camp-1")).rejects.toMatchObject({ statusCode: 409 });
+    expect(notificationsService.enqueue).not.toHaveBeenCalled();
   });
 
   it("markCollected rejects when the plan is DELIVERY, not COLLECTION", async () => {
@@ -142,23 +170,42 @@ describe("campaignFulfilmentService — organiser confirms completion", () => {
 
   it("allows confirming completion once DISPATCHED", async () => {
     ownedByOrganiser("DISPATCHED");
-    m.campaignFulfilment.update.mockResolvedValue({ status: "COMPLETED" } as never);
+    m.campaignFulfilment.findUniqueOrThrow.mockResolvedValue({ status: "COMPLETED" } as never);
     await campaignFulfilmentService.organiserConfirmCompletion("organiser-user-1", "camp-1");
-    expect(m.campaignFulfilment.update).toHaveBeenCalledWith(
+    expect(m.campaignFulfilment.updateMany).toHaveBeenCalledWith(
       expect.objectContaining({ data: { status: "COMPLETED" } }),
     );
   });
 
   it("allows confirming completion once COLLECTED", async () => {
     ownedByOrganiser("COLLECTED");
-    m.campaignFulfilment.update.mockResolvedValue({ status: "COMPLETED" } as never);
+    m.campaignFulfilment.findUniqueOrThrow.mockResolvedValue({ status: "COMPLETED" } as never);
     await campaignFulfilmentService.organiserConfirmCompletion("organiser-user-1", "camp-1");
-    expect(m.campaignFulfilment.update).toHaveBeenCalled();
+    expect(m.campaignFulfilment.updateMany).toHaveBeenCalled();
   });
 
   it("rejects a caller who isn't the campaign's organiser", async () => {
     m.organiserProfile.findUnique.mockResolvedValue({ id: "org-1" } as never);
     m.communityCampaign.findUnique.mockResolvedValue({ id: "camp-1", organiserId: "someone-else" } as never);
     await expect(campaignFulfilmentService.organiserConfirmCompletion("organiser-user-1", "camp-1")).rejects.toMatchObject({ statusCode: 404 });
+  });
+});
+
+describe("campaignFulfilmentService — SupplierAccount path (WS3 twins) race guard", () => {
+  function ownedBySupplierAccount(status: string, extra: Record<string, unknown> = {}) {
+    // requireSupplierAccountOwned reads prisma.supplierAccount, not
+    // supplierProfile — mocked separately here since it's not part of the
+    // shared prisma mock above.
+    (prisma as any).supplierAccount = { findUnique: vi.fn().mockResolvedValue({ id: "acct-1" }) };
+    m.communityCampaign.findUnique.mockResolvedValue({ id: "camp-1", supplierAccountId: "acct-1", organiserId: "org-1", title: "Rice bulk buy" } as never);
+    m.campaignFulfilment.findUnique.mockResolvedValue({ campaignId: "camp-1", status, method: null, ...extra } as never);
+  }
+
+  it("WS5: confirmInventoryForAccount is race-guarded the same way as the legacy Vendor path", async () => {
+    ownedBySupplierAccount("AWAITING_INVENTORY_CONFIRMATION");
+    m.campaignFulfilment.updateMany.mockResolvedValue({ count: 0 } as never);
+
+    await expect(campaignFulfilmentService.confirmInventoryForAccount("account-user-1", "camp-1")).rejects.toMatchObject({ statusCode: 409 });
+    expect(notificationsService.enqueue).not.toHaveBeenCalled();
   });
 });

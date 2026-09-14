@@ -14,7 +14,7 @@ vi.mock("../lib/prisma", () => ({
     campaignUpdate: { create: vi.fn(), findMany: vi.fn() },
     campaignExtensionRequest: { create: vi.fn(), findUnique: vi.fn(), update: vi.fn(), findMany: vi.fn() },
     campaignSupplierPayment: { findUnique: vi.fn(), create: vi.fn(), update: vi.fn(), findMany: vi.fn() },
-    campaignFulfilment: { upsert: vi.fn(), findUnique: vi.fn(), update: vi.fn() },
+    campaignFulfilment: { upsert: vi.fn(), findUnique: vi.fn(), findUniqueOrThrow: vi.fn(), update: vi.fn(), updateMany: vi.fn() },
     organiserProfile: { findUnique: vi.fn(), update: vi.fn() },
     supplierProfile: { findUnique: vi.fn(), findMany: vi.fn(), update: vi.fn() },
     // Community Buy Workstream 1: verify/restrict/unrestrictSupplier now
@@ -79,6 +79,10 @@ beforeEach(() => {
   m.ledgerAccount.findUnique.mockResolvedValue(null as never);
   m.ledgerAccount.create.mockImplementation(async ({ data }: any) => ({ id: `acct:${data.type}:${data.ownerId ?? "PLATFORM"}` }) as never);
   m.ledgerEntry.create.mockResolvedValue({ id: "entry-1" } as never);
+  // WS5: campaign-fulfilment.service.ts's mutating transitions now claim
+  // their write via updateMany before re-reading — default to "claim
+  // succeeded" for tests here that exercise it only incidentally.
+  m.campaignFulfilment.updateMany.mockResolvedValue({ count: 1 } as never);
 });
 
 describe("communityCampaignsService.closeDueCampaigns — doc §7 deadline evaluation", () => {
@@ -2766,7 +2770,7 @@ describe("Phase 8.1 — supplier notifications (invitation, accept, inventory co
         .mockResolvedValueOnce(inventoryCampaign as never) // requireSupplierOwned's own lookup
         .mockResolvedValueOnce(inventoryCampaign as never); // notifyOrganiser's separate lookup
       m.campaignFulfilment.findUnique.mockResolvedValue({ campaignId: "camp-1", status: "AWAITING_INVENTORY_CONFIRMATION" } as never);
-      m.campaignFulfilment.update.mockResolvedValue({ campaignId: "camp-1", status: "INVENTORY_CONFIRMED" } as never);
+      m.campaignFulfilment.findUniqueOrThrow.mockResolvedValue({ campaignId: "camp-1", status: "INVENTORY_CONFIRMED" } as never);
 
       const result = await campaignFulfilmentService.confirmInventory("vendor-1", "camp-1");
 
@@ -2800,7 +2804,7 @@ describe("Phase 8.1 — supplier notifications (invitation, accept, inventory co
       m.supplierProfile.findUnique.mockResolvedValue({ vendorId: "vendor-1", id: "sup-1" } as never);
       m.communityCampaign.findUnique.mockResolvedValue(inventoryCampaign as never);
       m.campaignFulfilment.findUnique.mockResolvedValue({ campaignId: "camp-1", status: "AWAITING_INVENTORY_CONFIRMATION" } as never);
-      m.campaignFulfilment.update.mockResolvedValue({ campaignId: "camp-1", status: "INVENTORY_CONFIRMED" } as never);
+      m.campaignFulfilment.findUniqueOrThrow.mockResolvedValue({ campaignId: "camp-1", status: "INVENTORY_CONFIRMED" } as never);
       vi.mocked(notificationsService.enqueue).mockRejectedValueOnce(new Error("push provider down"));
 
       const result = await campaignFulfilmentService.confirmInventory("vendor-1", "camp-1");
