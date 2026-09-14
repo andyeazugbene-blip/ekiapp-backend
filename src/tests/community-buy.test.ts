@@ -2084,6 +2084,230 @@ describe("communityCampaignsService.reassignSupplier — necessary companion to 
     m.organiserProfile.findUnique.mockResolvedValue({ id: "org-1" } as never);
     await expect(communityCampaignsService.reassignSupplier("organiser-user-1", "camp-1", "sup-1")).rejects.toMatchObject({ statusCode: 409 });
   });
+
+  it("reassigns to a no-Vendor SupplierAccount (Workstream 3) — writes supplierAccountId, leaves supplierId null, notifies the account's own userId, never touches SupplierProfile", async () => {
+    m.communityCampaign.findUnique.mockResolvedValue({
+      id: "camp-1", organiserId: "org-1", status: "DRAFT", termsLockedAt: null, supplierId: "sup-1", supplierAccountId: null, country: "GB",
+      title: "Bulk rice buy", minimumShares: 5, maximumShares: 15, fulfilmentOwner: "SUPPLIER",
+    } as never);
+    m.organiserProfile.findUnique.mockResolvedValue({ id: "org-1" } as never);
+    m.supplierAccount.findUnique.mockResolvedValue({ id: "acct-new-1", userId: "account-supplier-1", supplierState: "APPROVED", coverageRegions: ["GB"], legacySupplierProfileId: null } as never);
+    m.communityCampaign.update.mockResolvedValue({ id: "camp-1", supplierAccountId: "acct-new-1" } as never);
+
+    await communityCampaignsService.reassignSupplier("organiser-user-1", "camp-1", undefined, "acct-new-1");
+
+    expect(m.communityCampaign.update).toHaveBeenCalledWith({
+      where: { id: "camp-1" },
+      data: { supplierId: null, supplierAccountId: "acct-new-1", supplierCommitted: false, supplierCommittedAt: null, supplierDeclinedAt: null, supplierDeclineReason: null },
+    });
+    expect(notificationsService.enqueue).toHaveBeenCalledWith(expect.objectContaining({ userId: "account-supplier-1" }));
+    expect(m.supplierProfile.findUnique).not.toHaveBeenCalled();
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════
+// Workstream 3 — Supplier Centre + SupplierAccount cutover. The no-Vendor
+// SupplierAccount path is exercised end to end here: assignment, ownership,
+// payout, and picker — every test asserts (implicitly, since this file's
+// prisma mock never defines a `vendor` model at all — see the mock block
+// at the top of this file) that no Vendor lookup ever happens on this path,
+// satisfying mandate item K ("no Vendor is auto-created as a side effect").
+// ═══════════════════════════════════════════════════════════════════════
+describe("Workstream 3 — SupplierAccount campaign assignment (create/update)", () => {
+  const wsBaseInput = {
+    title: "Bulk rice buy",
+    country: "GB",
+    currency: "GBP",
+    minimumShares: 5,
+    goalShares: 10,
+    maximumShares: 15,
+    pricePerShareMinor: 1000,
+    deadline: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
+  };
+
+  it("create() with supplierAccountId assigns a genuinely new no-Vendor supplier — supplierId stays null, notifies the account's userId (test A/D/K)", async () => {
+    m.organiserProfile.findUnique.mockResolvedValue({ id: "org-1", isRestricted: false } as never);
+    m.marketConfiguration.findUnique.mockResolvedValue({ countryCode: "GB", communityBuyEnabled: true } as never);
+    m.marketConfiguration.count.mockResolvedValue(1);
+    m.supplierAccount.findUnique.mockResolvedValue({ id: "acct-new-1", userId: "account-supplier-1", supplierState: "APPROVED", coverageRegions: ["GB"], legacySupplierProfileId: null } as never);
+    m.communityCampaign.create.mockResolvedValue({ id: "camp-new", title: "Bulk rice buy" } as never);
+
+    await communityCampaignsService.create("organiser-user-1", { ...wsBaseInput, fulfilmentOwner: "SUPPLIER", supplierAccountId: "acct-new-1" });
+
+    expect(m.communityCampaign.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ supplierId: null, supplierAccountId: "acct-new-1" }),
+    }));
+    expect(notificationsService.enqueue).toHaveBeenCalledWith(expect.objectContaining({ userId: "account-supplier-1" }));
+    expect(m.supplierProfile.findUnique).not.toHaveBeenCalled();
+  });
+
+  it("create() with supplierAccountId dual-writes supplierId when the account is linked to a legacy profile — existing campaign.supplier.vendor reads keep working (test G)", async () => {
+    m.organiserProfile.findUnique.mockResolvedValue({ id: "org-1", isRestricted: false } as never);
+    m.marketConfiguration.findUnique.mockResolvedValue({ countryCode: "GB", communityBuyEnabled: true } as never);
+    m.marketConfiguration.count.mockResolvedValue(1);
+    m.supplierAccount.findUnique.mockResolvedValue({ id: "acct-linked-1", userId: "supplier-user-1", supplierState: "APPROVED", coverageRegions: ["GB"], legacySupplierProfileId: "sup-1" } as never);
+    m.communityCampaign.create.mockResolvedValue({ id: "camp-new" } as never);
+
+    await communityCampaignsService.create("organiser-user-1", { ...wsBaseInput, fulfilmentOwner: "SUPPLIER", supplierAccountId: "acct-linked-1" });
+
+    expect(m.communityCampaign.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ supplierId: "sup-1", supplierAccountId: "acct-linked-1" }),
+    }));
+  });
+
+  it("create() with supplierAccountId rejects an unapproved account (test J)", async () => {
+    m.organiserProfile.findUnique.mockResolvedValue({ id: "org-1", isRestricted: false } as never);
+    m.marketConfiguration.findUnique.mockResolvedValue({ countryCode: "GB", communityBuyEnabled: true } as never);
+    m.marketConfiguration.count.mockResolvedValue(1);
+    m.supplierAccount.findUnique.mockResolvedValue({ id: "acct-pending-1", userId: "pending-user-1", supplierState: "UNDER_REVIEW", coverageRegions: ["GB"], legacySupplierProfileId: null } as never);
+    await expect(
+      communityCampaignsService.create("organiser-user-1", { ...wsBaseInput, fulfilmentOwner: "SUPPLIER", supplierAccountId: "acct-pending-1" }),
+    ).rejects.toMatchObject({ statusCode: 404 });
+    expect(m.communityCampaign.create).not.toHaveBeenCalled();
+  });
+
+  it("create() with supplierAccountId rejects a restricted/suspended account (test J)", async () => {
+    m.organiserProfile.findUnique.mockResolvedValue({ id: "org-1", isRestricted: false } as never);
+    m.marketConfiguration.findUnique.mockResolvedValue({ countryCode: "GB", communityBuyEnabled: true } as never);
+    m.marketConfiguration.count.mockResolvedValue(1);
+    m.supplierAccount.findUnique.mockResolvedValue({ id: "acct-suspended-1", userId: "suspended-user-1", supplierState: "SUSPENDED", coverageRegions: ["GB"], legacySupplierProfileId: null } as never);
+    await expect(
+      communityCampaignsService.create("organiser-user-1", { ...wsBaseInput, fulfilmentOwner: "SUPPLIER", supplierAccountId: "acct-suspended-1" }),
+    ).rejects.toMatchObject({ statusCode: 404 });
+  });
+
+  it("create() with supplierAccountId rejects a supplier whose coverage doesn't include the campaign's market", async () => {
+    m.organiserProfile.findUnique.mockResolvedValue({ id: "org-1", isRestricted: false } as never);
+    m.marketConfiguration.findUnique.mockResolvedValue({ countryCode: "GB", communityBuyEnabled: true } as never);
+    m.marketConfiguration.count.mockResolvedValue(1);
+    m.supplierAccount.findUnique.mockResolvedValue({ id: "acct-fr-1", userId: "fr-user-1", supplierState: "APPROVED", coverageRegions: ["FR"], legacySupplierProfileId: null } as never);
+    await expect(
+      communityCampaignsService.create("organiser-user-1", { ...wsBaseInput, fulfilmentOwner: "SUPPLIER", supplierAccountId: "acct-fr-1" }),
+    ).rejects.toMatchObject({ statusCode: 400 });
+  });
+});
+
+describe("Workstream 3 — SupplierAccount campaign access (commit/decline)", () => {
+  it("confirmSupplierCommitmentForAccount succeeds for an approved no-Vendor account (test B)", async () => {
+    m.supplierAccount.findUnique.mockResolvedValue({ id: "acct-1", userId: "account-supplier-1", supplierState: "APPROVED" } as never);
+    m.communityCampaign.findUnique.mockResolvedValue({ id: "camp-1", supplierAccountId: "acct-1", status: "DRAFT", organiser: { userId: "organiser-1" } } as never);
+    m.communityCampaign.update.mockResolvedValue({ id: "camp-1", supplierCommitted: true } as never);
+
+    const result = await communityCampaignsService.confirmSupplierCommitmentForAccount("account-supplier-1", "camp-1");
+
+    expect(result.supplierCommitted).toBe(true);
+    expect(m.communityCampaign.update).toHaveBeenCalledWith({ where: { id: "camp-1" }, data: { supplierCommitted: true, supplierCommittedAt: expect.any(Date) } });
+    expect(m.vendor).toBeUndefined(); // no Vendor model mocked at all in this file — a Vendor call would throw, not silently no-op
+  });
+
+  it("confirmSupplierCommitmentForAccount rejects a restricted account (test I)", async () => {
+    m.supplierAccount.findUnique.mockResolvedValue({ id: "acct-1", userId: "account-supplier-1", supplierState: "RESTRICTED" } as never);
+    m.communityCampaign.findUnique.mockResolvedValue({ id: "camp-1", supplierAccountId: "acct-1", status: "DRAFT", organiser: { userId: "organiser-1" } } as never);
+    await expect(communityCampaignsService.confirmSupplierCommitmentForAccount("account-supplier-1", "camp-1")).rejects.toMatchObject({ statusCode: 403 });
+  });
+
+  it("confirmSupplierCommitmentForAccount 404s when the campaign belongs to a different SupplierAccount (test I/J — organiser cannot let an unassigned supplier act)", async () => {
+    m.supplierAccount.findUnique.mockResolvedValue({ id: "acct-1", userId: "account-supplier-1", supplierState: "APPROVED" } as never);
+    m.communityCampaign.findUnique.mockResolvedValue({ id: "camp-1", supplierAccountId: "someone-elses-account", status: "DRAFT" } as never);
+    await expect(communityCampaignsService.confirmSupplierCommitmentForAccount("account-supplier-1", "camp-1")).rejects.toMatchObject({ statusCode: 404 });
+  });
+
+  it("declineSupplierCommitmentForAccount records the decline, notifies the organiser, and writes an audit log", async () => {
+    m.supplierAccount.findUnique.mockResolvedValue({ id: "acct-1", userId: "account-supplier-1" } as never);
+    m.communityCampaign.findUnique.mockResolvedValue({
+      id: "camp-1", supplierAccountId: "acct-1", status: "DRAFT", supplierCommitted: false, supplierDeclinedAt: null, organiser: { userId: "organiser-1" },
+    } as never);
+    m.communityCampaign.update.mockResolvedValue({ id: "camp-1", supplierDeclinedAt: new Date(), supplierDeclineReason: "Out of stock" } as never);
+
+    await communityCampaignsService.declineSupplierCommitmentForAccount("account-supplier-1", "camp-1", "Out of stock");
+
+    expect(m.communityCampaign.update).toHaveBeenCalledWith({
+      where: { id: "camp-1" },
+      data: { supplierDeclinedAt: expect.any(Date), supplierDeclineReason: "Out of stock" },
+    });
+    expect(m.auditLog.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ actorId: "account-supplier-1", action: "community_campaign.supplier_declined" }),
+    }));
+    expect(notificationsService.enqueue).toHaveBeenCalledWith(expect.objectContaining({ userId: "organiser-1" }));
+  });
+
+  it("listForSupplierAccount lists only this account's campaigns", async () => {
+    m.supplierAccount.findUnique.mockResolvedValue({ id: "acct-1", userId: "account-supplier-1" } as never);
+    m.communityCampaign.findMany.mockResolvedValue([{ id: "camp-1", supplierAccountId: "acct-1" }] as never);
+    const result = await communityCampaignsService.listForSupplierAccount("account-supplier-1");
+    expect(m.communityCampaign.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: { supplierAccountId: "acct-1" } }));
+    expect(result).toHaveLength(1);
+  });
+
+  it("listForSupplierAccount returns an empty list for a user with no SupplierAccount at all", async () => {
+    m.supplierAccount.findUnique.mockResolvedValue(null as never);
+    const result = await communityCampaignsService.listForSupplierAccount("random-user");
+    expect(result).toEqual([]);
+    expect(m.communityCampaign.findMany).not.toHaveBeenCalled();
+  });
+});
+
+describe("Workstream 3 — SupplierAccount payout path (createSupplierOrder / releaseSupplierPayment)", () => {
+  it("createSupplierOrder snapshots the SupplierAccount's Stripe account and notifies its own userId, never touching SupplierProfile", async () => {
+    m.campaignSupplierPayment.findUnique.mockResolvedValue(null as never);
+    m.supplierAccount.findUnique.mockResolvedValue({ id: "acct-1", userId: "account-supplier-1", providerConnectedAccountId: "acct_new_1" } as never);
+    m.campaignSupplierPayment.create.mockResolvedValue({ id: "pay-1" } as never);
+    m.campaignFulfilment.upsert.mockResolvedValue({ campaignId: "camp-1" } as never);
+
+    await communityCampaignsService.createSupplierOrder({
+      id: "camp-1", supplierId: null, supplierAccountId: "acct-1", title: "Bulk rice buy", currency: "GBP", confirmedShares: 6, pricePerShareMinor: 1000,
+    });
+
+    expect(m.campaignSupplierPayment.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ amount: 6000, payoutStripeAccountIdAtApproval: "acct_new_1" }),
+    }));
+    expect(notificationsService.enqueue).toHaveBeenCalledWith(expect.objectContaining({ userId: "account-supplier-1" }));
+    expect(m.supplierProfile.findUnique).not.toHaveBeenCalled();
+  });
+
+  it("releaseSupplierPayment uses the SupplierAccount's Stripe account and posts a SUPPLIER_PAYABLE ledger leg when supplierAccountId is set", async () => {
+    m.campaignSupplierPayment.findUnique.mockResolvedValueOnce({
+      id: "payment-acct-1", campaignId: "camp-90", currency: "GBP", status: "NOT_RELEASED", payoutStripeAccountIdAtApproval: null,
+      campaign: { country: "GB", supplierAccountId: "acct-1", supplierAccount: { id: "acct-1", providerConnectedAccountId: "acct_new_1", chargesEnabled: true, payoutsEnabled: true } },
+    } as never);
+    m.campaignContribution.aggregate.mockResolvedValueOnce({ _sum: { amount: 10000 } } as never);
+    m.marketConfiguration.findUnique.mockResolvedValue({ countryCode: "GB", communityBuyFeeBps: 500 } as never);
+    vi.mocked(stripe.transfers.create).mockResolvedValueOnce({ id: "tr_acct_1" } as never);
+    m.campaignSupplierPayment.update.mockResolvedValue({ id: "payment-acct-1", status: "PAID" } as never);
+
+    await campaignContributionsService.releaseSupplierPayment("admin-1", "camp-90");
+
+    expect(stripe.transfers.create).toHaveBeenCalledWith(
+      expect.objectContaining({ amount: 9500, destination: "acct_new_1" }),
+      { idempotencyKey: "community-buy-transfer:camp-90" },
+    );
+    const accountTypesTouched = m.ledgerAccount.create.mock.calls.map((c: any) => c[0].data.type);
+    expect(accountTypesTouched).toEqual(expect.arrayContaining(["SUPPLIER_PAYABLE"]));
+    expect(accountTypesTouched).not.toContain("VENDOR_PAYABLE");
+  });
+
+  it("releaseSupplierPayment rejects when the SupplierAccount's payout account isn't ready", async () => {
+    m.campaignSupplierPayment.findUnique.mockResolvedValueOnce({
+      id: "payment-acct-2", campaignId: "camp-91", currency: "GBP", status: "NOT_RELEASED", payoutStripeAccountIdAtApproval: null,
+      campaign: { country: "GB", supplierAccountId: "acct-2", supplierAccount: { id: "acct-2", providerConnectedAccountId: null, chargesEnabled: false, payoutsEnabled: false } },
+    } as never);
+    await expect(campaignContributionsService.releaseSupplierPayment("admin-1", "camp-91")).rejects.toMatchObject({ statusCode: 409, code: "PAYOUTS_NOT_ENABLED" });
+    expect(stripe.transfers.create).not.toHaveBeenCalled();
+  });
+
+  it("getMyPaymentForCampaignAsAccount returns the payment for the owning SupplierAccount", async () => {
+    m.supplierAccount.findUnique.mockResolvedValue({ id: "acct-1", userId: "account-supplier-1" } as never);
+    m.communityCampaign.findUnique.mockResolvedValue({ id: "camp-1", supplierAccountId: "acct-1" } as never);
+    m.campaignSupplierPayment.findUnique.mockResolvedValue({ id: "pay-1", status: "PAID" } as never);
+    const result = await campaignContributionsService.getMyPaymentForCampaignAsAccount("account-supplier-1", "camp-1");
+    expect(result.status).toBe("PAID");
+  });
+
+  it("getMyPaymentForCampaignAsAccount 404s for a campaign not assigned to this account", async () => {
+    m.supplierAccount.findUnique.mockResolvedValue({ id: "acct-1", userId: "account-supplier-1" } as never);
+    m.communityCampaign.findUnique.mockResolvedValue({ id: "camp-1", supplierAccountId: "someone-elses" } as never);
+    await expect(campaignContributionsService.getMyPaymentForCampaignAsAccount("account-supplier-1", "camp-1")).rejects.toMatchObject({ statusCode: 404 });
+  });
 });
 
 // ═══════════════════════════════════════════════════════════════════════
