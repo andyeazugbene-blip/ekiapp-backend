@@ -2249,8 +2249,49 @@ model SupplierAccount {
   reasonCode                 String?
   createdAt                  DateTime             @default(now())
   updatedAt                  DateTime             @updatedAt
+  // Workstream 3 — campaigns this account is assigned to directly (the
+  // no-Vendor-required path). A campaign with a legacy-linked account is
+  // dual-written onto CommunityCampaign.supplierId too; see supplierId's
+  // own comment for why both can be set at once during the transition.
+  campaigns                  CommunityCampaign[]
 
   @@index([supplierState])
+}
+
+enum SupplierInvitationStatus {
+  PENDING
+  ACCEPTED
+  DECLINED
+  EXPIRED
+  REVOKED
+}
+
+// Workstream 3 — the third supply route deferred from Workstream 2: an
+// organiser inviting someone with no existing Eki account (or an existing
+// account with no SupplierAccount yet) to supply a specific campaign.
+// Accepting creates/links a SupplierAccount only — never a Vendor, per the
+// mandate's explicit "do NOT create a fake retail Vendor" instruction.
+model SupplierInvitation {
+  id                        String                   @id @default(cuid())
+  campaignId                String
+  campaign                  CommunityCampaign        @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  invitedByUserId           String
+  email                     String
+  token                     String                   @unique
+  status                    SupplierInvitationStatus @default(PENDING)
+  // Snapshot of the campaign's supply terms at invite time (title,
+  // quantities, price, dates) — what the invitee is actually agreeing to,
+  // immune to the organiser editing the campaign after sending the invite.
+  termsSnapshot             Json
+  declineReason             String?
+  acceptedSupplierAccountId String?
+  expiresAt                 DateTime
+  respondedAt               DateTime?
+  createdAt                 DateTime                 @default(now())
+  updatedAt                 DateTime                 @updatedAt
+
+  @@index([campaignId])
+  @@index([email])
 }
 
 model CommunityCampaign {
@@ -2262,6 +2303,15 @@ model CommunityCampaign {
   // workflow state only and never gates publication/LIVE — see submit()
   // and publish() in community-campaigns.service.ts.
   supplierId            String?
+  // Workstream 3 — additive expand-phase FK alongside supplierId, not a
+  // replacement. New assignments write this; a legacy-linked SupplierAccount
+  // (has legacySupplierProfileId) also dual-writes supplierId so every
+  // existing campaign.supplier.vendor... read keeps working untouched. A
+  // genuinely new no-Vendor supplier gets only this column. Resolve a
+  // campaign's supplier through resolveCampaignSupplier() (supplier-
+  // resolution.service.ts), never by reading either FK directly, so both
+  // paths stay correct without duplicating logic at every call site.
+  supplierAccountId     String?
   fulfilmentOwner       CampaignFulfilmentOwner    @default(SUPPLIER)
   title                 String
   description           String?
@@ -2321,6 +2371,7 @@ model CommunityCampaign {
   termsLockedAt         DateTime?
   organiser             OrganiserProfile           @relation(fields: [organiserId], references: [id], onDelete: Restrict)
   supplier              SupplierProfile?           @relation(fields: [supplierId], references: [id], onDelete: Restrict)
+  supplierAccount       SupplierAccount?           @relation(fields: [supplierAccountId], references: [id], onDelete: Restrict)
   participants          CampaignParticipant[]
   contributions         CampaignContribution[]
   extensionRequests     CampaignExtensionRequest[]
@@ -2329,12 +2380,14 @@ model CommunityCampaign {
   supportCases          CommunityBuySupportCase[]
   updates               CampaignUpdate[]
   fulfilmentAlerts      SupplierFulfilmentAlert[]
+  supplierInvitations   SupplierInvitation[]
   createdAt             DateTime                   @default(now())
   updatedAt             DateTime                   @updatedAt
 
   @@index([status, country])
   @@index([organiserId])
   @@index([supplierId])
+  @@index([supplierAccountId])
   @@index([deadline])
   @@index([rescueEndsAt])
 }
