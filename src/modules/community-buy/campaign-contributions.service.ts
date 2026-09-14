@@ -12,6 +12,7 @@ import { marketConfigurationService } from "./market-configuration.service";
 import { supportCaseService } from "./support-case.service";
 import { ledgerService } from "../ledger/ledger.service";
 import { recordAudit } from "../../shared/utils/audit";
+import { stripeConnectService as vendorStripeConnectService } from "../vendors/stripe-connect.service";
 
 const SYSTEM_CRON_ACTOR = "system:cron";
 
@@ -876,7 +877,10 @@ export const campaignContributionsService = {
       // self-fulfilled ones, so this campaign's supplier is guaranteed set.
       const vendor = payment.campaign.supplier!.vendor;
       payoutStripeAccountId = vendor.stripeAccountId;
-      payoutReady = vendor.stripePayoutsEnabled;
+      // Reuses the same eligibility primitive vendor withdrawals already use
+      // (stripePayoutsEnabled && stripeChargesEnabled && !isSuspended) instead
+      // of the weaker stripePayoutsEnabled-only check this branch used to run.
+      payoutReady = await vendorStripeConnectService.isPayoutEligible(vendor.id);
       ledgerOwnerType = LedgerOwnerType.VENDOR;
       ledgerAccountType = LedgerAccountType.VENDOR_PAYABLE;
       ledgerOwnerId = vendor.id;

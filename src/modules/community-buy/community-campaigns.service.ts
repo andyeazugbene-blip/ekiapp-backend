@@ -1061,19 +1061,25 @@ export const communityCampaignsService = {
         // line before the window closed — proceed exactly like a normal
         // on-time success.
         const outcome = campaign.confirmedShares >= goal ? "GOAL_REACHED" : "MINIMUM_REACHED";
-        await prisma.communityCampaign.update({
-          where: { id: campaign.id },
+        // Atomic claim — same guard as closeDueCampaigns(): prevents two
+        // overlapping sweep runs (e.g. a manual /jobs/community-buy-sweep
+        // trigger racing the daily cron) from both deciding this campaign's
+        // rescue outcome and double-firing the supplier order + charge pass.
+        const claim = await prisma.communityCampaign.updateMany({
+          where: { id: campaign.id, status: "RESCUE_WINDOW" },
           data: { status: "FULFILLING", fundingOutcome: outcome },
         });
+        if (claim.count !== 1) continue;
         rescued++;
         await this.notifyOutcome(campaign.id, "succeeded");
         await this.createSupplierOrder(campaign);
         await this.chargePledgesAfterSuccess(campaign.id);
       } else {
-        await prisma.communityCampaign.update({
-          where: { id: campaign.id },
+        const claim = await prisma.communityCampaign.updateMany({
+          where: { id: campaign.id, status: "RESCUE_WINDOW" },
           data: { status: "FAILED", fundingOutcome: "BELOW_MINIMUM", closedAt: new Date() },
         });
+        if (claim.count !== 1) continue;
         failed++;
         await this.notifyOutcome(campaign.id, "failed");
         await this.createRefundRecordsForFailedCampaign(campaign.id);

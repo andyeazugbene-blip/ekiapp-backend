@@ -22,6 +22,11 @@ vi.mock("../lib/prisma", () => ({
     // supplierProfile.findUnique's own `vendor` select (already mocked
     // below per-test) and writes here.
     supplierAccount: { findUnique: vi.fn(), findMany: vi.fn(), upsert: vi.fn() },
+    // WS4: releaseSupplierPayment()'s legacy-Vendor branch now resolves
+    // payout eligibility via vendorStripeConnectService.isPayoutEligible(),
+    // which does its own prisma.vendor.findUnique lookup by id rather than
+    // reading the vendor object already included via campaignSupplierPayment.
+    vendor: { findUnique: vi.fn() },
     user: { findUnique: vi.fn() },
     marketConfiguration: { findUnique: vi.fn(), findMany: vi.fn(), count: vi.fn(), upsert: vi.fn() },
     auditLog: { create: vi.fn() },
@@ -190,14 +195,17 @@ describe("communityCampaignsService.evaluateRescueExpiry", () => {
       { id: "camp-4", minimumShares: 3, goalShares: 6, maximumShares: 6, confirmedShares: 3, pricePerShareMinor: 1000, currency: "GBP", supplierId: "sup-1", title: "Rescued" },
     ] as never);
     m.communityCampaign.findUnique.mockResolvedValue({ id: "camp-4", title: "Rescued", organiser: { userId: "organiser-1" }, participants: [] } as never);
+    // WS4: evaluateRescueExpiry() now claims this transition the same way
+    // closeDueCampaigns() does — a guarded updateMany, not a plain update.
+    m.communityCampaign.updateMany.mockResolvedValue({ count: 1 } as never);
     m.campaignSupplierPayment.findUnique.mockResolvedValue(null);
     m.supplierProfile.findUnique.mockResolvedValue({ vendor: { userId: "supplier-user-1", stripeAccountId: "acct_1" } } as never);
 
     const result = await communityCampaignsService.evaluateRescueExpiry();
 
     expect(result).toEqual({ rescued: 1, failed: 0 });
-    expect(m.communityCampaign.update).toHaveBeenCalledWith(
-      expect.objectContaining({ data: expect.objectContaining({ status: "FULFILLING", fundingOutcome: "MINIMUM_REACHED" }) }),
+    expect(m.communityCampaign.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: "camp-4", status: "RESCUE_WINDOW" }, data: expect.objectContaining({ status: "FULFILLING", fundingOutcome: "MINIMUM_REACHED" }) }),
     );
   });
 
@@ -206,15 +214,49 @@ describe("communityCampaignsService.evaluateRescueExpiry", () => {
       { id: "camp-5", minimumShares: 3, goalShares: 6, maximumShares: 6, confirmedShares: 2, title: "Failed rescue" },
     ] as never);
     m.communityCampaign.findUnique.mockResolvedValue({ id: "camp-5", title: "Failed rescue", organiser: { userId: "organiser-1" }, participants: [] } as never);
+    m.communityCampaign.updateMany.mockResolvedValue({ count: 1 } as never);
     m.campaignContribution.findMany.mockResolvedValue([]);
 
     const result = await communityCampaignsService.evaluateRescueExpiry();
 
     expect(result).toEqual({ rescued: 0, failed: 1 });
-    expect(m.communityCampaign.update).toHaveBeenCalledWith(
-      expect.objectContaining({ data: expect.objectContaining({ status: "FAILED", fundingOutcome: "BELOW_MINIMUM" }) }),
+    expect(m.communityCampaign.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: "camp-5", status: "RESCUE_WINDOW" }, data: expect.objectContaining({ status: "FAILED", fundingOutcome: "BELOW_MINIMUM" }) }),
     );
     expect(m.campaignSupplierPayment.create).not.toHaveBeenCalled();
+  });
+
+  // WS4 fix: evaluateRescueExpiry() previously used a plain update() with no
+  // status guard, unlike closeDueCampaigns()'s already-guarded equivalent —
+  // an overlapping sweep run (e.g. a manual /jobs/community-buy-sweep
+  // trigger racing the daily cron) could double-process the same expired
+  // campaign. These two tests prove the same guard now protects this path.
+  it("WS4: a rescue-success claimed by a concurrent sweep run is not processed a second time", async () => {
+    m.communityCampaign.findMany.mockResolvedValue([
+      { id: "camp-race-rescue", minimumShares: 3, goalShares: 6, maximumShares: 6, confirmedShares: 6, pricePerShareMinor: 1000, currency: "GBP", supplierId: "sup-1", title: "Racing rescue" },
+    ] as never);
+    // Simulates: another process's updateMany already flipped this
+    // campaign's status away from RESCUE_WINDOW between the findMany read
+    // above and this call — the guarded claim sees 0 rows affected.
+    m.communityCampaign.updateMany.mockResolvedValue({ count: 0 } as never);
+
+    const result = await communityCampaignsService.evaluateRescueExpiry();
+
+    expect(result).toEqual({ rescued: 0, failed: 0 });
+    expect(m.campaignSupplierPayment.create).not.toHaveBeenCalled();
+    expect(m.campaignContribution.findMany).not.toHaveBeenCalled(); // chargePledgesAfterSuccess never ran
+  });
+
+  it("WS4: the losing side of that same race does not create a duplicate supplier order or fire a duplicate outcome notification", async () => {
+    m.communityCampaign.findMany.mockResolvedValue([
+      { id: "camp-race-rescue-2", minimumShares: 3, goalShares: 6, maximumShares: 6, confirmedShares: 6, pricePerShareMinor: 1000, currency: "GBP", supplierId: "sup-1", title: "Racing rescue 2" },
+    ] as never);
+    m.communityCampaign.updateMany.mockResolvedValue({ count: 0 } as never);
+
+    await communityCampaignsService.evaluateRescueExpiry();
+
+    expect(m.campaignSupplierPayment.create).not.toHaveBeenCalled();
+    expect(notificationsService.enqueue).not.toHaveBeenCalled();
   });
 });
 
@@ -1095,6 +1137,8 @@ describe("campaignContributionsService.releaseSupplierPayment — owner settleme
     } as never);
     m.campaignContribution.aggregate.mockResolvedValueOnce({ _sum: { amount: 10000 } } as never); // 100.00 collected
     m.marketConfiguration.findUnique.mockResolvedValue({ countryCode: "GB", communityBuyFeeBps: 500 } as never); // 5%
+    // WS4: eligibility is now resolved via vendorStripeConnectService.isPayoutEligible().
+    m.vendor.findUnique.mockResolvedValue({ stripePayoutsEnabled: true, stripeChargesEnabled: true, isSuspended: false } as never);
     vi.mocked(stripe.transfers.create).mockResolvedValueOnce({ id: "tr_1" } as never);
     m.campaignSupplierPayment.update.mockResolvedValue({ id: "payment-1", status: "PAID" } as never);
 
@@ -1127,6 +1171,7 @@ describe("campaignContributionsService.releaseSupplierPayment — owner settleme
     } as never);
     m.campaignContribution.aggregate.mockResolvedValueOnce({ _sum: { amount: 5000 } } as never);
     m.marketConfiguration.findUnique.mockResolvedValue({ countryCode: "GB", communityBuyFeeBps: null } as never);
+    m.vendor.findUnique.mockResolvedValue({ stripePayoutsEnabled: true, stripeChargesEnabled: true, isSuspended: false } as never);
 
     await expect(campaignContributionsService.releaseSupplierPayment("admin-1", "camp-41")).rejects.toMatchObject({ statusCode: 409, code: "FEE_NOT_CONFIGURED" });
     expect(stripe.transfers.create).not.toHaveBeenCalled();
@@ -1138,6 +1183,7 @@ describe("campaignContributionsService.releaseSupplierPayment — owner settleme
       campaign: { country: "GB", supplier: { vendor: { id: "vendor-3", stripeAccountId: "acct_3", stripePayoutsEnabled: true } } },
     } as never);
     m.campaignContribution.aggregate.mockResolvedValueOnce({ _sum: { amount: 0 } } as never);
+    m.vendor.findUnique.mockResolvedValue({ stripePayoutsEnabled: true, stripeChargesEnabled: true, isSuspended: false } as never);
 
     await expect(campaignContributionsService.releaseSupplierPayment("admin-1", "camp-42")).rejects.toMatchObject({ statusCode: 409, code: "NOTHING_COLLECTED_YET" });
     expect(stripe.transfers.create).not.toHaveBeenCalled();
@@ -1168,6 +1214,7 @@ describe("campaignContributionsService.releaseSupplierPayment — owner settleme
     } as never);
     m.campaignContribution.aggregate.mockResolvedValueOnce({ _sum: { amount: 10000 } } as never);
     m.marketConfiguration.findUnique.mockResolvedValue({ countryCode: "GB", communityBuyFeeBps: 500 } as never);
+    m.vendor.findUnique.mockResolvedValue({ stripePayoutsEnabled: true, stripeChargesEnabled: true, isSuspended: false } as never);
     vi.mocked(stripe.transfers.create).mockRejectedValueOnce(new Error("Your Stripe account's balance is insufficient for this transfer."));
 
     await expect(campaignContributionsService.releaseSupplierPayment("admin-1", "camp-45")).rejects.toMatchObject({ statusCode: 502 });
@@ -1183,6 +1230,52 @@ describe("campaignContributionsService.releaseSupplierPayment — owner settleme
       expect.objectContaining({ data: expect.objectContaining({ status: "PAID" }) }),
     );
     expect(m.ledgerEntry.create).not.toHaveBeenCalled();
+  });
+});
+
+// WS4 fix: the legacy-Vendor branch used to check only stripePayoutsEnabled,
+// weaker than the SupplierAccount branch (payoutsEnabled && chargesEnabled)
+// and weaker than the existing, already-tested vendor withdrawal check
+// (isPayoutEligible: stripePayoutsEnabled && stripeChargesEnabled &&
+// !isSuspended). It now reuses that same primitive instead of duplicating a
+// weaker inline check.
+describe("campaignContributionsService.releaseSupplierPayment — legacy Vendor payout eligibility (WS4)", () => {
+  const basePayment = {
+    id: "payment-eligibility", campaignId: "camp-eligibility", currency: "GBP", status: "NOT_RELEASED", payoutStripeAccountIdAtApproval: null,
+    campaign: { country: "GB", supplier: { vendor: { id: "vendor-eligibility", stripeAccountId: "acct_eligibility", stripePayoutsEnabled: true } } },
+  };
+
+  it("rejects release when the vendor's Stripe charges are not enabled, even though payouts are", async () => {
+    m.campaignSupplierPayment.findUnique.mockResolvedValueOnce(basePayment as never);
+    m.vendor.findUnique.mockResolvedValue({ stripePayoutsEnabled: true, stripeChargesEnabled: false, isSuspended: false } as never);
+
+    await expect(campaignContributionsService.releaseSupplierPayment("admin-1", "camp-eligibility")).rejects.toMatchObject({ statusCode: 409, code: "PAYOUTS_NOT_ENABLED" });
+    expect(stripe.transfers.create).not.toHaveBeenCalled();
+  });
+
+  it("rejects release when the vendor is suspended, even though payouts and charges are both enabled", async () => {
+    m.campaignSupplierPayment.findUnique.mockResolvedValueOnce(basePayment as never);
+    m.vendor.findUnique.mockResolvedValue({ stripePayoutsEnabled: true, stripeChargesEnabled: true, isSuspended: true } as never);
+
+    await expect(campaignContributionsService.releaseSupplierPayment("admin-1", "camp-eligibility")).rejects.toMatchObject({ statusCode: 409, code: "PAYOUTS_NOT_ENABLED" });
+    expect(stripe.transfers.create).not.toHaveBeenCalled();
+  });
+
+  it("still releases normally for a valid legacy Vendor — payouts enabled, charges enabled, not suspended", async () => {
+    m.campaignSupplierPayment.findUnique.mockResolvedValueOnce(basePayment as never);
+    m.vendor.findUnique.mockResolvedValue({ stripePayoutsEnabled: true, stripeChargesEnabled: true, isSuspended: false } as never);
+    m.campaignContribution.aggregate.mockResolvedValueOnce({ _sum: { amount: 2000 } } as never);
+    m.marketConfiguration.findUnique.mockResolvedValue({ countryCode: "GB", communityBuyFeeBps: 500 } as never);
+    vi.mocked(stripe.transfers.create).mockResolvedValueOnce({ id: "tr_eligibility" } as never);
+    m.campaignSupplierPayment.update.mockResolvedValue({ id: "payment-eligibility", status: "PAID" } as never);
+
+    const result = await campaignContributionsService.releaseSupplierPayment("admin-1", "camp-eligibility");
+
+    expect(stripe.transfers.create).toHaveBeenCalledWith(
+      expect.objectContaining({ destination: "acct_eligibility" }),
+      { idempotencyKey: "community-buy-transfer:camp-eligibility" },
+    );
+    expect(result.status).toBe("PAID");
   });
 });
 
@@ -2197,7 +2290,11 @@ describe("Workstream 3 — SupplierAccount campaign access (commit/decline)", ()
 
     expect(result.supplierCommitted).toBe(true);
     expect(m.communityCampaign.update).toHaveBeenCalledWith({ where: { id: "camp-1" }, data: { supplierCommitted: true, supplierCommittedAt: expect.any(Date) } });
-    expect(m.vendor).toBeUndefined(); // no Vendor model mocked at all in this file — a Vendor call would throw, not silently no-op
+    // WS4 added a vendor.findUnique mock to this file for the legacy-Vendor
+    // payout-eligibility fix, so the model now exists here — the invariant
+    // this test actually protects (SupplierAccount path never touches
+    // Vendor) is now proven by asserting the call itself never happened.
+    expect(m.vendor.findUnique).not.toHaveBeenCalled();
   });
 
   it("confirmSupplierCommitmentForAccount rejects a restricted account (test I)", async () => {
