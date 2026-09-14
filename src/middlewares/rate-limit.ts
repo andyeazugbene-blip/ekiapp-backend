@@ -65,6 +65,17 @@ export const paymentsRateLimiter = createRateLimiter({
 
 export const generalRateLimiter = createRateLimiter({
   windowMs: 60 * 1000,
-  max: 100,
+  // Workstream 3 investigation (community-buy-routes.test.ts full-suite
+  // flakiness): confirmed via instrumentation that this is NOT cross-file
+  // or cross-worker shared state — Vitest reloads this module fresh for
+  // every test file (verified: one MODULE_LOAD per file, distinct closure/
+  // Map each time). The real cause is simpler: community-buy-routes.test.ts
+  // alone makes ~100 genuine HTTP requests against this exact middleware in
+  // a single run (real Express app + supertest, not mocked), landing right
+  // at — and, once WS3 added one more request-level test, occasionally
+  // over — this production ceiling. Raised only when NODE_ENV=test (which
+  // src/tests/setup.ts sets and no real deployment ever does); production
+  // keeps the exact same 100-requests-per-60s limit unchanged.
+  max: process.env.NODE_ENV === "test" ? 100_000 : 100,
   message: { error: "Too many requests, please try again later." },
 });

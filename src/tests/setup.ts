@@ -1,4 +1,4 @@
-// Vitest setup file — runs once before any test file is imported.
+// Vitest setup file — runs once before each test file's tests run.
 // Set required env vars at module-load time so config/env.ts (which reads
 // them on import) doesn't throw.
 
