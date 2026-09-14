@@ -5,11 +5,13 @@ import { AppError } from "../../shared/errors/app-error";
 import { recordAudit } from "../../shared/utils/audit";
 import { organiserSupplierService } from "./organiser-supplier.service";
 import { supplierAccountService } from "./supplier-account.service";
+import { supplierStripeConnectService } from "./supplier-stripe-connect.service";
 import { communityCampaignsService } from "./community-campaigns.service";
 import { campaignContributionsService } from "./campaign-contributions.service";
 import { campaignFulfilmentService } from "./campaign-fulfilment.service";
 import { marketConfigurationService } from "./market-configuration.service";
 import { supportCaseService } from "./support-case.service";
+import { supplierInvitationService } from "./supplier-invitation.service";
 import { adminApprovalsService } from "../admin/admin-approvals.service";
 
 // ─── Public market availability (used by the mobile app to decide whether
@@ -274,6 +276,55 @@ export async function reassignCampaignSupplier(request: Request, response: Respo
   response.json({ campaign });
 }
 
+// ─── Supplier invitations — mandate item 7, the third supply route ─────
+// (invite someone with no existing Eki account). Create/list/revoke are
+// organiser-only; view/accept/decline are public-by-token, matching the
+// plan's "no login required to view" — a brand-new invitee has no account
+// yet to log in with.
+
+export async function createSupplierInvitation(request: Request, response: Response): Promise<void> {
+  const userId = requireUserId(request);
+  const { email } = request.body ?? {};
+  if (typeof email !== "string" || !email) throw new AppError("email is required", 400);
+  const invitation = await supplierInvitationService.create(userId, requireIdParam(request), email);
+  response.status(201).json({ invitation });
+}
+
+export async function listSupplierInvitations(request: Request, response: Response): Promise<void> {
+  const userId = requireUserId(request);
+  response.json({ items: await supplierInvitationService.listForCampaign(userId, requireIdParam(request)) });
+}
+
+function requireTokenParam(request: Request): string {
+  const token = request.params.token;
+  if (typeof token !== "string" || token.length === 0) throw new AppError("Invalid invitation token", 400);
+  return token;
+}
+
+export async function revokeSupplierInvitation(request: Request, response: Response): Promise<void> {
+  const userId = requireUserId(request);
+  const invitation = await supplierInvitationService.revoke(userId, requireIdParam(request));
+  response.json({ invitation });
+}
+
+export async function getSupplierInvitation(request: Request, response: Response): Promise<void> {
+  const invitation = await supplierInvitationService.getByToken(requireTokenParam(request));
+  response.json({ invitation });
+}
+
+export async function acceptSupplierInvitation(request: Request, response: Response): Promise<void> {
+  const { name, password } = request.body ?? {};
+  const newUser = typeof name === "string" && typeof password === "string" ? { name, password } : undefined;
+  const result = await supplierInvitationService.accept(requireTokenParam(request), newUser);
+  response.json(result);
+}
+
+export async function declineSupplierInvitation(request: Request, response: Response): Promise<void> {
+  const { reason } = request.body ?? {};
+  const invitation = await supplierInvitationService.decline(requireTokenParam(request), typeof reason === "string" ? reason : undefined);
+  response.json({ invitation });
+}
+
 // ─── Supplier fulfilment — doc Phase 8 ─────────────────────────────────
 
 export async function getSupplierFulfilment(request: Request, response: Response): Promise<void> {
@@ -491,6 +542,20 @@ export async function getMySupplierProfile(request: Request, response: Response)
   response.json({ profile: legacyProfile, account });
 }
 
+// Workstream 3 — Stripe Connect onboarding for the no-Vendor SupplierAccount
+// path (mandate item 2). Mirrors vendors/stripe-connect.controller.ts.
+export async function onboardSupplierStripeConnect(request: Request, response: Response): Promise<void> {
+  response.status(200).json(await supplierStripeConnectService.onboard(requireUserId(request)));
+}
+
+export async function getSupplierStripeConnectStatus(request: Request, response: Response): Promise<void> {
+  response.status(200).json(await supplierStripeConnectService.getStatus(requireUserId(request)));
+}
+
+export async function refreshSupplierStripeConnect(request: Request, response: Response): Promise<void> {
+  response.status(200).json(await supplierStripeConnectService.refresh(requireUserId(request)));
+}
+
 export async function listMySupplierCampaigns(request: Request, response: Response): Promise<void> {
   const acting = await resolveActingSupplier(requireUserId(request));
   const items = acting.kind === "vendor"
@@ -593,6 +658,11 @@ export async function adminVerifySupplier(request: Request, response: Response):
 // Community Buy Workstream 1 — admin actions on the new, no-Vendor-required
 // SupplierAccount (distinct from the legacy Vendor-keyed SupplierProfile
 // above). Backend-only for now; an admin-web review screen is Workstream 3.
+export async function adminListSupplierAccounts(request: Request, response: Response): Promise<void> {
+  const state = typeof request.query.state === "string" ? request.query.state : undefined;
+  response.json({ items: await supplierAccountService.listForAdmin(state) });
+}
+
 export async function adminApproveSupplierAccount(request: Request, response: Response): Promise<void> {
   const adminId = requireUserId(request);
   const id = requireIdParam(request);

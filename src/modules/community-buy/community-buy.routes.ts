@@ -4,6 +4,7 @@ import { authenticate } from "../../middlewares/authenticate";
 import { requireApprovedSupplier } from "../../middlewares/require-capability";
 import { asyncHandler } from "../../shared/utils/async-handler";
 import {
+  acceptSupplierInvitation,
   applyAsOrganiser,
   applyAsSupplier,
   confirmFulfilmentInventory,
@@ -13,6 +14,8 @@ import {
   createSupportCase,
   createOrganiserCampaign,
   createOrganiserTopUp,
+  createSupplierInvitation,
+  declineSupplierInvitation,
   endCampaignRescue,
   getCampaign,
   getCampaignRefundProgress,
@@ -26,6 +29,8 @@ import {
   getParticipantFulfilment,
   getPublicMarketConfig,
   getSupplierFulfilment,
+  getSupplierInvitation,
+  getSupplierStripeConnectStatus,
   joinCampaign,
   legacyCancelFailedCampaignShim,
   legacyFulfilCampaignAnywayShim,
@@ -36,16 +41,20 @@ import {
   listMyOrganiserCampaigns,
   listMySupplierCampaigns,
   listPublicMarketConfigs,
+  listSupplierInvitations,
   listVerifiedSuppliers,
   markFulfilmentCollected,
   markFulfilmentDispatched,
   markFulfilmentReady,
+  onboardSupplierStripeConnect,
   organiserConfirmFulfilmentCompletion,
   postCampaignUpdate,
   publishOrganiserCampaign,
   reassignCampaignSupplier,
+  refreshSupplierStripeConnect,
   requestCampaignExtension,
   retryContributionCharge,
+  revokeSupplierInvitation,
   setFulfilmentPlan,
   startFulfilmentPacking,
   submitOrganiserCampaign,
@@ -80,6 +89,13 @@ communityBuyRouter.post("/contributions/:id/retry-charge", authenticate, asyncHa
 communityBuyRouter.post("/campaigns/:id/join", authenticate, asyncHandler(joinCampaign));
 communityBuyRouter.post("/campaigns/:id/support-cases", authenticate, asyncHandler(createSupportCase));
 
+// Supplier invitations — public-by-token (mandate item 7: the invitee may
+// have no Eki account yet, so there is nothing to authenticate against
+// until accept() itself creates one).
+communityBuyRouter.get("/supplier-invitations/:token", asyncHandler(getSupplierInvitation));
+communityBuyRouter.post("/supplier-invitations/:token/accept", asyncHandler(acceptSupplierInvitation));
+communityBuyRouter.post("/supplier-invitations/:token/decline", asyncHandler(declineSupplierInvitation));
+
 // Organiser — mounted at /organiser.
 export const organiserRouter = Router();
 organiserRouter.use(authenticate);
@@ -92,6 +108,10 @@ organiserRouter.patch("/campaigns/:id", asyncHandler(updateOrganiserCampaign));
 // Necessary companion to supplier decline — moves a still-draft campaign
 // to a different supplier so a decline is never a dead end.
 organiserRouter.post("/campaigns/:id/supplier", asyncHandler(reassignCampaignSupplier));
+// Supplier invitations (item 7) — create/list/revoke are organiser-only.
+organiserRouter.post("/campaigns/:id/supplier-invitations", asyncHandler(createSupplierInvitation));
+organiserRouter.get("/campaigns/:id/supplier-invitations", asyncHandler(listSupplierInvitations));
+organiserRouter.post("/supplier-invitations/:id/revoke", asyncHandler(revokeSupplierInvitation));
 organiserRouter.post("/campaigns/:id/submit", asyncHandler(submitOrganiserCampaign));
 organiserRouter.post("/campaigns/:id/publish", asyncHandler(publishOrganiserCampaign));
 // Rescue-window actions — doc §8. "Fulfil anyway below minimum" does not
@@ -123,6 +143,13 @@ export const supplierRouter = Router();
 supplierRouter.use(authenticate);
 supplierRouter.get("/profile", asyncHandler(getMySupplierProfile));
 supplierRouter.post("/applications", asyncHandler(applyAsSupplier));
+// Stripe Connect onboarding (mandate item 2) — same gate as the profile/
+// application routes above (any authenticated user with a SupplierAccount
+// row): a supplier must be able to get payouts-ready while still under
+// review, not only after approval.
+supplierRouter.post("/stripe-connect/onboard", asyncHandler(onboardSupplierStripeConnect));
+supplierRouter.get("/stripe-connect/status", asyncHandler(getSupplierStripeConnectStatus));
+supplierRouter.post("/stripe-connect/refresh", asyncHandler(refreshSupplierStripeConnect));
 supplierRouter.get("/campaigns", requireApprovedSupplier(), asyncHandler(listMySupplierCampaigns));
 supplierRouter.post("/campaigns/:id/supplier-commitment", requireApprovedSupplier(), asyncHandler(confirmSupplierCommitment));
 supplierRouter.post("/campaigns/:id/decline", requireApprovedSupplier(), asyncHandler(declineSupplierCommitment));

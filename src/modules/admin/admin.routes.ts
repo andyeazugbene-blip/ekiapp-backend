@@ -157,6 +157,7 @@ import {
   adminApproveCampaign,
   adminApproveExtension,
   adminApproveSupplierAccount,
+  adminListSupplierAccounts,
   adminRestrictSupplierAccount,
   adminUnrestrictSupplierAccount,
   adminCancelCampaign,
@@ -341,6 +342,7 @@ adminRouter.post("/community-buy/suppliers/:id/unrestrict", asyncHandler(require
 // Community Buy Workstream 1 — admin actions on the new, no-Vendor-required
 // SupplierAccount (distinct from /community-buy/suppliers above, which
 // still operates on the legacy Vendor-keyed SupplierProfile).
+adminRouter.get("/community-buy/supplier-accounts", asyncHandler(requireAdminPermission("community_buy.read")), asyncHandler(adminListSupplierAccounts));
 adminRouter.post("/community-buy/supplier-accounts/:id/approve", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(adminApproveSupplierAccount));
 adminRouter.post("/community-buy/supplier-accounts/:id/restrict", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(adminRestrictSupplierAccount));
 adminRouter.post("/community-buy/supplier-accounts/:id/unrestrict", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(adminUnrestrictSupplierAccount));

@@ -73,6 +73,21 @@ export const supplierAccountService = {
     return { ...account, requirementsDue: computeRequirementsDue(account) };
   },
 
+  /**
+   * Workstream 3 — backs the admin-web SupplierAccount review screen
+   * (Set B, previously backend-only per Workstream 1's own comment on the
+   * approve/restrict/unrestrict routes). Optional state filter so admin can
+   * default to the review queue (UNDER_REVIEW/INFORMATION_REQUIRED) without
+   * a separate endpoint.
+   */
+  async listForAdmin(state?: string) {
+    return prisma.supplierAccount.findMany({
+      where: state ? { supplierState: state as never } : undefined,
+      include: { user: { select: { name: true, email: true } } },
+      orderBy: { createdAt: "desc" },
+    });
+  },
+
   async approve(id: string) {
     return prisma.supplierAccount.update({
       where: { id },
