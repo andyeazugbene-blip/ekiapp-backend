@@ -75,7 +75,16 @@ export const fulfilmentDelayService = {
   async list(status?: string) {
     return prisma.supplierFulfilmentAlert.findMany({
       where: status ? { status: status as never } : undefined,
-      include: { campaign: { select: { id: true, title: true, supplier: { select: { vendor: { select: { userId: true, storeName: true } } } } } } },
+      include: {
+        campaign: {
+          select: {
+            id: true,
+            title: true,
+            supplier: { select: { vendor: { select: { userId: true, storeName: true } } } },
+            supplierAccount: { select: { userId: true, user: { select: { name: true } } } },
+          },
+        },
+      },
       orderBy: { lastSeenAt: "desc" },
       take: 200,
     });
@@ -91,15 +100,24 @@ export const fulfilmentDelayService = {
   async contactSupplier(id: string, adminId: string, note: string) {
     const alert = await prisma.supplierFulfilmentAlert.findUnique({
       where: { id },
-      include: { campaign: { select: { title: true, supplier: { select: { vendor: { select: { userId: true } } } } } } },
+      include: {
+        campaign: {
+          select: {
+            title: true,
+            supplier: { select: { vendor: { select: { userId: true } } } },
+            supplierAccount: { select: { userId: true } },
+          },
+        },
+      },
     });
     if (!alert) throw new AppError("Fulfilment alert not found", 404);
 
     await notificationsService.enqueue({
       // Non-null: a SupplierFulfilmentAlert is only ever raised against a
       // CampaignFulfilment row, which createSupplierOrder() only creates
-      // for SUPPLIER-fulfilment campaigns.
-      userId: alert.campaign.supplier!.vendor.userId,
+      // for SUPPLIER-fulfilment campaigns — so either the legacy supplier or
+      // (Workstream 3) the SupplierAccount is guaranteed set, never neither.
+      userId: alert.campaign.supplierAccount?.userId ?? alert.campaign.supplier!.vendor.userId,
       type: "COMMUNITY_CAMPAIGN_UPDATE",
       title: "Fulfilment follow-up",
       body: `Eki is following up on fulfilment for "${alert.campaign.title}": ${note}`,

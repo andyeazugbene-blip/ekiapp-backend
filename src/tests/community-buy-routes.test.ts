@@ -79,6 +79,9 @@ const mockCancelCampaign = vi.fn();
 const mockEndRescueAndRefund = vi.fn();
 const mockRequestExtension = vi.fn();
 const mockConfirmSupplierCommitment = vi.fn();
+const mockConfirmSupplierCommitmentForAccount = vi.fn();
+const mockDeclineSupplierCommitmentForAccount = vi.fn();
+const mockListForSupplierAccount = vi.fn();
 const mockApproveExtension = vi.fn();
 const mockRejectExtension = vi.fn();
 const mockListExtensionRequestsForAdmin = vi.fn();
@@ -100,6 +103,9 @@ vi.mock("../modules/community-buy/community-campaigns.service", () => ({
     endRescueAndRefund: (...a: unknown[]) => mockEndRescueAndRefund(...a),
     requestExtension: (...a: unknown[]) => mockRequestExtension(...a),
     confirmSupplierCommitment: (...a: unknown[]) => mockConfirmSupplierCommitment(...a),
+    confirmSupplierCommitmentForAccount: (...a: unknown[]) => mockConfirmSupplierCommitmentForAccount(...a),
+    declineSupplierCommitment: vi.fn().mockResolvedValue({ id: "camp-2", supplierDeclinedAt: new Date() }),
+    declineSupplierCommitmentForAccount: (...a: unknown[]) => mockDeclineSupplierCommitmentForAccount(...a),
     approveExtension: (...a: unknown[]) => mockApproveExtension(...a),
     rejectExtension: (...a: unknown[]) => mockRejectExtension(...a),
     listExtensionRequestsForAdmin: (...a: unknown[]) => mockListExtensionRequestsForAdmin(...a),
@@ -107,6 +113,7 @@ vi.mock("../modules/community-buy/community-campaigns.service", () => ({
     publish: (...a: unknown[]) => mockPublishCampaign(...a),
     listForOrganiser: (...a: unknown[]) => mockListForOrganiser(...a),
     listForSupplier: (...a: unknown[]) => mockListForSupplier(...a),
+    listForSupplierAccount: (...a: unknown[]) => mockListForSupplierAccount(...a),
     listForReview: (...a: unknown[]) => mockListForReview(...a),
     listRecentlyClosed: (...a: unknown[]) => mockListRecentlyClosed(...a),
     approve: (...a: unknown[]) => mockApproveCampaign(...a),
@@ -132,6 +139,7 @@ const mockListContributionsForAdmin = vi.fn();
 const mockListMyContributions = vi.fn();
 const mockCreateSupportCase = vi.fn();
 const mockListMySupportCases = vi.fn();
+const mockGetMyPaymentForCampaignAsAccount = vi.fn();
 const mockGetMySupportCase = vi.fn();
 const mockListSupportCasesForAdmin = vi.fn();
 const mockGetSupportCaseForAdmin = vi.fn();
@@ -145,6 +153,7 @@ vi.mock("../modules/community-buy/campaign-contributions.service", () => ({
     pledgeOrganiserTopUp: (...a: unknown[]) => mockCreateOrganiserTopUp(...a),
     getMyContribution: (...a: unknown[]) => mockGetMyContribution(...a),
     getMyPaymentForCampaign: (...a: unknown[]) => mockGetMyPaymentForCampaign(...a),
+    getMyPaymentForCampaignAsAccount: (...a: unknown[]) => mockGetMyPaymentForCampaignAsAccount(...a),
     retryCharge: (...a: unknown[]) => mockRetryCharge(...a),
     releaseSupplierPayment: (...a: unknown[]) => mockReleaseSupplierPayment(...a),
     holdSupplierPayment: (...a: unknown[]) => mockHoldSupplierPayment(...a),
@@ -164,6 +173,13 @@ const mockMarkFulfilmentDispatched = vi.fn();
 const mockMarkFulfilmentCollected = vi.fn();
 const mockGetOrganiserFulfilment = vi.fn();
 const mockOrganiserConfirmFulfilmentCompletion = vi.fn();
+const mockGetSupplierFulfilmentForAccount = vi.fn();
+const mockConfirmFulfilmentInventoryForAccount = vi.fn();
+const mockSetFulfilmentPlanForAccount = vi.fn();
+const mockStartFulfilmentPackingForAccount = vi.fn();
+const mockMarkFulfilmentReadyForAccount = vi.fn();
+const mockMarkFulfilmentDispatchedForAccount = vi.fn();
+const mockMarkFulfilmentCollectedForAccount = vi.fn();
 
 vi.mock("../modules/community-buy/campaign-fulfilment.service", () => ({
   campaignFulfilmentService: {
@@ -173,6 +189,13 @@ vi.mock("../modules/community-buy/campaign-fulfilment.service", () => ({
     startPacking: (...a: unknown[]) => mockStartFulfilmentPacking(...a),
     markReady: (...a: unknown[]) => mockMarkFulfilmentReady(...a),
     markDispatched: (...a: unknown[]) => mockMarkFulfilmentDispatched(...a),
+    getForSupplierAccount: (...a: unknown[]) => mockGetSupplierFulfilmentForAccount(...a),
+    confirmInventoryForAccount: (...a: unknown[]) => mockConfirmFulfilmentInventoryForAccount(...a),
+    setPlanForAccount: (...a: unknown[]) => mockSetFulfilmentPlanForAccount(...a),
+    startPackingForAccount: (...a: unknown[]) => mockStartFulfilmentPackingForAccount(...a),
+    markReadyForAccount: (...a: unknown[]) => mockMarkFulfilmentReadyForAccount(...a),
+    markDispatchedForAccount: (...a: unknown[]) => mockMarkFulfilmentDispatchedForAccount(...a),
+    markCollectedForAccount: (...a: unknown[]) => mockMarkFulfilmentCollectedForAccount(...a),
     markCollected: (...a: unknown[]) => mockMarkFulfilmentCollected(...a),
     getForOrganiser: (...a: unknown[]) => mockGetOrganiserFulfilment(...a),
     organiserConfirmCompletion: (...a: unknown[]) => mockOrganiserConfirmFulfilmentCompletion(...a),
@@ -303,8 +326,12 @@ beforeEach(() => {
   mockVendorFindUnique.mockImplementation(async ({ where }: any) =>
     where?.userId === "vendor-user-1" ? { id: "vendor-db-1" } : null,
   );
+  // Workstream 3: "account-supplier-1" models a genuinely new no-Vendor
+  // supplier — approved SupplierAccount, no Vendor row at all — so route
+  // tests can exercise the resolveActingSupplier() account branch alongside
+  // vendor-user-1's legacy branch.
   mockSupplierAccountFindUnique.mockImplementation(async ({ where }: any) =>
-    where?.userId === "vendor-user-1" ? { supplierState: "APPROVED" } : null,
+    where?.userId === "vendor-user-1" || where?.userId === "account-supplier-1" ? { id: "acct-1", supplierState: "APPROVED" } : null,
   );
   mockApplyAsSupplierAccount.mockResolvedValue({ supplierState: "UNDER_REVIEW", requirementsDue: [] });
   mockGetSupplierAccountView.mockResolvedValue({ supplierState: "NOT_STARTED", requirementsDue: ["categories", "coverageRegions"] });
@@ -319,6 +346,11 @@ beforeEach(() => {
   mockEndRescueAndRefund.mockResolvedValue({ id: "camp-2", status: "FAILED" });
   mockRequestExtension.mockResolvedValue({ id: "ext-1", status: "PENDING" });
   mockConfirmSupplierCommitment.mockResolvedValue({ id: "camp-2", supplierCommitted: true });
+  mockConfirmSupplierCommitmentForAccount.mockResolvedValue({ id: "camp-2", supplierCommitted: true });
+  mockDeclineSupplierCommitmentForAccount.mockResolvedValue({ id: "camp-2", supplierDeclinedAt: new Date() });
+  mockListForSupplierAccount.mockResolvedValue([]);
+  mockGetSupplierFulfilmentForAccount.mockResolvedValue({ campaignId: "camp-77", status: "AWAITING_INVENTORY_CONFIRMATION" });
+  mockGetMyPaymentForCampaignAsAccount.mockResolvedValue({ campaignId: "camp-77", status: "NOT_RELEASED" });
   mockCreateOrganiserTopUp.mockResolvedValue({ contributionId: "contrib-top-1", clientSecret: "pi_test_secret" });
   mockApplyAsOrganiser.mockResolvedValue({ id: "org-1", isVerified: false });
   mockApplyAsSupplier.mockResolvedValue({ id: "sup-1", isVerified: false });
@@ -343,6 +375,10 @@ beforeEach(() => {
 const buyerToken = () => generateTestToken({ id: "buyer-1", role: "BUYER", email: "b@x.com" });
 const vendorToken = () => generateTestToken({ id: "vendor-user-1", role: "VENDOR", email: "v@x.com" });
 const adminToken = () => generateTestToken({ id: "admin-1", role: "ADMIN", email: "a@x.com" });
+// Workstream 3 — a genuinely new supplier with no Vendor at all, only an
+// approved SupplierAccount (role stays BUYER, matching a real no-Vendor
+// supplier's account — nothing about becoming a supplier ever touches role).
+const accountSupplierToken = () => generateTestToken({ id: "account-supplier-1", role: "BUYER", email: "s@x.com" });
 
 describe("Public discovery routes", () => {
   it("GET /api/community-buy/campaigns — public, no auth required", async () => {
@@ -703,6 +739,24 @@ describe("Supplier routes — Centre landing/apply open to any authenticated use
     const res = await request(app).get("/api/supplier/campaigns/camp-77/fulfilment").set("Authorization", `Bearer ${vendorToken()}`);
     expect(res.status).toBe(200);
     expect(mockGetSupplierFulfilment).toHaveBeenCalledWith("vendor-db-1", "camp-77");
+  });
+
+  // Workstream 3 — mandate items 6/9/K: a supplier with an approved
+  // SupplierAccount and NO Vendor at all must be able to act on these
+  // routes, routed to the *ForAccount service methods instead of ever
+  // calling requireVendorId (which would 403 "Vendor profile required"
+  // despite requireApprovedSupplier having already let the request through).
+  // Kept to a single request — this file's real Express rate limiter is
+  // shared/cumulative across every test in it and already runs close to
+  // its budget (see middlewares/rate-limit.ts) — the full per-route sweep
+  // for the account path lives in the service-level tests instead
+  // (community-buy.test.ts / community-buy-fulfilment.test.ts), which call
+  // the service functions directly and never touch this budget.
+  it("POST /api/supplier/campaigns/:id/supplier-commitment — no-Vendor SupplierAccount supplier (Workstream 3): 200, routed to the account-keyed service method with userId (not vendorId)", async () => {
+    const res = await request(app).post("/api/supplier/campaigns/camp-77/supplier-commitment").set("Authorization", `Bearer ${accountSupplierToken()}`);
+    expect(res.status).toBe(200);
+    expect(mockConfirmSupplierCommitmentForAccount).toHaveBeenCalledWith("account-supplier-1", "camp-77");
+    expect(mockConfirmSupplierCommitment).not.toHaveBeenCalled();
   });
 
   it("POST /api/supplier/campaigns/:id/fulfilment/confirm-inventory — id parsed correctly", async () => {

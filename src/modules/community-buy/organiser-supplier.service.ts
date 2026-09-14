@@ -55,13 +55,31 @@ export const organiserSupplierService = {
     return prisma.supplierProfile.findUnique({ where: { vendorId } });
   },
 
-  /** Verified, non-restricted suppliers an organiser can pick when creating a campaign in their market — spec §8.2 (same-market pairing only). */
+  /**
+   * Workstream 3 — the organiser-facing supplier picker (spec §8.2,
+   * same-market pairing only), now SupplierAccount-driven (item 6: no
+   * Vendor should ever be required merely to be selected as supplier).
+   * Every verified legacy SupplierProfile already has a mirrored, kept-in-
+   * sync SupplierAccount row (syncSupplierAccountForProfile, called from
+   * every verify/restrict/unrestrict mutation below and in
+   * community-campaigns.service.ts) with the same APPROVED/RESTRICTED state
+   * and a single-country coverageRegions — so this single query surfaces
+   * both existing Vendor-backed suppliers and new no-Vendor ones together,
+   * without a second query or a merge step.
+   */
   async listVerifiedSuppliers(country: string) {
-    return prisma.supplierProfile.findMany({
-      where: { isVerified: true, isRestricted: false, country },
-      include: { vendor: { select: { storeName: true } } },
-      orderBy: { verifiedAt: "desc" },
+    const accounts = await prisma.supplierAccount.findMany({
+      where: { supplierState: "APPROVED", coverageRegions: { has: country } },
+      include: { user: { select: { name: true } } },
+      orderBy: { approvedAt: "desc" },
     });
+    return accounts.map((account) => ({
+      id: account.id,
+      displayName: account.user.name,
+      categories: account.categories,
+      coverageRegions: account.coverageRegions,
+      legacySupplierProfileId: account.legacySupplierProfileId,
+    }));
   },
 
   // ─── Admin verification ─────────────────────────────────────────────────

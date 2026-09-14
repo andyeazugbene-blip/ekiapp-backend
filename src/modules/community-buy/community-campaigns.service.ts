@@ -21,6 +21,10 @@ export interface CreateCampaignInput {
   // requires it be absent.
   fulfilmentOwner?: "SELF" | "SUPPLIER";
   supplierId?: string;
+  // Workstream 3 — the no-Vendor-required supplier choice. Preferred over
+  // supplierId for new assignments; both remain accepted so nothing already
+  // integrated against supplierId breaks. See resolveSupplierChoice().
+  supplierAccountId?: string;
   description?: string;
   currency?: string;
   minimumShares?: number;
@@ -41,25 +45,33 @@ export interface CreateCampaignInput {
 type SupplyRoute = {
   fulfilmentOwner: "SELF" | "SUPPLIER";
   supplierId: string | null;
-  supplier: (Awaited<ReturnType<typeof prisma.supplierProfile.findUnique>> & { vendor: { userId: string } }) | null;
+  supplierAccountId: string | null;
+  notifyUserId: string | null;
 };
 
-/** Shared by create()/update() — every rule here already existed in create() verbatim; only the "must be provided" requirement moved to submit(). */
-async function resolveSupplyRoute(
-  fulfilmentOwner: "SELF" | "SUPPLIER" | undefined,
+/**
+ * Workstream 3 — resolves an organiser's supplier choice against either
+ * route: the new no-Vendor-required SupplierAccount (preferred — checked
+ * first) or the legacy Vendor-backed SupplierProfile (untouched from before
+ * this workstream — same lookup, same checks, same error messages/codes).
+ * When the chosen SupplierAccount is itself linked to a legacy
+ * SupplierProfile (legacySupplierProfileId), supplierId is dual-written too
+ * so every existing campaign.supplier.vendor... read keeps working.
+ */
+async function resolveSupplierChoice(
   supplierId: string | null | undefined,
+  supplierAccountId: string | null | undefined,
   country: string | null | undefined,
-): Promise<SupplyRoute | null> {
-  if (fulfilmentOwner === undefined) {
-    if (supplierId) throw new AppError("supplierId requires fulfilmentOwner to be set to SUPPLIER", 400);
-    return null;
-  }
-  if (fulfilmentOwner !== "SELF" && fulfilmentOwner !== "SUPPLIER") {
-    throw new AppError("fulfilmentOwner must be SELF or SUPPLIER", 400);
-  }
-  if (fulfilmentOwner === "SELF") {
-    if (supplierId) throw new AppError("supplierId must not be set when self-fulfilling", 400);
-    return { fulfilmentOwner: "SELF", supplierId: null, supplier: null };
+): Promise<{ fulfilmentOwner: "SUPPLIER"; supplierId: string | null; supplierAccountId: string | null; notifyUserId: string }> {
+  if (supplierAccountId) {
+    const account = await prisma.supplierAccount.findUnique({ where: { id: supplierAccountId } });
+    if (!account || account.supplierState !== "APPROVED") throw new AppError("Supplier not found or not approved", 404);
+    if (country && !account.coverageRegions.includes(country)) {
+      // spec §8.2: campaigns operate as a local-market feature only — no
+      // cross-border organiser/supplier pairing in this version.
+      throw new AppError("Supplier must cover the campaign's market", 400);
+    }
+    return { fulfilmentOwner: "SUPPLIER", supplierId: account.legacySupplierProfileId ?? null, supplierAccountId: account.id, notifyUserId: account.userId };
   }
   if (!supplierId) throw new AppError("supplierId is required when choosing a supplier", 400);
   const supplier = await prisma.supplierProfile.findUnique({ where: { id: supplierId }, include: { vendor: { select: { userId: true } } } });
@@ -70,7 +82,28 @@ async function resolveSupplyRoute(
     // cross-border organiser/supplier pairing in this version.
     throw new AppError("Supplier must be based in the same market as the campaign", 400);
   }
-  return { fulfilmentOwner: "SUPPLIER", supplierId, supplier };
+  return { fulfilmentOwner: "SUPPLIER", supplierId, supplierAccountId: null, notifyUserId: supplier.vendor.userId };
+}
+
+/** Shared by create()/update() — every rule here already existed in create() verbatim; only the "must be provided" requirement moved to submit(). */
+async function resolveSupplyRoute(
+  fulfilmentOwner: "SELF" | "SUPPLIER" | undefined,
+  supplierId: string | null | undefined,
+  supplierAccountId: string | null | undefined,
+  country: string | null | undefined,
+): Promise<SupplyRoute | null> {
+  if (fulfilmentOwner === undefined) {
+    if (supplierId || supplierAccountId) throw new AppError("supplierId requires fulfilmentOwner to be set to SUPPLIER", 400);
+    return null;
+  }
+  if (fulfilmentOwner !== "SELF" && fulfilmentOwner !== "SUPPLIER") {
+    throw new AppError("fulfilmentOwner must be SELF or SUPPLIER", 400);
+  }
+  if (fulfilmentOwner === "SELF") {
+    if (supplierId || supplierAccountId) throw new AppError("supplierId must not be set when self-fulfilling", 400);
+    return { fulfilmentOwner: "SELF", supplierId: null, supplierAccountId: null, notifyUserId: null };
+  }
+  return resolveSupplierChoice(supplierId, supplierAccountId, country);
 }
 
 /** Every numeric rule create() already enforced, made conditional on the field actually being provided so a partial draft save only validates what it touches. */
@@ -199,7 +232,7 @@ export const communityCampaignsService = {
     // this workstream — so is choosing a supply route at all while still
     // drafting. Every eligibility rule below is unchanged from before;
     // only "must be provided" moved to submit().
-    const route = await resolveSupplyRoute(input.fulfilmentOwner, input.supplierId, input.country);
+    const route = await resolveSupplyRoute(input.fulfilmentOwner, input.supplierId, input.supplierAccountId, input.country);
     validateSharesAndPricing(input);
     validateQuantityPerOrder(input.quantityPerOrder);
     validateDeliveryPreference(input.deliveryPreference);
@@ -210,6 +243,7 @@ export const communityCampaignsService = {
         organiserId: organiser.id,
         fulfilmentOwner: route?.fulfilmentOwner ?? "SELF",
         supplierId: route?.supplierId ?? null,
+        supplierAccountId: route?.supplierAccountId ?? null,
         title: input.title.trim(),
         description: input.description,
         country: input.country,
@@ -236,14 +270,14 @@ export const communityCampaignsService = {
     // actually comes into existence (supplierId assigned, supplierCommitted:
     // false), not merely because a campaign object exists. Self-fulfilled
     // campaigns have no supplier, so there is nothing to invite.
-    if (route?.fulfilmentOwner === "SUPPLIER" && route.supplier) {
+    if (route?.fulfilmentOwner === "SUPPLIER" && route.notifyUserId) {
       await notifyCampaign(
-        route.supplier.vendor.userId,
+        route.notifyUserId,
         "supplier_invited",
         "New Community Buy invitation",
         `An organiser wants you to supply "${campaign.title}"${input.minimumShares && input.maximumShares ? ` — ${input.minimumShares} to ${input.maximumShares} shares` : ""}. Review and accept or decline.`,
         campaign.id,
-        `supplier_invited:${campaign.id}:${route.supplier.id}`,
+        `supplier_invited:${campaign.id}:${route.supplierId ?? route.supplierAccountId}`,
       );
     }
     return campaign;
@@ -258,7 +292,7 @@ export const communityCampaignsService = {
     // editable on a draft, same as every other step — but only while
     // still DRAFT/CHANGES_REQUIRED; a LIVE campaign's supplier can only
     // change via reassignSupplier(), which also resets commitment state.
-    const supplyRouteTouched = input.fulfilmentOwner !== undefined || input.supplierId !== undefined;
+    const supplyRouteTouched = input.fulfilmentOwner !== undefined || input.supplierId !== undefined || input.supplierAccountId !== undefined;
 
     // spec §8.10 / doc §Screen 102: an organiser cannot edit financial
     // terms after contributions begin — termsLockedAt is set on the first
@@ -286,8 +320,9 @@ export const communityCampaignsService = {
 
     const route = supplyRouteTouched
       ? await resolveSupplyRoute(
-          input.fulfilmentOwner ?? (campaign.supplierId ? "SUPPLIER" : "SELF"),
+          input.fulfilmentOwner ?? (campaign.supplierId || campaign.supplierAccountId ? "SUPPLIER" : "SELF"),
           input.supplierId !== undefined ? input.supplierId : campaign.supplierId,
+          input.supplierAccountId !== undefined ? input.supplierAccountId : campaign.supplierAccountId,
           input.country !== undefined ? input.country : campaign.country,
         )
       : null;
@@ -316,21 +351,21 @@ export const communityCampaignsService = {
         ...(input.quantityPerOrder !== undefined && { quantityPerOrder: input.quantityPerOrder }),
         ...(input.qualityNotes !== undefined && { qualityNotes: input.qualityNotes }),
         ...(input.deliveryPreference !== undefined && { deliveryPreference: input.deliveryPreference }),
-        ...(route && { fulfilmentOwner: route.fulfilmentOwner, supplierId: route.supplierId }),
+        ...(route && { fulfilmentOwner: route.fulfilmentOwner, supplierId: route.supplierId, supplierAccountId: route.supplierAccountId }),
       },
     });
 
-    if (route?.fulfilmentOwner === "SUPPLIER" && route.supplier) {
+    if (route?.fulfilmentOwner === "SUPPLIER" && route.notifyUserId) {
       // Same real invitation as create()/reassignSupplier() — deduped by
       // notificationsService's dedupeKey, so re-saving the same supplier
       // choice on a later draft edit is a safe no-op, not a repeat spam.
       await notifyCampaign(
-        route.supplier.vendor.userId,
+        route.notifyUserId,
         "supplier_invited",
         "New Community Buy invitation",
         `An organiser wants you to supply "${updated.title}"${updated.minimumShares && updated.maximumShares ? ` — ${updated.minimumShares} to ${updated.maximumShares} shares` : ""}. Review and accept or decline.`,
         campaignId,
-        `supplier_invited:${campaignId}:${route.supplier.id}`,
+        `supplier_invited:${campaignId}:${route.supplierId ?? route.supplierAccountId}`,
       );
     }
 
@@ -344,7 +379,7 @@ export const communityCampaignsService = {
    * valid pre-commitment (mirrors update()'s financial-terms-locked gate);
    * resets the commitment/decline state so the new supplier starts clean.
    */
-  async reassignSupplier(userId: string, campaignId: string, newSupplierId: string) {
+  async reassignSupplier(userId: string, campaignId: string, newSupplierId?: string | null, newSupplierAccountId?: string | null) {
     const campaign = await this.requireOwnedByOrganiser(userId, campaignId);
     if (campaign.fulfilmentOwner !== "SUPPLIER") {
       throw new AppError("This campaign is self-fulfilled and has no supplier to reassign", 409);
@@ -355,19 +390,21 @@ export const communityCampaignsService = {
     if (campaign.termsLockedAt) {
       throw new AppError("This campaign's terms are locked after the first confirmed contribution", 409);
     }
-    if (newSupplierId === campaign.supplierId) {
+    // Workstream 3: same short-circuit as before for the legacy (supplierId)
+    // path — checked against the raw input, before any lookup, so this
+    // still throws 409 without ever touching supplierProfile/supplierAccount.
+    const alreadyAssigned = newSupplierAccountId
+      ? newSupplierAccountId === campaign.supplierAccountId
+      : newSupplierId === campaign.supplierId;
+    if (alreadyAssigned) {
       throw new AppError("This is already the assigned supplier", 409);
     }
-    const supplier = await prisma.supplierProfile.findUnique({ where: { id: newSupplierId }, include: { vendor: { select: { userId: true } } } });
-    if (!supplier || !supplier.isVerified) throw new AppError("Supplier not found or not verified", 404);
-    if (supplier.isRestricted) throw new AppError("This supplier is currently restricted and cannot take on new campaigns", 403);
-    if (supplier.country !== campaign.country) {
-      throw new AppError("Supplier must be based in the same market as the campaign", 400);
-    }
+    const choice = await resolveSupplierChoice(newSupplierId, newSupplierAccountId, campaign.country);
     const updated = await prisma.communityCampaign.update({
       where: { id: campaignId },
       data: {
-        supplierId: newSupplierId,
+        supplierId: choice.supplierId,
+        supplierAccountId: choice.supplierAccountId,
         supplierCommitted: false,
         supplierCommittedAt: null,
         supplierDeclinedAt: null,
@@ -377,12 +414,12 @@ export const communityCampaignsService = {
     // Same real invitation event as create() — a fresh commitment state now
     // exists for this (new) supplier.
     await notifyCampaign(
-      supplier.vendor.userId,
+      choice.notifyUserId,
       "supplier_invited",
       "New Community Buy invitation",
       `An organiser wants you to supply "${campaign.title}" — ${campaign.minimumShares} to ${campaign.maximumShares} shares. Review and accept or decline.`,
       campaignId,
-      `supplier_invited:${campaignId}:${supplier.id}`,
+      `supplier_invited:${campaignId}:${choice.supplierId ?? choice.supplierAccountId}`,
     );
     return updated;
   },
@@ -420,6 +457,40 @@ export const communityCampaignsService = {
   },
 
   /**
+   * Workstream 3 — same commitment action as confirmSupplierCommitment()
+   * above, for the no-Vendor SupplierAccount path. Kept fully separate
+   * (not merged into the function above) so the legacy vendorId-keyed path
+   * stays byte-for-byte untouched — see the plan's "dual-path resolver, not
+   * a rewrite" principle.
+   */
+  async confirmSupplierCommitmentForAccount(userId: string, campaignId: string) {
+    const account = await prisma.supplierAccount.findUnique({ where: { userId } });
+    const campaign = await prisma.communityCampaign.findUnique({ where: { id: campaignId }, include: { organiser: true } });
+    if (!campaign || !account || campaign.supplierAccountId !== account.id) {
+      throw new AppError("Campaign not found", 404);
+    }
+    if (account.supplierState === "RESTRICTED" || account.supplierState === "SUSPENDED" || account.supplierState === "PAUSED") {
+      throw new AppError("Your supplier account is currently restricted from committing to campaigns", 403);
+    }
+    if (!(SUPPLIER_RESPONSE_STATUSES as readonly string[]).includes(campaign.status)) {
+      throw new AppError("This campaign is not awaiting supplier commitment", 409);
+    }
+    const updated = await prisma.communityCampaign.update({
+      where: { id: campaignId },
+      data: { supplierCommitted: true, supplierCommittedAt: new Date() },
+    });
+    await notifyCampaign(
+      campaign.organiser.userId,
+      "supplier_accepted",
+      "Supplier accepted your campaign",
+      `Your supplier accepted "${campaign.title}".`,
+      campaignId,
+      `supplier_accepted:${campaignId}:${account.id}`,
+    );
+    return updated;
+  },
+
+  /**
    * Client spec (Community Buy doc, Screen CB67) requires a real Decline
    * alongside Accept. Deliberately does NOT touch campaign.status or
    * supplierId — a restricted supplier may still decline (restriction only
@@ -431,6 +502,44 @@ export const communityCampaignsService = {
     const supplier = await prisma.supplierProfile.findUnique({ where: { vendorId } });
     const campaign = await prisma.communityCampaign.findUnique({ where: { id: campaignId }, include: { organiser: true } });
     if (!campaign || !supplier || campaign.supplierId !== supplier.id) {
+      throw new AppError("Campaign not found", 404);
+    }
+    if (!(SUPPLIER_RESPONSE_STATUSES as readonly string[]).includes(campaign.status)) {
+      throw new AppError("This campaign is not awaiting your decision", 409);
+    }
+    if (campaign.supplierCommitted) {
+      throw new AppError("You have already accepted this campaign", 409);
+    }
+    if (campaign.supplierDeclinedAt) {
+      throw new AppError("You have already declined this campaign", 409);
+    }
+    const updated = await prisma.communityCampaign.update({
+      where: { id: campaignId },
+      data: { supplierDeclinedAt: new Date(), supplierDeclineReason: reason?.trim() || null },
+    });
+    await recordAudit({
+      actorId: userId,
+      action: "community_campaign.supplier_declined",
+      entityType: "CommunityCampaign",
+      entityId: campaignId,
+      reason,
+      afterState: { supplierDeclinedAt: updated.supplierDeclinedAt, supplierDeclineReason: updated.supplierDeclineReason },
+    });
+    await notifyCampaign(
+      campaign.organiser.userId,
+      "supplier_declined",
+      "Supplier declined your campaign",
+      reason ? `The supplier declined: ${reason}` : "The supplier declined this campaign. Choose a different supplier to continue.",
+      campaignId,
+    );
+    return updated;
+  },
+
+  /** Workstream 3 — declineSupplierCommitment() above, for the no-Vendor SupplierAccount path. Kept separate for the same reason as confirmSupplierCommitmentForAccount(). */
+  async declineSupplierCommitmentForAccount(userId: string, campaignId: string, reason?: string) {
+    const account = await prisma.supplierAccount.findUnique({ where: { userId } });
+    const campaign = await prisma.communityCampaign.findUnique({ where: { id: campaignId }, include: { organiser: true } });
+    if (!campaign || !account || campaign.supplierAccountId !== account.id) {
       throw new AppError("Campaign not found", 404);
     }
     if (!(SUPPLIER_RESPONSE_STATUSES as readonly string[]).includes(campaign.status)) {
@@ -740,7 +849,12 @@ export const communityCampaignsService = {
           ],
         }),
       },
-      include: { supplier: { include: { vendor: { select: { storeName: true } } } } },
+      include: {
+        supplier: { include: { vendor: { select: { storeName: true } } } },
+        // Workstream 3: display name for a no-Vendor supplier — legacy
+        // campaigns have no supplierAccountId, so this is always null there.
+        supplierAccount: { include: { user: { select: { name: true } } } },
+      },
       orderBy: { deadline: "asc" },
     });
   },
@@ -752,6 +866,7 @@ export const communityCampaignsService = {
       where: { organiserId: organiser.id },
       include: {
         supplier: { include: { vendor: { select: { storeName: true } } } },
+        supplierAccount: { include: { user: { select: { name: true } } } },
         contributions: { where: { status: "PAID" }, select: { amount: true } },
         _count: { select: { participants: true } },
       },
@@ -773,11 +888,26 @@ export const communityCampaignsService = {
     });
   },
 
+  /** Workstream 3 — listForSupplier() above, for the no-Vendor SupplierAccount path. */
+  async listForSupplierAccount(userId: string) {
+    const account = await prisma.supplierAccount.findUnique({ where: { userId } });
+    if (!account) return [];
+    return prisma.communityCampaign.findMany({
+      where: { supplierAccountId: account.id },
+      include: {
+        organiser: { include: { user: { select: { name: true } } } },
+        contributions: { where: { status: "PAID" }, select: { amount: true } },
+      },
+      orderBy: { createdAt: "desc" },
+    });
+  },
+
   async get(campaignId: string) {
     const campaign = await prisma.communityCampaign.findUnique({
       where: { id: campaignId },
       include: {
         supplier: { include: { vendor: { select: { storeName: true } } } },
+        supplierAccount: { include: { user: { select: { name: true } } } },
         contributions: { where: { status: "PAID" }, select: { amount: true, quantity: true } },
         _count: { select: { participants: true } },
       },
@@ -843,15 +973,38 @@ export const communityCampaignsService = {
   },
 
   /** One supplier order per campaign, using the actual final confirmedShares — never the goal — doc §11. Self-fulfilled campaigns have no supplier, so no order/payment/fulfilment record applies — the organiser handles it themselves outside this tracked workflow. */
-  async createSupplierOrder(campaign: { id: string; supplierId: string | null; title: string; currency: string | null; confirmedShares: number; pricePerShareMinor: number | null }): Promise<void> {
-    if (!campaign.supplierId) return;
+  async createSupplierOrder(campaign: { id: string; supplierId: string | null; supplierAccountId?: string | null; title: string; currency: string | null; confirmedShares: number; pricePerShareMinor: number | null }): Promise<void> {
+    if (!campaign.supplierId && !campaign.supplierAccountId) return;
     if (!campaign.pricePerShareMinor) return;
     if (!campaign.currency) return;
     const existing = await prisma.campaignSupplierPayment.findUnique({ where: { campaignId: campaign.id } });
     if (existing) return; // idempotent — never create a second supplier order/payment record.
 
-    const supplier = await prisma.supplierProfile.findUnique({ where: { id: campaign.supplierId }, include: { vendor: true } });
     const amount = campaign.confirmedShares * campaign.pricePerShareMinor;
+
+    // Workstream 3: the no-Vendor SupplierAccount path is checked first and
+    // is otherwise a complete parallel of the legacy branch below (same
+    // snapshot-then-notify shape) — untouched when supplierAccountId isn't
+    // set, which is every pre-Workstream-3 campaign.
+    if (campaign.supplierAccountId) {
+      const account = await prisma.supplierAccount.findUnique({ where: { id: campaign.supplierAccountId } });
+      await prisma.campaignSupplierPayment.create({
+        data: {
+          campaignId: campaign.id,
+          amount,
+          currency: campaign.currency,
+          status: "NOT_RELEASED",
+          payoutStripeAccountIdAtApproval: account?.providerConnectedAccountId ?? null,
+        },
+      });
+      await prisma.campaignFulfilment.upsert({ where: { campaignId: campaign.id }, update: {}, create: { campaignId: campaign.id } });
+      if (account) {
+        await notifyCampaign(account.userId, "supplier_order_created", "Campaign order confirmed", `${campaign.title} reached its funding requirement. Final quantity: ${campaign.confirmedShares}.`, campaign.id);
+      }
+      return;
+    }
+
+    const supplier = await prisma.supplierProfile.findUnique({ where: { id: campaign.supplierId! }, include: { vendor: true } });
     await prisma.campaignSupplierPayment.create({
       data: {
         campaignId: campaign.id,
@@ -1229,13 +1382,14 @@ export const communityCampaignsService = {
       include: {
         organiser: { select: { userId: true } },
         supplier: { select: { vendor: { select: { userId: true } } } },
+        supplierAccount: { select: { userId: true } },
         participants: { select: { userId: true } },
       },
     });
     if (!campaign) throw new AppError("Campaign not found", 404);
 
     const isOrganiser = campaign.organiser.userId === userId;
-    const isSupplier = campaign.supplier?.vendor.userId === userId;
+    const isSupplier = campaign.supplier?.vendor.userId === userId || campaign.supplierAccount?.userId === userId;
     if (!isOrganiser && !isSupplier) throw new AppError("Only this campaign's organiser or supplier can post an update", 403);
 
     if (!(this._postableUpdateStatuses as readonly string[]).includes(campaign.status)) {

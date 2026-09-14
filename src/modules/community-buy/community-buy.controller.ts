@@ -52,6 +52,25 @@ async function requireVendorId(userId: string): Promise<string> {
   return vendor.id;
 }
 
+type ActingSupplier = { kind: "vendor"; vendorId: string } | { kind: "account"; userId: string };
+
+/**
+ * Workstream 3 — every supplier-facing route below used to force
+ * requireVendorId(), which throws for the no-Vendor SupplierAccount path
+ * (item 6/9/K: no Vendor should ever be required to act as a supplier).
+ * Vendor is checked first — safe even for a Vendor whose SupplierAccount is
+ * also synced (legacySupplierProfileId), since resolveSupplierChoice()
+ * dual-writes supplierId for any legacy-linked account, so the untouched
+ * vendorId-keyed service methods keep matching exactly as before.
+ */
+async function resolveActingSupplier(userId: string): Promise<ActingSupplier> {
+  const vendor = await prisma.vendor.findUnique({ where: { userId }, select: { id: true } });
+  if (vendor) return { kind: "vendor", vendorId: vendor.id };
+  const account = await prisma.supplierAccount.findUnique({ where: { userId }, select: { id: true } });
+  if (account) return { kind: "account", userId };
+  throw new AppError("Vendor profile or Supplier account required", 403);
+}
+
 // ─── Discovery (public) ────────────────────────────────────────────────
 
 export async function listCampaigns(request: Request, response: Response): Promise<void> {
@@ -222,79 +241,110 @@ export async function requestCampaignExtension(request: Request, response: Respo
 }
 
 export async function confirmSupplierCommitment(request: Request, response: Response): Promise<void> {
-  const vendorId = await requireVendorId(requireUserId(request));
-  response.json({ campaign: await communityCampaignsService.confirmSupplierCommitment(vendorId, requireIdParam(request)) });
+  const acting = await resolveActingSupplier(requireUserId(request));
+  const campaign = acting.kind === "vendor"
+    ? await communityCampaignsService.confirmSupplierCommitment(acting.vendorId, requireIdParam(request))
+    : await communityCampaignsService.confirmSupplierCommitmentForAccount(acting.userId, requireIdParam(request));
+  response.json({ campaign });
 }
 
 export async function declineSupplierCommitment(request: Request, response: Response): Promise<void> {
   const userId = requireUserId(request);
-  const vendorId = await requireVendorId(userId);
+  const acting = await resolveActingSupplier(userId);
   const { reason } = request.body ?? {};
-  const campaign = await communityCampaignsService.declineSupplierCommitment(
-    userId,
-    vendorId,
-    requireIdParam(request),
-    typeof reason === "string" ? reason : undefined,
-  );
+  const reasonText = typeof reason === "string" ? reason : undefined;
+  const campaign = acting.kind === "vendor"
+    ? await communityCampaignsService.declineSupplierCommitment(userId, acting.vendorId, requireIdParam(request), reasonText)
+    : await communityCampaignsService.declineSupplierCommitmentForAccount(acting.userId, requireIdParam(request), reasonText);
   response.json({ campaign });
 }
 
 export async function reassignCampaignSupplier(request: Request, response: Response): Promise<void> {
   const userId = requireUserId(request);
-  const { supplierId } = request.body ?? {};
-  if (typeof supplierId !== "string" || !supplierId) throw new AppError("supplierId is required", 400);
-  const campaign = await communityCampaignsService.reassignSupplier(userId, requireIdParam(request), supplierId);
+  const { supplierId, supplierAccountId } = request.body ?? {};
+  if ((typeof supplierId !== "string" || !supplierId) && (typeof supplierAccountId !== "string" || !supplierAccountId)) {
+    throw new AppError("supplierId or supplierAccountId is required", 400);
+  }
+  const campaign = await communityCampaignsService.reassignSupplier(
+    userId,
+    requireIdParam(request),
+    typeof supplierId === "string" ? supplierId : undefined,
+    typeof supplierAccountId === "string" ? supplierAccountId : undefined,
+  );
   response.json({ campaign });
 }
 
 // ─── Supplier fulfilment — doc Phase 8 ─────────────────────────────────
 
 export async function getSupplierFulfilment(request: Request, response: Response): Promise<void> {
-  const vendorId = await requireVendorId(requireUserId(request));
-  response.json({ fulfilment: await campaignFulfilmentService.getForSupplier(vendorId, requireIdParam(request)) });
+  const acting = await resolveActingSupplier(requireUserId(request));
+  const fulfilment = acting.kind === "vendor"
+    ? await campaignFulfilmentService.getForSupplier(acting.vendorId, requireIdParam(request))
+    : await campaignFulfilmentService.getForSupplierAccount(acting.userId, requireIdParam(request));
+  response.json({ fulfilment });
 }
 
 export async function getMySupplierPayment(request: Request, response: Response): Promise<void> {
-  const vendorId = await requireVendorId(requireUserId(request));
-  response.json({ payment: await campaignContributionsService.getMyPaymentForCampaign(vendorId, requireIdParam(request)) });
+  const acting = await resolveActingSupplier(requireUserId(request));
+  const payment = acting.kind === "vendor"
+    ? await campaignContributionsService.getMyPaymentForCampaign(acting.vendorId, requireIdParam(request))
+    : await campaignContributionsService.getMyPaymentForCampaignAsAccount(acting.userId, requireIdParam(request));
+  response.json({ payment });
 }
 
 export async function confirmFulfilmentInventory(request: Request, response: Response): Promise<void> {
-  const vendorId = await requireVendorId(requireUserId(request));
-  response.json({ fulfilment: await campaignFulfilmentService.confirmInventory(vendorId, requireIdParam(request)) });
+  const acting = await resolveActingSupplier(requireUserId(request));
+  const fulfilment = acting.kind === "vendor"
+    ? await campaignFulfilmentService.confirmInventory(acting.vendorId, requireIdParam(request))
+    : await campaignFulfilmentService.confirmInventoryForAccount(acting.userId, requireIdParam(request));
+  response.json({ fulfilment });
 }
 
 export async function setFulfilmentPlan(request: Request, response: Response): Promise<void> {
-  const vendorId = await requireVendorId(requireUserId(request));
+  const acting = await resolveActingSupplier(requireUserId(request));
   const method = request.body?.method;
   if (method !== "DELIVERY" && method !== "COLLECTION") throw new AppError("method must be DELIVERY or COLLECTION", 400);
-  response.json({
-    fulfilment: await campaignFulfilmentService.setPlan(vendorId, requireIdParam(request), {
-      method,
-      estimatedReadyAt: typeof request.body?.estimatedReadyAt === "string" ? request.body.estimatedReadyAt : undefined,
-      notes: typeof request.body?.notes === "string" ? request.body.notes : undefined,
-    }),
-  });
+  const input = {
+    method: method as "DELIVERY" | "COLLECTION",
+    estimatedReadyAt: typeof request.body?.estimatedReadyAt === "string" ? request.body.estimatedReadyAt : undefined,
+    notes: typeof request.body?.notes === "string" ? request.body.notes : undefined,
+  };
+  const fulfilment = acting.kind === "vendor"
+    ? await campaignFulfilmentService.setPlan(acting.vendorId, requireIdParam(request), input)
+    : await campaignFulfilmentService.setPlanForAccount(acting.userId, requireIdParam(request), input);
+  response.json({ fulfilment });
 }
 
 export async function startFulfilmentPacking(request: Request, response: Response): Promise<void> {
-  const vendorId = await requireVendorId(requireUserId(request));
-  response.json({ fulfilment: await campaignFulfilmentService.startPacking(vendorId, requireIdParam(request)) });
+  const acting = await resolveActingSupplier(requireUserId(request));
+  const fulfilment = acting.kind === "vendor"
+    ? await campaignFulfilmentService.startPacking(acting.vendorId, requireIdParam(request))
+    : await campaignFulfilmentService.startPackingForAccount(acting.userId, requireIdParam(request));
+  response.json({ fulfilment });
 }
 
 export async function markFulfilmentReady(request: Request, response: Response): Promise<void> {
-  const vendorId = await requireVendorId(requireUserId(request));
-  response.json({ fulfilment: await campaignFulfilmentService.markReady(vendorId, requireIdParam(request)) });
+  const acting = await resolveActingSupplier(requireUserId(request));
+  const fulfilment = acting.kind === "vendor"
+    ? await campaignFulfilmentService.markReady(acting.vendorId, requireIdParam(request))
+    : await campaignFulfilmentService.markReadyForAccount(acting.userId, requireIdParam(request));
+  response.json({ fulfilment });
 }
 
 export async function markFulfilmentDispatched(request: Request, response: Response): Promise<void> {
-  const vendorId = await requireVendorId(requireUserId(request));
-  response.json({ fulfilment: await campaignFulfilmentService.markDispatched(vendorId, requireIdParam(request)) });
+  const acting = await resolveActingSupplier(requireUserId(request));
+  const fulfilment = acting.kind === "vendor"
+    ? await campaignFulfilmentService.markDispatched(acting.vendorId, requireIdParam(request))
+    : await campaignFulfilmentService.markDispatchedForAccount(acting.userId, requireIdParam(request));
+  response.json({ fulfilment });
 }
 
 export async function markFulfilmentCollected(request: Request, response: Response): Promise<void> {
-  const vendorId = await requireVendorId(requireUserId(request));
-  response.json({ fulfilment: await campaignFulfilmentService.markCollected(vendorId, requireIdParam(request)) });
+  const acting = await resolveActingSupplier(requireUserId(request));
+  const fulfilment = acting.kind === "vendor"
+    ? await campaignFulfilmentService.markCollected(acting.vendorId, requireIdParam(request))
+    : await campaignFulfilmentService.markCollectedForAccount(acting.userId, requireIdParam(request));
+  response.json({ fulfilment });
 }
 
 export async function getOrganiserFulfilment(request: Request, response: Response): Promise<void> {
@@ -442,8 +492,11 @@ export async function getMySupplierProfile(request: Request, response: Response)
 }
 
 export async function listMySupplierCampaigns(request: Request, response: Response): Promise<void> {
-  const vendorId = await requireVendorId(requireUserId(request));
-  response.json({ items: await communityCampaignsService.listForSupplier(vendorId) });
+  const acting = await resolveActingSupplier(requireUserId(request));
+  const items = acting.kind === "vendor"
+    ? await communityCampaignsService.listForSupplier(acting.vendorId)
+    : await communityCampaignsService.listForSupplierAccount(acting.userId);
+  response.json({ items });
 }
 
 // ─── Admin ──────────────────────────────────────────────────────────────

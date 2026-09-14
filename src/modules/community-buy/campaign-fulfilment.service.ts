@@ -26,6 +26,24 @@ async function requireSupplierOwned(vendorId: string, campaignId: string) {
   return { campaign, fulfilment };
 }
 
+/**
+ * Workstream 3 — same ownership gate as requireSupplierOwned() above, for
+ * the no-Vendor SupplierAccount path. Deliberately a separate function
+ * (not merged into requireSupplierOwned) so the legacy vendorId-keyed path
+ * stays completely untouched — see the plan's "dual-path resolver, not a
+ * rewrite" principle.
+ */
+async function requireSupplierAccountOwned(userId: string, campaignId: string) {
+  const account = await prisma.supplierAccount.findUnique({ where: { userId } });
+  const campaign = await prisma.communityCampaign.findUnique({ where: { id: campaignId } });
+  if (!campaign || !account || campaign.supplierAccountId !== account.id) {
+    throw new AppError("Campaign not found", 404);
+  }
+  const fulfilment = await prisma.campaignFulfilment.findUnique({ where: { campaignId } });
+  if (!fulfilment) throw new AppError("This campaign has no fulfilment record yet", 404);
+  return { campaign, fulfilment };
+}
+
 async function requireOrganiserOwned(userId: string, campaignId: string) {
   const organiser = await prisma.organiserProfile.findUnique({ where: { userId } });
   const campaign = await prisma.communityCampaign.findUnique({ where: { id: campaignId } });
@@ -159,6 +177,99 @@ export const campaignFulfilmentService = {
       where: { campaignId },
       data: { status: "COMPLETED" },
     });
+  },
+
+  // ─── Workstream 3 — no-Vendor SupplierAccount path. Each method below is
+  // the exact same state-machine action as its vendorId-keyed twin above,
+  // gated by requireSupplierAccountOwned() instead of requireSupplierOwned()
+  // — kept as separate functions rather than a shared/merged implementation
+  // so the legacy path above is provably untouched by this workstream. ────
+
+  async getForSupplierAccount(userId: string, campaignId: string) {
+    const { fulfilment } = await requireSupplierAccountOwned(userId, campaignId);
+    return fulfilment;
+  },
+
+  async confirmInventoryForAccount(userId: string, campaignId: string) {
+    const { campaign, fulfilment } = await requireSupplierAccountOwned(userId, campaignId);
+    if (fulfilment.status !== "AWAITING_INVENTORY_CONFIRMATION") {
+      throw new AppError("Inventory has already been confirmed for this campaign", 409);
+    }
+    const updated = await prisma.campaignFulfilment.update({
+      where: { campaignId },
+      data: { status: "INVENTORY_CONFIRMED", inventoryConfirmedAt: new Date() },
+    });
+    await notifyOrganiser(
+      campaign.id,
+      "inventory_confirmed",
+      "Supplier confirmed inventory",
+      `Your supplier confirmed they can fulfil ${campaign.confirmedShares} confirmed share${campaign.confirmedShares === 1 ? "" : "s"} of "${campaign.title}".`,
+      `inventory_confirmed:${campaign.id}`,
+    );
+    return updated;
+  },
+
+  async setPlanForAccount(userId: string, campaignId: string, input: { method: "DELIVERY" | "COLLECTION"; estimatedReadyAt?: string; notes?: string }) {
+    const { fulfilment } = await requireSupplierAccountOwned(userId, campaignId);
+    if (fulfilment.status === "AWAITING_INVENTORY_CONFIRMATION") {
+      throw new AppError("Confirm inventory before setting a fulfilment plan", 409);
+    }
+    if (fulfilment.status === "DISPATCHED" || fulfilment.status === "COLLECTED" || fulfilment.status === "COMPLETED") {
+      throw new AppError("This campaign has already been dispatched or collected", 409);
+    }
+    return prisma.campaignFulfilment.update({
+      where: { campaignId },
+      data: {
+        method: input.method,
+        estimatedReadyAt: input.estimatedReadyAt ? new Date(input.estimatedReadyAt) : undefined,
+        notes: input.notes,
+      },
+    });
+  },
+
+  async startPackingForAccount(userId: string, campaignId: string) {
+    const { fulfilment } = await requireSupplierAccountOwned(userId, campaignId);
+    if (fulfilment.status !== "INVENTORY_CONFIRMED") {
+      throw new AppError("Confirm inventory before starting packing", 409);
+    }
+    if (!fulfilment.method) throw new AppError("Set a fulfilment plan (delivery or collection) before starting packing", 409);
+    return prisma.campaignFulfilment.update({
+      where: { campaignId },
+      data: { status: "PACKING", packingStartedAt: new Date() },
+    });
+  },
+
+  async markReadyForAccount(userId: string, campaignId: string) {
+    const { fulfilment } = await requireSupplierAccountOwned(userId, campaignId);
+    if (fulfilment.status !== "PACKING") throw new AppError("Start packing before marking this campaign ready", 409);
+    return prisma.campaignFulfilment.update({
+      where: { campaignId },
+      data: { status: "READY_FOR_DISPATCH_OR_COLLECTION", readyAt: new Date() },
+    });
+  },
+
+  async markDispatchedForAccount(userId: string, campaignId: string) {
+    const { campaign, fulfilment } = await requireSupplierAccountOwned(userId, campaignId);
+    if (fulfilment.status !== "READY_FOR_DISPATCH_OR_COLLECTION") throw new AppError("This campaign is not ready for dispatch", 409);
+    if (fulfilment.method !== "DELIVERY") throw new AppError("This campaign's fulfilment plan is collection, not delivery", 409);
+    const updated = await prisma.campaignFulfilment.update({
+      where: { campaignId },
+      data: { status: "DISPATCHED", dispatchedAt: new Date() },
+    });
+    await notifyOrganiserAndParticipants(campaign.id, campaign.title, "Your Community Buy has been dispatched", `${campaign.title} has been dispatched by the supplier.`);
+    return updated;
+  },
+
+  async markCollectedForAccount(userId: string, campaignId: string) {
+    const { campaign, fulfilment } = await requireSupplierAccountOwned(userId, campaignId);
+    if (fulfilment.status !== "READY_FOR_DISPATCH_OR_COLLECTION") throw new AppError("This campaign is not ready for collection", 409);
+    if (fulfilment.method !== "COLLECTION") throw new AppError("This campaign's fulfilment plan is delivery, not collection", 409);
+    const updated = await prisma.campaignFulfilment.update({
+      where: { campaignId },
+      data: { status: "COLLECTED", collectedAt: new Date() },
+    });
+    await notifyOrganiserAndParticipants(campaign.id, campaign.title, "Your Community Buy is ready for collection", `${campaign.title} is ready for collection from the supplier.`);
+    return updated;
   },
 };
 

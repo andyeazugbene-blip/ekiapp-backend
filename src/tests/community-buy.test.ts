@@ -21,7 +21,7 @@ vi.mock("../lib/prisma", () => ({
     // call syncSupplierAccountForProfile, which reads the linked vendor via
     // supplierProfile.findUnique's own `vendor` select (already mocked
     // below per-test) and writes here.
-    supplierAccount: { findUnique: vi.fn(), upsert: vi.fn() },
+    supplierAccount: { findUnique: vi.fn(), findMany: vi.fn(), upsert: vi.fn() },
     user: { findUnique: vi.fn() },
     marketConfiguration: { findUnique: vi.fn(), findMany: vi.fn(), count: vi.fn(), upsert: vi.fn() },
     auditLog: { create: vi.fn() },
@@ -1723,11 +1723,11 @@ describe("Community Buy risk controls — restrict/unrestrict organiser and supp
     await expect(communityCampaignsService.confirmSupplierCommitment("vendor-1", "camp-1")).rejects.toMatchObject({ statusCode: 403 });
   });
 
-  it("listVerifiedSuppliers (organiser-facing picker) excludes restricted suppliers", async () => {
-    m.supplierProfile.findMany.mockResolvedValue([] as never);
+  it("listVerifiedSuppliers (organiser-facing picker) is SupplierAccount-driven — Workstream 3 — and excludes anything not APPROVED", async () => {
+    m.supplierAccount.findMany.mockResolvedValue([] as never);
     await organiserSupplierService.listVerifiedSuppliers("GB");
-    expect(m.supplierProfile.findMany).toHaveBeenCalledWith(
-      expect.objectContaining({ where: { isVerified: true, isRestricted: false, country: "GB" } }),
+    expect(m.supplierAccount.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { supplierState: "APPROVED", coverageRegions: { has: "GB" } } }),
     );
   });
 });
@@ -2027,7 +2027,7 @@ describe("communityCampaignsService.reassignSupplier — necessary companion to 
 
     expect(m.communityCampaign.update).toHaveBeenCalledWith({
       where: { id: "camp-1" },
-      data: { supplierId: "sup-2", supplierCommitted: false, supplierCommittedAt: null, supplierDeclinedAt: null, supplierDeclineReason: null },
+      data: { supplierId: "sup-2", supplierAccountId: null, supplierCommitted: false, supplierCommittedAt: null, supplierDeclinedAt: null, supplierDeclineReason: null },
     });
     expect(notificationsService.enqueue).toHaveBeenCalledWith(expect.objectContaining({
       userId: "supplier-user-2",
@@ -2221,7 +2221,7 @@ describe("Client correction — supplier is optional, never a publication gate",
     expect(result.status).toBe("LIVE");
     expect(m.communityCampaign.update).toHaveBeenCalledWith({
       where: { id: "camp-7" },
-      data: { supplierId: "sup-2", supplierCommitted: false, supplierCommittedAt: null, supplierDeclinedAt: null, supplierDeclineReason: null },
+      data: { supplierId: "sup-2", supplierAccountId: null, supplierCommitted: false, supplierCommittedAt: null, supplierDeclinedAt: null, supplierDeclineReason: null },
     });
     expect(notificationsService.enqueue).toHaveBeenCalledWith(expect.objectContaining({ userId: "supplier-user-2" }));
   });

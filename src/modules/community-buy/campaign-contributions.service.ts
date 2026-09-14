@@ -818,6 +818,18 @@ export const campaignContributionsService = {
     return payment;
   },
 
+  /** Workstream 3 — getMyPaymentForCampaign() above, for the no-Vendor SupplierAccount path. */
+  async getMyPaymentForCampaignAsAccount(userId: string, campaignId: string) {
+    const account = await prisma.supplierAccount.findUnique({ where: { userId } });
+    const campaign = await prisma.communityCampaign.findUnique({ where: { id: campaignId } });
+    if (!campaign || !account || campaign.supplierAccountId !== account.id) {
+      throw new AppError("Campaign not found", 404);
+    }
+    const payment = await prisma.campaignSupplierPayment.findUnique({ where: { campaignId } });
+    if (!payment) throw new AppError("No supplier payment record exists for this campaign yet", 404);
+    return payment;
+  },
+
   /**
    * The actual settlement — client mandate: "owner receives the campaign
    * funds through the approved Stripe flow, while Eki takes its configured
@@ -829,23 +841,51 @@ export const campaignContributionsService = {
   async releaseSupplierPayment(adminId: string, campaignId: string) {
     const payment = await prisma.campaignSupplierPayment.findUnique({
       where: { campaignId },
-      include: { campaign: { include: { supplier: { include: { vendor: true } } } } },
+      include: { campaign: { include: { supplier: { include: { vendor: true } }, supplierAccount: true } } },
     });
     if (!payment) throw new AppError("No supplier payment record exists for this campaign", 404);
     if (payment.status === "PAID") return payment;
     if (payment.status !== "NOT_RELEASED" && payment.status !== "ON_HOLD") {
       throw new AppError("This payment cannot be released from its current state", 409);
     }
-    // Doc Screen 131: never release if the payout account changed after
-    // campaign approval without reverification.
-    // Non-null: a CampaignSupplierPayment row only ever exists for a
-    // SUPPLIER-fulfilment campaign — createSupplierOrder() returns early for
-    // self-fulfilled ones, so this campaign's supplier is guaranteed set.
-    const vendor = payment.campaign.supplier!.vendor;
-    if (payment.payoutStripeAccountIdAtApproval && vendor.stripeAccountId !== payment.payoutStripeAccountIdAtApproval) {
+
+    // Workstream 3: dual-path payout-target resolution. When
+    // campaign.supplierAccountId is unset (every pre-Workstream-3 campaign)
+    // this is byte-identical to the original code — same field, same error
+    // messages/codes, same Stripe destination, same ledger legs — just
+    // renamed into local variables so both paths can share the checks below.
+    let payoutStripeAccountId: string | null;
+    let payoutReady: boolean;
+    let ledgerOwnerType: LedgerOwnerType;
+    let ledgerAccountType: LedgerAccountType;
+    let ledgerOwnerId: string;
+
+    if (payment.campaign.supplierAccountId) {
+      // Non-null: included above whenever supplierAccountId is set.
+      const account = payment.campaign.supplierAccount!;
+      payoutStripeAccountId = account.providerConnectedAccountId;
+      payoutReady = account.payoutsEnabled && account.chargesEnabled;
+      ledgerOwnerType = LedgerOwnerType.SUPPLIER;
+      ledgerAccountType = LedgerAccountType.SUPPLIER_PAYABLE;
+      ledgerOwnerId = account.id;
+    } else {
+      // Doc Screen 131: never release if the payout account changed after
+      // campaign approval without reverification.
+      // Non-null: a CampaignSupplierPayment row only ever exists for a
+      // SUPPLIER-fulfilment campaign — createSupplierOrder() returns early for
+      // self-fulfilled ones, so this campaign's supplier is guaranteed set.
+      const vendor = payment.campaign.supplier!.vendor;
+      payoutStripeAccountId = vendor.stripeAccountId;
+      payoutReady = vendor.stripePayoutsEnabled;
+      ledgerOwnerType = LedgerOwnerType.VENDOR;
+      ledgerAccountType = LedgerAccountType.VENDOR_PAYABLE;
+      ledgerOwnerId = vendor.id;
+    }
+
+    if (payment.payoutStripeAccountIdAtApproval && payoutStripeAccountId !== payment.payoutStripeAccountIdAtApproval) {
       throw new AppError("The supplier's payout account has changed since approval — reverification is required before release", 409, undefined, "PAYOUT_ACCOUNT_CHANGED");
     }
-    if (!vendor.stripeAccountId || !vendor.stripePayoutsEnabled) {
+    if (!payoutStripeAccountId || !payoutReady) {
       throw new AppError("This supplier's payout account is not ready to receive transfers", 409, undefined, "PAYOUTS_NOT_ENABLED");
     }
 
@@ -877,7 +917,7 @@ export const campaignContributionsService = {
         {
           amount: netAmount,
           currency: resolveStripeCurrency(payment.currency),
-          destination: vendor.stripeAccountId,
+          destination: payoutStripeAccountId,
           transfer_group: `community-buy:${campaignId}`,
           description: `Community Buy settlement for campaign ${campaignId}`,
         },
@@ -902,7 +942,7 @@ export const campaignContributionsService = {
       description: `Community Buy settlement for campaign ${campaignId} — supplier net of Eki processing fee`,
       legs: [
         { accountType: LedgerAccountType.COMMUNITY_BUY_ESCROW, ownerType: LedgerOwnerType.PLATFORM, direction: LedgerDirection.DEBIT, amount: totalPaid },
-        { accountType: LedgerAccountType.VENDOR_PAYABLE, ownerType: LedgerOwnerType.VENDOR, ownerId: vendor.id, direction: LedgerDirection.CREDIT, amount: netAmount },
+        { accountType: ledgerAccountType, ownerType: ledgerOwnerType, ownerId: ledgerOwnerId, direction: LedgerDirection.CREDIT, amount: netAmount },
         { accountType: LedgerAccountType.PLATFORM_FEE_REVENUE, ownerType: LedgerOwnerType.PLATFORM, direction: LedgerDirection.CREDIT, amount: feeAmount },
       ],
     }).catch((error) => {
