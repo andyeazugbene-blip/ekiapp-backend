@@ -13,7 +13,7 @@ vi.mock("../lib/prisma", () => ({
     notification: { findMany: vi.fn() },
     campaignUpdate: { create: vi.fn(), findMany: vi.fn() },
     campaignExtensionRequest: { create: vi.fn(), findUnique: vi.fn(), update: vi.fn(), findMany: vi.fn() },
-    campaignSupplierPayment: { findUnique: vi.fn(), create: vi.fn(), update: vi.fn(), findMany: vi.fn() },
+    campaignSupplierPayment: { findUnique: vi.fn(), create: vi.fn(), update: vi.fn(), updateMany: vi.fn(), findMany: vi.fn() },
     campaignFulfilment: { upsert: vi.fn(), findUnique: vi.fn(), findUniqueOrThrow: vi.fn(), update: vi.fn(), updateMany: vi.fn() },
     organiserProfile: { findUnique: vi.fn(), update: vi.fn() },
     supplierProfile: { findUnique: vi.fn(), findMany: vi.fn(), update: vi.fn() },
@@ -83,6 +83,9 @@ beforeEach(() => {
   // their write via updateMany before re-reading — default to "claim
   // succeeded" for tests here that exercise it only incidentally.
   m.campaignFulfilment.updateMany.mockResolvedValue({ count: 1 } as never);
+  // WS6: releaseSupplierPayment()'s pre-transfer PROCESSING write is now
+  // the same kind of guarded claim — same default-success rationale.
+  m.campaignSupplierPayment.updateMany.mockResolvedValue({ count: 1 } as never);
 });
 
 describe("communityCampaignsService.closeDueCampaigns — doc §7 deadline evaluation", () => {
@@ -1280,6 +1283,21 @@ describe("campaignContributionsService.releaseSupplierPayment — legacy Vendor 
       { idempotencyKey: "community-buy-transfer:camp-eligibility" },
     );
     expect(result.status).toBe("PAID");
+  });
+
+  // WS6: a concurrent second release call (admin double-click, or a
+  // four-eyes approval execution racing a direct call) must not reach
+  // Stripe at all if another caller already claimed the PROCESSING
+  // transition first.
+  it("WS6: a losing concurrent release call gets 409 and never calls Stripe", async () => {
+    m.campaignSupplierPayment.findUnique.mockResolvedValueOnce(basePayment as never);
+    m.vendor.findUnique.mockResolvedValue({ stripePayoutsEnabled: true, stripeChargesEnabled: true, isSuspended: false } as never);
+    m.campaignContribution.aggregate.mockResolvedValueOnce({ _sum: { amount: 2000 } } as never);
+    m.marketConfiguration.findUnique.mockResolvedValue({ countryCode: "GB", communityBuyFeeBps: 500 } as never);
+    m.campaignSupplierPayment.updateMany.mockResolvedValueOnce({ count: 0 } as never); // another call already won the claim
+
+    await expect(campaignContributionsService.releaseSupplierPayment("admin-1", "camp-eligibility")).rejects.toMatchObject({ statusCode: 409 });
+    expect(stripe.transfers.create).not.toHaveBeenCalled();
   });
 });
 

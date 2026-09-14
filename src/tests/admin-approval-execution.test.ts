@@ -30,10 +30,12 @@ vi.mock("../modules/community-buy/campaign-contributions.service", () => ({
 
 import { prisma } from "../lib/prisma";
 import { executeOrderRefund } from "../modules/admin/admin-refunds.controller";
+import { campaignContributionsService } from "../modules/community-buy/campaign-contributions.service";
 import { adminDecideApproval } from "../modules/admin/admin-approvals.controller";
 
 const m = vi.mocked(prisma, true);
 const mExecuteRefund = vi.mocked(executeOrderRefund);
+const mReleaseSupplierPayment = vi.mocked(campaignContributionsService.releaseSupplierPayment);
 
 function createMockReq(body: Record<string, unknown>): Request {
   return { user: { id: "admin-b", role: "ADMIN", email: "b@test.com" }, params: { id: "appr-1" }, body, headers: {} } as unknown as Request;
@@ -112,6 +114,35 @@ describe("adminDecideApproval — approve path only commits after successful exe
 
     expect(m.adminApproval.update).toHaveBeenCalledTimes(1);
     expect((res.data as Record<string, unknown>).approval).toMatchObject({ status: "APPROVED" });
+  });
+
+  // WS6: a four-eyes-approved Community Buy supplier-payment release used to
+  // be audited ONLY as the generic admin_approval.approved_and_executed
+  // entry — a query for "every supplier payment release" silently missed
+  // every gated one. This proves the specific entry now also fires.
+  it("WS6: approving a community_buy.supplier_payment_release action records BOTH the specific release audit entry and the generic approval-executed entry", async () => {
+    const supplierPaymentApproval = {
+      id: "appr-2", status: "PENDING", actionType: "community_buy.supplier_payment_release",
+      businessRefType: "CampaignSupplierPayment", businessRefId: "camp-99", amount: 5000, requestedById: "admin-a",
+    };
+    m.adminApproval.findUnique.mockResolvedValue(supplierPaymentApproval as never);
+    mReleaseSupplierPayment.mockResolvedValue({ status: "PAID" } as never);
+    m.adminApproval.update.mockResolvedValue({ ...supplierPaymentApproval, status: "APPROVED" } as never);
+
+    const res = createMockRes();
+    await adminDecideApproval(createMockReq({ approve: true }), res as unknown as Response);
+
+    expect(mReleaseSupplierPayment).toHaveBeenCalledWith("admin-b", "camp-99");
+    expect(m.auditLog.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        action: "community_supplier_payment.release",
+        entityType: "CampaignSupplierPayment",
+        entityId: "camp-99",
+      }),
+    }));
+    expect(m.auditLog.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ action: "admin_approval.approved_and_executed" }),
+    }));
   });
 
   it("reject path never calls execution at all, commits REJECTED immediately", async () => {

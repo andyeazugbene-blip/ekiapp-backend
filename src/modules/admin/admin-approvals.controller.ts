@@ -59,7 +59,22 @@ export async function adminDecideApproval(request: Request, response: Response):
 
   try {
     if (approval.actionType === "community_buy.supplier_payment_release") {
-      await campaignContributionsService.releaseSupplierPayment(adminId, approval.businessRefId);
+      // WS6: mirror the exact audit entry the direct (ungated) release path
+      // emits (community-buy.controller.ts's adminReleaseSupplierPayment) —
+      // without this, a release that happened to be four-eyes-gated was
+      // only ever visible as the generic admin_approval.approved_and_executed
+      // entry below, never as community_supplier_payment.release, so a
+      // query for "every supplier payment release" silently missed every
+      // gated one.
+      const payment = await campaignContributionsService.releaseSupplierPayment(adminId, approval.businessRefId);
+      await recordAudit({
+        actorId: adminId,
+        action: "community_supplier_payment.release",
+        entityType: "CampaignSupplierPayment",
+        entityId: approval.businessRefId,
+        afterState: { status: payment.status },
+        request,
+      });
     } else if (approval.actionType === "order.refund.large") {
       await executeOrderRefund(approval.businessRefId, adminId, approval.amount ?? undefined, "Four-eyes approved refund");
     } else {

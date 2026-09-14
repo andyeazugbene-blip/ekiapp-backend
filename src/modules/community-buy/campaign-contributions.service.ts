@@ -910,10 +910,18 @@ export const campaignContributionsService = {
     const feeAmount = calculatePlatformFee(totalPaid, config.communityBuyFeeBps);
     const netAmount = totalPaid - feeAmount;
 
-    await prisma.campaignSupplierPayment.update({
-      where: { campaignId },
+    // WS6: atomic claim — same guard shape as WS4/WS5's fixes. Two
+    // concurrent releases (an admin double-click, or a four-eyes approval
+    // execution racing a direct call) could otherwise both pass the status
+    // read at the top of this function and both reach this point; the
+    // guarded write means only one caller's release actually proceeds to
+    // call Stripe, closing the race at the database layer rather than
+    // relying solely on Stripe's own idempotency-key matching.
+    const claim = await prisma.campaignSupplierPayment.updateMany({
+      where: { campaignId, status: { in: ["NOT_RELEASED", "ON_HOLD"] } },
       data: { status: "PROCESSING", amount: totalPaid, feeAmount, netAmount },
     });
+    if (claim.count !== 1) throw new AppError("This payment cannot be released from its current state", 409);
 
     let transfer: Stripe.Transfer;
     try {
