@@ -98,6 +98,22 @@ export async function getParticipantFulfilment(request: Request, response: Respo
   response.json({ fulfilment: await campaignFulfilmentService.getForParticipant(requireIdParam(request)) });
 }
 
+/** M5 — participant-authorized only (requires an owned PAID contribution); a supplier can never forge this. */
+export async function confirmFulfilmentReceipt(request: Request, response: Response): Promise<void> {
+  const userId = requireUserId(request);
+  response.json(await campaignFulfilmentService.confirmReceiptForParticipant(userId, requireIdParam(request)));
+}
+
+/** M5 — reuses the existing CommunityBuySupportCase ticket workflow (FULFILMENT_ISSUE), not a new one. */
+export async function reportFulfilmentProblem(request: Request, response: Response): Promise<void> {
+  const userId = requireUserId(request);
+  const description = request.body?.description;
+  if (typeof description !== "string" || !description.trim()) throw new AppError("description is required", 400);
+  const evidenceUrls = Array.isArray(request.body?.evidenceUrls) ? request.body.evidenceUrls : undefined;
+  const supportCase = await campaignFulfilmentService.reportFulfilmentProblem(userId, requireIdParam(request), description, evidenceUrls);
+  response.status(201).json({ supportCase });
+}
+
 // ─── Participant ────────────────────────────────────────────────────────
 
 export async function joinCampaign(request: Request, response: Response): Promise<void> {
@@ -537,6 +553,42 @@ export async function organiserConfirmFulfilmentCompletion(request: Request, res
   response.json({ fulfilment: await campaignFulfilmentService.organiserConfirmCompletion(userId, requireIdParam(request)) });
 }
 
+/** M5 — supplier-facing exception report; an informational overlay, never a fulfilment-status change. */
+export async function reportFulfilmentException(request: Request, response: Response): Promise<void> {
+  const acting = await resolveActingSupplier(requireUserId(request));
+  const note = request.body?.note;
+  if (typeof note !== "string" || !note.trim()) throw new AppError("note is required", 400);
+  const result = acting.kind === "vendor"
+    ? await campaignFulfilmentService.reportExceptionForVendor(acting.vendorId, requireIdParam(request), note)
+    : await campaignFulfilmentService.reportExceptionForAccount(acting.userId, requireIdParam(request), note);
+  response.status(201).json(result);
+}
+
+/** M5 — the append-only evidence timeline; organiser/supplier (own campaign) or admin only. */
+export async function getFulfilmentEvents(request: Request, response: Response): Promise<void> {
+  const userId = requireUserId(request);
+  const campaignId = requireIdParam(request);
+  let events;
+  const organiser = await prisma.organiserProfile.findUnique({ where: { userId } });
+  if (organiser) {
+    const campaign = await prisma.communityCampaign.findUnique({ where: { id: campaignId }, select: { organiserId: true } });
+    if (campaign?.organiserId === organiser.id) {
+      events = await campaignFulfilmentService.getFulfilmentEventsForOrganiser(userId, campaignId);
+    }
+  }
+  if (!events) {
+    const acting = await resolveActingSupplier(userId);
+    events = acting.kind === "vendor"
+      ? await campaignFulfilmentService.getFulfilmentEventsForVendor(acting.vendorId, campaignId)
+      : await campaignFulfilmentService.getFulfilmentEventsForAccount(acting.userId, campaignId);
+  }
+  response.json({ events });
+}
+
+export async function adminGetFulfilmentEvents(request: Request, response: Response): Promise<void> {
+  response.json({ events: await campaignFulfilmentService.getFulfilmentEventsForAdmin(requireIdParam(request)) });
+}
+
 // ─── Support cases — doc Phase 9 ───────────────────────────────────────
 
 const VALID_CASE_TYPES = ["PAYMENT_ISSUE", "REFUND_ISSUE", "FULFILMENT_ISSUE", "ORGANISER_CONDUCT", "SUPPLIER_CONDUCT", "OTHER"];
@@ -656,9 +708,22 @@ export async function applyAsSupplier(request: Request, response: Response): Pro
   if (typeof country !== "string") throw new AppError("country is required", 400);
   const categories = Array.isArray(request.body?.categories) ? request.body.categories : undefined;
   const coverageRegions = Array.isArray(request.body?.coverageRegions) ? request.body.coverageRegions : undefined;
+  // M5 (spec §10.2 step 5 "collection capacity").
+  const collectionCapacityPerDay = Number.isInteger(request.body?.collectionCapacityPerDay) ? request.body.collectionCapacityPerDay : undefined;
   response.status(201).json({
-    account: await supplierAccountService.applyAsSupplier(userId, { country, categories, coverageRegions }),
+    account: await supplierAccountService.applyAsSupplier(userId, { country, categories, coverageRegions, collectionCapacityPerDay }),
   });
+}
+
+/** M5 (spec §6.4 "paused: voluntarily unavailable for new work") — the only self-service SupplierAccount state transition; everything else in this file is admin-only. */
+export async function pauseSupplierAccount(request: Request, response: Response): Promise<void> {
+  const userId = requireUserId(request);
+  response.json({ account: await supplierAccountService.pause(userId) });
+}
+
+export async function resumeSupplierAccount(request: Request, response: Response): Promise<void> {
+  const userId = requireUserId(request);
+  response.json({ account: await supplierAccountService.resume(userId) });
 }
 
 export async function getMySupplierProfile(request: Request, response: Response): Promise<void> {
@@ -829,6 +894,48 @@ export async function adminUnrestrictSupplierAccount(request: Request, response:
   const id = requireIdParam(request);
   const account = await supplierAccountService.unrestrict(id);
   await recordAudit({ actorId: adminId, action: "community_supplier_account.unrestrict", entityType: "SupplierAccount", entityId: id, afterState: { supplierState: account.supplierState }, request });
+  response.json({ account });
+}
+
+/** M5 — the equally-guarded (2FA) reversal for suspend(); never reachable through unrestrict(). */
+export async function adminUnsuspendSupplierAccount(request: Request, response: Response): Promise<void> {
+  const adminId = requireUserId(request);
+  const id = requireIdParam(request);
+  const account = await supplierAccountService.unsuspend(id);
+  await recordAudit({ actorId: adminId, action: "community_supplier_account.unsuspend", entityType: "SupplierAccount", entityId: id, afterState: { supplierState: account.supplierState }, request });
+  response.json({ account });
+}
+
+/** M5 (spec §10.1/§10.2 step 6 "request information") */
+export async function adminRequestSupplierInformation(request: Request, response: Response): Promise<void> {
+  const adminId = requireUserId(request);
+  const id = requireIdParam(request);
+  const { reason } = request.body ?? {};
+  if (typeof reason !== "string" || reason.length === 0) throw new AppError("reason is required", 400);
+  const account = await supplierAccountService.requestInformation(id, reason);
+  await recordAudit({ actorId: adminId, action: "community_supplier_account.request_information", entityType: "SupplierAccount", entityId: id, reason, afterState: { supplierState: account.supplierState }, request });
+  response.json({ account });
+}
+
+/** M5 (spec §6.4/§14.4) — admin-only; always revokes data access. */
+export async function adminSuspendSupplierAccount(request: Request, response: Response): Promise<void> {
+  const adminId = requireUserId(request);
+  const id = requireIdParam(request);
+  const { reason } = request.body ?? {};
+  if (typeof reason !== "string" || reason.length === 0) throw new AppError("reason is required", 400);
+  const account = await supplierAccountService.suspend(id, reason, adminId);
+  await recordAudit({ actorId: adminId, action: "community_supplier_account.suspend", entityType: "SupplierAccount", entityId: id, reason, afterState: { supplierState: account.supplierState }, request });
+  response.json({ account });
+}
+
+/** M5 — permanent, terminal; admin-only. */
+export async function adminCloseSupplierAccount(request: Request, response: Response): Promise<void> {
+  const adminId = requireUserId(request);
+  const id = requireIdParam(request);
+  const { reason } = request.body ?? {};
+  if (typeof reason !== "string" || reason.length === 0) throw new AppError("reason is required", 400);
+  const account = await supplierAccountService.close(id, reason, adminId);
+  await recordAudit({ actorId: adminId, action: "community_supplier_account.close", entityType: "SupplierAccount", entityId: id, reason, afterState: { supplierState: account.supplierState }, request });
   response.json({ account });
 }
 

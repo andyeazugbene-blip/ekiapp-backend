@@ -2249,11 +2249,27 @@ model SupplierAccount {
   payoutsEnabled             Boolean              @default(false)
   detailsSubmitted           Boolean              @default(false)
   requirementsDue            String[]             @default([])
+  // M5 — Stripe's own `requirements.currently_due` array, distinct from
+  // requirementsDue above (that one is Eki-side profile completeness —
+  // categories/coverageRegions — computed by computeRequirementsDue(), not
+  // this). Kept separate rather than overloading the existing field's
+  // established meaning. Synced by getStatus()'s live Stripe poll.
+  stripeRequirementsDue      String[]             @default([])
   categories                 String[]             @default([])
   coverageRegions            String[]             @default([])
   collectionAreas            String[]             @default([])
+  // M5 (spec §10.2 step 5: "Collect coverage areas, collection capacity,
+  // product categories and fulfilment evidence separately") — the one
+  // onboarding field named in the spec that never got a column. Nullable:
+  // "not yet stated," never a fabricated default.
+  collectionCapacityPerDay   Int?
   approvedAt                 DateTime?
   pausedAt                   DateTime?
+  // M5 — SUSPENDED/CLOSED were reachable in the enum since Workstream 1 but
+  // no code ever set them (see supplier-account.service.ts's own comment).
+  // Additive timestamps, mirroring approvedAt/pausedAt's existing pattern.
+  suspendedAt                DateTime?
+  closedAt                   DateTime?
   controlScope               String?
   reasonCode                 String?
   createdAt                  DateTime             @default(now())
@@ -2409,6 +2425,7 @@ model CommunityCampaign {
   paymentAuthorisations     CommunityBuyPaymentAuthorisation[]
   payout                    CommunityBuyPayout?
   deliveryReferences        DeliveryReference[]
+  fulfilmentEvents          CampaignFulfilmentEvent[]
   createdAt                 DateTime                           @default(now())
   updatedAt                 DateTime                           @updatedAt
 
@@ -2559,6 +2576,51 @@ enum FulfilmentStatus {
 enum FulfilmentMethod {
   DELIVERY
   COLLECTION
+}
+
+// M5 (spec §10.2 step 5 "fulfilment evidence"; Appendix B event catalogue:
+// order_ready, packed, handed_to_courier, collected, delivered,
+// delivery_exception, evidence_submitted) — append-only historical record
+// alongside CampaignFulfilment's mutable current-state row. Never updated
+// or deleted after creation; a correction is a new event, not an edit.
+// Written by campaign-fulfilment.service.ts's recordFulfilmentEvent()
+// (never throws — mirrors community-buy-privacy.service.ts's
+// recordDataAccess() contract) at every existing state transition, plus
+// the new participant-facing receipt-confirmation/problem-report actions.
+model CampaignFulfilmentEvent {
+  id             String                    @id @default(cuid())
+  campaignId     String
+  contributionId String?
+  actorUserId    String
+  actorRole      FulfilmentEventActorRole
+  eventType      FulfilmentEventType
+  note           String?
+  metadata       Json?
+  campaign       CommunityCampaign         @relation(fields: [campaignId], references: [id], onDelete: Restrict)
+  createdAt      DateTime                  @default(now())
+
+  @@index([campaignId, createdAt])
+  @@index([contributionId])
+}
+
+enum FulfilmentEventActorRole {
+  SUPPLIER
+  ORGANISER
+  PARTICIPANT
+  ADMIN
+}
+
+enum FulfilmentEventType {
+  INVENTORY_CONFIRMED
+  PLAN_SET
+  PACKING_STARTED
+  READY
+  DISPATCHED
+  COLLECTED
+  COMPLETED
+  EXCEPTION
+  PARTICIPANT_RECEIPT_CONFIRMED
+  PARTICIPANT_PROBLEM_REPORTED
 }
 
 model CampaignParticipant {

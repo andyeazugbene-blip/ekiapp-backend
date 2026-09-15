@@ -160,9 +160,14 @@ import {
   adminListSupplierAccounts,
   adminRestrictSupplierAccount,
   adminUnrestrictSupplierAccount,
+  adminUnsuspendSupplierAccount,
   adminRevokeSupplierDataAccess,
   adminSearchDataAccessLog,
   adminRequestEmergencyDisclosure,
+  adminRequestSupplierInformation,
+  adminSuspendSupplierAccount,
+  adminCloseSupplierAccount,
+  adminGetFulfilmentEvents,
   adminCancelCampaign,
   adminListCampaignContributions,
   adminGetCampaignLedger,
@@ -352,6 +357,8 @@ adminRouter.post("/fulfilment-delays/:id/note", asyncHandler(requireAdminPermiss
 adminRouter.post("/fulfilment-delays/:id/contact-supplier", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(adminContactSupplierForDelay));
 adminRouter.post("/fulfilment-delays/:id/resolve", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(adminResolveFulfilmentDelay));
 adminRouter.post("/fulfilment-delays/:id/escalate", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(adminEscalateFulfilmentDelay));
+// M5 — the append-only fulfilment evidence timeline.
+adminRouter.get("/community-campaigns/:id/fulfilment-events", asyncHandler(requireAdminPermission("community_buy.read")), asyncHandler(adminGetFulfilmentEvents));
 adminRouter.get("/community-buy/organisers", asyncHandler(requireAdminPermission("community_buy.read")), asyncHandler(adminListVerifiedOrganisers));
 adminRouter.post("/community-buy/organisers/:id/restrict", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(adminRestrictOrganiser));
 adminRouter.post("/community-buy/organisers/:id/unrestrict", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(adminUnrestrictOrganiser));
@@ -365,6 +372,11 @@ adminRouter.get("/community-buy/supplier-accounts", asyncHandler(requireAdminPer
 adminRouter.post("/community-buy/supplier-accounts/:id/approve", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(adminApproveSupplierAccount));
 adminRouter.post("/community-buy/supplier-accounts/:id/restrict", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(adminRestrictSupplierAccount));
 adminRouter.post("/community-buy/supplier-accounts/:id/unrestrict", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(adminUnrestrictSupplierAccount));
+// M5 (spec §6.4, §10.1/§10.2 step 6) — request-information mirrors restrict's severity (no 2FA); suspend/close are harder to reverse (close is permanent) and always revoke data access, so both require 2FA like revoke-data-access below.
+adminRouter.post("/community-buy/supplier-accounts/:id/request-information", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(adminRequestSupplierInformation));
+adminRouter.post("/community-buy/supplier-accounts/:id/suspend", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(require2fa), asyncHandler(adminSuspendSupplierAccount));
+adminRouter.post("/community-buy/supplier-accounts/:id/unsuspend", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(require2fa), asyncHandler(adminUnsuspendSupplierAccount));
+adminRouter.post("/community-buy/supplier-accounts/:id/close", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(require2fa), asyncHandler(adminCloseSupplierAccount));
 // M4 — delivery/privacy admin controls (spec §14, §19, AT-42/43).
 adminRouter.post("/community-buy/supplier-accounts/:id/revoke-data-access", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(require2fa), asyncHandler(adminRevokeSupplierDataAccess));
 adminRouter.get("/community-buy/data-access-log", asyncHandler(requireAdminPermission("community_buy.read")), asyncHandler(adminSearchDataAccessLog));

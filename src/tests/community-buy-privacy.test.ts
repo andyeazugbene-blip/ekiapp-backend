@@ -105,7 +105,7 @@ describe("AT-38: deliveryPreference=DELIVERY is rejected at campaign creation/up
 
 describe("AT-38: setPlan()/setPlanForAccount() is a second, independent bypass — closed the same way", () => {
   function mockOwnedCampaign(deliveryPreference: string) {
-    m.supplierProfile.findUnique.mockResolvedValue({ id: "sup-1" } as never);
+    m.supplierProfile.findUnique.mockResolvedValue({ id: "sup-1", vendor: { userId: "vendor-user-1" } } as never);
     m.supplierAccount.findUnique.mockResolvedValue({ id: "acct-1" } as never);
     m.communityCampaign.findUnique.mockResolvedValue({ id: "camp-1", supplierId: "sup-1", supplierAccountId: "acct-1", organiserId: "org-1", title: "Rice", deliveryPreference } as never);
     m.campaignFulfilment.findUnique.mockResolvedValue({ campaignId: "camp-1", status: "INVENTORY_CONFIRMED", method: null } as never);

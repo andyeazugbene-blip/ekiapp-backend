@@ -2,6 +2,7 @@ import { logger } from "../../lib/logger";
 import { prisma } from "../../lib/prisma";
 import { stripe } from "../../lib/stripe";
 import { AppError } from "../../shared/errors/app-error";
+import { supplierAccountService } from "./supplier-account.service";
 
 const FRONTEND_URL = process.env.FRONTEND_URL ?? "http://localhost:3000";
 
@@ -89,6 +90,11 @@ export const supplierStripeConnectService = {
           detailsSubmitted: stripeAccount.details_submitted ?? false,
         };
         await prisma.supplierAccount.update({ where: { id: account.id }, data });
+        // M5 — Stripe's own outstanding-requirements list, kept separate
+        // from the Eki-side requirementsDue; may demote UNDER_REVIEW to
+        // VERIFICATION_REQUIRED (and promote back), never touches a
+        // decided state — see syncStripeRequirements()'s own doc comment.
+        await supplierAccountService.syncStripeRequirements(account.id, stripeAccount.requirements?.currently_due ?? []);
         return { providerConnectedAccountId: account.providerConnectedAccountId, ...data };
       } catch (error) {
         logger.error("Stripe account retrieve failed (supplier)", {

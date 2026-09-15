@@ -6,15 +6,26 @@ vi.mock("../lib/prisma", () => ({
     organiserProfile: { findUnique: vi.fn() },
     communityCampaign: { findUnique: vi.fn() },
     campaignFulfilment: { findUnique: vi.fn(), findUniqueOrThrow: vi.fn(), update: vi.fn(), updateMany: vi.fn(), upsert: vi.fn() },
+    // M5 — fulfilment evidence log + participant own-contribution lookup.
+    campaignFulfilmentEvent: { create: vi.fn(), findFirst: vi.fn(), findMany: vi.fn() },
+    campaignParticipant: { findUnique: vi.fn() },
+    campaignContribution: { findFirst: vi.fn() },
   },
 }));
+
+vi.mock("../lib/logger", () => ({ logger: { error: vi.fn() } }));
 
 vi.mock("../modules/notifications/notifications.service", () => ({
   notificationsService: { enqueue: vi.fn() },
 }));
 
+vi.mock("../modules/community-buy/support-case.service", () => ({
+  supportCaseService: { create: vi.fn() },
+}));
+
 import { prisma } from "../lib/prisma";
 import { notificationsService } from "../modules/notifications/notifications.service";
+import { supportCaseService } from "../modules/community-buy/support-case.service";
 import { campaignFulfilmentService } from "../modules/community-buy/campaign-fulfilment.service";
 
 const m = vi.mocked(prisma, true);
@@ -26,10 +37,12 @@ beforeEach(() => {
   // success-path tests don't need to know about this plumbing; tests that
   // specifically exercise the race override this to { count: 0 }.
   m.campaignFulfilment.updateMany.mockResolvedValue({ count: 1 } as never);
+  m.campaignFulfilmentEvent.create.mockResolvedValue({} as never);
+  m.campaignFulfilmentEvent.findFirst.mockResolvedValue(null);
 });
 
 function ownedBySupplier(status: string, extra: Record<string, unknown> = {}) {
-  m.supplierProfile.findUnique.mockResolvedValue({ id: "sup-1" } as never);
+  m.supplierProfile.findUnique.mockResolvedValue({ id: "sup-1", vendor: { userId: "vendor-user-1" } } as never);
   m.communityCampaign.findUnique.mockResolvedValue({ id: "camp-1", supplierId: "sup-1", organiserId: "org-1", title: "Rice bulk buy" } as never);
   m.campaignFulfilment.findUnique.mockResolvedValue({ campaignId: "camp-1", status, method: null, ...extra } as never);
 }
@@ -213,5 +226,141 @@ describe("campaignFulfilmentService — SupplierAccount path (WS3 twins) race gu
 
     await expect(campaignFulfilmentService.confirmInventoryForAccount("account-user-1", "camp-1")).rejects.toMatchObject({ statusCode: 409 });
     expect(notificationsService.enqueue).not.toHaveBeenCalled();
+  });
+});
+
+// M5 — append-only fulfilment evidence (spec §10.2 step 5, Appendix B).
+describe("recordFulfilmentEvent() — wired into every existing transition", () => {
+  it("confirmInventory logs an INVENTORY_CONFIRMED event attributed to the real vendor user, not the vendorId", async () => {
+    ownedBySupplier("AWAITING_INVENTORY_CONFIRMATION");
+    m.campaignFulfilment.findUniqueOrThrow.mockResolvedValue({ status: "INVENTORY_CONFIRMED" } as never);
+
+    await campaignFulfilmentService.confirmInventory("vendor-1", "camp-1");
+
+    expect(m.campaignFulfilmentEvent.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ campaignId: "camp-1", actorUserId: "vendor-user-1", actorRole: "SUPPLIER", eventType: "INVENTORY_CONFIRMED" }),
+    }));
+  });
+
+  it("a fulfilment event log failure never breaks the transition it's recording (never-throws contract)", async () => {
+    ownedBySupplier("AWAITING_INVENTORY_CONFIRMATION");
+    m.campaignFulfilment.findUniqueOrThrow.mockResolvedValue({ status: "INVENTORY_CONFIRMED" } as never);
+    m.campaignFulfilmentEvent.create.mockRejectedValue(new Error("DB down"));
+
+    const result = await campaignFulfilmentService.confirmInventory("vendor-1", "camp-1");
+    expect(result.status).toBe("INVENTORY_CONFIRMED");
+  });
+
+  it("organiserConfirmCompletion logs a COMPLETED event attributed to the organiser", async () => {
+    ownedByOrganiser("DISPATCHED");
+    m.campaignFulfilment.findUniqueOrThrow.mockResolvedValue({ status: "COMPLETED" } as never);
+
+    await campaignFulfilmentService.organiserConfirmCompletion("organiser-user-1", "camp-1");
+
+    expect(m.campaignFulfilmentEvent.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ actorUserId: "organiser-user-1", actorRole: "ORGANISER", eventType: "COMPLETED" }),
+    }));
+  });
+});
+
+describe("reportExceptionForVendor()/reportExceptionForAccount() — informational overlay, never changes fulfilment.status", () => {
+  it("records an EXCEPTION event and notifies the organiser, without touching CampaignFulfilment", async () => {
+    ownedBySupplier("PACKING");
+    // notifyOrganiser() makes its own separate communityCampaign lookup
+    // (with organiser included) after requireSupplierOwned()'s own lookup —
+    // same two-call pattern the pre-existing confirmInventory tests above use.
+    m.communityCampaign.findUnique.mockResolvedValueOnce({ id: "camp-1", supplierId: "sup-1", organiserId: "org-1", title: "Rice bulk buy" } as never);
+    m.communityCampaign.findUnique.mockResolvedValueOnce({ id: "camp-1", title: "Rice bulk buy", organiser: { userId: "organiser-user-1" } } as never);
+
+    await campaignFulfilmentService.reportExceptionForVendor("vendor-1", "camp-1", "Stock damaged in transit");
+
+    expect(m.campaignFulfilmentEvent.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ actorRole: "SUPPLIER", eventType: "EXCEPTION", note: "Stock damaged in transit" }),
+    }));
+    expect(m.campaignFulfilment.update).not.toHaveBeenCalled();
+    expect(m.campaignFulfilment.updateMany).not.toHaveBeenCalled();
+    expect(notificationsService.enqueue).toHaveBeenCalledWith(expect.objectContaining({ userId: "organiser-user-1" }));
+  });
+
+  it("404s for a vendor who doesn't own the campaign", async () => {
+    m.supplierProfile.findUnique.mockResolvedValue({ id: "sup-1", vendor: { userId: "vendor-user-1" } } as never);
+    m.communityCampaign.findUnique.mockResolvedValue({ id: "camp-1", supplierId: "someone-else" } as never);
+    await expect(campaignFulfilmentService.reportExceptionForVendor("vendor-1", "camp-1", "issue")).rejects.toMatchObject({ statusCode: 404 });
+  });
+});
+
+describe("confirmReceiptForParticipant() — participant-authorized, cannot be forged by a supplier", () => {
+  it("requires an owned PAID contribution — 404 if the caller never joined", async () => {
+    m.campaignParticipant.findUnique.mockResolvedValue(null);
+    await expect(campaignFulfilmentService.confirmReceiptForParticipant("buyer-1", "camp-1")).rejects.toMatchObject({ statusCode: 404 });
+  });
+
+  it("404s if the participant joined but has no captured (PAID) order yet", async () => {
+    m.campaignParticipant.findUnique.mockResolvedValue({ id: "part-1" } as never);
+    m.campaignContribution.findFirst.mockResolvedValue(null);
+    await expect(campaignFulfilmentService.confirmReceiptForParticipant("buyer-1", "camp-1")).rejects.toMatchObject({ statusCode: 404 });
+  });
+
+  it("records exactly one PARTICIPANT_RECEIPT_CONFIRMED event for a genuine captured order", async () => {
+    m.campaignParticipant.findUnique.mockResolvedValue({ id: "part-1" } as never);
+    m.campaignContribution.findFirst.mockResolvedValue({ id: "contrib-1" } as never);
+
+    const result = await campaignFulfilmentService.confirmReceiptForParticipant("buyer-1", "camp-1");
+
+    expect(result).toEqual({ confirmed: true });
+    expect(m.campaignFulfilmentEvent.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ contributionId: "contrib-1", actorUserId: "buyer-1", actorRole: "PARTICIPANT", eventType: "PARTICIPANT_RECEIPT_CONFIRMED" }),
+    }));
+  });
+
+  it("is idempotent — a repeat confirmation does not create a second event", async () => {
+    m.campaignParticipant.findUnique.mockResolvedValue({ id: "part-1" } as never);
+    m.campaignContribution.findFirst.mockResolvedValue({ id: "contrib-1" } as never);
+    m.campaignFulfilmentEvent.findFirst.mockResolvedValue({ id: "existing-event" } as never);
+
+    await campaignFulfilmentService.confirmReceiptForParticipant("buyer-1", "camp-1");
+
+    expect(m.campaignFulfilmentEvent.create).not.toHaveBeenCalled();
+  });
+});
+
+describe("reportFulfilmentProblem() — reuses the existing CommunityBuySupportCase workflow, not a new ticket system", () => {
+  it("logs a PARTICIPANT_PROBLEM_REPORTED event and creates a FULFILMENT_ISSUE support case", async () => {
+    m.campaignParticipant.findUnique.mockResolvedValue({ id: "part-1" } as never);
+    m.campaignContribution.findFirst.mockResolvedValue({ id: "contrib-1" } as never);
+    vi.mocked(supportCaseService.create).mockResolvedValue({ id: "case-1" } as never);
+
+    const result = await campaignFulfilmentService.reportFulfilmentProblem("buyer-1", "camp-1", "Order never arrived", ["https://example.com/photo.jpg"]);
+
+    expect(result).toEqual({ id: "case-1" });
+    expect(supportCaseService.create).toHaveBeenCalledWith("buyer-1", "camp-1", { caseType: "FULFILMENT_ISSUE", description: "Order never arrived", evidenceUrls: ["https://example.com/photo.jpg"] });
+    expect(m.campaignFulfilmentEvent.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ eventType: "PARTICIPANT_PROBLEM_REPORTED", actorRole: "PARTICIPANT", note: "Order never arrived" }),
+    }));
+  });
+
+  it("404s without an owned captured contribution — cannot report a problem for an order that was never charged", async () => {
+    m.campaignParticipant.findUnique.mockResolvedValue({ id: "part-1" } as never);
+    m.campaignContribution.findFirst.mockResolvedValue(null);
+    await expect(campaignFulfilmentService.reportFulfilmentProblem("buyer-1", "camp-1", "issue")).rejects.toMatchObject({ statusCode: 404 });
+    expect(supportCaseService.create).not.toHaveBeenCalled();
+  });
+});
+
+describe("getFulfilmentEvents* — evidence timeline read, ownership-scoped", () => {
+  it("organiser can read their own campaign's event timeline", async () => {
+    ownedByOrganiser("COMPLETED");
+    m.campaignFulfilmentEvent.findMany.mockResolvedValue([{ id: "evt-1", eventType: "COMPLETED" }] as never);
+
+    const events = await campaignFulfilmentService.getFulfilmentEventsForOrganiser("organiser-user-1", "camp-1");
+
+    expect(events).toHaveLength(1);
+    expect(m.campaignFulfilmentEvent.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: { campaignId: "camp-1" } }));
+  });
+
+  it("admin read has no ownership check at all (already gated at the route/permission layer)", async () => {
+    m.campaignFulfilmentEvent.findMany.mockResolvedValue([]);
+    await campaignFulfilmentService.getFulfilmentEventsForAdmin("camp-1");
+    expect(m.campaignFulfilmentEvent.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: { campaignId: "camp-1" } }));
   });
 });

@@ -416,7 +416,7 @@ describe("communityCampaignsService rescue-window organiser actions", () => {
  */
 describe("campaignFulfilmentService.markDispatched — NAV-08: fulfilment_update audience tagging", () => {
   it("tags only the organiser's notification with audience:organiser", async () => {
-    m.supplierProfile.findUnique.mockResolvedValue({ id: "sup-1", vendorId: "vendor-1" } as never);
+    m.supplierProfile.findUnique.mockResolvedValue({ id: "sup-1", vendorId: "vendor-1", vendor: { userId: "vendor-user-1" } } as never);
     m.communityCampaign.findUnique
       .mockResolvedValueOnce({ id: "camp-fd-1", supplierId: "sup-1", title: "Rice Bulk Buy" } as never)
       .mockResolvedValueOnce({
@@ -2818,7 +2818,7 @@ describe("Phase 8.1 — supplier notifications (invitation, accept, inventory co
     const inventoryCampaign = { id: "camp-1", supplierId: "sup-1", confirmedShares: 8, title: "Bulk rice buy", organiser: { userId: "organiser-1" } };
 
     it("notifies the organiser with the confirmed quantity, correct event, and deep-link data", async () => {
-      m.supplierProfile.findUnique.mockResolvedValue({ vendorId: "vendor-1", id: "sup-1" } as never);
+      m.supplierProfile.findUnique.mockResolvedValue({ vendorId: "vendor-1", id: "sup-1", vendor: { userId: "vendor-user-1" } } as never);
       m.communityCampaign.findUnique
         .mockResolvedValueOnce(inventoryCampaign as never) // requireSupplierOwned's own lookup
         .mockResolvedValueOnce(inventoryCampaign as never); // notifyOrganiser's separate lookup
@@ -2837,7 +2837,7 @@ describe("Phase 8.1 — supplier notifications (invitation, accept, inventory co
     });
 
     it("rejects a duplicate inventory confirmation and does not send a second notification", async () => {
-      m.supplierProfile.findUnique.mockResolvedValue({ vendorId: "vendor-1", id: "sup-1" } as never);
+      m.supplierProfile.findUnique.mockResolvedValue({ vendorId: "vendor-1", id: "sup-1", vendor: { userId: "vendor-user-1" } } as never);
       m.communityCampaign.findUnique.mockResolvedValue(inventoryCampaign as never);
       m.campaignFulfilment.findUnique.mockResolvedValue({ campaignId: "camp-1", status: "INVENTORY_CONFIRMED" } as never);
 
@@ -2854,7 +2854,7 @@ describe("Phase 8.1 — supplier notifications (invitation, accept, inventory co
     });
 
     it("a notification failure does not roll back the inventory-confirmed state", async () => {
-      m.supplierProfile.findUnique.mockResolvedValue({ vendorId: "vendor-1", id: "sup-1" } as never);
+      m.supplierProfile.findUnique.mockResolvedValue({ vendorId: "vendor-1", id: "sup-1", vendor: { userId: "vendor-user-1" } } as never);
       m.communityCampaign.findUnique.mockResolvedValue(inventoryCampaign as never);
       m.campaignFulfilment.findUnique.mockResolvedValue({ campaignId: "camp-1", status: "AWAITING_INVENTORY_CONFIRMATION" } as never);
       m.campaignFulfilment.findUniqueOrThrow.mockResolvedValue({ campaignId: "camp-1", status: "INVENTORY_CONFIRMED" } as never);

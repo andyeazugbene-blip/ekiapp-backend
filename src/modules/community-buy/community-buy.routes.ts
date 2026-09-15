@@ -7,6 +7,8 @@ import {
   acceptSupplierInvitation,
   applyAsOrganiser,
   applyAsSupplier,
+  pauseSupplierAccount,
+  resumeSupplierAccount,
   commitToCampaign,
   confirmContributionSetup,
   confirmFulfilmentInventory,
@@ -35,6 +37,11 @@ import {
   getMySupportCase,
   getOrganiserFulfilment,
   getParticipantFulfilment,
+  confirmFulfilmentReceipt,
+  reportFulfilmentProblem,
+  reportFulfilmentException,
+  getFulfilmentEvents,
+  adminGetFulfilmentEvents,
   getPublicMarketConfig,
   getSupplierEmergencyContact,
   getSupplierFulfilment,
@@ -82,6 +89,10 @@ communityBuyRouter.get("/support-cases", authenticate, asyncHandler(listMySuppor
 communityBuyRouter.get("/support-cases/:id", authenticate, asyncHandler(getMySupportCase));
 communityBuyRouter.get("/campaigns/:id", asyncHandler(getCampaign));
 communityBuyRouter.get("/campaigns/:id/fulfilment", asyncHandler(getParticipantFulfilment));
+// M5 — participant-authorized evidence actions (requires an owned PAID contribution; enforced in the service, not here).
+communityBuyRouter.post("/campaigns/:id/fulfilment/confirm-receipt", authenticate, asyncHandler(confirmFulfilmentReceipt));
+communityBuyRouter.post("/campaigns/:id/fulfilment/report-problem", authenticate, asyncHandler(reportFulfilmentProblem));
+communityBuyRouter.get("/campaigns/:id/fulfilment/events", authenticate, asyncHandler(getFulfilmentEvents));
 communityBuyRouter.get("/campaigns/:id/updates", authenticate, asyncHandler(getCampaignUpdates));
 // Organiser or supplier posts a real broadcast update — authorization
 // (must be this campaign's organiser or supplier) is enforced in the
@@ -167,6 +178,9 @@ export const supplierRouter = Router();
 supplierRouter.use(authenticate);
 supplierRouter.get("/profile", asyncHandler(getMySupplierProfile));
 supplierRouter.post("/applications", asyncHandler(applyAsSupplier));
+// M5 (spec §6.4 "paused: voluntarily unavailable for new work") — self-service only, no requireApprovedSupplier() gate needed since pause()/resume() enforce their own precondition (APPROVED/PAUSED respectively).
+supplierRouter.post("/pause", asyncHandler(pauseSupplierAccount));
+supplierRouter.post("/resume", asyncHandler(resumeSupplierAccount));
 // Stripe Connect onboarding (mandate item 2) — same gate as the profile/
 // application routes above (any authenticated user with a SupplierAccount
 // row): a supplier must be able to get payouts-ready while still under
@@ -184,6 +198,8 @@ supplierRouter.post("/campaigns/:id/fulfilment/start-packing", requireApprovedSu
 supplierRouter.post("/campaigns/:id/fulfilment/ready", requireApprovedSupplier(), asyncHandler(markFulfilmentReady));
 supplierRouter.post("/campaigns/:id/fulfilment/dispatch", requireApprovedSupplier(), asyncHandler(markFulfilmentDispatched));
 supplierRouter.post("/campaigns/:id/fulfilment/collect", requireApprovedSupplier(), asyncHandler(markFulfilmentCollected));
+// M5 — same gate as every other supplier fulfilment action above.
+supplierRouter.post("/campaigns/:id/fulfilment/exception", requireApprovedSupplier(), asyncHandler(reportFulfilmentException));
 supplierRouter.get("/campaigns/:id/payment", requireApprovedSupplier(), asyncHandler(getMySupplierPayment));
 // M2 — spec §16 "POST /community-buys/:id/reconfirm" and the
 // AUTHORISE_THEN_CAPTURE-mode twin of the payment route above.

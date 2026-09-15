@@ -1,8 +1,10 @@
+import type { Prisma } from "@prisma/client";
 import { prisma } from "../../lib/prisma";
 import { logger } from "../../lib/logger";
 import { AppError } from "../../shared/errors/app-error";
 import { notificationsService } from "../notifications/notifications.service";
 import { isIndividualDeliveryEnabled } from "./community-buy-privacy.service";
+import { supportCaseService } from "./support-case.service";
 
 /**
  * Operational fulfilment tracking for a succeeded campaign — doc Phase 8.
@@ -17,14 +19,17 @@ import { isIndividualDeliveryEnabled } from "./community-buy-privacy.service";
  */
 
 async function requireSupplierOwned(vendorId: string, campaignId: string) {
-  const supplier = await prisma.supplierProfile.findUnique({ where: { vendorId } });
+  // M5: vendor also selected (userId only) so every mutating function below
+  // can attribute its CampaignFulfilmentEvent to the real acting user
+  // without changing any existing function's public signature/call sites.
+  const supplier = await prisma.supplierProfile.findUnique({ where: { vendorId }, include: { vendor: { select: { userId: true } } } });
   const campaign = await prisma.communityCampaign.findUnique({ where: { id: campaignId } });
   if (!campaign || !supplier || campaign.supplierId !== supplier.id) {
     throw new AppError("Campaign not found", 404);
   }
   const fulfilment = await prisma.campaignFulfilment.findUnique({ where: { campaignId } });
   if (!fulfilment) throw new AppError("This campaign has no fulfilment record yet", 404);
-  return { campaign, fulfilment };
+  return { campaign, fulfilment, actorUserId: supplier.vendor.userId };
 }
 
 /**
@@ -42,7 +47,7 @@ async function requireSupplierAccountOwned(userId: string, campaignId: string) {
   }
   const fulfilment = await prisma.campaignFulfilment.findUnique({ where: { campaignId } });
   if (!fulfilment) throw new AppError("This campaign has no fulfilment record yet", 404);
-  return { campaign, fulfilment };
+  return { campaign, fulfilment, actorUserId: userId };
 }
 
 /**
@@ -63,6 +68,43 @@ function assertFulfilmentMethodAllowed(method: "DELIVERY" | "COLLECTION", campai
   }
 }
 
+/**
+ * M5 (spec §10.2 step 5 "fulfilment evidence"; Appendix B event catalogue)
+ * — append-only historical record alongside CampaignFulfilment's mutable
+ * current-state row. Mirrors community-buy-privacy.service.ts's
+ * recordDataAccess()'s never-throws contract exactly: a logging failure
+ * must never break the fulfilment transition it's recording.
+ */
+async function recordFulfilmentEvent(entry: {
+  campaignId: string;
+  contributionId?: string | null;
+  actorUserId: string;
+  actorRole: "SUPPLIER" | "ORGANISER" | "PARTICIPANT" | "ADMIN";
+  eventType: "INVENTORY_CONFIRMED" | "PLAN_SET" | "PACKING_STARTED" | "READY" | "DISPATCHED" | "COLLECTED" | "COMPLETED" | "EXCEPTION" | "PARTICIPANT_RECEIPT_CONFIRMED" | "PARTICIPANT_PROBLEM_REPORTED";
+  note?: string | null;
+  metadata?: Record<string, unknown> | null;
+}): Promise<void> {
+  try {
+    await prisma.campaignFulfilmentEvent.create({
+      data: {
+        campaignId: entry.campaignId,
+        contributionId: entry.contributionId ?? null,
+        actorUserId: entry.actorUserId,
+        actorRole: entry.actorRole,
+        eventType: entry.eventType,
+        note: entry.note ?? null,
+        metadata: (entry.metadata as Prisma.InputJsonValue | undefined) ?? undefined,
+      },
+    });
+  } catch (error) {
+    logger.error("Community Buy fulfilment event log write failed", {
+      campaignId: entry.campaignId,
+      eventType: entry.eventType,
+      errorMessage: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
 async function requireOrganiserOwned(userId: string, campaignId: string) {
   const organiser = await prisma.organiserProfile.findUnique({ where: { userId } });
   const campaign = await prisma.communityCampaign.findUnique({ where: { id: campaignId } });
@@ -71,7 +113,7 @@ async function requireOrganiserOwned(userId: string, campaignId: string) {
   }
   const fulfilment = await prisma.campaignFulfilment.findUnique({ where: { campaignId } });
   if (!fulfilment) throw new AppError("This campaign has no fulfilment record yet", 404);
-  return { campaign, fulfilment };
+  return { campaign, fulfilment, actorUserId: userId };
 }
 
 export const campaignFulfilmentService = {
@@ -99,7 +141,7 @@ export const campaignFulfilmentService = {
   },
 
   async confirmInventory(vendorId: string, campaignId: string) {
-    const { campaign, fulfilment } = await requireSupplierOwned(vendorId, campaignId);
+    const { campaign, fulfilment, actorUserId } = await requireSupplierOwned(vendorId, campaignId);
     if (fulfilment.status !== "AWAITING_INVENTORY_CONFIRMATION") {
       throw new AppError("Inventory has already been confirmed for this campaign", 409);
     }
@@ -114,6 +156,7 @@ export const campaignFulfilmentService = {
     });
     if (claim.count !== 1) throw new AppError("Inventory has already been confirmed for this campaign", 409);
     const updated = await prisma.campaignFulfilment.findUniqueOrThrow({ where: { campaignId } });
+    await recordFulfilmentEvent({ campaignId, actorUserId, actorRole: "SUPPLIER", eventType: "INVENTORY_CONFIRMED" });
     // Fires only after the status transition above actually succeeds. The
     // AWAITING_INVENTORY_CONFIRMATION -> INVENTORY_CONFIRMED move is
     // one-directional and already guarded above, so a genuine retry gets a
@@ -131,7 +174,7 @@ export const campaignFulfilmentService = {
 
   /** Fulfilment plan — method (delivery/collection), an optional estimated-ready date, and free-text notes. Settable any time before dispatch/collection. */
   async setPlan(vendorId: string, campaignId: string, input: { method: "DELIVERY" | "COLLECTION"; estimatedReadyAt?: string; notes?: string }) {
-    const { campaign, fulfilment } = await requireSupplierOwned(vendorId, campaignId);
+    const { campaign, fulfilment, actorUserId } = await requireSupplierOwned(vendorId, campaignId);
     assertFulfilmentMethodAllowed(input.method, campaign);
     if (fulfilment.status === "AWAITING_INVENTORY_CONFIRMATION") {
       throw new AppError("Confirm inventory before setting a fulfilment plan", 409);
@@ -151,11 +194,12 @@ export const campaignFulfilmentService = {
       },
     });
     if (claim.count !== 1) throw new AppError("This campaign has already been dispatched or collected", 409);
+    await recordFulfilmentEvent({ campaignId, actorUserId, actorRole: "SUPPLIER", eventType: "PLAN_SET", metadata: { method: input.method } });
     return prisma.campaignFulfilment.findUniqueOrThrow({ where: { campaignId } });
   },
 
   async startPacking(vendorId: string, campaignId: string) {
-    const { fulfilment } = await requireSupplierOwned(vendorId, campaignId);
+    const { fulfilment, actorUserId } = await requireSupplierOwned(vendorId, campaignId);
     if (fulfilment.status !== "INVENTORY_CONFIRMED") {
       throw new AppError("Confirm inventory before starting packing", 409);
     }
@@ -165,22 +209,24 @@ export const campaignFulfilmentService = {
       data: { status: "PACKING", packingStartedAt: new Date() },
     });
     if (claim.count !== 1) throw new AppError("Confirm inventory before starting packing", 409);
+    await recordFulfilmentEvent({ campaignId, actorUserId, actorRole: "SUPPLIER", eventType: "PACKING_STARTED" });
     return prisma.campaignFulfilment.findUniqueOrThrow({ where: { campaignId } });
   },
 
   async markReady(vendorId: string, campaignId: string) {
-    const { fulfilment } = await requireSupplierOwned(vendorId, campaignId);
+    const { fulfilment, actorUserId } = await requireSupplierOwned(vendorId, campaignId);
     if (fulfilment.status !== "PACKING") throw new AppError("Start packing before marking this campaign ready", 409);
     const claim = await prisma.campaignFulfilment.updateMany({
       where: { campaignId, status: "PACKING" },
       data: { status: "READY_FOR_DISPATCH_OR_COLLECTION", readyAt: new Date() },
     });
     if (claim.count !== 1) throw new AppError("Start packing before marking this campaign ready", 409);
+    await recordFulfilmentEvent({ campaignId, actorUserId, actorRole: "SUPPLIER", eventType: "READY" });
     return prisma.campaignFulfilment.findUniqueOrThrow({ where: { campaignId } });
   },
 
   async markDispatched(vendorId: string, campaignId: string) {
-    const { campaign, fulfilment } = await requireSupplierOwned(vendorId, campaignId);
+    const { campaign, fulfilment, actorUserId } = await requireSupplierOwned(vendorId, campaignId);
     if (fulfilment.status !== "READY_FOR_DISPATCH_OR_COLLECTION") throw new AppError("This campaign is not ready for dispatch", 409);
     if (fulfilment.method !== "DELIVERY") throw new AppError("This campaign's fulfilment plan is collection, not delivery", 409);
     // WS5: method is folded into the guard itself, not just the pre-check —
@@ -193,12 +239,13 @@ export const campaignFulfilmentService = {
     });
     if (claim.count !== 1) throw new AppError("This campaign is not ready for dispatch", 409);
     const updated = await prisma.campaignFulfilment.findUniqueOrThrow({ where: { campaignId } });
+    await recordFulfilmentEvent({ campaignId, actorUserId, actorRole: "SUPPLIER", eventType: "DISPATCHED" });
     await notifyOrganiserAndParticipants(campaign.id, campaign.title, "Your Community Buy has been dispatched", `${campaign.title} has been dispatched by the supplier.`);
     return updated;
   },
 
   async markCollected(vendorId: string, campaignId: string) {
-    const { campaign, fulfilment } = await requireSupplierOwned(vendorId, campaignId);
+    const { campaign, fulfilment, actorUserId } = await requireSupplierOwned(vendorId, campaignId);
     if (fulfilment.status !== "READY_FOR_DISPATCH_OR_COLLECTION") throw new AppError("This campaign is not ready for collection", 409);
     if (fulfilment.method !== "COLLECTION") throw new AppError("This campaign's fulfilment plan is delivery, not collection", 409);
     const claim = await prisma.campaignFulfilment.updateMany({
@@ -207,13 +254,14 @@ export const campaignFulfilmentService = {
     });
     if (claim.count !== 1) throw new AppError("This campaign is not ready for collection", 409);
     const updated = await prisma.campaignFulfilment.findUniqueOrThrow({ where: { campaignId } });
+    await recordFulfilmentEvent({ campaignId, actorUserId, actorRole: "SUPPLIER", eventType: "COLLECTED" });
     await notifyOrganiserAndParticipants(campaign.id, campaign.title, "Your Community Buy is ready for collection", `${campaign.title} is ready for collection from the supplier.`);
     return updated;
   },
 
   /** Organiser confirms the campaign's goods were actually received/collected — closes fulfilment out. */
   async organiserConfirmCompletion(userId: string, campaignId: string) {
-    const { fulfilment } = await requireOrganiserOwned(userId, campaignId);
+    const { fulfilment, actorUserId } = await requireOrganiserOwned(userId, campaignId);
     if (fulfilment.status !== "DISPATCHED" && fulfilment.status !== "COLLECTED") {
       throw new AppError("This campaign hasn't been dispatched or collected yet", 409);
     }
@@ -222,6 +270,7 @@ export const campaignFulfilmentService = {
       data: { status: "COMPLETED" },
     });
     if (claim.count !== 1) throw new AppError("This campaign hasn't been dispatched or collected yet", 409);
+    await recordFulfilmentEvent({ campaignId, actorUserId, actorRole: "ORGANISER", eventType: "COMPLETED" });
     return prisma.campaignFulfilment.findUniqueOrThrow({ where: { campaignId } });
   },
 
@@ -237,7 +286,7 @@ export const campaignFulfilmentService = {
   },
 
   async confirmInventoryForAccount(userId: string, campaignId: string) {
-    const { campaign, fulfilment } = await requireSupplierAccountOwned(userId, campaignId);
+    const { campaign, fulfilment, actorUserId } = await requireSupplierAccountOwned(userId, campaignId);
     if (fulfilment.status !== "AWAITING_INVENTORY_CONFIRMATION") {
       throw new AppError("Inventory has already been confirmed for this campaign", 409);
     }
@@ -247,6 +296,7 @@ export const campaignFulfilmentService = {
     });
     if (claim.count !== 1) throw new AppError("Inventory has already been confirmed for this campaign", 409);
     const updated = await prisma.campaignFulfilment.findUniqueOrThrow({ where: { campaignId } });
+    await recordFulfilmentEvent({ campaignId, actorUserId, actorRole: "SUPPLIER", eventType: "INVENTORY_CONFIRMED" });
     await notifyOrganiser(
       campaign.id,
       "inventory_confirmed",
@@ -258,7 +308,7 @@ export const campaignFulfilmentService = {
   },
 
   async setPlanForAccount(userId: string, campaignId: string, input: { method: "DELIVERY" | "COLLECTION"; estimatedReadyAt?: string; notes?: string }) {
-    const { campaign, fulfilment } = await requireSupplierAccountOwned(userId, campaignId);
+    const { campaign, fulfilment, actorUserId } = await requireSupplierAccountOwned(userId, campaignId);
     assertFulfilmentMethodAllowed(input.method, campaign);
     if (fulfilment.status === "AWAITING_INVENTORY_CONFIRMATION") {
       throw new AppError("Confirm inventory before setting a fulfilment plan", 409);
@@ -275,11 +325,12 @@ export const campaignFulfilmentService = {
       },
     });
     if (claim.count !== 1) throw new AppError("This campaign has already been dispatched or collected", 409);
+    await recordFulfilmentEvent({ campaignId, actorUserId, actorRole: "SUPPLIER", eventType: "PLAN_SET", metadata: { method: input.method } });
     return prisma.campaignFulfilment.findUniqueOrThrow({ where: { campaignId } });
   },
 
   async startPackingForAccount(userId: string, campaignId: string) {
-    const { fulfilment } = await requireSupplierAccountOwned(userId, campaignId);
+    const { fulfilment, actorUserId } = await requireSupplierAccountOwned(userId, campaignId);
     if (fulfilment.status !== "INVENTORY_CONFIRMED") {
       throw new AppError("Confirm inventory before starting packing", 409);
     }
@@ -289,22 +340,24 @@ export const campaignFulfilmentService = {
       data: { status: "PACKING", packingStartedAt: new Date() },
     });
     if (claim.count !== 1) throw new AppError("Confirm inventory before starting packing", 409);
+    await recordFulfilmentEvent({ campaignId, actorUserId, actorRole: "SUPPLIER", eventType: "PACKING_STARTED" });
     return prisma.campaignFulfilment.findUniqueOrThrow({ where: { campaignId } });
   },
 
   async markReadyForAccount(userId: string, campaignId: string) {
-    const { fulfilment } = await requireSupplierAccountOwned(userId, campaignId);
+    const { fulfilment, actorUserId } = await requireSupplierAccountOwned(userId, campaignId);
     if (fulfilment.status !== "PACKING") throw new AppError("Start packing before marking this campaign ready", 409);
     const claim = await prisma.campaignFulfilment.updateMany({
       where: { campaignId, status: "PACKING" },
       data: { status: "READY_FOR_DISPATCH_OR_COLLECTION", readyAt: new Date() },
     });
     if (claim.count !== 1) throw new AppError("Start packing before marking this campaign ready", 409);
+    await recordFulfilmentEvent({ campaignId, actorUserId, actorRole: "SUPPLIER", eventType: "READY" });
     return prisma.campaignFulfilment.findUniqueOrThrow({ where: { campaignId } });
   },
 
   async markDispatchedForAccount(userId: string, campaignId: string) {
-    const { campaign, fulfilment } = await requireSupplierAccountOwned(userId, campaignId);
+    const { campaign, fulfilment, actorUserId } = await requireSupplierAccountOwned(userId, campaignId);
     if (fulfilment.status !== "READY_FOR_DISPATCH_OR_COLLECTION") throw new AppError("This campaign is not ready for dispatch", 409);
     if (fulfilment.method !== "DELIVERY") throw new AppError("This campaign's fulfilment plan is collection, not delivery", 409);
     const claim = await prisma.campaignFulfilment.updateMany({
@@ -313,12 +366,13 @@ export const campaignFulfilmentService = {
     });
     if (claim.count !== 1) throw new AppError("This campaign is not ready for dispatch", 409);
     const updated = await prisma.campaignFulfilment.findUniqueOrThrow({ where: { campaignId } });
+    await recordFulfilmentEvent({ campaignId, actorUserId, actorRole: "SUPPLIER", eventType: "DISPATCHED" });
     await notifyOrganiserAndParticipants(campaign.id, campaign.title, "Your Community Buy has been dispatched", `${campaign.title} has been dispatched by the supplier.`);
     return updated;
   },
 
   async markCollectedForAccount(userId: string, campaignId: string) {
-    const { campaign, fulfilment } = await requireSupplierAccountOwned(userId, campaignId);
+    const { campaign, fulfilment, actorUserId } = await requireSupplierAccountOwned(userId, campaignId);
     if (fulfilment.status !== "READY_FOR_DISPATCH_OR_COLLECTION") throw new AppError("This campaign is not ready for collection", 409);
     if (fulfilment.method !== "COLLECTION") throw new AppError("This campaign's fulfilment plan is delivery, not collection", 409);
     const claim = await prisma.campaignFulfilment.updateMany({
@@ -327,10 +381,90 @@ export const campaignFulfilmentService = {
     });
     if (claim.count !== 1) throw new AppError("This campaign is not ready for collection", 409);
     const updated = await prisma.campaignFulfilment.findUniqueOrThrow({ where: { campaignId } });
+    await recordFulfilmentEvent({ campaignId, actorUserId, actorRole: "SUPPLIER", eventType: "COLLECTED" });
     await notifyOrganiserAndParticipants(campaign.id, campaign.title, "Your Community Buy is ready for collection", `${campaign.title} is ready for collection from the supplier.`);
     return updated;
   },
+
+  // ─── M5 — participant-facing evidence: receipt confirmation and problem
+  // reporting. Participant-authorized only (requires an owned PAID
+  // contribution for this campaign) — a supplier can never forge these.
+
+  /** Participant confirms they actually received/collected their own order. Idempotent — a repeat call is a harmless no-op, not a duplicate event. */
+  async confirmReceiptForParticipant(userId: string, campaignId: string) {
+    const contribution = await requireOwnPaidContribution(userId, campaignId);
+    const already = await prisma.campaignFulfilmentEvent.findFirst({
+      where: { campaignId, contributionId: contribution.id, eventType: "PARTICIPANT_RECEIPT_CONFIRMED" },
+      select: { id: true },
+    });
+    if (already) return { confirmed: true };
+    await recordFulfilmentEvent({ campaignId, contributionId: contribution.id, actorUserId: userId, actorRole: "PARTICIPANT", eventType: "PARTICIPANT_RECEIPT_CONFIRMED" });
+    return { confirmed: true };
+  },
+
+  /**
+   * Participant reports a fulfilment problem. Reuses the existing
+   * CommunityBuySupportCase ticket workflow (already has description/
+   * evidenceUrls/admin-triage/escalation built — see support-case.service.ts)
+   * rather than inventing a second, parallel ticket system; the fulfilment
+   * event log entry is only the append-only timeline marker.
+   */
+  async reportFulfilmentProblem(userId: string, campaignId: string, description: string, evidenceUrls?: string[]) {
+    const contribution = await requireOwnPaidContribution(userId, campaignId);
+    await recordFulfilmentEvent({ campaignId, contributionId: contribution.id, actorUserId: userId, actorRole: "PARTICIPANT", eventType: "PARTICIPANT_PROBLEM_REPORTED", note: description });
+    return supportCaseService.create(userId, campaignId, { caseType: "FULFILMENT_ISSUE", description, evidenceUrls });
+  },
+
+  // ─── M5 — supplier-facing exception reporting. Informational overlay
+  // only (Appendix B's delivery_exception is an EVENT, not a distinct
+  // CampaignFulfilment status) — never changes fulfilment.status itself.
+
+  async reportExceptionForVendor(vendorId: string, campaignId: string, note: string) {
+    const { campaign, actorUserId } = await requireSupplierOwned(vendorId, campaignId);
+    await recordFulfilmentEvent({ campaignId, actorUserId, actorRole: "SUPPLIER", eventType: "EXCEPTION", note });
+    await notifyOrganiser(campaign.id, "fulfilment_exception", "Fulfilment exception reported", `Your supplier reported an issue with "${campaign.title}": ${note}`, `fulfilment_exception:${campaign.id}:${Date.now()}`);
+    return { recorded: true };
+  },
+
+  async reportExceptionForAccount(userId: string, campaignId: string, note: string) {
+    const { campaign, actorUserId } = await requireSupplierAccountOwned(userId, campaignId);
+    await recordFulfilmentEvent({ campaignId, actorUserId, actorRole: "SUPPLIER", eventType: "EXCEPTION", note });
+    await notifyOrganiser(campaign.id, "fulfilment_exception", "Fulfilment exception reported", `Your supplier reported an issue with "${campaign.title}": ${note}`, `fulfilment_exception:${campaign.id}:${Date.now()}`);
+    return { recorded: true };
+  },
+
+  /** M5 — the append-only evidence timeline (spec §10.2 step 5). Organiser/supplier (their own campaign) and admin only — never raw participant contact data (M4 rules stay authoritative; events only ever carry actorUserId, never a participant's email/phone). */
+  async getFulfilmentEventsForOrganiser(userId: string, campaignId: string) {
+    await requireOrganiserOwned(userId, campaignId);
+    return prisma.campaignFulfilmentEvent.findMany({ where: { campaignId }, orderBy: { createdAt: "asc" } });
+  },
+
+  async getFulfilmentEventsForVendor(vendorId: string, campaignId: string) {
+    await requireSupplierOwned(vendorId, campaignId);
+    return prisma.campaignFulfilmentEvent.findMany({ where: { campaignId }, orderBy: { createdAt: "asc" } });
+  },
+
+  async getFulfilmentEventsForAccount(userId: string, campaignId: string) {
+    await requireSupplierAccountOwned(userId, campaignId);
+    return prisma.campaignFulfilmentEvent.findMany({ where: { campaignId }, orderBy: { createdAt: "asc" } });
+  },
+
+  async getFulfilmentEventsForAdmin(campaignId: string) {
+    return prisma.campaignFulfilmentEvent.findMany({ where: { campaignId }, orderBy: { createdAt: "asc" } });
+  },
 };
+
+/** Shared by confirmReceiptForParticipant()/reportFulfilmentProblem() — participant-authorized, never trusts a client-supplied contribution id without checking ownership + capture status. */
+async function requireOwnPaidContribution(userId: string, campaignId: string) {
+  const participant = await prisma.campaignParticipant.findUnique({ where: { campaignId_userId: { campaignId, userId } } });
+  if (!participant) throw new AppError("You have not joined this campaign", 404);
+  const contribution = await prisma.campaignContribution.findFirst({
+    where: { campaignId, participantId: participant.id, status: "PAID" },
+    orderBy: { createdAt: "desc" },
+  });
+  if (!contribution) throw new AppError("No captured order found for you on this campaign yet", 404);
+  return contribution;
+}
 
 async function notifyOrganiser(campaignId: string, event: string, title: string, body: string, dedupeKey: string) {
   const campaign = await prisma.communityCampaign.findUnique({ where: { id: campaignId }, include: { organiser: true } });
