@@ -329,6 +329,54 @@ describe("captureHold()/captureWorker() — spec §11.4 (AT-19, AT-20, AT-21)", 
     expect(m.campaignContribution.update).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ status: "PAID" }) }));
   });
 
+  // M3 gap 1 fix — a HOLD_EXPIRING hold is only a warning flag
+  // (hold_expiry_monitor's admin alert), not terminal/declined; the
+  // underlying Stripe authorisation is still live and must remain
+  // capturable. Before this fix, captureHold()/captureWorker() excluded
+  // HOLD_EXPIRING entirely, so a hold that happened to get warning-flagged
+  // moments before capture was silently skipped and counted as failed for
+  // no Stripe-side reason.
+  it("M3 regression: a HOLD_EXPIRING hold (warning-flagged, not declined) still captures successfully via captureHold()", async () => {
+    const authStore = makeAuthorisationStore({ "auth-1": baseAuthorisation({ holdStatus: "HOLD_EXPIRING", captureStatus: "NOT_CAPTURED", paymentIntentId: "pi_1", authorisedAmount: 2000 }) });
+    m.communityBuyPaymentAuthorisation.findUniqueOrThrow.mockImplementation(authStore.findUniqueOrThrow as any);
+    m.communityBuyPaymentAuthorisation.updateMany.mockImplementation(authStore.updateMany as any);
+    m.communityCampaign.findUniqueOrThrow.mockResolvedValue(baseCampaign() as any);
+    s.paymentIntents.capture.mockResolvedValue({ id: "pi_1", status: "succeeded" } as any);
+    m.$transaction.mockImplementationOnce(async (cb: any) => cb(m));
+    m.campaignContribution.findUniqueOrThrow.mockResolvedValue({ id: "contrib-1", participant: { userId: "user-1" } } as any);
+    m.supplierAccount.findUnique.mockResolvedValue({ providerConnectedAccountId: CONNECTED_ACCOUNT_ID } as any);
+    m.communityBuyPayout.findUnique.mockResolvedValue(null);
+    m.ledgerAccount.findUnique.mockResolvedValue(null);
+    m.ledgerAccount.create.mockImplementation(async (args: any) => ({ id: `acct-${args.data.type}`, ...args.data }));
+
+    const result = await campaignAuthorisationService.captureHold("auth-1");
+
+    expect(result.captureStatus).toBe("CAPTURED");
+    expect(s.paymentIntents.capture).toHaveBeenCalledWith("pi_1", { application_fee_amount: 100 }, expect.objectContaining({ idempotencyKey: "capture:auth-1" }));
+  });
+
+  it("M3 regression: captureWorker() includes HOLD_EXPIRING holds in its query, not just HOLD_SUCCEEDED", async () => {
+    const authStore = makeAuthorisationStore({ "auth-1": baseAuthorisation({ holdStatus: "HOLD_EXPIRING", captureStatus: "NOT_CAPTURED", paymentIntentId: "pi_1", authorisedAmount: 2000 }) });
+    m.communityBuyPaymentAuthorisation.findMany.mockResolvedValue([...authStore.store.values()] as any);
+    m.communityBuyPaymentAuthorisation.findUniqueOrThrow.mockImplementation(authStore.findUniqueOrThrow as any);
+    m.communityBuyPaymentAuthorisation.updateMany.mockImplementation(authStore.updateMany as any);
+    m.communityCampaign.findUniqueOrThrow.mockResolvedValue(baseCampaign() as any);
+    s.paymentIntents.capture.mockResolvedValue({ id: "pi_1", status: "succeeded" } as any);
+    m.$transaction.mockImplementation(async (cb: any) => cb(m));
+    m.campaignContribution.findUniqueOrThrow.mockResolvedValue({ id: "contrib-1", participant: { userId: "user-1" } } as any);
+    m.supplierAccount.findUnique.mockResolvedValue({ providerConnectedAccountId: CONNECTED_ACCOUNT_ID } as any);
+    m.communityBuyPayout.findUnique.mockResolvedValue(null);
+    m.ledgerAccount.findUnique.mockResolvedValue(null);
+    m.ledgerAccount.create.mockImplementation(async (args: any) => ({ id: `acct-${args.data.type}`, ...args.data }));
+    m.communityCampaign.updateMany.mockResolvedValue({ count: 1 } as any);
+
+    const result = await campaignAuthorisationService.captureWorker(CAMPAIGN_ID);
+
+    expect(result.total).toBe(1);
+    expect(result.captured).toBe(1);
+    expect(result.failed).toBe(0);
+  });
+
   it("AT-20: a capture failure leaves the contribution OUT of PAID/fulfilment — no successful payment entry", async () => {
     const authorisation = baseAuthorisation({ holdStatus: "HOLD_SUCCEEDED", captureStatus: "NOT_CAPTURED", paymentIntentId: "pi_1", authorisedAmount: 2000 });
     m.communityBuyPaymentAuthorisation.findUniqueOrThrow.mockResolvedValue(authorisation as any);

@@ -492,13 +492,15 @@ export const campaignAuthorisationService = {
         const claim = await prisma.communityCampaign.updateMany({ where: { id: campaign.id, status: "HOLD_WINDOW" }, data: { status: "PAYMENT_CAPTURE" } });
         if (claim.count !== 1) continue;
         proceeded++;
-        await this.notifyDecisionOutcome(campaign.id, "proceeding");
+        await this.notifyDecisionOutcome(campaign.id, "proceeding", { authorisedQuantity, minimum });
         await this.captureWorker(campaign.id);
       } else {
-        const claim = await prisma.communityCampaign.updateMany({ where: { id: campaign.id, status: "HOLD_WINDOW" }, data: { status: "DECISION_REQUIRED", decisionRequiredAt: new Date() } });
+        const decisionRequiredAt = new Date();
+        const organiserDeadline = new Date(decisionRequiredAt.getTime() + DECISION_WINDOW_MS);
+        const claim = await prisma.communityCampaign.updateMany({ where: { id: campaign.id, status: "HOLD_WINDOW" }, data: { status: "DECISION_REQUIRED", decisionRequiredAt } });
         if (claim.count !== 1) continue;
         decisionRequired++;
-        await this.notifyDecisionOutcome(campaign.id, "decision_required");
+        await this.notifyDecisionOutcome(campaign.id, "decision_required", { authorisedQuantity, minimum, deadline: organiserDeadline });
       }
     }
     return { evaluated: due.length, proceeded, decisionRequired };
@@ -512,13 +514,51 @@ export const campaignAuthorisationService = {
     return rows.reduce((sum, r) => sum + r.quantity, 0);
   },
 
-  async notifyDecisionOutcome(campaignId: string, outcome: "proceeding" | "decision_required") {
+  /** M3 gap 6 — the below-minimum notification must give the organiser the actual numbers and deadline, not just "you have 24 hours." */
+  async notifyDecisionOutcome(campaignId: string, outcome: "proceeding" | "decision_required", context: { authorisedQuantity: number; minimum: number; deadline?: Date }) {
     const campaign = await prisma.communityCampaign.findUnique({ where: { id: campaignId }, include: { organiser: true } });
     if (!campaign) return;
     if (outcome === "proceeding") {
-      await notifyParticipant(campaign.organiser.userId, "authorisation_proceeding", "Your campaign is proceeding", `${campaign.title} reached its minimum authorised quantity — capturing payment now.`, campaignId);
+      await notifyParticipant(campaign.organiser.userId, "authorisation_proceeding", "Your campaign is proceeding", `${campaign.title} reached its minimum authorised quantity (${context.authorisedQuantity} of ${context.minimum} required) — capturing payment now.`, campaignId);
     } else {
-      await notifyParticipant(campaign.organiser.userId, "decision_required", "Decision required", `${campaign.title} is below its minimum authorised quantity. You have 24 hours to proceed or cancel.`, campaignId);
+      const deadlineText = context.deadline ? ` Decide by ${context.deadline.toISOString()}.` : "";
+      await notifyParticipant(
+        campaign.organiser.userId,
+        "decision_required",
+        "Decision required",
+        `${campaign.title} authorised ${context.authorisedQuantity} of the ${context.minimum} minimum required. Choose to proceed with the reduced quantity or cancel the campaign.${deadlineText}`,
+        campaignId,
+      );
+    }
+  },
+
+  /**
+   * M3 gap 6 — fan-out for the cancellation paths that don't already have
+   * their own participant-facing notification: cancelHold() (called by
+   * releaseAllHoldsForCampaign()) already tells every participant "you were
+   * not charged" — this only covers the organiser/supplier side. Wording
+   * deliberately mirrors cancelHold()'s "not charged" language: this
+   * campaign never captured anything, so "refunded" would be false.
+   */
+  async notifyCancellationOutcome(campaignId: string, reasonCode: "organiser_cancelled" | "decision_timeout" | "supplier_reconfirmation_timeout"): Promise<void> {
+    const campaign = await prisma.communityCampaign.findUnique({
+      where: { id: campaignId },
+      include: { organiser: true, supplier: { include: { vendor: true } }, supplierAccount: true },
+    });
+    if (!campaign) return;
+    const supplierUserId = campaign.supplierAccount?.userId ?? campaign.supplier?.vendor.userId ?? null;
+
+    if (reasonCode === "decision_timeout") {
+      await notifyParticipant(campaign.organiser.userId, "decision_timeout_cancelled", "Campaign cancelled — no decision made in time", `${campaign.title} was automatically cancelled because no decision was made within 24 hours. Participants were not charged.`, campaignId);
+    }
+    if (reasonCode === "supplier_reconfirmation_timeout") {
+      await notifyParticipant(campaign.organiser.userId, "reconfirmation_timeout_cancelled", "Campaign cancelled — supplier did not respond", `${campaign.title} was automatically cancelled because the supplier did not confirm the reduced quantity in time. Participants were not charged.`, campaignId);
+    }
+    // The supplier already knows why when their own non-response caused it;
+    // otherwise (organiser cancelled, or the organiser missed the decision
+    // window) tell them so they don't keep expecting this order.
+    if (campaign.fulfilmentOwner === "SUPPLIER" && supplierUserId && reasonCode !== "supplier_reconfirmation_timeout") {
+      await notifyParticipant(supplierUserId, "campaign_cancelled_no_charge", "Campaign cancelled", `${campaign.title} was cancelled. Participants were not charged, so there is nothing to fulfil.`, campaignId);
     }
   },
 
@@ -533,25 +573,38 @@ export const campaignAuthorisationService = {
       const claim = await prisma.communityCampaign.updateMany({ where: { id: campaignId, status: "DECISION_REQUIRED" }, data: { status: "FAILED", fundingOutcome: "BELOW_MINIMUM", closedAt: new Date() } });
       if (claim.count !== 1) throw new AppError("This campaign is no longer awaiting a decision", 409);
       await this.releaseAllHoldsForCampaign(campaignId, "organiser_cancelled");
+      await this.notifyCancellationOutcome(campaignId, "organiser_cancelled");
       await recordAudit({ actorId: userId, action: "community_campaign.decision_cancel", entityType: "CommunityCampaign", entityId: campaignId });
       return prisma.communityCampaign.findUniqueOrThrow({ where: { id: campaignId } });
     }
 
+    // M3 (AT-17 "preserving allocation reporting"): the reduced-quantity
+    // figure is recorded via reconfirmationQuantity on BOTH paths now —
+    // self-supply skips the reconfirmation STATE (no supplier decision to
+    // wait for, unchanged), but the same reporting number a third-party
+    // campaign would have gotten from AWAITING_SUPPLIER_RECONFIRMATION is
+    // still persisted, so admin/organiser reporting doesn't have to treat
+    // self-fulfilled campaigns as a blank spot.
+    const authorisedQuantity = await this.getAuthorisedQuantity(campaignId);
+
     if (campaign.fulfilmentOwner === "SUPPLIER") {
       const reconfirmationDeadline = await this.computeReconfirmationDeadline(campaign.id);
-      const authorisedQuantity = await this.getAuthorisedQuantity(campaignId);
       const claim = await prisma.communityCampaign.updateMany({
         where: { id: campaignId, status: "DECISION_REQUIRED" },
         data: { status: "AWAITING_SUPPLIER_RECONFIRMATION", reconfirmationRequestedAt: new Date(), reconfirmationDeadline, reconfirmationQuantity: authorisedQuantity },
       });
       if (claim.count !== 1) throw new AppError("This campaign is no longer awaiting a decision", 409);
-      await this.notifySupplierReconfirmationRequested(campaignId, authorisedQuantity);
+      await this.assertReconfirmationDeadlineSafe(campaignId, reconfirmationDeadline);
+      await this.notifySupplierReconfirmationRequested(campaignId, authorisedQuantity, reconfirmationDeadline);
     } else {
-      const claim = await prisma.communityCampaign.updateMany({ where: { id: campaignId, status: "DECISION_REQUIRED" }, data: { status: "PAYMENT_CAPTURE" } });
+      const claim = await prisma.communityCampaign.updateMany({
+        where: { id: campaignId, status: "DECISION_REQUIRED" },
+        data: { status: "PAYMENT_CAPTURE", reconfirmationQuantity: authorisedQuantity },
+      });
       if (claim.count !== 1) throw new AppError("This campaign is no longer awaiting a decision", 409);
       await this.captureWorker(campaignId);
     }
-    await recordAudit({ actorId: userId, action: "community_campaign.decision_proceed", entityType: "CommunityCampaign", entityId: campaignId });
+    await recordAudit({ actorId: userId, action: "community_campaign.decision_proceed", entityType: "CommunityCampaign", entityId: campaignId, metadata: { authorisedQuantity, fulfilmentOwner: campaign.fulfilmentOwner } });
     return prisma.communityCampaign.findUniqueOrThrow({ where: { id: campaignId } });
   },
 
@@ -564,6 +617,7 @@ export const campaignAuthorisationService = {
       const claim = await prisma.communityCampaign.updateMany({ where: { id: campaign.id, status: "DECISION_REQUIRED" }, data: { status: "FAILED", fundingOutcome: "BELOW_MINIMUM", closedAt: new Date() } });
       if (claim.count !== 1) continue;
       await this.releaseAllHoldsForCampaign(campaign.id, "decision_timeout");
+      await this.notifyCancellationOutcome(campaign.id, "decision_timeout");
       cancelled++;
     }
     return { cancelled };
@@ -586,7 +640,8 @@ export const campaignAuthorisationService = {
     return bufferedFromCapture < configured ? bufferedFromCapture : configured;
   },
 
-  async notifySupplierReconfirmationRequested(campaignId: string, reducedQuantity: number) {
+  /** M3 gap 6 — must give the supplier the economics and the real deadline, not just the reduced quantity. */
+  async notifySupplierReconfirmationRequested(campaignId: string, reducedQuantity: number, reconfirmationDeadline: Date) {
     const campaign = await prisma.communityCampaign.findUnique({
       where: { id: campaignId },
       include: { supplier: { include: { vendor: true } }, supplierAccount: true },
@@ -594,10 +649,63 @@ export const campaignAuthorisationService = {
     if (!campaign) return;
     const recipientUserId = campaign.supplierAccount?.userId ?? campaign.supplier?.vendor.userId;
     if (!recipientUserId) return;
-    await notifyParticipant(recipientUserId, "supplier_reconfirmation_requested", "Confirm reduced quantity", `${campaign.title} is below its original minimum — ${reducedQuantity} units authorised. Confirm you can still fulfil this reduced quantity.`, campaignId);
+
+    const currency = campaign.currency ?? "";
+    const estimatedGrossAmount = campaign.pricePerShareMinor ? reducedQuantity * campaign.pricePerShareMinor : null;
+    let estimatedPayableAmount: number | null = null;
+    if (estimatedGrossAmount != null && campaign.country) {
+      const config = await marketConfigurationService.get(campaign.country);
+      if (config?.communityBuyFeeBps != null) {
+        estimatedPayableAmount = estimatedGrossAmount - calculatePlatformFee(estimatedGrossAmount, config.communityBuyFeeBps);
+      }
+    }
+    const earliestExpiryHolds = await prisma.communityBuyPaymentAuthorisation.findMany({
+      where: { campaignId, holdStatus: "HOLD_SUCCEEDED", captureBefore: { not: null } },
+      select: { captureBefore: true },
+      orderBy: { captureBefore: "asc" },
+      take: 1,
+    });
+
+    const valueText = estimatedGrossAmount != null ? ` Estimated captured value: ${estimatedGrossAmount} ${currency}.` : "";
+    const payableText = estimatedPayableAmount != null ? ` Estimated payable to you: ${estimatedPayableAmount} ${currency}.` : "";
+    const expiryText = earliestExpiryHolds[0]?.captureBefore ? ` Earliest hold expiry: ${earliestExpiryHolds[0].captureBefore.toISOString()}.` : "";
+
+    await notifyParticipant(
+      recipientUserId,
+      "supplier_reconfirmation_requested",
+      "Confirm reduced quantity",
+      `${campaign.title} is below its original minimum — ${reducedQuantity} units authorised.${valueText}${payableText}${expiryText} Respond by ${reconfirmationDeadline.toISOString()}. Confirm you can still fulfil this reduced quantity.`,
+      campaignId,
+    );
   },
 
-  async applyReconfirmation(campaign: { id: string; title: string }, action: "confirm" | "decline", reason?: string) {
+  /**
+   * M3 gap 7 (AT-18) — computeReconfirmationDeadline() can, in principle,
+   * return a deadline that has already passed (an already-tight
+   * capture_before minus the safety buffer resolving to the past). Rather
+   * than silently opening an AWAITING_SUPPLIER_RECONFIRMATION window the
+   * supplier can never actually respond within — which evaluateReconfirmationTimeouts()
+   * would clean up on its next pass regardless, but only after presenting a
+   * misleading "you have time to respond" state in the meantime — this
+   * records a distinct, queryable audit event so admin visibility isn't
+   * silent about the anomaly. Deliberately no new schema/status: reuses the
+   * same recordAudit-based escalation pattern as holdExpiryMonitor()'s
+   * hold_expiring_alert, per the approved plan's preference for zero schema
+   * change here.
+   */
+  async assertReconfirmationDeadlineSafe(campaignId: string, reconfirmationDeadline: Date): Promise<void> {
+    if (reconfirmationDeadline.getTime() > Date.now()) return;
+    await recordAudit({
+      actorId: SYSTEM_CRON_ACTOR,
+      action: "community_campaign.reconfirmation_deadline_unsafe",
+      entityType: "CommunityCampaign",
+      entityId: campaignId,
+      metadata: { reconfirmationDeadline },
+    });
+  },
+
+  /** M3 gap 5 — every confirm/decline gets an audit event (mirroring declineSupplierCommitment()'s pattern); a decline also tells the organiser, since unlike the pre-close decline path this one is reachable after the organiser has already committed to proceeding. */
+  async applyReconfirmation(actorId: string, campaign: { id: string; title: string; organiserId: string }, action: "confirm" | "decline", reason?: string) {
     if (action === "decline") {
       const claim = await prisma.communityCampaign.updateMany({
         where: { id: campaign.id, status: "AWAITING_SUPPLIER_RECONFIRMATION" },
@@ -605,20 +713,26 @@ export const campaignAuthorisationService = {
       });
       if (claim.count !== 1) throw new AppError("This campaign is no longer awaiting reconfirmation", 409);
       await this.releaseAllHoldsForCampaign(campaign.id, "supplier_declined_reduced_quantity");
+      await recordAudit({ actorId, action: "community_campaign.reconfirmation_declined", entityType: "CommunityCampaign", entityId: campaign.id, reason, metadata: { supplierDeclineReason: reason?.trim() || null } });
+      const organiser = await prisma.organiserProfile.findUnique({ where: { id: campaign.organiserId } });
+      if (organiser) {
+        await notifyParticipant(organiser.userId, "supplier_declined_reconfirmation", "Supplier declined the reduced quantity", reason ? `The supplier declined: ${reason}. ${campaign.title} was cancelled. Participants were not charged.` : `The supplier declined to fulfil the reduced quantity. ${campaign.title} was cancelled. Participants were not charged.`, campaign.id);
+      }
       return prisma.communityCampaign.findUniqueOrThrow({ where: { id: campaign.id } });
     }
     const claim = await prisma.communityCampaign.updateMany({ where: { id: campaign.id, status: "AWAITING_SUPPLIER_RECONFIRMATION" }, data: { status: "PAYMENT_CAPTURE" } });
     if (claim.count !== 1) throw new AppError("This campaign is no longer awaiting reconfirmation", 409);
+    await recordAudit({ actorId, action: "community_campaign.reconfirmation_confirmed", entityType: "CommunityCampaign", entityId: campaign.id });
     await this.captureWorker(campaign.id);
     return prisma.communityCampaign.findUniqueOrThrow({ where: { id: campaign.id } });
   },
 
   /** Legacy Vendor-backed supplier path — mirrors confirmSupplierCommitment()'s dual-function pattern. */
-  async reconfirmForVendor(vendorId: string, campaignId: string, action: "confirm" | "decline", reason?: string) {
+  async reconfirmForVendor(userId: string, vendorId: string, campaignId: string, action: "confirm" | "decline", reason?: string) {
     const supplier = await prisma.supplierProfile.findUnique({ where: { vendorId } });
     const campaign = await prisma.communityCampaign.findUnique({ where: { id: campaignId } });
     if (!campaign || !supplier || campaign.supplierId !== supplier.id) throw new AppError("Campaign not found", 404);
-    return this.applyReconfirmation(campaign, action, reason);
+    return this.applyReconfirmation(userId, campaign, action, reason);
   },
 
   /** Workstream 3 SupplierAccount path — mirrors confirmSupplierCommitmentForAccount()'s dual-function pattern. */
@@ -626,7 +740,7 @@ export const campaignAuthorisationService = {
     const account = await prisma.supplierAccount.findUnique({ where: { userId } });
     const campaign = await prisma.communityCampaign.findUnique({ where: { id: campaignId } });
     if (!campaign || !account || campaign.supplierAccountId !== account.id) throw new AppError("Campaign not found", 404);
-    return this.applyReconfirmation(campaign, action, reason);
+    return this.applyReconfirmation(userId, campaign, action, reason);
   },
 
   async evaluateReconfirmationTimeouts(): Promise<{ cancelled: number }> {
@@ -636,6 +750,7 @@ export const campaignAuthorisationService = {
       const claim = await prisma.communityCampaign.updateMany({ where: { id: campaign.id, status: "AWAITING_SUPPLIER_RECONFIRMATION" }, data: { status: "FAILED", fundingOutcome: "BELOW_MINIMUM", closedAt: new Date() } });
       if (claim.count !== 1) continue;
       await this.releaseAllHoldsForCampaign(campaign.id, "supplier_reconfirmation_timeout");
+      await this.notifyCancellationOutcome(campaign.id, "supplier_reconfirmation_timeout");
       cancelled++;
     }
     return { cancelled };
@@ -643,10 +758,25 @@ export const campaignAuthorisationService = {
 
   // ─── Capture (spec §11.4, AT-19/20/21/22/23/24) ─────────────────────────
 
-  /** capture_worker job — captures every HOLD_SUCCEEDED authorisation for a PAYMENT_CAPTURE campaign, independently (one failure never affects another — same client requirement as chargeAllPledgesForCampaign() in the old mode). */
+  /**
+   * capture_worker job — captures every still-capturable authorisation for
+   * a PAYMENT_CAPTURE campaign, independently (one failure never affects
+   * another — same client requirement as chargeAllPledgesForCampaign() in
+   * the old mode).
+   *
+   * M3 fix: HOLD_EXPIRING is included alongside HOLD_SUCCEEDED —
+   * hold_expiry_monitor() sets HOLD_EXPIRING purely as an admin WARNING
+   * flag when a hold enters its capture_before safety-buffer window; it is
+   * not a terminal or declined state, and the underlying Stripe
+   * authorisation is still perfectly capturable at that point. Excluding
+   * it here would have meant a hold that happened to get warning-flagged
+   * moments before an organiser/supplier decision fired capture_worker was
+   * silently skipped and counted as failed, for no Stripe-side reason —
+   * the exact "capture safety" gap this milestone exists to close.
+   */
   async captureWorker(campaignId: string): Promise<{ total: number; captured: number; failed: number }> {
     const authorisations = await prisma.communityBuyPaymentAuthorisation.findMany({
-      where: { campaignId, holdStatus: "HOLD_SUCCEEDED", captureStatus: "NOT_CAPTURED" },
+      where: { campaignId, holdStatus: { in: ["HOLD_SUCCEEDED", "HOLD_EXPIRING"] }, captureStatus: "NOT_CAPTURED" },
     });
     let captured = 0;
     let failed = 0;
@@ -672,7 +802,12 @@ export const campaignAuthorisationService = {
   async captureHold(authorisationId: string) {
     const authorisation = await prisma.communityBuyPaymentAuthorisation.findUniqueOrThrow({ where: { id: authorisationId } });
     if (authorisation.captureStatus === "CAPTURED") return authorisation; // idempotent
-    if (authorisation.holdStatus !== "HOLD_SUCCEEDED" || authorisation.captureStatus !== "NOT_CAPTURED") {
+    // M3 fix: HOLD_EXPIRING is a warning flag (hold_expiry_monitor()), not a
+    // terminal/declined state — the Stripe authorisation is still live and
+    // capturable. Every other state (NOT_REQUESTED, HOLD_PENDING,
+    // REQUIRES_ACTION, HOLD_DECLINED, HOLD_RELEASED) still correctly
+    // refuses capture, exactly as before.
+    if (!["HOLD_SUCCEEDED", "HOLD_EXPIRING"].includes(authorisation.holdStatus) || authorisation.captureStatus !== "NOT_CAPTURED") {
       throw new AppError("This hold is not ready to be captured", 409);
     }
 
@@ -928,8 +1063,11 @@ export const campaignAuthorisationService = {
       holdWindowStartsAt: campaign.holdWindowStartsAt,
       decisionDeadline: campaign.decisionDeadline,
       decisionRequiredAt: campaign.decisionRequiredAt,
+      reconfirmationRequestedAt: campaign.reconfirmationRequestedAt,
       reconfirmationDeadline: campaign.reconfirmationDeadline,
       reconfirmationQuantity: campaign.reconfirmationQuantity,
+      // M3 gap 8 — additive: lets a dashboard show why a campaign ended without a second query against the audit log.
+      supplierDeclineReason: campaign.supplierDeclineReason,
     };
   },
 };

@@ -15,6 +15,8 @@ vi.mock("../lib/prisma", () => ({
     campaignExtensionRequest: { create: vi.fn(), findUnique: vi.fn(), update: vi.fn(), findMany: vi.fn() },
     campaignSupplierPayment: { findUnique: vi.fn(), create: vi.fn(), update: vi.fn(), updateMany: vi.fn(), findMany: vi.fn() },
     campaignFulfilment: { upsert: vi.fn(), findUnique: vi.fn(), findUniqueOrThrow: vi.fn(), update: vi.fn(), updateMany: vi.fn() },
+    // M3: cancel() now branches into campaignAuthorisationService.releaseAllHoldsForCampaign() for AUTHORISE_THEN_CAPTURE campaigns.
+    communityBuyPaymentAuthorisation: { findMany: vi.fn(), findUnique: vi.fn(), findUniqueOrThrow: vi.fn(), update: vi.fn(), updateMany: vi.fn() },
     organiserProfile: { findUnique: vi.fn(), update: vi.fn() },
     supplierProfile: { findUnique: vi.fn(), findMany: vi.fn(), update: vi.fn() },
     // Community Buy Workstream 1: verify/restrict/unrestrictSupplier now
@@ -35,7 +37,7 @@ vi.mock("../lib/prisma", () => ({
 }));
 
 vi.mock("../lib/stripe", () => ({
-  stripe: { refunds: { create: vi.fn() }, paymentIntents: { create: vi.fn(), retrieve: vi.fn() }, transfers: { create: vi.fn() } },
+  stripe: { refunds: { create: vi.fn() }, paymentIntents: { create: vi.fn(), retrieve: vi.fn(), cancel: vi.fn() }, transfers: { create: vi.fn() } },
 }));
 
 vi.mock("../modules/notifications/notifications.service", () => ({
@@ -2917,6 +2919,44 @@ describe("Phase 9 — admin cancel/end campaign", () => {
 
     expect(result.status).toBe("CANCELLED");
   });
+
+  // M3 gap 3 — admin dashboard visibility must cover AUTHORISE_THEN_CAPTURE's
+  // own in-flight statuses the same way it already covers RESCUE_WINDOW,
+  // otherwise a campaign stuck mid-decision/reconfirmation is invisible to
+  // the exact admin monitoring/recovery workflow that needs to see it.
+  it.each(["HOLD_WINDOW", "DECISION_REQUIRED", "AWAITING_SUPPLIER_RECONFIRMATION", "PAYMENT_CAPTURE"])(
+    "listRecentlyClosed includes %s campaigns for admin visibility",
+    async (status) => {
+      m.communityCampaign.findMany.mockResolvedValue([] as never);
+      await communityCampaignsService.listRecentlyClosed();
+      const call = m.communityCampaign.findMany.mock.calls[0][0] as any;
+      expect(call.where.status.in).toContain(status);
+    },
+  );
+
+  // M3 gap 2 — admin recovery for AUTHORISE_THEN_CAPTURE's own in-flight
+  // statuses must release Stripe holds via releaseAllHoldsForCampaign()
+  // (Direct Charge authorisations), never the old mode's PLEDGE_THEN_CHARGE
+  // refund-record path, which doesn't apply here (nothing was ever charged
+  // the old-mode way — there is no PaymentIntent to refund, only a hold to
+  // release).
+  it.each(["HOLD_WINDOW", "DECISION_REQUIRED", "AWAITING_SUPPLIER_RECONFIRMATION", "PAYMENT_CAPTURE"])(
+    "cancels an AUTHORISE_THEN_CAPTURE campaign in %s by releasing holds, not the old-mode refund path",
+    async (status) => {
+      m.communityCampaign.findUnique.mockResolvedValue({ ...baseCampaign, status, paymentMode: "AUTHORISE_THEN_CAPTURE" } as never);
+      m.communityCampaign.update.mockResolvedValue({ id: "camp-1", status: "CANCELLED" } as never);
+      m.communityBuyPaymentAuthorisation.findMany.mockResolvedValue([] as never);
+
+      const result = await communityCampaignsService.cancel("admin-1", "camp-1", "Organiser requested cancellation");
+
+      expect(result.status).toBe("CANCELLED");
+      expect(m.communityBuyPaymentAuthorisation.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({ where: expect.objectContaining({ campaignId: "camp-1" }) }),
+      );
+      // The old-mode refund path must never fire for AUTHORISE_THEN_CAPTURE — nothing was ever charged that way.
+      expect(m.campaignRefund.create).not.toHaveBeenCalled();
+    },
+  );
 });
 
 describe("Phase 9 — admin contribution/payment records (listContributionsForAdmin)", () => {

@@ -5,6 +5,7 @@ import { notificationsService } from "../notifications/notifications.service";
 import { automationService } from "../automation/automation.service";
 import { marketConfigurationService } from "./market-configuration.service";
 import { campaignContributionsService } from "./campaign-contributions.service";
+import { campaignAuthorisationService } from "./campaign-authorisation.service";
 import { recordAudit } from "../../shared/utils/audit";
 
 // Community Buy Workstream 2: only `title` and `country` are hard
@@ -757,8 +758,13 @@ export const communityCampaignsService = {
       // contributions") have a real campaign to act on, not just closed
       // ones. RESCUE_WINDOW is included too (Phase 9) — without it, a
       // campaign in its completion period was invisible to admin entirely,
-      // making rescue/deadline monitoring impossible.
-      where: { status: { in: ["SUCCEEDED", "FAILED", "FULFILLING", "CANCELLED", "LIVE", "PAUSED", "RESCUE_WINDOW"] } },
+      // making rescue/deadline monitoring impossible. M3: the same
+      // reasoning applies to AUTHORISE_THEN_CAPTURE's own in-flight
+      // statuses — a campaign sitting in DECISION_REQUIRED or
+      // AWAITING_SUPPLIER_RECONFIRMATION needs to be visible to admin for
+      // exactly the same monitoring/recovery reasons RESCUE_WINDOW already
+      // is.
+      where: { status: { in: ["SUCCEEDED", "FAILED", "FULFILLING", "CANCELLED", "LIVE", "PAUSED", "RESCUE_WINDOW", "HOLD_WINDOW", "DECISION_REQUIRED", "AWAITING_SUPPLIER_RECONFIRMATION", "PAYMENT_CAPTURE"] } },
       include: { organiser: { include: { user: { select: { name: true, email: true } } } }, supplier: { include: { vendor: { select: { storeName: true } } } } },
       orderBy: { updatedAt: "desc" },
       take: limit,
@@ -867,7 +873,19 @@ export const communityCampaignsService = {
       include: { organiser: true, participants: true },
     });
     if (!campaign) throw new AppError("Campaign not found", 404);
-    const cancellable = ["DRAFT", "UNDER_REVIEW", "CHANGES_REQUIRED", "APPROVED", "LIVE", "PAUSED", "RESCUE_WINDOW"];
+    // M3 — AUTHORISE_THEN_CAPTURE's own in-flight statuses added alongside
+    // the original PLEDGE_THEN_CHARGE-era list, untouched. A campaign in
+    // PAYMENT_CAPTURE may already have SOME captured (PAID) contributions
+    // by the time an admin cancels it — exactly the same "a campaign that
+    // already succeeded is a different, harder problem" boundary this
+    // function's own doc comment already draws for the old mode above;
+    // this does not extend to refunding anything already captured, only to
+    // releasing whatever holds are still open (see the paymentMode branch
+    // below).
+    const cancellable = [
+      "DRAFT", "UNDER_REVIEW", "CHANGES_REQUIRED", "APPROVED", "LIVE", "PAUSED", "RESCUE_WINDOW",
+      "HOLD_WINDOW", "DECISION_REQUIRED", "AWAITING_SUPPLIER_RECONFIRMATION", "PAYMENT_CAPTURE",
+    ];
     if (!cancellable.includes(campaign.status)) {
       throw new AppError("This campaign can no longer be cancelled — it has already succeeded, failed, or ended", 409);
     }
@@ -875,10 +893,17 @@ export const communityCampaignsService = {
       where: { id: campaignId },
       data: { status: "CANCELLED", closedAt: new Date(), reviewNotes: reason },
     });
-    // Defensive, matching endRescueAndRefund() exactly — see method comment
-    // above for why this is always a no-op today, kept as a safety net.
-    await this.createRefundRecordsForFailedCampaign(campaignId);
-    await this.cancelPledgesForFailedCampaign(campaignId);
+    if (campaign.paymentMode === "AUTHORISE_THEN_CAPTURE") {
+      // Reuses the exact same hold-release path decide()'s own cancel
+      // branch and the timeout sweeps already use — no parallel
+      // implementation of "how does a hold get released" invented here.
+      await campaignAuthorisationService.releaseAllHoldsForCampaign(campaignId, "admin_cancelled");
+    } else {
+      // Defensive, matching endRescueAndRefund() exactly — see method comment
+      // above for why this is always a no-op today, kept as a safety net.
+      await this.createRefundRecordsForFailedCampaign(campaignId);
+      await this.cancelPledgesForFailedCampaign(campaignId);
+    }
     await notifyCampaign(campaign.organiser.userId, "admin_cancelled", "Campaign ended by admin", `${campaign.title} has been ended by an administrator. No participant was charged — pledges have been cancelled. Reason: ${reason}`, campaignId, `admin_cancelled:${campaignId}:${campaign.organiser.userId}`, "organiser");
     for (const p of campaign.participants) {
       await notifyCampaign(p.userId, "admin_cancelled", "Campaign ended", `${campaign.title} has been ended by an administrator. Your saved payment method was never charged — your pledge is cancelled.`, campaignId, `admin_cancelled:${campaignId}:${p.userId}`);

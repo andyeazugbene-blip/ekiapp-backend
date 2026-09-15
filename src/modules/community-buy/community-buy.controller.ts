@@ -202,7 +202,7 @@ export async function reconfirmCampaign(request: Request, response: Response): P
   if (action !== "confirm" && action !== "decline") throw new AppError("action must be \"confirm\" or \"decline\"", 400);
   const reason = typeof request.body?.reason === "string" ? request.body.reason : undefined;
   const campaign = acting.kind === "vendor"
-    ? await campaignAuthorisationService.reconfirmForVendor(acting.vendorId, requireIdParam(request), action, reason)
+    ? await campaignAuthorisationService.reconfirmForVendor(userId, acting.vendorId, requireIdParam(request), action, reason)
     : await campaignAuthorisationService.reconfirmForAccount(acting.userId, requireIdParam(request), action, reason);
   response.json({ campaign });
 }
