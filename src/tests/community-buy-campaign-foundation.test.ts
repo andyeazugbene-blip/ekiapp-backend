@@ -99,17 +99,21 @@ describe("communityCampaignsService.create — draft creation requires no organi
 
 describe("communityCampaignsService.update — resumable draft persistence (B)", () => {
   it("B: a draft's Product/Delivery fields can be saved and are reflected in the update call", async () => {
+    // COLLECTION here deliberately — M4 gates DELIVERY behind
+    // COMMUNITY_BUY_INDIVIDUAL_DELIVERY_ENABLED; see
+    // community-buy-privacy.test.ts for that gating's own coverage. This
+    // test is only about Product/Delivery fields being persisted at all.
     m.communityCampaign.findUnique.mockResolvedValue({ id: "camp-1", organiserId: "org-1", status: "DRAFT", termsLockedAt: null, supplierId: null } as never);
     m.organiserProfile.findUnique.mockResolvedValue({ id: "org-1", userId: "u1" });
-    m.communityCampaign.update.mockResolvedValue({ id: "camp-1", status: "DRAFT", images: ["img1.jpg"], unit: "kg", quantityPerOrder: 2, deliveryPreference: "DELIVERY" });
+    m.communityCampaign.update.mockResolvedValue({ id: "camp-1", status: "DRAFT", images: ["img1.jpg"], unit: "kg", quantityPerOrder: 2, deliveryPreference: "COLLECTION" });
 
     const result = await communityCampaignsService.update("u1", "camp-1", {
-      images: ["img1.jpg"], unit: "kg", quantityPerOrder: 2, deliveryPreference: "DELIVERY",
+      images: ["img1.jpg"], unit: "kg", quantityPerOrder: 2, deliveryPreference: "COLLECTION",
     });
 
-    expect(result.deliveryPreference).toBe("DELIVERY");
+    expect(result.deliveryPreference).toBe("COLLECTION");
     expect(m.communityCampaign.update).toHaveBeenCalledWith(expect.objectContaining({
-      data: expect.objectContaining({ images: ["img1.jpg"], unit: "kg", quantityPerOrder: 2, deliveryPreference: "DELIVERY" }),
+      data: expect.objectContaining({ images: ["img1.jpg"], unit: "kg", quantityPerOrder: 2, deliveryPreference: "COLLECTION" }),
     }));
   });
 

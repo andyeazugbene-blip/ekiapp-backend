@@ -2,10 +2,21 @@ import type { Request, Response } from "express";
 
 import { AppError } from "../../shared/errors/app-error";
 import { recordAudit } from "../../shared/utils/audit";
+import { prisma } from "../../lib/prisma";
 import { adminApprovalsService } from "./admin-approvals.service";
 import { campaignContributionsService } from "../community-buy/campaign-contributions.service";
 import { campaignPayoutService } from "../community-buy/campaign-payout.service";
 import { executeOrderRefund } from "./admin-refunds.controller";
+import { recordDataAccess } from "../community-buy/community-buy-privacy.service";
+import { notificationsService } from "../notifications/notifications.service";
+
+// M4 (spec §14.3, AT-42) — "bounded expiry" is enforced as a fixed,
+// non-configurable window rather than an admin-chosen duration: a
+// deliberate simplification that removes the possibility of an admin
+// granting an arbitrarily long disclosure, at the cost of not letting a
+// genuinely longer-running incident extend it (a new grant can always be
+// requested and re-approved instead).
+const EMERGENCY_DISCLOSURE_WINDOW_MS = 60 * 60 * 1000;
 
 function requireUserId(request: Request): string {
   if (!request.user) throw new AppError("Unauthorized", 401);
@@ -94,6 +105,50 @@ export async function adminDecideApproval(request: Request, response: Response):
       });
     } else if (approval.actionType === "order.refund.large") {
       await executeOrderRefund(approval.businessRefId, adminId, approval.amount ?? undefined, "Four-eyes approved refund");
+    } else if (approval.actionType === "community_buy.emergency_contact_disclosure") {
+      // M4 (spec §14.3, AT-42) — the approval itself IS the grant request;
+      // this is the only place the actual, time-bound access record gets
+      // created, and only once a second, different admin has approved it.
+      const contribution = await prisma.campaignContribution.findUnique({ where: { id: approval.businessRefId } });
+      if (!contribution) throw new AppError("Contribution no longer exists", 404);
+      const accessExpiresAt = new Date(Date.now() + EMERGENCY_DISCLOSURE_WINDOW_MS);
+      await recordDataAccess({
+        campaignId: contribution.campaignId,
+        contributionId: contribution.id,
+        participantId: contribution.participantId,
+        accessorUserId: adminId,
+        accessorRole: "ADMIN",
+        dataCategory: "EMERGENCY_NUMBER",
+        action: "ADMIN_OVERRIDE",
+        purposeCode: approval.reason,
+        accessExpiresAt,
+        adminOverrideId: approval.id,
+      });
+      await recordAudit({
+        actorId: adminId,
+        action: "community_buy_data_access.emergency_disclosure_granted",
+        entityType: "CampaignContribution",
+        entityId: contribution.id,
+        reason: approval.reason,
+        metadata: { accessExpiresAt },
+        request,
+      });
+      // Transparency notice — the supplier is told a disclosure happened,
+      // never told silently (spec's own emphasis on this being sensitive).
+      const campaign = await prisma.communityCampaign.findUnique({
+        where: { id: contribution.campaignId },
+        include: { supplierAccount: true, supplier: { include: { vendor: true } } },
+      });
+      const supplierUserId = campaign?.supplierAccount?.userId ?? campaign?.supplier?.vendor.userId ?? null;
+      if (supplierUserId) {
+        await notificationsService.enqueue({
+          userId: supplierUserId,
+          type: "COMMUNITY_CAMPAIGN_UPDATE",
+          title: "Emergency contact disclosure granted",
+          body: `An admin has granted you time-limited access to a participant's contact number for "${campaign?.title ?? "a campaign"}". This access expires automatically.`,
+          data: { type: "community_campaign_update", event: "emergency_disclosure_granted", campaignId: contribution.campaignId },
+        });
+      }
     } else {
       throw new AppError(`No execution wired for approved actionType "${approval.actionType}"`, 500, undefined, "APPROVAL_EXECUTION_NOT_WIRED");
     }

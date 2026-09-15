@@ -11,6 +11,7 @@ import { notificationsService } from "../notifications/notifications.service";
 import { ledgerService } from "../ledger/ledger.service";
 import { recordAudit } from "../../shared/utils/audit";
 import { marketConfigurationService } from "./market-configuration.service";
+import { createDeliveryReferenceForContribution } from "./community-buy-privacy.service";
 
 const SYSTEM_CRON_ACTOR = "system:cron";
 const CONSENT_WORDING_VERSION = "cb-authorise-v1";
@@ -894,6 +895,10 @@ export const campaignAuthorisationService = {
     });
 
     await this.onCaptureSucceeded(campaign, netAmount, applicationFeeAmount, grossAmount, authorisation.consentCurrency);
+    // M4 — additive, non-blocking: mirrors the same call in the
+    // PLEDGE_THEN_CHARGE mode's markChargeSucceeded(); never allowed to
+    // affect capture confirmation itself.
+    await createDeliveryReferenceForContribution(authorisation.contributionId);
 
     const contribution = await prisma.campaignContribution.findUniqueOrThrow({ where: { id: authorisation.contributionId }, include: { participant: true } });
     await notifyParticipant(contribution.participant.userId, "capture_succeeded", "Payment complete", "Your Community Buy payment has been completed.", authorisation.campaignId);

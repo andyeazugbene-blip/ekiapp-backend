@@ -15,6 +15,8 @@ import { supplierInvitationService } from "./supplier-invitation.service";
 import { adminApprovalsService } from "../admin/admin-approvals.service";
 import { campaignAuthorisationService } from "./campaign-authorisation.service";
 import { campaignPayoutService } from "./campaign-payout.service";
+import { communityBuyManifestService } from "./community-buy-manifest.service";
+import { searchDataAccessLog, revokeDeliveryReferencesForSupplierAccount, isIndividualDeliveryEnabled, FULFILMENT_ACCESS_PRESERVED_SCOPE } from "./community-buy-privacy.service";
 
 // ─── Public market availability (used by the mobile app to decide whether
 // to show Regular Deliveries / Community Buy entry points at all — the
@@ -35,6 +37,7 @@ export async function getPublicMarketConfig(request: Request, response: Response
       organiserApplicationsEnabled: false,
       supplierApplicationsEnabled: false,
       regularDeliveriesEnabled: false,
+      individualDeliveryEnabled: isIndividualDeliveryEnabled(),
     },
   });
 }
@@ -407,6 +410,50 @@ export async function getMySupplierPayment(request: Request, response: Response)
   response.json({ payment });
 }
 
+// ─── M4 — supplier data-access: manifest, in-app contact, emergency read
+// (spec §14.3, AT-39/40/41/44). Same dual-path dispatch as every other
+// supplier-facing function above.
+
+function requireContributionIdParam(request: Request): string {
+  const contributionId = request.params.contributionId;
+  if (typeof contributionId !== "string" || contributionId.length === 0) throw new AppError("Invalid contributionId", 400);
+  return contributionId;
+}
+
+export async function getSupplierManifest(request: Request, response: Response): Promise<void> {
+  const userId = requireUserId(request);
+  const acting = await resolveActingSupplier(userId);
+  const campaignId = requireIdParam(request);
+  const manifest = acting.kind === "vendor"
+    ? await communityBuyManifestService.getManifestForVendor(acting.vendorId, campaignId, userId)
+    : await communityBuyManifestService.getManifestForAccount(acting.userId, campaignId);
+  response.json({ manifest });
+}
+
+export async function sendSupplierContactMessage(request: Request, response: Response): Promise<void> {
+  const userId = requireUserId(request);
+  const acting = await resolveActingSupplier(userId);
+  const campaignId = requireIdParam(request);
+  const contributionId = requireContributionIdParam(request);
+  const channel = typeof request.body?.channel === "string" ? request.body.channel : "IN_APP_MESSAGE";
+  const message = typeof request.body?.message === "string" ? request.body.message : undefined;
+  const result = acting.kind === "vendor"
+    ? await communityBuyManifestService.sendContactMessageForVendor(acting.vendorId, campaignId, userId, contributionId, channel, message)
+    : await communityBuyManifestService.sendContactMessageForAccount(acting.userId, campaignId, contributionId, channel, message);
+  response.json(result);
+}
+
+export async function getSupplierEmergencyContact(request: Request, response: Response): Promise<void> {
+  const userId = requireUserId(request);
+  const acting = await resolveActingSupplier(userId);
+  const campaignId = requireIdParam(request);
+  const contributionId = requireContributionIdParam(request);
+  const contact = acting.kind === "vendor"
+    ? await communityBuyManifestService.getEmergencyContactForVendor(acting.vendorId, campaignId, userId, contributionId)
+    : await communityBuyManifestService.getEmergencyContactForAccount(acting.userId, campaignId, contributionId);
+  response.json(contact);
+}
+
 /** M2 — the AUTHORISE_THEN_CAPTURE-mode twin of getMySupplierPayment() above, reading CommunityBuyPayout instead of CampaignSupplierPayment. */
 export async function getMyCampaignPayout(request: Request, response: Response): Promise<void> {
   const acting = await resolveActingSupplier(requireUserId(request));
@@ -753,13 +800,27 @@ export async function adminApproveSupplierAccount(request: Request, response: Re
   response.json({ account });
 }
 
+/**
+ * M4 (spec §14.4, §15.4): controlScope now actually does something —
+ * "fulfilment_access_preserved" is the only recognised value; anything
+ * else is rejected up front rather than silently stored as a no-op string.
+ * Restricting without that scope immediately revokes this supplier's open
+ * DeliveryReference access across every campaign they're assigned to (not
+ * just this one restriction's trigger) — matches spec §14.4's table.
+ */
 export async function adminRestrictSupplierAccount(request: Request, response: Response): Promise<void> {
   const adminId = requireUserId(request);
   const id = requireIdParam(request);
-  const { reason } = request.body ?? {};
+  const { reason, controlScope } = request.body ?? {};
   if (typeof reason !== "string" || reason.length === 0) throw new AppError("reason is required", 400);
-  const account = await supplierAccountService.restrict(id, reason);
-  await recordAudit({ actorId: adminId, action: "community_supplier_account.restrict", entityType: "SupplierAccount", entityId: id, reason, afterState: { supplierState: account.supplierState }, request });
+  if (controlScope !== undefined && controlScope !== null && controlScope !== FULFILMENT_ACCESS_PRESERVED_SCOPE) {
+    throw new AppError(`controlScope must be "${FULFILMENT_ACCESS_PRESERVED_SCOPE}" or omitted`, 400);
+  }
+  const account = await supplierAccountService.restrict(id, reason, controlScope ?? null);
+  if (account.controlScope !== FULFILMENT_ACCESS_PRESERVED_SCOPE) {
+    await revokeDeliveryReferencesForSupplierAccount(id, "supplier_restricted", adminId);
+  }
+  await recordAudit({ actorId: adminId, action: "community_supplier_account.restrict", entityType: "SupplierAccount", entityId: id, reason, afterState: { supplierState: account.supplierState, controlScope: account.controlScope }, request });
   response.json({ account });
 }
 
@@ -769,6 +830,63 @@ export async function adminUnrestrictSupplierAccount(request: Request, response:
   const account = await supplierAccountService.unrestrict(id);
   await recordAudit({ actorId: adminId, action: "community_supplier_account.unrestrict", entityType: "SupplierAccount", entityId: id, afterState: { supplierState: account.supplierState }, request });
   response.json({ account });
+}
+
+/** M4 — manual, admin-initiated revoke, for investigation cases where nothing has changed the supplier's state (spec §19 "attribution/solicitation investigation"). */
+export async function adminRevokeSupplierDataAccess(request: Request, response: Response): Promise<void> {
+  const adminId = requireUserId(request);
+  const id = requireIdParam(request);
+  const { reason } = request.body ?? {};
+  if (typeof reason !== "string" || reason.length === 0) throw new AppError("reason is required", 400);
+  const revokedCount = await revokeDeliveryReferencesForSupplierAccount(id, reason, adminId);
+  await recordAudit({ actorId: adminId, action: "community_supplier_account.data_access_revoked", entityType: "SupplierAccount", entityId: id, reason, metadata: { revokedCount }, request });
+  response.json({ revokedCount });
+}
+
+/** M4 — admin search surface for the data-access audit trail (spec §19, AT-43). */
+export async function adminSearchDataAccessLog(request: Request, response: Response): Promise<void> {
+  const { campaignId, supplierAccountId, accessorUserId, dataCategory, action, from, to, limit } = request.query;
+  const items = await searchDataAccessLog({
+    campaignId: typeof campaignId === "string" ? campaignId : undefined,
+    supplierAccountId: typeof supplierAccountId === "string" ? supplierAccountId : undefined,
+    accessorUserId: typeof accessorUserId === "string" ? accessorUserId : undefined,
+    dataCategory: typeof dataCategory === "string" ? dataCategory : undefined,
+    action: typeof action === "string" ? action : undefined,
+    from: typeof from === "string" && from ? new Date(from) : undefined,
+    to: typeof to === "string" && to ? new Date(to) : undefined,
+    limit: typeof limit === "string" ? Number(limit) : undefined,
+  });
+  response.json({ items });
+}
+
+/**
+ * M4 — emergency real-number disclosure (spec §14.3, AT-42). Always
+ * four-eyes gated: unlike adminReleaseSupplierPayment()/
+ * adminReleaseCommunityBuyPayout() below, this never checks
+ * adminApprovalsService.requiresApproval()'s configurable, rule-based
+ * threshold — a data-privacy override must always need a second admin,
+ * not only above some amount (there is no amount here at all). The actual
+ * grant is only ever created by adminDecideApproval()'s execution branch,
+ * once a second, different admin has approved it.
+ */
+export async function adminRequestEmergencyDisclosure(request: Request, response: Response): Promise<void> {
+  const adminId = requireUserId(request);
+  const campaignId = requireIdParam(request);
+  const contributionId = requireContributionIdParam(request);
+  const { reason } = request.body ?? {};
+  if (typeof reason !== "string" || !reason.trim()) throw new AppError("reason is required", 400);
+  const contribution = await prisma.campaignContribution.findUnique({ where: { id: contributionId } });
+  if (!contribution || contribution.campaignId !== campaignId) throw new AppError("Contribution not found", 404);
+
+  const approval = await adminApprovalsService.requestApproval({
+    actionType: "community_buy.emergency_contact_disclosure",
+    businessRefType: "CampaignContribution",
+    businessRefId: contributionId,
+    requestedById: adminId,
+    reason,
+  });
+  await recordAudit({ actorId: adminId, action: "community_buy_data_access.emergency_disclosure_requested", entityType: "CampaignContribution", entityId: contributionId, reason, request });
+  response.status(202).json({ pendingApproval: approval, message: "This disclosure requires a second admin's approval before it executes." });
 }
 
 export async function adminListRefunds(_request: Request, response: Response): Promise<void> {

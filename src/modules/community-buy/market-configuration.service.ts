@@ -2,6 +2,7 @@ import type { CommunityBuyPaymentMode, MarketPaymentMode, SupplierReleasePolicy 
 
 import { prisma } from "../../lib/prisma";
 import { resolveMarketCode } from "../../shared/currency";
+import { isIndividualDeliveryEnabled } from "./community-buy-privacy.service";
 
 /**
  * Every market approved for the current launch scope (client mandate
@@ -54,6 +55,12 @@ export interface PublicMarketConfiguration {
   organiserApplicationsEnabled: boolean;
   supplierApplicationsEnabled: boolean;
   regularDeliveriesEnabled: boolean;
+  // M4 — global kill-switch (COMMUNITY_BUY_INDIVIDUAL_DELIVERY_ENABLED),
+  // not a per-market MarketConfiguration column: reported here purely
+  // because this is the existing "what can the app show right now" public
+  // capability surface mobile already fetches before rendering the
+  // creation/delivery step. The value is identical for every country.
+  individualDeliveryEnabled: boolean;
 }
 
 function toPublicShape(config: {
@@ -73,6 +80,7 @@ function toPublicShape(config: {
     organiserApplicationsEnabled: config.organiserApplicationsEnabled,
     supplierApplicationsEnabled: config.supplierApplicationsEnabled,
     regularDeliveriesEnabled: config.regularDeliveriesEnabled,
+    individualDeliveryEnabled: isIndividualDeliveryEnabled(),
   };
 }
 

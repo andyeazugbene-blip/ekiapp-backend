@@ -95,10 +95,18 @@ export const supplierAccountService = {
     });
   },
 
-  async restrict(id: string, reason: string) {
+  /**
+   * M4 (spec §14.4, §15.4) — controlScope finally gets written, not just
+   * stored. `"fulfilment_access_preserved"` is the only recognised value
+   * (validated by the controller before this is called); anything else
+   * (including omitted) means the default, safer behaviour: restriction
+   * revokes participant-delivery-data access — see
+   * community-buy-privacy.service.ts's isDataAccessAllowed().
+   */
+  async restrict(id: string, reason: string, controlScope: string | null = null) {
     return prisma.supplierAccount.update({
       where: { id },
-      data: { supplierState: "RESTRICTED", reasonCode: reason },
+      data: { supplierState: "RESTRICTED", reasonCode: reason, controlScope },
     });
   },
 
@@ -108,10 +116,11 @@ export const supplierAccountService = {
     // Restriction is independent of approval (mirrors organiser-supplier.service.ts's
     // existing isRestricted/isVerified separation) — unrestricting returns to
     // APPROVED if this account was previously approved (has approvedAt),
-    // otherwise back to UNDER_REVIEW.
+    // otherwise back to UNDER_REVIEW. controlScope is cleared — it only
+    // ever means something while RESTRICTED.
     return prisma.supplierAccount.update({
       where: { id },
-      data: { supplierState: account.approvedAt ? "APPROVED" : "UNDER_REVIEW", reasonCode: null },
+      data: { supplierState: account.approvedAt ? "APPROVED" : "UNDER_REVIEW", reasonCode: null, controlScope: null },
     });
   },
 

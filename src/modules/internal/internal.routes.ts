@@ -10,6 +10,7 @@ import { renewalsService } from "../regular-deliveries/renewals.service";
 import { communityCampaignsService } from "../community-buy/community-campaigns.service";
 import { campaignContributionsService } from "../community-buy/campaign-contributions.service";
 import { campaignAuthorisationService } from "../community-buy/campaign-authorisation.service";
+import { privacyExpirySweep } from "../community-buy/community-buy-privacy.service";
 import { escrowService } from "../paystack/escrow.service";
 import { escrowHealthService } from "../paystack/escrow-health.service";
 import { reconciliationService } from "../ledger/reconciliation.service";
@@ -179,6 +180,14 @@ async function runCommunityBuyAuthorisationSweep() {
   };
 }
 
+// M4 — spec §17.2 "privacy_expiry", daily. Revokes anything past its own
+// expiry (open DeliveryReference rows, emergency-disclosure grants) —
+// independent of both Community Buy sweeps above, since it has nothing to
+// do with campaign/payment state.
+async function runPrivacyExpirySweep() {
+  return privacyExpirySweep();
+}
+
 // Paystack domestic escrow: auto-cancel+refund orders where the vendor
 // never confirmed within the timeout window, and auto-release payouts for
 // dispatched orders past the buyer-confirmation window with no dispute.
@@ -339,6 +348,7 @@ const jobs: [string, string, () => Promise<Record<string, unknown>>][] = [
   ["renewals-sweep", "renewals sweep", runRenewalsSweep],
   ["community-buy-sweep", "Community Buy sweep", runCommunityBuySweep],
   ["community-buy-authorisation-sweep", "Community Buy AUTHORISE_THEN_CAPTURE sweep", runCommunityBuyAuthorisationSweep],
+  ["privacy-expiry-sweep", "Community Buy privacy expiry sweep", runPrivacyExpirySweep],
   ["escrow-sweep", "escrow timeout/auto-release sweep", runEscrowSweep],
   ["escrow-balance-check", "escrow balance check", runEscrowBalanceCheck],
   ["cart-cleanup", "cart cleanup", runCartCleanup],

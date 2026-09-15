@@ -83,8 +83,11 @@ describe("campaignFulfilmentService — state machine (supplier side)", () => {
 
   it("setPlan rejects being set before inventory is confirmed", async () => {
     ownedBySupplier("AWAITING_INVENTORY_CONFIRMATION");
+    // Method is COLLECTION here deliberately — this test exercises the
+    // inventory-confirmation gate, not M4's delivery-method gating (see the
+    // dedicated describe block below for that).
     await expect(
-      campaignFulfilmentService.setPlan("vendor-1", "camp-1", { method: "DELIVERY" }),
+      campaignFulfilmentService.setPlan("vendor-1", "camp-1", { method: "COLLECTION" }),
     ).rejects.toMatchObject({ statusCode: 409 });
   });
 
@@ -96,11 +99,14 @@ describe("campaignFulfilmentService — state machine (supplier side)", () => {
   });
 
   it("setPlan succeeds once inventory is confirmed", async () => {
+    // COLLECTION here deliberately — see the M4 describe block below for
+    // DELIVERY-specific gating coverage; this test is only about the
+    // inventory-confirmed precondition.
     ownedBySupplier("INVENTORY_CONFIRMED");
-    m.campaignFulfilment.findUniqueOrThrow.mockResolvedValue({ method: "DELIVERY" } as never);
-    await campaignFulfilmentService.setPlan("vendor-1", "camp-1", { method: "DELIVERY", notes: "Fragile" });
+    m.campaignFulfilment.findUniqueOrThrow.mockResolvedValue({ method: "COLLECTION" } as never);
+    await campaignFulfilmentService.setPlan("vendor-1", "camp-1", { method: "COLLECTION", notes: "Fragile" });
     expect(m.campaignFulfilment.updateMany).toHaveBeenCalledWith(
-      expect.objectContaining({ data: expect.objectContaining({ method: "DELIVERY", notes: "Fragile" }) }),
+      expect.objectContaining({ data: expect.objectContaining({ method: "COLLECTION", notes: "Fragile" }) }),
     );
   });
 

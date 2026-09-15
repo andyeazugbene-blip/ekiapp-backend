@@ -53,11 +53,50 @@ vi.mock("../modules/community-buy/organiser-supplier.service", () => ({
 // the vendor-keyed organiserSupplierService above.
 const mockApplyAsSupplierAccount = vi.fn();
 const mockGetSupplierAccountView = vi.fn();
+const mockSupplierAccountRestrict = vi.fn();
+const mockSupplierAccountUnrestrict = vi.fn();
 vi.mock("../modules/community-buy/supplier-account.service", () => ({
   supplierAccountService: {
     applyAsSupplier: (...a: unknown[]) => mockApplyAsSupplierAccount(...a),
     getView: (...a: unknown[]) => mockGetSupplierAccountView(...a),
+    listForAdmin: vi.fn().mockResolvedValue([]),
+    approve: vi.fn().mockResolvedValue({ id: "acct-1", supplierState: "APPROVED" }),
+    restrict: (...a: unknown[]) => mockSupplierAccountRestrict(...a),
+    unrestrict: (...a: unknown[]) => mockSupplierAccountUnrestrict(...a),
   },
+}));
+
+// M4 — new supplier data-access surface (manifest/contact/emergency-contact)
+// and the privacy service backing both it and the new admin controls.
+// Mocked here at the service layer, same as every other Community Buy
+// service in this file — the route/HTTP-wiring layer is what's under test;
+// the actual access-control/masking logic has its own dedicated unit
+// coverage in community-buy-manifest.test.ts and community-buy-privacy.test.ts.
+const mockGetManifestForAccount = vi.fn();
+const mockGetManifestForVendor = vi.fn();
+const mockSendContactMessageForAccount = vi.fn();
+const mockSendContactMessageForVendor = vi.fn();
+const mockGetEmergencyContactForAccount = vi.fn();
+const mockGetEmergencyContactForVendor = vi.fn();
+vi.mock("../modules/community-buy/community-buy-manifest.service", () => ({
+  communityBuyManifestService: {
+    getManifestForAccount: (...a: unknown[]) => mockGetManifestForAccount(...a),
+    getManifestForVendor: (...a: unknown[]) => mockGetManifestForVendor(...a),
+    sendContactMessageForAccount: (...a: unknown[]) => mockSendContactMessageForAccount(...a),
+    sendContactMessageForVendor: (...a: unknown[]) => mockSendContactMessageForVendor(...a),
+    getEmergencyContactForAccount: (...a: unknown[]) => mockGetEmergencyContactForAccount(...a),
+    getEmergencyContactForVendor: (...a: unknown[]) => mockGetEmergencyContactForVendor(...a),
+  },
+}));
+
+const mockSearchDataAccessLog = vi.fn();
+const mockRevokeDeliveryReferencesForSupplierAccount = vi.fn();
+vi.mock("../modules/community-buy/community-buy-privacy.service", () => ({
+  searchDataAccessLog: (...a: unknown[]) => mockSearchDataAccessLog(...a),
+  revokeDeliveryReferencesForSupplierAccount: (...a: unknown[]) => mockRevokeDeliveryReferencesForSupplierAccount(...a),
+  revokeDeliveryReferencesForCampaign: vi.fn(),
+  isIndividualDeliveryEnabled: vi.fn().mockReturnValue(false),
+  FULFILMENT_ACCESS_PRESERVED_SCOPE: "fulfilment_access_preserved",
 }));
 
 const mockListLive = vi.fn();
@@ -243,6 +282,8 @@ const mockSupplierAccountFindUnique = vi.fn();
 // looks up the payment amount before deciding whether to release directly
 // or create a pending approval.
 const mockCampaignSupplierPaymentFindUnique = vi.fn().mockResolvedValue({ amount: 50000 });
+// adminRequestEmergencyDisclosure (M4) looks the contribution up directly.
+const mockCampaignContributionFindUnique = vi.fn();
 // With requiresApproval defaulting to false, release proceeds exactly as
 // this file's pre-existing tests expect.
 const mockRequiresApproval = vi.fn().mockResolvedValue(false);
@@ -262,6 +303,7 @@ vi.mock("../lib/prisma", async () => {
         if (prop === "vendor") return { findUnique: (...a: unknown[]) => mockVendorFindUnique(...a) };
         if (prop === "supplierAccount") return { findUnique: (...a: unknown[]) => mockSupplierAccountFindUnique(...a) };
         if (prop === "campaignSupplierPayment") return { findUnique: (...a: unknown[]) => mockCampaignSupplierPaymentFindUnique(...a) };
+        if (prop === "campaignContribution") return { findUnique: (...a: unknown[]) => mockCampaignContributionFindUnique(...a) };
         // require2fa (gates the two supplier-payment routes below) looks
         // this up for every request — without a mock it falls through to
         // a real DB call, which this test environment can't make. No admin
@@ -1040,5 +1082,136 @@ describe("Admin routes — permission-gated, id handling", () => {
     expect(res.status).toBe(200);
     expect(mockListContributionsForAdmin).toHaveBeenCalledWith("camp-55");
     expect(res.body.items).toHaveLength(1);
+  });
+});
+
+describe("M4 — delivery/privacy routes (AT-38..44)", () => {
+  it("GET /api/supplier/campaigns/:id/manifest — 401 without a token", async () => {
+    const res = await request(app).get("/api/supplier/campaigns/camp-1/manifest");
+    expect(res.status).toBe(401);
+  });
+
+  it("GET /api/supplier/campaigns/:id/manifest — reachable for an approved SupplierAccount holder, dispatched to the account path", async () => {
+    mockGetManifestForAccount.mockResolvedValue([{ participantReference: "part-1", contributionId: "c1", quantity: 2, deliveryMethod: "COLLECTION", deliveryStatus: "NOT_REQUIRED" }]);
+    const res = await request(app).get("/api/supplier/campaigns/camp-1/manifest").set("Authorization", `Bearer ${generateTestToken({ id: "account-supplier-1", role: "BUYER", email: "s@x.com" })}`);
+    expect(res.status).toBe(200);
+    expect(mockGetManifestForAccount).toHaveBeenCalledWith("account-supplier-1", "camp-1");
+    expect(res.body.manifest).toHaveLength(1);
+  });
+
+  it("GET /api/supplier/campaigns/:id/manifest — dispatched to the legacy Vendor path for a Vendor-backed supplier", async () => {
+    mockGetManifestForVendor.mockResolvedValue([]);
+    const res = await request(app).get("/api/supplier/campaigns/camp-1/manifest").set("Authorization", `Bearer ${vendorToken()}`);
+    expect(res.status).toBe(200);
+    expect(mockGetManifestForVendor).toHaveBeenCalledWith("vendor-db-1", "camp-1", "vendor-user-1");
+  });
+
+  it("POST /api/supplier/campaigns/:id/contributions/:contributionId/contact — routes channel/message through to the service", async () => {
+    mockSendContactMessageForAccount.mockResolvedValue({ sent: true });
+    const res = await request(app)
+      .post("/api/supplier/campaigns/camp-1/contributions/contrib-1/contact")
+      .set("Authorization", `Bearer ${generateTestToken({ id: "account-supplier-1", role: "BUYER", email: "s@x.com" })}`)
+      .send({ channel: "IN_APP_MESSAGE", message: "Ready for pickup" });
+    expect(res.status).toBe(200);
+    expect(mockSendContactMessageForAccount).toHaveBeenCalledWith("account-supplier-1", "camp-1", "contrib-1", "IN_APP_MESSAGE", "Ready for pickup");
+  });
+
+  it("GET /api/supplier/campaigns/:id/contributions/:contributionId/emergency-contact — routes through to the service", async () => {
+    mockGetEmergencyContactForAccount.mockResolvedValue({ phone: null, accessExpiresAt: null });
+    const res = await request(app)
+      .get("/api/supplier/campaigns/camp-1/contributions/contrib-1/emergency-contact")
+      .set("Authorization", `Bearer ${generateTestToken({ id: "account-supplier-1", role: "BUYER", email: "s@x.com" })}`);
+    expect(res.status).toBe(200);
+    expect(mockGetEmergencyContactForAccount).toHaveBeenCalledWith("account-supplier-1", "camp-1", "contrib-1");
+  });
+
+  it("POST /api/admin/community-buy/supplier-accounts/:id/restrict — rejects an unrecognised controlScope with 400, never calling restrict()", async () => {
+    const res = await request(app)
+      .post("/api/admin/community-buy/supplier-accounts/acct-1/restrict")
+      .set("Authorization", `Bearer ${adminToken()}`)
+      .send({ reason: "policy violation", controlScope: "anything_goes" });
+    expect(res.status).toBe(400);
+    expect(mockSupplierAccountRestrict).not.toHaveBeenCalled();
+  });
+
+  it("POST /api/admin/community-buy/supplier-accounts/:id/restrict — a recognised controlScope is accepted and does NOT trigger a data-access revoke", async () => {
+    mockSupplierAccountRestrict.mockResolvedValue({ id: "acct-1", supplierState: "RESTRICTED", controlScope: "fulfilment_access_preserved" });
+    const res = await request(app)
+      .post("/api/admin/community-buy/supplier-accounts/acct-1/restrict")
+      .set("Authorization", `Bearer ${adminToken()}`)
+      .send({ reason: "policy violation", controlScope: "fulfilment_access_preserved" });
+    expect(res.status).toBe(200);
+    expect(mockSupplierAccountRestrict).toHaveBeenCalledWith("acct-1", "policy violation", "fulfilment_access_preserved");
+    expect(mockRevokeDeliveryReferencesForSupplierAccount).not.toHaveBeenCalled();
+  });
+
+  it("POST /api/admin/community-buy/supplier-accounts/:id/restrict — omitting controlScope revokes data access (the safer default)", async () => {
+    mockSupplierAccountRestrict.mockResolvedValue({ id: "acct-1", supplierState: "RESTRICTED", controlScope: null });
+    mockRevokeDeliveryReferencesForSupplierAccount.mockResolvedValue(2);
+    const res = await request(app)
+      .post("/api/admin/community-buy/supplier-accounts/acct-1/restrict")
+      .set("Authorization", `Bearer ${adminToken()}`)
+      .send({ reason: "policy violation" });
+    expect(res.status).toBe(200);
+    expect(mockRevokeDeliveryReferencesForSupplierAccount).toHaveBeenCalledWith("acct-1", "supplier_restricted", "admin-1");
+  });
+
+  it("POST /api/admin/community-buy/supplier-accounts/:id/revoke-data-access — requires a reason, otherwise 400", async () => {
+    const res = await request(app).post("/api/admin/community-buy/supplier-accounts/acct-1/revoke-data-access").set("Authorization", `Bearer ${adminToken()}`).send({});
+    expect(res.status).toBe(400);
+    expect(mockRevokeDeliveryReferencesForSupplierAccount).not.toHaveBeenCalled();
+  });
+
+  it("POST /api/admin/community-buy/supplier-accounts/:id/revoke-data-access — manual revoke reaches the service with the given reason", async () => {
+    mockRevokeDeliveryReferencesForSupplierAccount.mockResolvedValue(4);
+    const res = await request(app)
+      .post("/api/admin/community-buy/supplier-accounts/acct-1/revoke-data-access")
+      .set("Authorization", `Bearer ${adminToken()}`)
+      .send({ reason: "solicitation investigation" });
+    expect(res.status).toBe(200);
+    expect(res.body.revokedCount).toBe(4);
+    expect(mockRevokeDeliveryReferencesForSupplierAccount).toHaveBeenCalledWith("acct-1", "solicitation investigation", "admin-1");
+  });
+
+  it("GET /api/admin/community-buy/data-access-log — 401 without a token, 200 with filters passed through for admin", async () => {
+    const unauth = await request(app).get("/api/admin/community-buy/data-access-log");
+    expect(unauth.status).toBe(401);
+
+    mockSearchDataAccessLog.mockResolvedValue([]);
+    const res = await request(app).get("/api/admin/community-buy/data-access-log?campaignId=camp-1&action=VIEWED").set("Authorization", `Bearer ${adminToken()}`);
+    expect(res.status).toBe(200);
+    expect(mockSearchDataAccessLog).toHaveBeenCalledWith(expect.objectContaining({ campaignId: "camp-1", action: "VIEWED" }));
+  });
+
+  it("POST /api/admin/community-campaigns/:id/contributions/:contributionId/emergency-disclosure — AT-42: requires a reason and always goes through the four-eyes pending-approval path", async () => {
+    mockCampaignContributionFindUnique.mockResolvedValue({ id: "contrib-1", campaignId: "camp-1" });
+    mockRequestApproval.mockResolvedValue({ id: "appr-1", status: "PENDING", actionType: "community_buy.emergency_contact_disclosure" });
+
+    const missingReason = await request(app)
+      .post("/api/admin/community-campaigns/camp-1/contributions/contrib-1/emergency-disclosure")
+      .set("Authorization", `Bearer ${adminToken()}`)
+      .send({});
+    expect(missingReason.status).toBe(400);
+
+    const res = await request(app)
+      .post("/api/admin/community-campaigns/camp-1/contributions/contrib-1/emergency-disclosure")
+      .set("Authorization", `Bearer ${adminToken()}`)
+      .send({ reason: "participant unreachable, delivery window closing" });
+    expect(res.status).toBe(202);
+    expect(mockRequestApproval).toHaveBeenCalledWith(expect.objectContaining({
+      actionType: "community_buy.emergency_contact_disclosure",
+      businessRefId: "contrib-1",
+      requestedById: "admin-1",
+    }));
+  });
+
+  it("POST /api/admin/community-campaigns/:id/contributions/:contributionId/emergency-disclosure — 404s for a contribution belonging to a different campaign", async () => {
+    mockCampaignContributionFindUnique.mockResolvedValue({ id: "contrib-1", campaignId: "some-other-campaign" });
+    const res = await request(app)
+      .post("/api/admin/community-campaigns/camp-1/contributions/contrib-1/emergency-disclosure")
+      .set("Authorization", `Bearer ${adminToken()}`)
+      .send({ reason: "test" });
+    expect(res.status).toBe(404);
+    expect(mockRequestApproval).not.toHaveBeenCalled();
   });
 });

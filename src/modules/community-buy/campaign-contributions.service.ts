@@ -13,6 +13,7 @@ import { supportCaseService } from "./support-case.service";
 import { ledgerService } from "../ledger/ledger.service";
 import { recordAudit } from "../../shared/utils/audit";
 import { stripeConnectService as vendorStripeConnectService } from "../vendors/stripe-connect.service";
+import { createDeliveryReferenceForContribution } from "./community-buy-privacy.service";
 
 const SYSTEM_CRON_ACTOR = "system:cron";
 
@@ -483,6 +484,11 @@ export const campaignContributionsService = {
         ],
       });
     });
+    // M4 — additive, non-blocking: creates the per-order privacy/manifest
+    // record only once this contribution is genuinely captured. Never
+    // allowed to affect payment confirmation itself (see that function's
+    // own never-throws contract).
+    await createDeliveryReferenceForContribution(contribution.id);
     await notificationsService.enqueue({
       userId: contribution.participant.userId,
       type: "COMMUNITY_CAMPAIGN_UPDATE",

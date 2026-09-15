@@ -2408,6 +2408,7 @@ model CommunityCampaign {
   supplierInvitations       SupplierInvitation[]
   paymentAuthorisations     CommunityBuyPaymentAuthorisation[]
   payout                    CommunityBuyPayout?
+  deliveryReferences        DeliveryReference[]
   createdAt                 DateTime                           @default(now())
   updatedAt                 DateTime                           @updatedAt
 
@@ -2603,6 +2604,9 @@ model CampaignContribution {
   // Stripe-hold-mechanics fields — see CommunityBuyPaymentAuthorisation's
   // own doc comment for why this isn't a duplicate table.
   paymentAuthorisation  CommunityBuyPaymentAuthorisation?
+  // M4 — 1:1, created only once this contribution is actually captured
+  // (either payment mode); see DeliveryReference's own doc comment.
+  deliveryReference     DeliveryReference?
   createdAt             DateTime                          @default(now())
   updatedAt             DateTime                          @updatedAt
 
@@ -2631,6 +2635,52 @@ model CampaignChargeAttempt {
 
   @@unique([contributionId, attemptNumber])
   @@index([contributionId])
+}
+
+// M4 (spec §15.7) — one row per CAPTURED contribution (created only once a
+// contribution actually becomes PAID, in either payment mode — never
+// before; see communityBuyPrivacyService.createDeliveryReferenceForContribution()).
+// Deliberately has NO address/phone field at all: for a COLLECTION campaign
+// nothing beyond a status is ever needed; for a DELIVERY campaign (currently
+// unreachable in production — gated off by
+// COMMUNITY_BUY_INDIVIDUAL_DELIVERY_ENABLED) courierProvider/
+// externalDeliveryToken/labelReference stay null until a real courier/
+// token-vault integration exists — see that env gate's own doc comment for
+// why this repo deliberately does not invent one.
+model DeliveryReference {
+  id                    String                     @id @default(cuid())
+  campaignId            String
+  contributionId        String                     @unique
+  participantId         String
+  deliveryMethod        CampaignDeliveryPreference
+  status                DeliveryReferenceStatus    @default(NOT_REQUIRED)
+  // Coarse only (e.g. a postcode/area), never a full address — unused until
+  // individual delivery is real; left null for every COLLECTION row.
+  deliveryArea          String?
+  labelReference        String?
+  externalDeliveryToken String?
+  courierProvider       String?
+  expiresAt             DateTime?
+  revokedAt             DateTime?
+  revocationReason      String?
+  campaign              CommunityCampaign          @relation(fields: [campaignId], references: [id], onDelete: Restrict)
+  contribution          CampaignContribution       @relation(fields: [contributionId], references: [id], onDelete: Restrict)
+  createdAt             DateTime                   @default(now())
+  updatedAt             DateTime                   @updatedAt
+
+  @@index([campaignId, status])
+  @@index([status, expiresAt])
+}
+
+enum DeliveryReferenceStatus {
+  NOT_REQUIRED // collection-point order — terminal, nothing to track
+  PENDING
+  LABEL_GENERATED
+  HANDED_TO_COURIER
+  DELIVERED
+  COLLECTED
+  EXCEPTION
+  REVOKED
 }
 
 model CampaignRefund {
@@ -2787,6 +2837,67 @@ model CommunityBuyPayout {
   updatedAt                    DateTime                 @updatedAt
 
   @@index([status])
+}
+
+// M4 (spec §15.8) — append-only access/action trail for anything a
+// supplier, organiser or admin does against a participant's delivery/
+// contact data. Deliberately loosely-coupled (plain string IDs, no hard FK
+// relations to campaign/contribution/participant) rather than
+// relationally joined, mirroring LedgerEntry's own "immutable event record"
+// shape — this table must never block or be blocked by a campaign/
+// contribution being deleted or restructured. Never updated after creation
+// except to set revokedAt/revocationReason on the ONE row a later
+// revocation targets.
+model CommunityBuyDataAccessLog {
+  id                String              @id @default(cuid())
+  campaignId        String
+  contributionId    String?
+  participantId     String?
+  accessorAccountId String?
+  accessorUserId    String
+  accessorRole      DataAccessorRole
+  dataCategory      DataAccessCategory
+  action            DataAccessAction
+  purposeCode       String
+  accessedAt        DateTime            @default(now())
+  accessExpiresAt   DateTime?
+  // Privacy-preserving equivalent of IP address (spec §15.8's own wording)
+  // — a hash, never the raw address.
+  ipAddressHash     String?
+  deviceOrSessionId String?
+  controlScope      String?
+  adminOverrideId   String?
+  revokedAt         DateTime?
+  revocationReason  String?
+  createdAt         DateTime            @default(now())
+
+  @@index([campaignId, accessedAt])
+  @@index([accessorUserId, accessedAt])
+  @@index([action])
+  @@index([accessExpiresAt])
+}
+
+enum DataAccessorRole {
+  SUPPLIER
+  ORGANISER
+  ADMIN
+}
+
+enum DataAccessCategory {
+  DELIVERY_STATUS
+  CONTACT_CHANNEL
+  EMERGENCY_NUMBER
+  MANIFEST
+}
+
+enum DataAccessAction {
+  VIEWED
+  LABEL_GENERATED
+  MESSAGE_SENT
+  PROXY_CALL_STARTED
+  COURIER_SHARED
+  ACCESS_REVOKED
+  ADMIN_OVERRIDE
 }
 
 // Per-country configuration gate. Every market defaults to Community Buy

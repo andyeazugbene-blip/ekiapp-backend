@@ -17,6 +17,9 @@ vi.mock("../lib/prisma", () => ({
   prisma: {
     adminApproval: { findUnique: vi.fn(), update: vi.fn() },
     auditLog: { create: vi.fn() },
+    campaignContribution: { findUnique: vi.fn() },
+    communityCampaign: { findUnique: vi.fn() },
+    communityBuyDataAccessLog: { create: vi.fn() },
   },
 }));
 
@@ -28,14 +31,20 @@ vi.mock("../modules/community-buy/campaign-contributions.service", () => ({
   campaignContributionsService: { releaseSupplierPayment: vi.fn() },
 }));
 
+vi.mock("../modules/notifications/notifications.service", () => ({
+  notificationsService: { enqueue: vi.fn() },
+}));
+
 import { prisma } from "../lib/prisma";
 import { executeOrderRefund } from "../modules/admin/admin-refunds.controller";
 import { campaignContributionsService } from "../modules/community-buy/campaign-contributions.service";
+import { notificationsService } from "../modules/notifications/notifications.service";
 import { adminDecideApproval } from "../modules/admin/admin-approvals.controller";
 
 const m = vi.mocked(prisma, true);
 const mExecuteRefund = vi.mocked(executeOrderRefund);
 const mReleaseSupplierPayment = vi.mocked(campaignContributionsService.releaseSupplierPayment);
+const mNotify = vi.mocked(notificationsService, true);
 
 function createMockReq(body: Record<string, unknown>): Request {
   return { user: { id: "admin-b", role: "ADMIN", email: "b@test.com" }, params: { id: "appr-1" }, body, headers: {} } as unknown as Request;
@@ -142,6 +151,50 @@ describe("adminDecideApproval — approve path only commits after successful exe
     }));
     expect(m.auditLog.create).toHaveBeenCalledWith(expect.objectContaining({
       data: expect.objectContaining({ action: "admin_approval.approved_and_executed" }),
+    }));
+  });
+
+  // M4 (spec §14.3, AT-42) — emergency real-number disclosure. This
+  // execution branch IS the grant: it never exists before a second,
+  // different admin has approved it.
+  it("AT-42: approving community_buy.emergency_contact_disclosure creates a time-bound ADMIN_OVERRIDE access-log grant and notifies the assigned supplier", async () => {
+    const disclosureApproval = {
+      id: "appr-3", status: "PENDING", actionType: "community_buy.emergency_contact_disclosure",
+      businessRefType: "CampaignContribution", businessRefId: "contrib-1", amount: null, requestedById: "admin-a",
+      reason: "Participant unreachable, delivery window closing",
+    };
+    m.adminApproval.findUnique.mockResolvedValue(disclosureApproval as never);
+    m.campaignContribution.findUnique.mockResolvedValue({ id: "contrib-1", campaignId: "camp-1", participantId: "part-1" } as never);
+    m.communityCampaign.findUnique.mockResolvedValue({ id: "camp-1", title: "Rice bulk buy", supplierAccount: { userId: "supplier-user-1" }, supplier: null } as never);
+    m.adminApproval.update.mockResolvedValue({ ...disclosureApproval, status: "APPROVED" } as never);
+
+    const before = Date.now();
+    const res = createMockRes();
+    await adminDecideApproval(createMockReq({ approve: true }), res as unknown as Response);
+
+    expect(m.communityBuyDataAccessLog.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        campaignId: "camp-1",
+        contributionId: "contrib-1",
+        participantId: "part-1",
+        accessorUserId: "admin-b",
+        accessorRole: "ADMIN",
+        dataCategory: "EMERGENCY_NUMBER",
+        action: "ADMIN_OVERRIDE",
+        purposeCode: disclosureApproval.reason,
+        adminOverrideId: "appr-3",
+      }),
+    }));
+    // Bounded expiry — a fixed, non-configurable window, not admin-chosen.
+    const call = m.communityBuyDataAccessLog.create.mock.calls[0][0] as any;
+    const expiresAt = call.data.accessExpiresAt as Date;
+    expect(expiresAt.getTime()).toBeGreaterThan(before);
+    expect(expiresAt.getTime()).toBeLessThanOrEqual(before + 61 * 60 * 1000);
+    expect(expiresAt.getTime()).toBeGreaterThan(before + 59 * 60 * 1000);
+
+    expect(mNotify.enqueue).toHaveBeenCalledWith(expect.objectContaining({ userId: "supplier-user-1" }));
+    expect(m.auditLog.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ action: "community_buy_data_access.emergency_disclosure_granted", entityId: "contrib-1" }),
     }));
   });
 

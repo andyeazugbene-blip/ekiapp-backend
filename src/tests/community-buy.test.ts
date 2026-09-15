@@ -17,6 +17,9 @@ vi.mock("../lib/prisma", () => ({
     campaignFulfilment: { upsert: vi.fn(), findUnique: vi.fn(), findUniqueOrThrow: vi.fn(), update: vi.fn(), updateMany: vi.fn() },
     // M3: cancel() now branches into campaignAuthorisationService.releaseAllHoldsForCampaign() for AUTHORISE_THEN_CAPTURE campaigns.
     communityBuyPaymentAuthorisation: { findMany: vi.fn(), findUnique: vi.fn(), findUniqueOrThrow: vi.fn(), update: vi.fn(), updateMany: vi.fn() },
+    // M4: reassignSupplier() now calls revokeDeliveryReferencesForCampaign(), which touches these two models regardless of whether there's anything to revoke.
+    deliveryReference: { findMany: vi.fn(), updateMany: vi.fn().mockResolvedValue({ count: 0 }) },
+    communityBuyDataAccessLog: { create: vi.fn(), findMany: vi.fn(), findFirst: vi.fn(), updateMany: vi.fn() },
     organiserProfile: { findUnique: vi.fn(), update: vi.fn() },
     supplierProfile: { findUnique: vi.fn(), findMany: vi.fn(), update: vi.fn() },
     // Community Buy Workstream 1: verify/restrict/unrestrictSupplier now
@@ -1704,6 +1707,30 @@ describe("communityCampaignsService.listParticipantsForOrganiser — 'Participan
     );
   });
 
+  // M4 gap 12/AT-44: a self-supply organiser IS the fulfiller — same
+  // "fulfilment-necessary data only, no contact export" rule a third-party
+  // supplier gets, even though there's no separate SupplierAccount here to
+  // gate. A genuinely third-party-supplied campaign (tested above, no
+  // fulfilmentOwner set) keeps the full name/email view unchanged.
+  it("AT-44: omits name/email for a SELF-fulfilled campaign, keeping only fulfilment-necessary fields", async () => {
+    m.organiserProfile.findUnique.mockResolvedValue({ id: "org-1" } as never);
+    m.communityCampaign.findUnique.mockResolvedValue({ id: "camp-1", organiserId: "org-1", fulfilmentOwner: "SELF" } as never);
+    m.campaignParticipant.findMany.mockResolvedValue([
+      {
+        userId: "buyer-1",
+        user: { name: "Amina", email: "amina@example.com" },
+        joinedAt: new Date("2026-01-01"),
+        contributions: [{ quantity: 2, amount: 2000, isOrganiserTopUp: false, createdAt: new Date() }],
+      },
+    ] as never);
+
+    const result = await communityCampaignsService.listParticipantsForOrganiser("organiser-user-1", "camp-1");
+
+    expect(result).toEqual([{ userId: "buyer-1", joinedAt: new Date("2026-01-01"), totalQuantity: 2, totalPaid: 2000, isOrganiser: false }]);
+    expect(result[0]).not.toHaveProperty("name");
+    expect(result[0]).not.toHaveProperty("email");
+  });
+
   it("rejects a caller who doesn't own the campaign", async () => {
     m.organiserProfile.findUnique.mockResolvedValue({ id: "org-1" } as never);
     m.communityCampaign.findUnique.mockResolvedValue({ id: "camp-1", organiserId: "someone-else" } as never);
@@ -3044,6 +3071,10 @@ describe("marketConfigurationService.listPublic/getPublic — SEC-01: public end
     "organiserApplicationsEnabled",
     "supplierApplicationsEnabled",
     "regularDeliveriesEnabled",
+    // M4 — global individual-delivery kill-switch, deliberately added to
+    // this public shape (see market-configuration.service.ts's own doc
+    // comment on the field) — not a leak, an intentional capability flag.
+    "individualDeliveryEnabled",
   ].sort();
 
   beforeEach(() => {
@@ -3065,6 +3096,7 @@ describe("marketConfigurationService.listPublic/getPublic — SEC-01: public end
       organiserApplicationsEnabled: true,
       supplierApplicationsEnabled: true,
       regularDeliveriesEnabled: true,
+      individualDeliveryEnabled: false,
     });
     // Explicitly assert the sensitive fields this bug leaked are gone.
     expect(items[0]).not.toHaveProperty("organiserFeeBps");

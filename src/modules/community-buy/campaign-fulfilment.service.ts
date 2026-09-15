@@ -2,6 +2,7 @@ import { prisma } from "../../lib/prisma";
 import { logger } from "../../lib/logger";
 import { AppError } from "../../shared/errors/app-error";
 import { notificationsService } from "../notifications/notifications.service";
+import { isIndividualDeliveryEnabled } from "./community-buy-privacy.service";
 
 /**
  * Operational fulfilment tracking for a succeeded campaign — doc Phase 8.
@@ -42,6 +43,24 @@ async function requireSupplierAccountOwned(userId: string, campaignId: string) {
   const fulfilment = await prisma.campaignFulfilment.findUnique({ where: { campaignId } });
   if (!fulfilment) throw new AppError("This campaign has no fulfilment record yet", 404);
   return { campaign, fulfilment };
+}
+
+/**
+ * M4 (spec §14.2, AT-38) — a second, independent gate against a supplier
+ * setting DELIVERY at fulfilment time. Two checks, both required: the
+ * global kill-switch, AND the campaign's own organiser-set intent — a
+ * supplier can never pick DELIVERY for a campaign the organiser created as
+ * COLLECTION, even while the flag happens to be on. Never silently
+ * downgrades to COLLECTION; rejects the request outright.
+ */
+function assertFulfilmentMethodAllowed(method: "DELIVERY" | "COLLECTION", campaign: { deliveryPreference: string }): void {
+  if (method !== "DELIVERY") return;
+  if (!isIndividualDeliveryEnabled()) {
+    throw new AppError("Individual delivery is not available yet — use collection point.", 400, undefined, "INDIVIDUAL_DELIVERY_NOT_AVAILABLE");
+  }
+  if (campaign.deliveryPreference !== "DELIVERY") {
+    throw new AppError("This campaign was created as collection-point only — its fulfilment method cannot be changed to delivery.", 409, undefined, "DELIVERY_METHOD_MISMATCH");
+  }
 }
 
 async function requireOrganiserOwned(userId: string, campaignId: string) {
@@ -112,7 +131,8 @@ export const campaignFulfilmentService = {
 
   /** Fulfilment plan — method (delivery/collection), an optional estimated-ready date, and free-text notes. Settable any time before dispatch/collection. */
   async setPlan(vendorId: string, campaignId: string, input: { method: "DELIVERY" | "COLLECTION"; estimatedReadyAt?: string; notes?: string }) {
-    const { fulfilment } = await requireSupplierOwned(vendorId, campaignId);
+    const { campaign, fulfilment } = await requireSupplierOwned(vendorId, campaignId);
+    assertFulfilmentMethodAllowed(input.method, campaign);
     if (fulfilment.status === "AWAITING_INVENTORY_CONFIRMATION") {
       throw new AppError("Confirm inventory before setting a fulfilment plan", 409);
     }
@@ -238,7 +258,8 @@ export const campaignFulfilmentService = {
   },
 
   async setPlanForAccount(userId: string, campaignId: string, input: { method: "DELIVERY" | "COLLECTION"; estimatedReadyAt?: string; notes?: string }) {
-    const { fulfilment } = await requireSupplierAccountOwned(userId, campaignId);
+    const { campaign, fulfilment } = await requireSupplierAccountOwned(userId, campaignId);
+    assertFulfilmentMethodAllowed(input.method, campaign);
     if (fulfilment.status === "AWAITING_INVENTORY_CONFIRMATION") {
       throw new AppError("Confirm inventory before setting a fulfilment plan", 409);
     }

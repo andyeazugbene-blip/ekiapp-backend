@@ -160,6 +160,9 @@ import {
   adminListSupplierAccounts,
   adminRestrictSupplierAccount,
   adminUnrestrictSupplierAccount,
+  adminRevokeSupplierDataAccess,
+  adminSearchDataAccessLog,
+  adminRequestEmergencyDisclosure,
   adminCancelCampaign,
   adminListCampaignContributions,
   adminGetCampaignLedger,
@@ -362,6 +365,10 @@ adminRouter.get("/community-buy/supplier-accounts", asyncHandler(requireAdminPer
 adminRouter.post("/community-buy/supplier-accounts/:id/approve", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(adminApproveSupplierAccount));
 adminRouter.post("/community-buy/supplier-accounts/:id/restrict", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(adminRestrictSupplierAccount));
 adminRouter.post("/community-buy/supplier-accounts/:id/unrestrict", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(adminUnrestrictSupplierAccount));
+// M4 — delivery/privacy admin controls (spec §14, §19, AT-42/43).
+adminRouter.post("/community-buy/supplier-accounts/:id/revoke-data-access", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(require2fa), asyncHandler(adminRevokeSupplierDataAccess));
+adminRouter.get("/community-buy/data-access-log", asyncHandler(requireAdminPermission("community_buy.read")), asyncHandler(adminSearchDataAccessLog));
+adminRouter.post("/community-campaigns/:id/contributions/:contributionId/emergency-disclosure", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(require2fa), asyncHandler(adminRequestEmergencyDisclosure));
 adminRouter.get("/community-buy/support-cases", asyncHandler(requireAdminPermission("community_buy.read")), asyncHandler(adminListSupportCases));
 adminRouter.get("/community-buy/support-cases/:id", asyncHandler(requireAdminPermission("community_buy.read")), asyncHandler(adminGetSupportCase));
 adminRouter.patch("/community-buy/support-cases/:id", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(adminUpdateSupportCase));

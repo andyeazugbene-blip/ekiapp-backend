@@ -7,6 +7,7 @@ import { marketConfigurationService } from "./market-configuration.service";
 import { campaignContributionsService } from "./campaign-contributions.service";
 import { campaignAuthorisationService } from "./campaign-authorisation.service";
 import { recordAudit } from "../../shared/utils/audit";
+import { isIndividualDeliveryEnabled, revokeDeliveryReferencesForCampaign } from "./community-buy-privacy.service";
 
 // Community Buy Workstream 2: only `title` and `country` are hard
 // requirements to start a draft (spec §7 — "any authenticated user can
@@ -185,10 +186,27 @@ function validateQuantityPerOrder(quantityPerOrder: number | undefined): void {
   }
 }
 
-/** A raw JSON body isn't TS-checked at runtime — reject anything outside the real enum with a clean 400 instead of letting an invalid value reach Prisma as a DB-level enum error. */
+/**
+ * A raw JSON body isn't TS-checked at runtime — reject anything outside the
+ * real enum with a clean 400 instead of letting an invalid value reach
+ * Prisma as a DB-level enum error.
+ *
+ * M4 (spec §14.2, AT-38): DELIVERY is additionally rejected outright unless
+ * COMMUNITY_BUY_INDIVIDUAL_DELIVERY_ENABLED is set — never silently
+ * downgraded to COLLECTION. "There is no creator override" (spec §14.2) —
+ * this fails the request rather than coercing it.
+ */
 function validateDeliveryPreference(deliveryPreference: string | undefined): void {
   if (deliveryPreference !== undefined && deliveryPreference !== "COLLECTION" && deliveryPreference !== "DELIVERY") {
     throw new AppError("deliveryPreference must be COLLECTION or DELIVERY", 400);
+  }
+  if (deliveryPreference === "DELIVERY" && !isIndividualDeliveryEnabled()) {
+    throw new AppError(
+      "Individual delivery is not available yet — this campaign must use collection point.",
+      400,
+      undefined,
+      "INDIVIDUAL_DELIVERY_NOT_AVAILABLE",
+    );
   }
 }
 
@@ -457,6 +475,15 @@ export const communityCampaignsService = {
       throw new AppError("This is already the assigned supplier", 409);
     }
     const choice = await resolveSupplierChoice(newSupplierId, newSupplierAccountId, campaign.country);
+    // M4 (spec §7.2, §14.4) — "revoke the old supplier's campaign/data
+    // access immediately" before granting the new one. In the currently
+    // shipped state machine this is always a no-op in practice: reassignment
+    // is only reachable pre-close (the SUPPLIER_RESPONSE_STATUSES check
+    // above) and before termsLockedAt, i.e. strictly before any contribution
+    // could ever have been captured — so no DeliveryReference row can exist
+    // yet to revoke. Called anyway for exact spec compliance and so this
+    // stays correct if that gate is ever loosened.
+    await revokeDeliveryReferencesForCampaign(campaignId, "supplier_replaced", userId);
     const updated = await prisma.communityCampaign.update({
       where: { id: campaignId },
       data: {
@@ -696,9 +723,19 @@ export const communityCampaignsService = {
     return prisma.communityCampaign.update({ where: { id: campaignId }, data: { status: "UNDER_REVIEW" } });
   },
 
-  /** "Participants" — every contributor to the organiser's own campaign, with their real total. */
+  /**
+   * "Participants" — every contributor to the organiser's own campaign,
+   * with their real total.
+   *
+   * M4 (spec §14.3, AT-44): for a SELF-fulfilled campaign the organiser IS
+   * the fulfiller — there is no separate supplier to hide contact details
+   * from, but the same "only fulfilment-necessary data, no contact export"
+   * principle still applies. name/email are omitted for SELF; a genuine
+   * third-party-supplied campaign's organiser (who is not the one fulfilling
+   * orders) keeps the existing full view unchanged.
+   */
   async listParticipantsForOrganiser(userId: string, campaignId: string) {
-    await this.requireOwnedByOrganiser(userId, campaignId);
+    const campaign = await this.requireOwnedByOrganiser(userId, campaignId);
     const participants = await prisma.campaignParticipant.findMany({
       where: { campaignId, contributions: { some: { status: "PAID" } } },
       include: {
@@ -707,10 +744,10 @@ export const communityCampaignsService = {
       },
       orderBy: { joinedAt: "asc" },
     });
+    const isSelfSupply = campaign.fulfilmentOwner === "SELF";
     return participants.map((p) => ({
       userId: p.userId,
-      name: p.user.name,
-      email: p.user.email,
+      ...(isSelfSupply ? {} : { name: p.user.name, email: p.user.email }),
       joinedAt: p.joinedAt,
       totalQuantity: p.contributions.reduce((sum, c) => sum + c.quantity, 0),
       totalPaid: p.contributions.reduce((sum, c) => sum + c.amount, 0),

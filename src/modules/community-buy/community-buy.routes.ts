@@ -36,8 +36,10 @@ import {
   getOrganiserFulfilment,
   getParticipantFulfilment,
   getPublicMarketConfig,
+  getSupplierEmergencyContact,
   getSupplierFulfilment,
   getSupplierInvitation,
+  getSupplierManifest,
   getSupplierStripeConnectStatus,
   joinCampaign,
   legacyCancelFailedCampaignShim,
@@ -63,6 +65,7 @@ import {
   requestCampaignExtension,
   retryContributionCharge,
   revokeSupplierInvitation,
+  sendSupplierContactMessage,
   setFulfilmentPlan,
   startFulfilmentPacking,
   submitOrganiserCampaign,
@@ -186,3 +189,14 @@ supplierRouter.get("/campaigns/:id/payment", requireApprovedSupplier(), asyncHan
 // AUTHORISE_THEN_CAPTURE-mode twin of the payment route above.
 supplierRouter.post("/campaigns/:id/reconfirm", requireApprovedSupplier(), asyncHandler(reconfirmCampaign));
 supplierRouter.get("/campaigns/:id/payout", requireApprovedSupplier(), asyncHandler(getMyCampaignPayout));
+
+// M4 (spec §14.3, AT-39/40/41/44) — deliberately NOT gated by
+// requireApprovedSupplier() (that gate is a blunt supplierState==="APPROVED"
+// boolean, see require-capability.ts). Data access here is scope-aware
+// (a RESTRICTED supplier with "fulfilment_access_preserved" must still get
+// through) — communityBuyManifestService's own resolveForVendor/
+// resolveForAccount does the real ownership + capture + control_scope
+// check, campaign by campaign, on every call.
+supplierRouter.get("/campaigns/:id/manifest", asyncHandler(getSupplierManifest));
+supplierRouter.post("/campaigns/:id/contributions/:contributionId/contact", asyncHandler(sendSupplierContactMessage));
+supplierRouter.get("/campaigns/:id/contributions/:contributionId/emergency-contact", asyncHandler(getSupplierEmergencyContact));
