@@ -1075,6 +1075,46 @@ export const campaignAuthorisationService = {
       supplierDeclineReason: campaign.supplierDeclineReason,
     };
   },
+
+  // ─── M6 — dispute/refund exposure on a captured Direct Charge hold ──────
+  // These Stripe events (charge.dispute.created / charge.refunded) arrive
+  // keyed on paymentIntentId, not campaignId — resolved here since this is
+  // the sole owner of CommunityBuyPaymentAuthorisation mutations. Called
+  // from stripe.service.ts's existing dispute/refund handlers ONLY after
+  // their own Checkout-based resolution finds nothing (a Community Buy
+  // Direct Charge PaymentIntent has no Checkout row). Never throws — a
+  // lookup miss (this dispute/refund isn't ours) is a normal, expected
+  // outcome, not an error.
+
+  /** charge.dispute.created — marks captureStatus DISPUTED so payout eligibility (campaign-payout.service.ts) can see the exposure. Idempotent: setting the same status twice on a duplicate webhook delivery is harmless. */
+  async markCaptureDisputed(paymentIntentId: string): Promise<{ campaignId: string } | null> {
+    const authorisation = await prisma.communityBuyPaymentAuthorisation.findUnique({ where: { paymentIntentId } });
+    if (!authorisation) return null;
+    await prisma.communityBuyPaymentAuthorisation.update({ where: { id: authorisation.id }, data: { captureStatus: "DISPUTED" } });
+    await recordAudit({
+      actorId: SYSTEM_CRON_ACTOR,
+      action: "community_buy_authorisation.capture_disputed",
+      entityType: "CommunityBuyPaymentAuthorisation",
+      entityId: authorisation.id,
+      metadata: { campaignId: authorisation.campaignId },
+    });
+    return { campaignId: authorisation.campaignId };
+  },
+
+  /** charge.refunded — marks captureStatus REFUNDED (spec §11.5 distinguishes this from a released, never-captured hold). Idempotent for the same reason as markCaptureDisputed. */
+  async markCaptureRefunded(paymentIntentId: string): Promise<{ campaignId: string } | null> {
+    const authorisation = await prisma.communityBuyPaymentAuthorisation.findUnique({ where: { paymentIntentId } });
+    if (!authorisation) return null;
+    await prisma.communityBuyPaymentAuthorisation.update({ where: { id: authorisation.id }, data: { captureStatus: "REFUNDED" } });
+    await recordAudit({
+      actorId: SYSTEM_CRON_ACTOR,
+      action: "community_buy_authorisation.capture_refunded",
+      entityType: "CommunityBuyPaymentAuthorisation",
+      entityId: authorisation.id,
+      metadata: { campaignId: authorisation.campaignId },
+    });
+    return { campaignId: authorisation.campaignId };
+  },
 };
 
 export { resolveCampaignConnectedAccountId, resolveCampaignSupplierLedgerOwnerId };

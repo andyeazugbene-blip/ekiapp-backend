@@ -4,6 +4,7 @@ import { AppError } from "../../shared/errors/app-error";
 import { recordAudit } from "../../shared/utils/audit";
 import { reconciliationService } from "./reconciliation.service";
 import { paymentAnomalyService } from "./payment-anomaly.service";
+import { communityBuyReconciliationService } from "../community-buy/community-buy-reconciliation.service";
 
 function requireUserId(request: Request): string {
   if (!request.user) throw new AppError("Unauthorized", 401);
@@ -46,6 +47,28 @@ export async function adminRunReconciliation(request: Request, response: Respons
     entityType: "ReconciliationRun",
     entityId: run.id,
     metadata: { provider, periodStart: periodStart.toISOString(), periodEnd: periodEnd.toISOString(), differenceCount: run.differences.length, status: run.status },
+  });
+  response.status(201).json({ run });
+}
+
+/**
+ * M6 — Community Buy's Direct Charge/legacy-transfer/payout reconciliation.
+ * Separate trigger from adminRunReconciliation() above (that one only
+ * supports the generic list-based stripe/paystack strategy) but writes into
+ * the SAME ReconciliationRun/ReconciliationDifference tables, so it reuses
+ * every other endpoint in this file (list/get/resolve) unchanged.
+ */
+export async function adminRunCommunityBuyReconciliation(request: Request, response: Response): Promise<void> {
+  const adminId = requireUserId(request);
+  const periodStart = new Date(request.body?.periodStart);
+  const periodEnd = new Date(request.body?.periodEnd);
+  const run = await communityBuyReconciliationService.runReconciliation(periodStart, periodEnd);
+  await recordAudit({
+    actorId: adminId,
+    action: "community_buy_reconciliation_run.execute",
+    entityType: "ReconciliationRun",
+    entityId: run.id,
+    metadata: { periodStart: periodStart.toISOString(), periodEnd: periodEnd.toISOString(), differenceCount: run.differences.length, status: run.status },
   });
   response.status(201).json({ run });
 }

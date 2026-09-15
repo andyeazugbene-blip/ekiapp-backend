@@ -16,6 +16,7 @@ import { ledgerService } from "../ledger/ledger.service";
 import { renewalsService } from "../regular-deliveries/renewals.service";
 import { campaignContributionsService } from "../community-buy/campaign-contributions.service";
 import { campaignAuthorisationService } from "../community-buy/campaign-authorisation.service";
+import { campaignPayoutService } from "../community-buy/campaign-payout.service";
 import { LedgerAccountType, LedgerDirection, LedgerOwnerType } from "@prisma/client";
 import { AppError } from "../../shared/errors/app-error";
 import type { StripeWebhookInput, StripeWebhookResult } from "./stripe.types";
@@ -63,6 +64,19 @@ class StripeWebhookService {
 
     if (event.type === "charge.refunded" || event.type === "charge.refund.updated") {
       return this.handleChargeRefunded(event);
+    }
+
+    // M6 — Stripe Connect payout lifecycle for CommunityBuyPayout
+    // (campaign-payout.service.ts's triggerManualPayout()). These are
+    // connected-account events (Stripe populates event.account); they only
+    // ever arrive here if the platform's webhook endpoint is configured in
+    // the Stripe Dashboard to also receive events from connected accounts —
+    // an external/operational configuration step, not something this code
+    // can verify. The handler itself is complete regardless: a
+    // provider-confirmed payout.paid is the ONLY thing that ever marks a
+    // CommunityBuyPayout PAID anywhere in this codebase.
+    if (event.type === "payout.paid" || event.type === "payout.failed" || event.type === "payout.canceled") {
+      return this.handleCommunityBuyPayoutEvent(event);
     }
 
     if (event.type === "checkout.session.completed") {
@@ -525,6 +539,39 @@ class StripeWebhookService {
         return { received: true, duplicate: true, eventId: event.id, type: event.type };
       }
       logger.error("Webhook failed: community_buy_hold resolution", { eventId: event.id, ...serializeError(error) });
+      throw error;
+    }
+  }
+
+  /**
+   * M6 — resolves a Stripe Connect payout.paid/failed/canceled event
+   * against CommunityBuyPayout. Same isDuplicate-inside-a-Serializable-
+   * transaction shape as the other webhook handlers in this file; the
+   * actual state-machine logic lives in
+   * campaignPayoutService.resolvePayoutWebhook(), not here.
+   */
+  private async handleCommunityBuyPayoutEvent(event: Stripe.Event): Promise<StripeWebhookResult> {
+    const payout = event.data.object as Stripe.Payout;
+
+    try {
+      const isDup = await prisma.$transaction(async (tx) => {
+        if (await this.isDuplicate(tx, event.id, event.type, {})) return true;
+        await tx.webhookEvent.update({ where: { stripeEventId: event.id }, data: { status: "PROCESSED", processedAt: new Date() } });
+        return false;
+      }, { isolationLevel: "Serializable" });
+
+      if (isDup) {
+        return { received: true, duplicate: true, eventId: event.id, type: event.type };
+      }
+
+      const outcome = await campaignPayoutService.resolvePayoutWebhook(payout.id, event.type, payout);
+      logger.info("Webhook processed: community_buy_payout resolved", { eventId: event.id, providerPayoutId: payout.id, type: event.type, handled: outcome.handled });
+      return { received: true, eventId: event.id, type: event.type };
+    } catch (error) {
+      if (this.isUniqueConstraintError(error)) {
+        return { received: true, duplicate: true, eventId: event.id, type: event.type };
+      }
+      logger.error("Webhook failed: community_buy_payout resolution", { eventId: event.id, ...serializeError(error) });
       throw error;
     }
   }
@@ -1052,7 +1099,7 @@ class StripeWebhookService {
     }
 
     try {
-      const result = await prisma.$transaction(async (tx): Promise<StripeWebhookResult & { refundedBuyerId?: string; refundedOrderIds?: string[] }> => {
+      const result = await prisma.$transaction(async (tx): Promise<StripeWebhookResult & { refundedBuyerId?: string; refundedOrderIds?: string[]; communityBuyCampaignId?: string }> => {
         if (await this.isDuplicate(tx, event.id, event.type, {})) {
           return { received: true, duplicate: true, eventId: event.id, type: event.type };
         }
@@ -1082,8 +1129,15 @@ class StripeWebhookService {
               data: { status: "REFUNDED" },
             });
           }
+          // Not a regular-commerce charge either — this is the shape a
+          // Community Buy Direct Charge PaymentIntent takes (no Checkout/
+          // Payment row of its own; see CommunityBuyPaymentAuthorisation's
+          // own doc comment). Resolved AFTER commit, outside this tx.
+          const communityBuyHold = !payment
+            ? await tx.communityBuyPaymentAuthorisation.findUnique({ where: { paymentIntentId }, select: { campaignId: true } })
+            : null;
           await tx.webhookEvent.update({ where: { stripeEventId: event.id }, data: { status: "PROCESSED", processedAt: new Date() } });
-          return { received: true, eventId: event.id, type: event.type };
+          return { received: true, eventId: event.id, type: event.type, communityBuyCampaignId: communityBuyHold?.campaignId };
         }
 
         // Reverse vendor wallet credits and mark orders refunded
@@ -1181,6 +1235,21 @@ class StripeWebhookService {
         }).catch(() => {});
       }
 
+      // M6 — a Community Buy Direct Charge hold, resolved outside the
+      // transaction above (its own service owns CommunityBuyPaymentAuthorisation
+      // mutations). Never lets a failure here re-throw: the WebhookEvent row
+      // is already PROCESSED, so a retry of this same Stripe event would be
+      // treated as a duplicate and skip this branch entirely — throwing
+      // would only turn a partial failure into a silently-never-retried one.
+      if (result.communityBuyCampaignId) {
+        try {
+          await campaignAuthorisationService.markCaptureRefunded(paymentIntentId);
+          await campaignPayoutService.holdForSystemReason(result.communityBuyCampaignId, "capture_refunded");
+        } catch (error) {
+          logger.error("Community Buy refund resolution failed (non-fatal — webhook already acknowledged)", { eventId: event.id, campaignId: result.communityBuyCampaignId, ...serializeError(error) });
+        }
+      }
+
       return result;
     } catch (error) {
       if (this.isUniqueConstraintError(error)) {
@@ -1198,7 +1267,7 @@ class StripeWebhookService {
     const paymentIntentId = typeof dispute.payment_intent === "string" ? dispute.payment_intent : dispute.payment_intent?.id;
 
     try {
-      return await prisma.$transaction(async (tx) => {
+      const result = await prisma.$transaction(async (tx): Promise<StripeWebhookResult & { communityBuyCampaignId?: string }> => {
         if (await this.isDuplicate(tx, event.id, event.type, {})) {
           return { received: true, duplicate: true, eventId: event.id, type: event.type };
         }
@@ -1209,6 +1278,13 @@ class StripeWebhookService {
               where: { stripePaymentIntentId: paymentIntentId },
               select: { id: true, buyerId: true },
             })
+          : null;
+
+        // Not a regular-commerce charge — check whether it's a Community
+        // Buy Direct Charge hold instead (see handleChargeRefunded()'s
+        // identical fallback for why no Checkout row exists for these).
+        const communityBuyHold = !checkout && paymentIntentId
+          ? await tx.communityBuyPaymentAuthorisation.findUnique({ where: { paymentIntentId }, select: { campaignId: true } })
           : null;
 
         // Log dispute for manual review. Chargebacks require human investigation —
@@ -1274,8 +1350,21 @@ class StripeWebhookService {
           data: { status: "PROCESSED", processedAt: new Date() },
         });
 
-        return { received: true, eventId: event.id, type: event.type };
+        return { received: true, eventId: event.id, type: event.type, communityBuyCampaignId: communityBuyHold?.campaignId };
       }, { isolationLevel: "Serializable" });
+
+      // M6 — see handleChargeRefunded()'s identical post-commit comment for
+      // why this never re-throws.
+      if (result.communityBuyCampaignId && paymentIntentId) {
+        try {
+          await campaignAuthorisationService.markCaptureDisputed(paymentIntentId);
+          await campaignPayoutService.holdForSystemReason(result.communityBuyCampaignId, "dispute_open");
+        } catch (error) {
+          logger.error("Community Buy dispute resolution failed (non-fatal — webhook already acknowledged)", { eventId: event.id, campaignId: result.communityBuyCampaignId, ...serializeError(error) });
+        }
+      }
+
+      return result;
     } catch (error) {
       if (this.isUniqueConstraintError(error)) {
         return { received: true, duplicate: true, eventId: event.id, type: event.type };

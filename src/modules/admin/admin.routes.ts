@@ -35,6 +35,7 @@ import {
   adminGetReconciliationRun,
   adminListOpenDifferences,
   adminRunReconciliation,
+  adminRunCommunityBuyReconciliation,
   adminResolveReconciliationDifference,
   adminScanPaymentAnomalies,
   adminListPaymentAnomalies,
@@ -174,6 +175,7 @@ import {
   adminGetLedgerSummary,
   adminListCommunityBuyPayouts,
   adminGetCommunityBuyPayout,
+  adminGetCommunityBuyPayoutEligibility,
   adminMarkCommunityBuyPayoutReady,
   adminHoldCommunityBuyPayout,
   adminReleaseCommunityBuyPayout,
@@ -306,6 +308,7 @@ adminRouter.post("/community-campaigns/:id/supplier-payment/hold", asyncHandler(
 // confirmed — see campaign-payout.service.ts.
 adminRouter.get("/community-buy/payouts", asyncHandler(requireAdminPermission("community_buy.read")), asyncHandler(adminListCommunityBuyPayouts));
 adminRouter.get("/community-campaigns/:id/payout", asyncHandler(requireAdminPermission("community_buy.read")), asyncHandler(adminGetCommunityBuyPayout));
+adminRouter.get("/community-campaigns/:id/payout/eligibility", asyncHandler(requireAdminPermission("community_buy.read")), asyncHandler(adminGetCommunityBuyPayoutEligibility));
 adminRouter.post("/community-campaigns/:id/payout/mark-ready", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(require2fa), asyncHandler(adminMarkCommunityBuyPayoutReady));
 adminRouter.post("/community-campaigns/:id/payout/hold", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(require2fa), asyncHandler(adminHoldCommunityBuyPayout));
 adminRouter.post("/community-campaigns/:id/payout/release", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(require2fa), asyncHandler(adminReleaseCommunityBuyPayout));
@@ -341,6 +344,7 @@ adminRouter.get("/ledger/balances", asyncHandler(requireAdminPermission("audit.r
 adminRouter.get("/ledger/reconciliation-runs", asyncHandler(requireAdminPermission("audit.read")), asyncHandler(adminListReconciliationRuns));
 adminRouter.get("/ledger/reconciliation-runs/:id", asyncHandler(requireAdminPermission("audit.read")), asyncHandler(adminGetReconciliationRun));
 adminRouter.post("/ledger/reconciliation-runs", asyncHandler(requireAdminPermission("payments.mutate")), asyncHandler(adminRunReconciliation));
+adminRouter.post("/ledger/community-buy-reconciliation-runs", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(adminRunCommunityBuyReconciliation));
 adminRouter.get("/ledger/differences", asyncHandler(requireAdminPermission("audit.read")), asyncHandler(adminListOpenDifferences));
 adminRouter.post("/ledger/differences/:id/resolve", asyncHandler(requireAdminPermission("payments.mutate")), asyncHandler(adminResolveReconciliationDifference));
 

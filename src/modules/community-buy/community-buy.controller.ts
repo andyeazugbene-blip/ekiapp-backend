@@ -1107,6 +1107,11 @@ export async function adminGetCommunityBuyPayout(request: Request, response: Res
   response.json({ payout: await campaignPayoutService.get(requireIdParam(request)) });
 }
 
+/** M6 — read-only preview of the same server-recomputed eligibility markReady()/triggerManualPayout() enforce, so the admin screen can explain a blocker before an admin attempts (and gets refused). */
+export async function adminGetCommunityBuyPayoutEligibility(request: Request, response: Response): Promise<void> {
+  response.json(await campaignPayoutService.getEligibility(requireIdParam(request)));
+}
+
 export async function adminMarkCommunityBuyPayoutReady(request: Request, response: Response): Promise<void> {
   const adminId = requireUserId(request);
   const payout = await campaignPayoutService.markReady(adminId, requireIdParam(request));
