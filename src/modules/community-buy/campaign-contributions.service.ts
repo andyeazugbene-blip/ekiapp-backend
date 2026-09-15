@@ -14,6 +14,8 @@ import { ledgerService } from "../ledger/ledger.service";
 import { recordAudit } from "../../shared/utils/audit";
 import { stripeConnectService as vendorStripeConnectService } from "../vendors/stripe-connect.service";
 import { createDeliveryReferenceForContribution } from "./community-buy-privacy.service";
+import { organiserFeeService } from "./organiser-fee.service";
+import { upsertParticipantWithAttribution } from "./campaign-participant-attribution.service";
 
 const SYSTEM_CRON_ACTOR = "system:cron";
 
@@ -169,11 +171,7 @@ export const campaignContributionsService = {
     const campaign = await prisma.communityCampaign.findUnique({ where: { id: campaignId } });
     if (!campaign || campaign.status !== "LIVE") throw new AppError("Campaign not found or not live", 404);
 
-    return prisma.campaignParticipant.upsert({
-      where: { campaignId_userId: { campaignId, userId } },
-      update: {},
-      create: { campaignId, userId },
-    });
+    return upsertParticipantWithAttribution(campaign, userId);
   },
 
   /**
@@ -201,11 +199,7 @@ export const campaignContributionsService = {
     await assertCapacityAvailable(campaign, quantity);
     const paymentMethod = await requirePaymentMethod(userId, paymentMethodId);
 
-    const participant = await prisma.campaignParticipant.upsert({
-      where: { campaignId_userId: { campaignId, userId } },
-      update: {},
-      create: { campaignId, userId },
-    });
+    const participant = await upsertParticipantWithAttribution(campaign, userId);
 
     return createPledge(campaignId, campaign, participant.id, quantity, false, paymentMethod.id);
   },
@@ -231,11 +225,7 @@ export const campaignContributionsService = {
     await assertCapacityAvailable(campaign, quantity);
     const paymentMethod = await requirePaymentMethod(userId, paymentMethodId);
 
-    const participant = await prisma.campaignParticipant.upsert({
-      where: { campaignId_userId: { campaignId, userId } },
-      update: {},
-      create: { campaignId, userId },
-    });
+    const participant = await upsertParticipantWithAttribution(campaign, userId);
 
     return createPledge(campaignId, campaign, participant.id, quantity, true, paymentMethod.id);
   },
@@ -489,6 +479,9 @@ export const campaignContributionsService = {
     // allowed to affect payment confirmation itself (see that function's
     // own never-throws contract).
     await createDeliveryReferenceForContribution(contribution.id);
+    // M7 — additive, non-blocking: accrues this campaign's organiser fee
+    // (never-throws contract, same as the delivery-reference call above).
+    await organiserFeeService.accrueForCapturedContribution(contribution.id);
     await notificationsService.enqueue({
       userId: contribution.participant.userId,
       type: "COMMUNITY_CAMPAIGN_UPDATE",

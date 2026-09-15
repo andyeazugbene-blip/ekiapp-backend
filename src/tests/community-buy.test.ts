@@ -6,7 +6,7 @@ vi.mock("../lib/prisma", () => ({
     campaignContribution: { findMany: vi.fn(), update: vi.fn(), updateMany: vi.fn(), findUnique: vi.fn(), findUniqueOrThrow: vi.fn(), create: vi.fn(), groupBy: vi.fn(), aggregate: vi.fn(), count: vi.fn() },
     campaignChargeAttempt: { create: vi.fn(), update: vi.fn(), count: vi.fn(), updateMany: vi.fn(), findFirst: vi.fn() },
     campaignRefund: { create: vi.fn(), findMany: vi.fn(), findUnique: vi.fn(), findUniqueOrThrow: vi.fn(), update: vi.fn(), updateMany: vi.fn(), groupBy: vi.fn() },
-    campaignParticipant: { findMany: vi.fn(), findUnique: vi.fn(), upsert: vi.fn() },
+    campaignParticipant: { findMany: vi.fn(), findUnique: vi.fn(), findFirst: vi.fn(), upsert: vi.fn(), create: vi.fn() },
     buyerPaymentMethod: { findUnique: vi.fn() },
     ledgerAccount: { findUnique: vi.fn(), create: vi.fn() },
     ledgerEntry: { create: vi.fn(), findMany: vi.fn() },
@@ -91,6 +91,14 @@ beforeEach(() => {
   // WS6: releaseSupplierPayment()'s pre-transfer PROCESSING write is now
   // the same kind of guarded claim — same default-success rationale.
   m.campaignSupplierPayment.updateMany.mockResolvedValue({ count: 1 } as never);
+  // M7: upsertParticipantWithAttribution() now runs on every join()/pledge()
+  // call — default to "no existing participant, not the organiser, no
+  // prior acquisition" so it takes the plain DIRECT_JOIN path unless a test
+  // explicitly cares about attribution. m.campaignParticipant.findUnique
+  // already has other, unrelated per-test uses below — left untouched here.
+  m.campaignParticipant.findFirst.mockResolvedValue(null as never);
+  m.campaignParticipant.create.mockResolvedValue({ id: "part-1" } as never);
+  m.organiserProfile.findUnique.mockResolvedValue({ id: "org-default", userId: "organiser-default" } as never);
 });
 
 describe("communityCampaignsService.closeDueCampaigns — doc §7 deadline evaluation", () => {
@@ -2607,7 +2615,13 @@ describe("Client correction — supplier is optional, never a publication gate",
   // 8. participant can discover/join a LIVE campaign while supplier pending
   it("8. join() and listLive() never look at supplierCommitted — a participant can join while the supplier hasn't responded", async () => {
     m.communityCampaign.findUnique.mockResolvedValue({ id: "camp-8", status: "LIVE", supplierId: "sup-1", supplierCommitted: false } as never);
-    m.campaignParticipant.upsert.mockResolvedValue({ campaignId: "camp-8", userId: "buyer-1" } as never);
+    // A different, earlier test in this file sets a standing (non-once)
+    // mockResolvedValue on campaignParticipant.findUnique for its own
+    // purpose — vi.clearAllMocks() doesn't reset mock implementations, only
+    // call history, so it would otherwise leak in here and make
+    // upsertParticipantWithAttribution() think this participant already exists.
+    m.campaignParticipant.findUnique.mockResolvedValueOnce(null as never);
+    m.campaignParticipant.create.mockResolvedValueOnce({ campaignId: "camp-8", userId: "buyer-1" } as never);
 
     const joined = await campaignContributionsService.join("buyer-1", "camp-8");
     expect(joined).toEqual({ campaignId: "camp-8", userId: "buyer-1" });

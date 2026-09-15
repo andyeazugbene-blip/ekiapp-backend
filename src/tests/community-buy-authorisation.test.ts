@@ -16,7 +16,8 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 vi.mock("../lib/prisma", () => ({
   prisma: {
     communityCampaign: { findUnique: vi.fn(), findUniqueOrThrow: vi.fn(), update: vi.fn(), updateMany: vi.fn() },
-    campaignParticipant: { upsert: vi.fn() },
+    campaignParticipant: { upsert: vi.fn(), findUnique: vi.fn(), findFirst: vi.fn(), create: vi.fn() },
+    organiserProfile: { findUnique: vi.fn() },
     campaignContribution: { create: vi.fn(), findUnique: vi.fn(), findUniqueOrThrow: vi.fn(), update: vi.fn(), updateMany: vi.fn(), findMany: vi.fn() },
     communityBuyPaymentAuthorisation: { create: vi.fn(), findUnique: vi.fn(), findUniqueOrThrow: vi.fn(), update: vi.fn(), updateMany: vi.fn(), findMany: vi.fn() },
     communityBuyPayout: { create: vi.fn(), findUnique: vi.fn(), findUniqueOrThrow: vi.fn(), update: vi.fn(), findMany: vi.fn() },
@@ -129,6 +130,11 @@ beforeEach(() => {
   vi.clearAllMocks();
   m.marketConfiguration.count.mockResolvedValue(1);
   m.marketConfiguration.findUnique.mockResolvedValue({ countryCode: "GB", communityBuyEnabled: true, communityBuyPaymentsEnabled: true, communityBuyPaymentMode: "AUTHORISE_THEN_CAPTURE", communityBuyFeeBps: 500 } as any);
+  // upsertParticipantWithAttribution() defaults — a fresh, non-organiser, non-reorder join.
+  m.campaignParticipant.findUnique.mockResolvedValue(null as any);
+  m.organiserProfile.findUnique.mockResolvedValue({ id: "org-1", userId: "organiser-user-1" } as any);
+  m.campaignParticipant.findFirst.mockResolvedValue(null as any);
+  m.campaignParticipant.create.mockResolvedValue({ id: "participant-1" } as any);
 });
 
 describe("commit() — spec §11.2 commitment phase (AT-04, AT-05)", () => {

@@ -35,6 +35,7 @@ import {
   getMySupplierPayment,
   getMySupplierProfile,
   getMySupportCase,
+  getMyCommunityBuyOrganiserFee,
   getOrganiserFulfilment,
   getParticipantFulfilment,
   confirmFulfilmentReceipt,
@@ -160,6 +161,7 @@ organiserRouter.get("/campaigns/:id/participants", asyncHandler(listCampaignPart
 organiserRouter.get("/campaigns/:id/refund-progress", asyncHandler(getCampaignRefundProgress));
 organiserRouter.get("/campaigns/:id/fulfilment", asyncHandler(getOrganiserFulfilment));
 organiserRouter.post("/campaigns/:id/fulfilment/confirm-completion", asyncHandler(organiserConfirmFulfilmentCompletion));
+organiserRouter.get("/campaigns/:id/organiser-fee", asyncHandler(getMyCommunityBuyOrganiserFee));
 
 // TEMPORARY compatibility shim for the currently-deployed mobile app — see
 // the long comment in community-buy.controller.ts. Remove once the new

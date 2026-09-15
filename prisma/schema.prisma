@@ -2426,6 +2426,7 @@ model CommunityCampaign {
   payout                    CommunityBuyPayout?
   deliveryReferences        DeliveryReference[]
   fulfilmentEvents          CampaignFulfilmentEvent[]
+  organiserFee              CommunityBuyOrganiserFee?
   createdAt                 DateTime                           @default(now())
   updatedAt                 DateTime                           @updatedAt
 
@@ -2628,12 +2629,46 @@ model CampaignParticipant {
   campaignId    String
   userId        String
   joinedAt      DateTime               @default(now())
+  // M7 (spec §14.5/§15.2) — organiser acquisition attribution. Computed
+  // exactly once, server-side, inside join() — the spec names no organiser-
+  // facing "edit attribution" action, only an admin investigation outcome
+  // (see attributionStatus/attributionOverrideReason below), so there is no
+  // post-join mutation path to guard against beyond that one admin action.
+  // acquisitionOrganiserId stores CommunityCampaign.organiserId
+  // (OrganiserProfile.id), matching that field's own identifier convention.
+  acquisitionOrganiserId        String?
+  acquisitionCampaignId         String?
+  acquiredAt                    DateTime?
+  organiserAttributionExpiresAt DateTime?
+  attributionSource             AttributionSource?
+  // Points at the ORIGINAL CampaignParticipant row a reorder's attribution
+  // was retained from (spec AT-45) — null for a fresh/independent
+  // acquisition. No FK: deliberately cross-campaign and read-only.
+  repeatCampaignParentId    String?
+  attributionStatus         AttributionStatus @default(ACTIVE)
+  attributionOverrideReason String?
   campaign      CommunityCampaign      @relation(fields: [campaignId], references: [id], onDelete: Cascade)
   user          User                   @relation(fields: [userId], references: [id], onDelete: Cascade)
   contributions CampaignContribution[]
 
   @@unique([campaignId, userId])
   @@index([userId])
+  @@index([acquisitionOrganiserId])
+}
+
+enum AttributionSource {
+  DIRECT_JOIN
+  REORDER_RETAINED
+  SELF
+}
+
+// Never auto-set beyond ACTIVE — UNDER_REVIEW/INVALIDATED only ever result
+// from an explicit admin investigation action (spec §14.5: "do not auto-
+// divert rewards").
+enum AttributionStatus {
+  ACTIVE
+  UNDER_REVIEW
+  INVALIDATED
 }
 
 model CampaignContribution {
@@ -2899,6 +2934,84 @@ model CommunityBuyPayout {
   updatedAt                    DateTime                 @updatedAt
 
   @@index([status])
+}
+
+// M7 (spec §13.3/§15.6) — organiser reward for third-party-supply campaigns
+// (fulfilmentOwner=SUPPLIER only — self-supply organisers already ARE the
+// supplier, spec never describes a second reward for them). Accrued only
+// from genuinely captured orders, never participant principal (invariant
+// #10). Cash settlement is explicitly excluded from v1 (spec §1.3/§26)
+// pending a confirmed settlement route — see organiser-fee.service.ts's own
+// doc comment for the production gate. Never share a code path with
+// CommunityBuyPayout: an organiser fee is never a supplier payout.
+model CommunityBuyOrganiserFee {
+  id                     String                         @id @default(cuid())
+  campaignId             String                         @unique
+  organiserId            String
+  supplierId             String?
+  currency               String
+  // Snapshotted once from pricePerShareMinor × MarketConfiguration.
+  // organiserFeeBps at the first capture — never recomputed if the market
+  // rate changes mid-campaign (same immutable-snapshot principle as
+  // CommunityCampaign.paymentMode).
+  feePerCapturedOrder    Int
+  capturedQuantity       Int                            @default(0)
+  grossFeeAmount         Int                            @default(0)
+  refundDeductionAmount  Int                            @default(0)
+  disputeDeductionAmount Int                            @default(0)
+  netFeeAmount           Int                            @default(0)
+  status                 CommunityBuyOrganiserFeeStatus @default(ACCRUED)
+  settlementMethod       OrganiserFeeSettlementMethod   @default(NONE)
+  providerReference      String?
+  releaseCondition       String?
+  heldReasonCodes        String[]                       @default([])
+  settledAt              DateTime?
+  failureCode            String?
+  idempotencyKey         String?                        @unique
+  campaign               CommunityCampaign              @relation(fields: [campaignId], references: [id], onDelete: Restrict)
+  createdAt              DateTime                       @default(now())
+  updatedAt              DateTime                       @updatedAt
+
+  @@index([status])
+  @@index([organiserId])
+}
+
+enum CommunityBuyOrganiserFeeStatus {
+  ACCRUED
+  HELD
+  BLOCKED_NO_SETTLEMENT_ROUTE
+  SETTLED
+  CANCELLED
+  REVERSED
+}
+
+// NONE is the only reachable default in this environment. The two non-cash
+// routes (spec §1.3: "a supplier-paid external commercial arrangement, or a
+// non-cash reward") need no Stripe involvement and are safe to record today.
+// STRIPE_CONNECT_TRANSFER represents the eventual real-cash route named in
+// spec §26 as an unresolved external dependency — gated, see
+// organiser-fee.service.ts.
+enum OrganiserFeeSettlementMethod {
+  NONE
+  EXTERNAL_SUPPLIER_ARRANGEMENT
+  NON_CASH_REWARD
+  STRIPE_CONNECT_TRANSFER
+}
+
+// M7 — append-only, one row per captured contribution ever accrued into a
+// CommunityBuyOrganiserFee. Enforces "never accrue the same capture twice"
+// (master prompt invariant) as a real DB unique constraint rather than
+// relying solely on caller discipline — same create-and-catch-P2002
+// idempotency pattern already used for WebhookEvent.
+model OrganiserFeeAccrualEvent {
+  id             String   @id @default(cuid())
+  campaignId     String
+  contributionId String   @unique
+  quantity       Int
+  amount         Int
+  createdAt      DateTime @default(now())
+
+  @@index([campaignId])
 }
 
 // M4 (spec §15.8) — append-only access/action trail for anything a

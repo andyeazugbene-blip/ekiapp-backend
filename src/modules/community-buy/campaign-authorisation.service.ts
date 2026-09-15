@@ -12,6 +12,9 @@ import { ledgerService } from "../ledger/ledger.service";
 import { recordAudit } from "../../shared/utils/audit";
 import { marketConfigurationService } from "./market-configuration.service";
 import { createDeliveryReferenceForContribution } from "./community-buy-privacy.service";
+import { organiserFeeService } from "./organiser-fee.service";
+import { resolveCampaignConnectedAccountId, resolveCampaignSupplierLedgerOwnerId } from "./campaign-supplier-resolution.service";
+import { upsertParticipantWithAttribution } from "./campaign-participant-attribution.service";
 
 const SYSTEM_CRON_ACTOR = "system:cron";
 const CONSENT_WORDING_VERSION = "cb-authorise-v1";
@@ -95,30 +98,6 @@ function isAuthoriseCampaign(campaign: { paymentMode: string }): void {
   }
 }
 
-/** Dual-path resolver mirroring createSupplierOrder()/releaseSupplierPayment()'s existing SupplierAccount-vs-legacy-Vendor pattern — never shared code with those, just the same shape. */
-async function resolveCampaignConnectedAccountId(campaign: { fulfilmentOwner: string; supplierAccountId: string | null; supplierId: string | null }): Promise<string | null> {
-  if (campaign.fulfilmentOwner !== "SUPPLIER") return null; // SELF-fulfilment has no connected account — see submit()'s guard preventing this combination.
-  if (campaign.supplierAccountId) {
-    const account = await prisma.supplierAccount.findUnique({ where: { id: campaign.supplierAccountId }, select: { providerConnectedAccountId: true } });
-    return account?.providerConnectedAccountId ?? null;
-  }
-  if (campaign.supplierId) {
-    const supplier = await prisma.supplierProfile.findUnique({ where: { id: campaign.supplierId }, include: { vendor: { select: { stripeAccountId: true } } } });
-    return supplier?.vendor.stripeAccountId ?? null;
-  }
-  return null;
-}
-
-/** Resolves the ledger owner (SupplierAccount.id or legacy Vendor.id) for SUPPLIER_PAYABLE/SUPPLIER_CONNECTED_BALANCE legs — same dual-path shape as resolveCampaignConnectedAccountId(). */
-async function resolveCampaignSupplierLedgerOwnerId(campaign: { supplierAccountId: string | null; supplierId: string | null }): Promise<string | null> {
-  if (campaign.supplierAccountId) return campaign.supplierAccountId;
-  if (campaign.supplierId) {
-    const supplier = await prisma.supplierProfile.findUnique({ where: { id: campaign.supplierId }, select: { vendorId: true } });
-    return supplier?.vendorId ?? null;
-  }
-  return null;
-}
-
 function nextHoldIdempotencyKey(contributionId: string, retryCount: number): string {
   return `hold:${contributionId}:${retryCount + 1}`;
 }
@@ -179,11 +158,7 @@ export const campaignAuthorisationService = {
     }
     const amount = quantity * campaign.pricePerShareMinor;
 
-    const participant = await prisma.campaignParticipant.upsert({
-      where: { campaignId_userId: { campaignId, userId } },
-      update: {},
-      create: { campaignId, userId },
-    });
+    const participant = await upsertParticipantWithAttribution(campaign, userId);
 
     // Atomic capacity claim — mirrors createPledge()'s guarded-transaction
     // shape exactly (same reasoning: this claim IS the only commitment
@@ -899,6 +874,9 @@ export const campaignAuthorisationService = {
     // PLEDGE_THEN_CHARGE mode's markChargeSucceeded(); never allowed to
     // affect capture confirmation itself.
     await createDeliveryReferenceForContribution(authorisation.contributionId);
+    // M7 — additive, non-blocking: accrues this campaign's organiser fee
+    // (never-throws contract, same as the delivery-reference call above).
+    await organiserFeeService.accrueForCapturedContribution(authorisation.contributionId);
 
     const contribution = await prisma.campaignContribution.findUniqueOrThrow({ where: { id: authorisation.contributionId }, include: { participant: true } });
     await notifyParticipant(contribution.participant.userId, "capture_succeeded", "Payment complete", "Your Community Buy payment has been completed.", authorisation.campaignId);
@@ -1117,4 +1095,3 @@ export const campaignAuthorisationService = {
   },
 };
 
-export { resolveCampaignConnectedAccountId, resolveCampaignSupplierLedgerOwnerId };

@@ -17,6 +17,7 @@ import { renewalsService } from "../regular-deliveries/renewals.service";
 import { campaignContributionsService } from "../community-buy/campaign-contributions.service";
 import { campaignAuthorisationService } from "../community-buy/campaign-authorisation.service";
 import { campaignPayoutService } from "../community-buy/campaign-payout.service";
+import { organiserFeeService } from "../community-buy/organiser-fee.service";
 import { LedgerAccountType, LedgerDirection, LedgerOwnerType } from "@prisma/client";
 import { AppError } from "../../shared/errors/app-error";
 import type { StripeWebhookInput, StripeWebhookResult } from "./stripe.types";
@@ -1245,6 +1246,7 @@ class StripeWebhookService {
         try {
           await campaignAuthorisationService.markCaptureRefunded(paymentIntentId);
           await campaignPayoutService.holdForSystemReason(result.communityBuyCampaignId, "capture_refunded");
+          await organiserFeeService.holdForSystemReason(result.communityBuyCampaignId, "capture_refunded");
         } catch (error) {
           logger.error("Community Buy refund resolution failed (non-fatal — webhook already acknowledged)", { eventId: event.id, campaignId: result.communityBuyCampaignId, ...serializeError(error) });
         }
@@ -1359,6 +1361,7 @@ class StripeWebhookService {
         try {
           await campaignAuthorisationService.markCaptureDisputed(paymentIntentId);
           await campaignPayoutService.holdForSystemReason(result.communityBuyCampaignId, "dispute_open");
+          await organiserFeeService.holdForSystemReason(result.communityBuyCampaignId, "dispute_open");
         } catch (error) {
           logger.error("Community Buy dispute resolution failed (non-fatal — webhook already acknowledged)", { eventId: event.id, campaignId: result.communityBuyCampaignId, ...serializeError(error) });
         }

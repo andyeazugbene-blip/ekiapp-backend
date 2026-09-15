@@ -14,7 +14,7 @@ vi.mock("../lib/prisma", () => ({
     supplierProfile: { findUnique: vi.fn() },
     communityCampaign: { create: vi.fn(), update: vi.fn(), updateMany: vi.fn(), findUnique: vi.fn(), findUniqueOrThrow: vi.fn() },
     campaignContribution: { create: vi.fn(), findUniqueOrThrow: vi.fn() },
-    campaignParticipant: { upsert: vi.fn() },
+    campaignParticipant: { upsert: vi.fn(), findUnique: vi.fn(), findFirst: vi.fn(), create: vi.fn() },
     buyerPaymentMethod: { findUnique: vi.fn() },
     // count() is used by marketConfigurationService.get()'s lazy
     // ensureDefaults() seeding check — mocked >0 so it never tries to
@@ -226,7 +226,10 @@ describe("campaignContributionsService.pledge — the guarded-transaction capaci
       countryCode: "GB", communityBuyEnabled: true, communityBuyPaymentsEnabled: true, communityBuyPaymentMode: "PLEDGE_THEN_CHARGE",
     } as never);
     m.buyerPaymentMethod.findUnique.mockResolvedValue({ id: "pm-1", buyerId: "buyer-1", stripeCustomerId: "cus_1", stripePaymentMethodId: "pm_1" } as never);
-    m.campaignParticipant.upsert.mockResolvedValue({ id: "part-1" } as never);
+    m.campaignParticipant.findUnique.mockResolvedValue(null as never);
+    m.organiserProfile.findUnique.mockResolvedValue({ id: "org-race", userId: "organiser-race" } as never);
+    m.campaignParticipant.findFirst.mockResolvedValue(null as never);
+    m.campaignParticipant.create.mockResolvedValue({ id: "part-1" } as never);
 
     // This is the real race: the pre-check (assertCapacityAvailable, a
     // plain read of confirmedShares=5) sees 1 slot free for a quantity-1
@@ -265,7 +268,10 @@ describe("campaignContributionsService.pledge — the guarded-transaction capaci
       countryCode: "GB", communityBuyEnabled: true, communityBuyPaymentsEnabled: true, communityBuyPaymentMode: "PLEDGE_THEN_CHARGE",
     } as never);
     m.buyerPaymentMethod.findUnique.mockResolvedValue({ id: "pm-1", buyerId: "buyer-1", stripeCustomerId: "cus_1", stripePaymentMethodId: "pm_1" } as never);
-    m.campaignParticipant.upsert.mockResolvedValue({ id: "part-1" } as never);
+    m.campaignParticipant.findUnique.mockResolvedValue(null as never);
+    m.organiserProfile.findUnique.mockResolvedValue({ id: "org-race2", userId: "organiser-race2" } as never);
+    m.campaignParticipant.findFirst.mockResolvedValue(null as never);
+    m.campaignParticipant.create.mockResolvedValue({ id: "part-1" } as never);
 
     const txCampaign = {
       findUniqueOrThrow: vi.fn().mockResolvedValue({ id: "camp-race2", maximumShares: 6, confirmedShares: 5, termsLockedAt: null }),

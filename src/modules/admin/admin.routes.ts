@@ -179,6 +179,14 @@ import {
   adminMarkCommunityBuyPayoutReady,
   adminHoldCommunityBuyPayout,
   adminReleaseCommunityBuyPayout,
+  adminListCommunityBuyOrganiserFees,
+  adminGetCommunityBuyOrganiserFee,
+  adminHoldCommunityBuyOrganiserFee,
+  adminReleaseCommunityBuyOrganiserFee,
+  adminSettleCommunityBuyOrganiserFee,
+  adminListAttributionReviews,
+  adminFlagAttributionForReview,
+  adminResolveAttributionReview,
   adminGetSupportCase,
   adminHoldSupplierPayment,
   adminListCampaignsForReview,
@@ -312,6 +320,22 @@ adminRouter.get("/community-campaigns/:id/payout/eligibility", asyncHandler(requ
 adminRouter.post("/community-campaigns/:id/payout/mark-ready", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(require2fa), asyncHandler(adminMarkCommunityBuyPayoutReady));
 adminRouter.post("/community-campaigns/:id/payout/hold", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(require2fa), asyncHandler(adminHoldCommunityBuyPayout));
 adminRouter.post("/community-campaigns/:id/payout/release", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(require2fa), asyncHandler(adminReleaseCommunityBuyPayout));
+
+// M7 — CommunityBuyOrganiserFee admin (spec §13.3/§15.6). Same permission
+// gating as the payout routes above; settle is 2FA-gated even though the
+// two non-cash routes never move money, since it's still a financial-state
+// terminal transition — same caution level as marking a payout ready.
+adminRouter.get("/community-buy/organiser-fees", asyncHandler(requireAdminPermission("community_buy.read")), asyncHandler(adminListCommunityBuyOrganiserFees));
+adminRouter.get("/community-campaigns/:id/organiser-fee", asyncHandler(requireAdminPermission("community_buy.read")), asyncHandler(adminGetCommunityBuyOrganiserFee));
+adminRouter.post("/community-campaigns/:id/organiser-fee/hold", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(require2fa), asyncHandler(adminHoldCommunityBuyOrganiserFee));
+adminRouter.post("/community-campaigns/:id/organiser-fee/release", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(require2fa), asyncHandler(adminReleaseCommunityBuyOrganiserFee));
+adminRouter.post("/community-campaigns/:id/organiser-fee/settle", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(require2fa), asyncHandler(adminSettleCommunityBuyOrganiserFee));
+
+// M7 — attribution review (spec §14.5, AT-45/AT-46). Manual admin
+// investigation only; never auto-diverts a reward to another organiser.
+adminRouter.get("/community-buy/attribution-reviews", asyncHandler(requireAdminPermission("community_buy.read")), asyncHandler(adminListAttributionReviews));
+adminRouter.post("/community-buy/participants/:id/attribution/flag", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(adminFlagAttributionForReview));
+adminRouter.post("/community-buy/participants/:id/attribution/resolve", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(adminResolveAttributionReview));
 
 // Four-eyes approvals (architecture doc §7) — generic across gated action
 // types. Deciding a specific pending approval uses its own approvals.read/

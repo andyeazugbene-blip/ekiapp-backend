@@ -15,6 +15,8 @@ import { supplierInvitationService } from "./supplier-invitation.service";
 import { adminApprovalsService } from "../admin/admin-approvals.service";
 import { campaignAuthorisationService } from "./campaign-authorisation.service";
 import { campaignPayoutService } from "./campaign-payout.service";
+import { organiserFeeService } from "./organiser-fee.service";
+import { attributionReviewService } from "./campaign-participant-attribution.service";
 import { communityBuyManifestService } from "./community-buy-manifest.service";
 import { searchDataAccessLog, revokeDeliveryReferencesForSupplierAccount, isIndividualDeliveryEnabled, FULFILMENT_ACCESS_PRESERVED_SCOPE } from "./community-buy-privacy.service";
 
@@ -1155,6 +1157,86 @@ export async function adminReleaseCommunityBuyPayout(request: Request, response:
   }
   const payout = await campaignPayoutService.triggerManualPayout(adminId, id);
   response.json({ payout });
+}
+
+// ─── M7 — CommunityBuyOrganiserFee admin (spec §13.3/§15.6) ─────────────
+// Accounting/accrual only — see organiser-fee.service.ts's own doc comment
+// for why this never shares a code path with the payout functions above:
+// an organiser fee is never a supplier payout.
+
+export async function adminListCommunityBuyOrganiserFees(_request: Request, response: Response): Promise<void> {
+  response.json({ items: await organiserFeeService.listForAdmin() });
+}
+
+export async function adminGetCommunityBuyOrganiserFee(request: Request, response: Response): Promise<void> {
+  response.json({ fee: await organiserFeeService.get(requireIdParam(request)) });
+}
+
+export async function adminHoldCommunityBuyOrganiserFee(request: Request, response: Response): Promise<void> {
+  const adminId = requireUserId(request);
+  const reasonCode = request.body?.reasonCode;
+  if (typeof reasonCode !== "string" || !reasonCode.trim()) throw new AppError("reasonCode is required", 400);
+  const fee = await organiserFeeService.hold(adminId, requireIdParam(request), reasonCode);
+  response.json({ fee });
+}
+
+export async function adminReleaseCommunityBuyOrganiserFee(request: Request, response: Response): Promise<void> {
+  const adminId = requireUserId(request);
+  const fee = await organiserFeeService.release(adminId, requireIdParam(request));
+  response.json({ fee });
+}
+
+/**
+ * Records settlement through an approved, non-Eki-cash route (spec §1.3).
+ * See organiser-fee.service.ts's settleFee() doc comment: only
+ * STRIPE_CONNECT_TRANSFER is gated behind an unresolved external
+ * dependency and will refuse with 503 regardless of this route's own 2FA.
+ */
+export async function adminSettleCommunityBuyOrganiserFee(request: Request, response: Response): Promise<void> {
+  const adminId = requireUserId(request);
+  const settlementMethod = request.body?.settlementMethod;
+  if (settlementMethod !== "EXTERNAL_SUPPLIER_ARRANGEMENT" && settlementMethod !== "NON_CASH_REWARD" && settlementMethod !== "STRIPE_CONNECT_TRANSFER") {
+    throw new AppError("settlementMethod must be EXTERNAL_SUPPLIER_ARRANGEMENT, NON_CASH_REWARD, or STRIPE_CONNECT_TRANSFER", 400);
+  }
+  const providerReference = typeof request.body?.providerReference === "string" ? request.body.providerReference : undefined;
+  const fee = await organiserFeeService.settleFee(adminId, requireIdParam(request), settlementMethod, providerReference);
+  response.json({ fee });
+}
+
+/** Organiser's own read-only view of their campaign's accrued reward. */
+export async function getMyCommunityBuyOrganiserFee(request: Request, response: Response): Promise<void> {
+  const userId = requireUserId(request);
+  const organiser = await prisma.organiserProfile.findUnique({ where: { userId } });
+  if (!organiser) throw new AppError("Organiser profile not found", 404);
+  response.json({ fee: await organiserFeeService.getMyFee(organiser.id, requireIdParam(request)) });
+}
+
+// ─── M7 — Attribution review (spec §14.5, AT-45/AT-46) ──────────────────
+// Manual admin investigation flow only — no automatic solicitation
+// detector exists in the spec, so none is invented here.
+
+export async function adminListAttributionReviews(request: Request, response: Response): Promise<void> {
+  const status = request.query.status;
+  const validStatus = status === "UNDER_REVIEW" || status === "INVALIDATED" || status === "ACTIVE" ? status : "UNDER_REVIEW";
+  response.json({ items: await attributionReviewService.listForAdmin(validStatus) });
+}
+
+export async function adminFlagAttributionForReview(request: Request, response: Response): Promise<void> {
+  const adminId = requireUserId(request);
+  const reason = request.body?.reason;
+  if (typeof reason !== "string" || !reason.trim()) throw new AppError("reason is required", 400);
+  const participant = await attributionReviewService.flagForReview(adminId, requireIdParam(request), reason);
+  response.json({ participant });
+}
+
+export async function adminResolveAttributionReview(request: Request, response: Response): Promise<void> {
+  const adminId = requireUserId(request);
+  const outcome = request.body?.outcome;
+  const reason = request.body?.reason;
+  if (outcome !== "CONFIRMED_VALID" && outcome !== "INVALIDATED") throw new AppError("outcome must be CONFIRMED_VALID or INVALIDATED", 400);
+  if (typeof reason !== "string" || !reason.trim()) throw new AppError("reason is required", 400);
+  const participant = await attributionReviewService.resolveReview(adminId, requireIdParam(request), outcome, reason);
+  response.json({ participant });
 }
 
 export async function adminListMarketConfigurations(_request: Request, response: Response): Promise<void> {
