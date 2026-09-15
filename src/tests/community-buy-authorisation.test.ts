@@ -501,3 +501,16 @@ describe("onCaptureSucceeded() — CommunityBuyPayout creation, spec §H", () =>
     expect(m.communityBuyPayout.create).not.toHaveBeenCalled();
   });
 });
+
+describe("listExpiringHolds() — M8 admin queue visibility (Appendix A 'capture expiry' screen)", () => {
+  it("lists only HOLD_EXPIRING, uncaptured holds, soonest-expiring first", async () => {
+    m.communityBuyPaymentAuthorisation.findMany.mockResolvedValue([{ id: "hold-1", holdStatus: "HOLD_EXPIRING" }] as any);
+
+    const result = await campaignAuthorisationService.listExpiringHolds();
+
+    expect(result).toEqual([{ id: "hold-1", holdStatus: "HOLD_EXPIRING" }]);
+    expect(m.communityBuyPaymentAuthorisation.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { holdStatus: "HOLD_EXPIRING", captureStatus: "NOT_CAPTURED" } }),
+    );
+  });
+});

@@ -173,6 +173,8 @@ import {
   adminListCampaignContributions,
   adminGetCampaignLedger,
   adminGetLedgerSummary,
+  adminListExpiringHolds,
+  adminScanStuckPayouts,
   adminListCommunityBuyPayouts,
   adminGetCommunityBuyPayout,
   adminGetCommunityBuyPayoutEligibility,
@@ -314,6 +316,8 @@ adminRouter.post("/community-campaigns/:id/supplier-payment/hold", asyncHandler(
 // release route additionally refuses server-side (503
 // PAYOUT_CUSTODY_NOT_CONFIRMED) unless payout custody has been explicitly
 // confirmed — see campaign-payout.service.ts.
+adminRouter.get("/community-buy/holds/expiring", asyncHandler(requireAdminPermission("community_buy.read")), asyncHandler(adminListExpiringHolds));
+adminRouter.get("/community-buy/payouts/stuck-scan", asyncHandler(requireAdminPermission("community_buy.read")), asyncHandler(adminScanStuckPayouts));
 adminRouter.get("/community-buy/payouts", asyncHandler(requireAdminPermission("community_buy.read")), asyncHandler(adminListCommunityBuyPayouts));
 adminRouter.get("/community-campaigns/:id/payout", asyncHandler(requireAdminPermission("community_buy.read")), asyncHandler(adminGetCommunityBuyPayout));
 adminRouter.get("/community-campaigns/:id/payout/eligibility", asyncHandler(requireAdminPermission("community_buy.read")), asyncHandler(adminGetCommunityBuyPayoutEligibility));

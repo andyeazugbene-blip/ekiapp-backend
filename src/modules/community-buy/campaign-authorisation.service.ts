@@ -1054,6 +1054,21 @@ export const campaignAuthorisationService = {
     };
   },
 
+  /**
+   * M8 — admin queue visibility for near-expiry holds (Appendix A: admin
+   * "capture expiry" screen). hold_expiry_monitor() above already flags
+   * these into HOLD_EXPIRING and records an audit entry; this is simply the
+   * read side an admin screen needs to see the queue, ordered soonest-
+   * expiring first using the same real captureBefore/holdCreatedAt fields
+   * hold_expiry_monitor() itself checks — no invented urgency score.
+   */
+  async listExpiringHolds() {
+    return prisma.communityBuyPaymentAuthorisation.findMany({
+      where: { holdStatus: "HOLD_EXPIRING", captureStatus: "NOT_CAPTURED" },
+      orderBy: [{ captureBefore: "asc" }, { holdCreatedAt: "asc" }],
+    });
+  },
+
   // ─── M6 — dispute/refund exposure on a captured Direct Charge hold ──────
   // These Stripe events (charge.dispute.created / charge.refunded) arrive
   // keyed on paymentIntentId, not campaignId — resolved here since this is

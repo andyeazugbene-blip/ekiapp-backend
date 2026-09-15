@@ -26,11 +26,23 @@ vi.mock("../lib/stripe", () => ({
   stripe: { payouts: { create: vi.fn() } },
 }));
 
+vi.mock("../modules/notifications/notifications.service", () => ({
+  notificationsService: { enqueue: vi.fn().mockResolvedValue(undefined) },
+}));
+
+vi.mock("../lib/email-queue", () => ({
+  enqueueEmail: vi.fn().mockResolvedValue(undefined),
+}));
+
 import { prisma } from "../lib/prisma";
 import { stripe } from "../lib/stripe";
+import { notificationsService } from "../modules/notifications/notifications.service";
+import { enqueueEmail } from "../lib/email-queue";
 
 const m = vi.mocked(prisma, true);
 const s = vi.mocked(stripe, true);
+const n = vi.mocked(notificationsService, true);
+const mailer = vi.mocked(enqueueEmail);
 const CAMPAIGN_ID = "camp-payout-1";
 
 function basePayout(overrides: Partial<any> = {}) {
@@ -50,7 +62,7 @@ function basePayout(overrides: Partial<any> = {}) {
 }
 
 function eligibleSupplier(overrides: Partial<any> = {}) {
-  return { id: "supplier-account-1", supplierState: "APPROVED", chargesEnabled: true, payoutsEnabled: true, ...overrides };
+  return { id: "supplier-account-1", userId: "supplier-user-1", supplierState: "APPROVED", chargesEnabled: true, payoutsEnabled: true, ...overrides };
 }
 
 /** Sets up all three eligibility-check mocks to return a fully-eligible payout — the shape most tests need so they can focus on their own specific assertion. */
@@ -383,5 +395,166 @@ describe("M6 — escalateToManualReview() / holdForSystemReason()", () => {
     m.communityBuyPayout.update.mockResolvedValue(basePayout({ status: "HELD", holdReasonCodes: ["dispute_open"] }) as any);
     await campaignPayoutService.holdForSystemReason(CAMPAIGN_ID, "dispute_open");
     expect(m.communityBuyPayout.update).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ holdReasonCodes: ["dispute_open"] }) }));
+  });
+});
+
+describe("M8 — supplier notifications (spec Appendix B: payout_held/ready/initiated/in_transit/paid/failed)", () => {
+  it("markReady() notifies the supplier with a stable dedupeKey", async () => {
+    const { campaignPayoutService } = await import("../modules/community-buy/campaign-payout.service");
+    mockEligible();
+    m.communityBuyPayout.findUnique.mockResolvedValue(basePayout({ status: "HELD" }) as any);
+    m.communityBuyPayout.updateMany.mockResolvedValue({ count: 1 } as any);
+    m.communityBuyPayout.findUniqueOrThrow.mockResolvedValue(basePayout({ status: "READY" }) as any);
+
+    await campaignPayoutService.markReady("admin-1", CAMPAIGN_ID);
+
+    expect(n.enqueue).toHaveBeenCalledWith(expect.objectContaining({
+      userId: "supplier-user-1",
+      data: expect.objectContaining({ event: "payout_ready" }),
+      dedupeKey: `community_buy_payout:payout_ready:${CAMPAIGN_ID}:`,
+    }));
+  });
+
+  it("hold() notifies the supplier with the reason code folded into the dedupeKey (repeat holds for different reasons are distinct events)", async () => {
+    const { campaignPayoutService } = await import("../modules/community-buy/campaign-payout.service");
+    m.supplierAccount.findUnique.mockResolvedValue(eligibleSupplier() as any);
+    m.communityBuyPayout.findUnique.mockResolvedValue(basePayout({ status: "READY", holdReasonCodes: [] }) as any);
+    m.communityBuyPayout.update.mockResolvedValue(basePayout({ status: "HELD" }) as any);
+
+    await campaignPayoutService.hold("admin-1", CAMPAIGN_ID, "dispute_open");
+
+    expect(n.enqueue).toHaveBeenCalledWith(expect.objectContaining({
+      userId: "supplier-user-1",
+      dedupeKey: `community_buy_payout:payout_held:${CAMPAIGN_ID}:dispute_open`,
+    }));
+  });
+
+  it("triggerManualPayout() notifies payout_initiated then payout_in_transit, each keyed by retryCount so a later legitimate retry is never suppressed as a duplicate", async () => {
+    process.env.COMMUNITY_BUY_PAYOUT_CUSTODY_CONFIRMED = "true";
+    const { campaignPayoutService } = await import("../modules/community-buy/campaign-payout.service");
+    mockEligible();
+    m.communityBuyPayout.findUnique.mockResolvedValue(basePayout({ retryCount: 2 }) as any);
+    m.communityBuyPayout.updateMany.mockResolvedValue({ count: 1 } as any);
+    s.payouts.create.mockResolvedValue({ id: "po_1" } as any);
+    m.communityBuyPayout.update.mockResolvedValue(basePayout({ status: "IN_TRANSIT" }) as any);
+
+    await campaignPayoutService.triggerManualPayout("admin-1", CAMPAIGN_ID);
+
+    expect(n.enqueue).toHaveBeenCalledWith(expect.objectContaining({ dedupeKey: `community_buy_payout:payout_initiated:${CAMPAIGN_ID}:2` }));
+    expect(n.enqueue).toHaveBeenCalledWith(expect.objectContaining({ dedupeKey: `community_buy_payout:payout_in_transit:${CAMPAIGN_ID}:2` }));
+  });
+
+  it("a Stripe rejection notifies payout_failed and sends an ops alert email when OPS_ALERT_EMAIL is configured", async () => {
+    process.env.COMMUNITY_BUY_PAYOUT_CUSTODY_CONFIRMED = "true";
+    process.env.OPS_ALERT_EMAIL = "ops@example.com";
+    const { campaignPayoutService } = await import("../modules/community-buy/campaign-payout.service");
+    mockEligible();
+    m.communityBuyPayout.findUnique.mockResolvedValue(basePayout() as any);
+    m.communityBuyPayout.updateMany.mockResolvedValue({ count: 1 } as any);
+    s.payouts.create.mockRejectedValue(new Error("insufficient funds"));
+
+    await expect(campaignPayoutService.triggerManualPayout("admin-1", CAMPAIGN_ID)).rejects.toThrow(/Payout failed/);
+
+    expect(n.enqueue).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ event: "payout_failed" }) }));
+    expect(mailer).toHaveBeenCalledWith(expect.objectContaining({ to: "ops@example.com" }));
+    delete process.env.OPS_ALERT_EMAIL;
+  });
+
+  it("never sends an ops alert when OPS_ALERT_EMAIL is unset", async () => {
+    process.env.COMMUNITY_BUY_PAYOUT_CUSTODY_CONFIRMED = "true";
+    const { campaignPayoutService } = await import("../modules/community-buy/campaign-payout.service");
+    mockEligible();
+    m.communityBuyPayout.findUnique.mockResolvedValue(basePayout() as any);
+    m.communityBuyPayout.updateMany.mockResolvedValue({ count: 1 } as any);
+    s.payouts.create.mockRejectedValue(new Error("insufficient funds"));
+
+    await expect(campaignPayoutService.triggerManualPayout("admin-1", CAMPAIGN_ID)).rejects.toThrow(/Payout failed/);
+    expect(mailer).not.toHaveBeenCalled();
+  });
+
+  it("resolvePayoutWebhook(payout.paid) notifies the supplier", async () => {
+    const { campaignPayoutService } = await import("../modules/community-buy/campaign-payout.service");
+    m.communityBuyPayout.updateMany.mockResolvedValue({ count: 1 } as any);
+    m.communityBuyPayout.findFirst.mockResolvedValue(basePayout({ status: "PAID" }) as any);
+    m.supplierAccount.findUnique.mockResolvedValue(eligibleSupplier() as any);
+
+    await campaignPayoutService.resolvePayoutWebhook("po_1", "payout.paid", { id: "po_1", amount: 1900 } as any);
+
+    expect(n.enqueue).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ event: "payout_paid" }) }));
+  });
+
+  it("resolvePayoutWebhook(payout.failed) notifies the supplier and alerts ops", async () => {
+    process.env.OPS_ALERT_EMAIL = "ops@example.com";
+    const { campaignPayoutService } = await import("../modules/community-buy/campaign-payout.service");
+    m.communityBuyPayout.updateMany.mockResolvedValue({ count: 1 } as any);
+    m.communityBuyPayout.findFirst.mockResolvedValue(basePayout({ status: "FAILED" }) as any);
+    m.supplierAccount.findUnique.mockResolvedValue(eligibleSupplier() as any);
+
+    await campaignPayoutService.resolvePayoutWebhook("po_1", "payout.failed", { id: "po_1", amount: 1900 } as any);
+
+    expect(n.enqueue).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ event: "payout_failed" }) }));
+    expect(mailer).toHaveBeenCalled();
+    delete process.env.OPS_ALERT_EMAIL;
+  });
+
+  it("resolvePayoutWebhook(payout.canceled) notifies but does not page ops (a cancellation isn't a failure alert)", async () => {
+    const { campaignPayoutService } = await import("../modules/community-buy/campaign-payout.service");
+    m.communityBuyPayout.updateMany.mockResolvedValue({ count: 1 } as any);
+    m.communityBuyPayout.findFirst.mockResolvedValue(basePayout({ status: "CANCELLED" }) as any);
+    m.supplierAccount.findUnique.mockResolvedValue(eligibleSupplier() as any);
+
+    await campaignPayoutService.resolvePayoutWebhook("po_1", "payout.canceled", { id: "po_1", amount: 1900 } as any);
+    expect(mailer).not.toHaveBeenCalled();
+  });
+
+  it("scanStuckPayouts() is a configured no-op until PAYOUT_STUCK_THRESHOLD_HOURS is set — never invents a default threshold", async () => {
+    delete process.env.PAYOUT_STUCK_THRESHOLD_HOURS;
+    const { campaignPayoutService } = await import("../modules/community-buy/campaign-payout.service");
+    const result = await campaignPayoutService.scanStuckPayouts();
+    expect(result).toEqual({ configured: false, findings: [] });
+    expect(m.communityBuyPayout.findMany).not.toHaveBeenCalled();
+  });
+
+  it("scanStuckPayouts() finds payouts stuck past the configured threshold and alerts ops", async () => {
+    process.env.PAYOUT_STUCK_THRESHOLD_HOURS = "24";
+    process.env.OPS_ALERT_EMAIL = "ops@example.com";
+    const { campaignPayoutService } = await import("../modules/community-buy/campaign-payout.service");
+    m.communityBuyPayout.findMany.mockResolvedValue([
+      { campaignId: "camp-stuck-1", status: "IN_TRANSIT", updatedAt: new Date(Date.now() - 48 * 60 * 60 * 1000) },
+    ] as any);
+
+    const result = await campaignPayoutService.scanStuckPayouts();
+
+    expect(result.configured).toBe(true);
+    expect(result.findings).toHaveLength(1);
+    expect(result.findings[0].campaignId).toBe("camp-stuck-1");
+    expect(mailer).toHaveBeenCalledWith(expect.objectContaining({ to: "ops@example.com" }));
+    delete process.env.PAYOUT_STUCK_THRESHOLD_HOURS;
+    delete process.env.OPS_ALERT_EMAIL;
+  });
+
+  it("scanStuckPayouts() never alerts when nothing is actually stuck", async () => {
+    process.env.PAYOUT_STUCK_THRESHOLD_HOURS = "24";
+    process.env.OPS_ALERT_EMAIL = "ops@example.com";
+    const { campaignPayoutService } = await import("../modules/community-buy/campaign-payout.service");
+    m.communityBuyPayout.findMany.mockResolvedValue([] as any);
+
+    const result = await campaignPayoutService.scanStuckPayouts();
+    expect(result).toEqual({ configured: true, findings: [] });
+    expect(mailer).not.toHaveBeenCalled();
+    delete process.env.PAYOUT_STUCK_THRESHOLD_HOURS;
+    delete process.env.OPS_ALERT_EMAIL;
+  });
+
+  it("escalateToManualReview() sends an ops alert for a genuine reconciliation mismatch", async () => {
+    process.env.OPS_ALERT_EMAIL = "ops@example.com";
+    const { campaignPayoutService } = await import("../modules/community-buy/campaign-payout.service");
+    m.communityBuyPayout.findUnique.mockResolvedValue(basePayout({ status: "READY", holdReasonCodes: [] }) as any);
+    m.communityBuyPayout.update.mockResolvedValue(basePayout({ status: "MANUAL_REVIEW" }) as any);
+
+    await campaignPayoutService.escalateToManualReview(CAMPAIGN_ID, "capture_amount_mismatch");
+
+    expect(mailer).toHaveBeenCalledWith(expect.objectContaining({ to: "ops@example.com" }));
+    delete process.env.OPS_ALERT_EMAIL;
   });
 });

@@ -83,6 +83,20 @@ function getFulfilmentStaleThresholdHours(): number | null {
   return hours;
 }
 
+function getPayoutStuckThresholdHours(): number | null {
+  // M8 — "stuck payout state" observability. Same no-invented-deadline
+  // rationale as getFulfilmentStaleThresholdHours() above: no client-
+  // approved "how long is too long stuck in PENDING/IN_TRANSIT" value
+  // exists, so this stays a genuine no-op until an operator sets one.
+  const raw = process.env.PAYOUT_STUCK_THRESHOLD_HOURS;
+  if (!raw) return null;
+  const hours = Number(raw);
+  if (!Number.isFinite(hours) || hours <= 0) {
+    throw new Error("PAYOUT_STUCK_THRESHOLD_HOURS must be a positive number of hours");
+  }
+  return hours;
+}
+
 export const env = {
   nodeEnv: process.env.NODE_ENV ?? "development",
   port: getPort(),
@@ -109,4 +123,5 @@ export const env = {
   appleBundleId: process.env.APPLE_BUNDLE_ID ?? "",
   priceApprovalTimeoutHours: getPriceApprovalTimeoutHours(),
   fulfilmentStaleThresholdHours: getFulfilmentStaleThresholdHours(),
+  payoutStuckThresholdHours: getPayoutStuckThresholdHours(),
 } as const;

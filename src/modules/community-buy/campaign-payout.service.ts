@@ -3,10 +3,59 @@ import type Stripe from "stripe";
 
 import { prisma } from "../../lib/prisma";
 import { stripe } from "../../lib/stripe";
+import { logger } from "../../lib/logger";
 import { AppError } from "../../shared/errors/app-error";
 import { recordAudit } from "../../shared/utils/audit";
+import { notificationsService } from "../notifications/notifications.service";
+import { enqueueEmail } from "../../lib/email-queue";
+import { env } from "../../config/env";
 
 const SYSTEM_WEBHOOK_ACTOR = "system:stripe_webhook";
+
+/**
+ * M8 — actionable ops alert for a failed payout or a genuine reconciliation
+ * mismatch (master prompt: "actionable alerts... for failed payout,
+ * reconciliation mismatch"). Same OPS_ALERT_EMAIL pattern already
+ * established in stripe.service.ts's dispute handler — no separate
+ * alerting channel invented. A no-op when OPS_ALERT_EMAIL isn't configured,
+ * same as that handler.
+ */
+async function alertOps(subject: string, html: string): Promise<void> {
+  const opsAlertEmail = process.env.OPS_ALERT_EMAIL;
+  if (!opsAlertEmail) return;
+  try {
+    await enqueueEmail({ to: opsAlertEmail, subject, html });
+  } catch (error) {
+    logger.error("Community Buy payout ops alert failed to send (non-blocking)", { errorMessage: error instanceof Error ? error.message : String(error) });
+  }
+}
+
+/**
+ * M8 (spec Appendix B — payout_held/ready/initiated/in_transit/paid/failed)
+ * — these six events had zero notification coverage anywhere until now.
+ * Never-throws, mirroring campaign-authorisation.service.ts's
+ * notifyParticipant(): a notification failure must never break the payout
+ * state transition it describes. Each transition this module already
+ * guards (updateMany + count check) fires at most once per real state
+ * change, so the dedupeKey below is defense-in-depth, not the only thing
+ * preventing a duplicate.
+ */
+async function notifySupplier(supplierId: string, event: string, title: string, body: string, campaignId: string, dedupeSuffix: number | string = ""): Promise<void> {
+  try {
+    const supplier = await prisma.supplierAccount.findUnique({ where: { id: supplierId }, select: { userId: true } });
+    if (!supplier) return;
+    await notificationsService.enqueue({
+      userId: supplier.userId,
+      type: "COMMUNITY_CAMPAIGN_UPDATE",
+      title,
+      body,
+      data: { type: "community_campaign_update", event, campaignId },
+      dedupeKey: `community_buy_payout:${event}:${campaignId}:${dedupeSuffix}`,
+    });
+  } catch (error) {
+    logger.error("Community Buy payout notification failed (non-blocking)", { campaignId, event, errorMessage: error instanceof Error ? error.message : String(error) });
+  }
+}
 
 /**
  * M6 — server-side-recomputed payout eligibility. Called at BOTH markReady()
@@ -81,6 +130,36 @@ export const campaignPayoutService = {
     });
   },
 
+  /**
+   * M8 — "stuck payout state" observability. Only activates once an
+   * operator sets PAYOUT_STUCK_THRESHOLD_HOURS — no client-approved "how
+   * long is too long stuck in PENDING/IN_TRANSIT" duration exists to
+   * invent, same rationale as fulfilment-delay.service.ts's own stale
+   * check. Computed live on each call rather than persisted, since this
+   * is a smaller, newer surface than the fulfilment-delay queue and
+   * doesn't yet warrant its own contacted/resolved tracking table.
+   */
+  async scanStuckPayouts(): Promise<{ configured: boolean; findings: Array<{ campaignId: string; status: string; hoursStuck: number }> }> {
+    if (env.payoutStuckThresholdHours == null) return { configured: false, findings: [] };
+    const staleSince = new Date(Date.now() - env.payoutStuckThresholdHours * 60 * 60 * 1000);
+    const stuck = await prisma.communityBuyPayout.findMany({
+      where: { status: { in: ["PENDING", "IN_TRANSIT"] }, updatedAt: { lt: staleSince } },
+      select: { campaignId: true, status: true, updatedAt: true },
+    });
+    const findings = stuck.map((p) => ({
+      campaignId: p.campaignId,
+      status: p.status,
+      hoursStuck: Math.round((Date.now() - p.updatedAt.getTime()) / (60 * 60 * 1000)),
+    }));
+    if (findings.length > 0) {
+      await alertOps(
+        `⚠️ ${findings.length} Community Buy payout(s) stuck beyond ${env.payoutStuckThresholdHours}h`,
+        `<h2>Stuck Community Buy Payouts</h2><ul>${findings.map((f) => `<li>Campaign ${f.campaignId} — ${f.status} for ${f.hoursStuck}h</li>`).join("")}</ul>`,
+      );
+    }
+    return { configured: true, findings };
+  },
+
   async get(campaignId: string) {
     const payout = await prisma.communityBuyPayout.findUnique({ where: { campaignId } });
     if (!payout) throw new AppError("No Direct Charge payout record exists for this campaign", 404);
@@ -110,6 +189,7 @@ export const campaignPayoutService = {
     const claim = await prisma.communityBuyPayout.updateMany({ where: { campaignId, status: "HELD" }, data: { status: "READY", releaseEligibleAt: new Date(), holdReasonCodes: [] } });
     if (claim.count !== 1) throw new AppError("This payout cannot be marked ready from its current state", 409);
     await recordAudit({ actorId: adminId, action: "community_buy_payout.marked_ready", entityType: "CommunityBuyPayout", entityId: payout.id });
+    await notifySupplier(payout.supplierId, "payout_ready", "Payout ready", "Your Community Buy payout has cleared review and is ready for release.", campaignId);
     return prisma.communityBuyPayout.findUniqueOrThrow({ where: { campaignId } });
   },
 
@@ -130,6 +210,7 @@ export const campaignPayoutService = {
       data: { status: "HELD", holdReasonCodes: Array.from(new Set([...payout.holdReasonCodes, reasonCode])) },
     });
     await recordAudit({ actorId: adminId, action: "community_buy_payout.held", entityType: "CommunityBuyPayout", entityId: payout.id, metadata: { reasonCode } });
+    await notifySupplier(payout.supplierId, "payout_held", "Payout on hold", "Your Community Buy payout has been placed on hold — check the Supplier Centre for details.", campaignId, reasonCode);
     return updated;
   },
 
@@ -173,6 +254,7 @@ export const campaignPayoutService = {
       data: { status: "PENDING", requestedAt: new Date(), idempotencyKey },
     });
     if (claim.count !== 1) throw new AppError("This payout cannot be released from its current state", 409);
+    await notifySupplier(payout.supplierId, "payout_initiated", "Payout initiated", "Your Community Buy payout release has been initiated.", campaignId, payout.retryCount);
 
     try {
       const stripePayout = await stripe.payouts.create(
@@ -184,10 +266,13 @@ export const campaignPayoutService = {
         data: { status: "IN_TRANSIT", providerPayoutId: stripePayout.id, submittedAt: new Date(), retryCount: { increment: 1 } },
       });
       await recordAudit({ actorId: adminId, action: "community_buy_payout.released", entityType: "CommunityBuyPayout", entityId: payout.id, metadata: { providerPayoutId: stripePayout.id, idempotencyKey } });
+      await notifySupplier(payout.supplierId, "payout_in_transit", "Payout in transit", "Your Community Buy payout is now in transit to your bank.", campaignId, payout.retryCount);
       return updated;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       await prisma.communityBuyPayout.update({ where: { campaignId }, data: { status: "FAILED", failureMessage: message, retryCount: { increment: 1 } } });
+      await notifySupplier(payout.supplierId, "payout_failed", "Payout failed", "Your Community Buy payout could not be released — contact support.", campaignId, payout.retryCount);
+      await alertOps(`⚠️ Community Buy payout failed: campaign ${campaignId}`, `<h2>Community Buy Payout Failed</h2><p>Campaign: ${campaignId}</p><p>Supplier: ${payout.supplierId}</p><p>Error: ${message}</p>`);
       throw new AppError(`Payout failed: ${message}`, 502);
     }
   },
@@ -217,6 +302,7 @@ export const campaignPayoutService = {
         const payout = await prisma.communityBuyPayout.findFirst({ where: { providerPayoutId } });
         if (payout) {
           await recordAudit({ actorId: SYSTEM_WEBHOOK_ACTOR, action: "community_buy_payout.paid_confirmed", entityType: "CommunityBuyPayout", entityId: payout.id, metadata: { providerPayoutId } });
+          await notifySupplier(payout.supplierId, "payout_paid", "Payout completed", "Your Community Buy payout has been paid.", payout.campaignId, payout.retryCount);
         }
       }
       return { handled: claim.count === 1 };
@@ -237,6 +323,10 @@ export const campaignPayoutService = {
         const payout = await prisma.communityBuyPayout.findFirst({ where: { providerPayoutId } });
         if (payout) {
           await recordAudit({ actorId: SYSTEM_WEBHOOK_ACTOR, action: "community_buy_payout.terminal_confirmed", entityType: "CommunityBuyPayout", entityId: payout.id, metadata: { providerPayoutId, eventType } });
+          if (nextStatus === "FAILED") {
+            await notifySupplier(payout.supplierId, "payout_failed", "Payout failed", "Your Community Buy payout could not be completed — contact support.", payout.campaignId, payout.retryCount);
+            await alertOps(`⚠️ Community Buy payout failed (provider-confirmed): campaign ${payout.campaignId}`, `<h2>Community Buy Payout Failed</h2><p>Campaign: ${payout.campaignId}</p><p>Supplier: ${payout.supplierId}</p><p>Provider payout: ${providerPayoutId}</p>`);
+          }
         }
       }
       return { handled: claim.count === 1 };
@@ -259,6 +349,7 @@ export const campaignPayoutService = {
       data: { status: "MANUAL_REVIEW", holdReasonCodes: Array.from(new Set([...payout.holdReasonCodes, reasonCode])) },
     });
     await recordAudit({ actorId: SYSTEM_WEBHOOK_ACTOR, action: "community_buy_payout.escalated_manual_review", entityType: "CommunityBuyPayout", entityId: payout.id, metadata: { reasonCode } });
+    await alertOps(`⚠️ Community Buy payout escalated to MANUAL_REVIEW: campaign ${campaignId}`, `<h2>Reconciliation Mismatch</h2><p>Campaign: ${campaignId}</p><p>Supplier: ${payout.supplierId}</p><p>Reason: ${reasonCode}</p><p>This payout will not proceed until an admin reviews it.</p>`);
     return updated;
   },
 

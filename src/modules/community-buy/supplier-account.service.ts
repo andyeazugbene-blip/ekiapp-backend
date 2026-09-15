@@ -1,6 +1,40 @@
 import { prisma } from "../../lib/prisma";
+import { logger } from "../../lib/logger";
 import { AppError } from "../../shared/errors/app-error";
+import { enqueueEmail } from "../../lib/email-queue";
 import { revokeDeliveryReferencesForSupplierAccount } from "./community-buy-privacy.service";
+
+/**
+ * M8 — actionable ops alert: "supplier suspension with active fulfilment"
+ * is named explicitly in the master build's observability requirements.
+ * Same OPS_ALERT_EMAIL pattern already established elsewhere (stripe.
+ * service.ts's dispute handler, campaign-payout.service.ts's failed-payout
+ * alert) — no separate channel invented.
+ */
+async function alertActiveFulfilmentAtSuspension(supplierAccountId: string, reason: string): Promise<void> {
+  try {
+    const activeCampaigns = await prisma.communityCampaign.findMany({
+      where: { supplierAccountId, fulfilment: { status: { not: "COMPLETED" } } },
+      select: { id: true, title: true, fulfilment: { select: { status: true } } },
+    });
+    if (activeCampaigns.length === 0) return;
+    const opsAlertEmail = process.env.OPS_ALERT_EMAIL;
+    if (!opsAlertEmail) return;
+    await enqueueEmail({
+      to: opsAlertEmail,
+      subject: `⚠️ Supplier suspended with ${activeCampaigns.length} active fulfilment(s) in progress`,
+      html: `
+        <h2>Supplier Suspended — Active Fulfilment In Progress</h2>
+        <p>Supplier account: ${supplierAccountId}</p>
+        <p>Reason: ${reason}</p>
+        <ul>${activeCampaigns.map((c) => `<li>${c.title} (${c.id}) — fulfilment status: ${c.fulfilment?.status ?? "unknown"}</li>`).join("")}</ul>
+        <p>Data access for these campaigns has already been revoked (spec §14.4: permitted active fulfilment access continues) — this alert is for operational follow-up on the physical fulfilment itself.</p>
+      `,
+    });
+  } catch (error) {
+    logger.error("Supplier-suspension active-fulfilment alert failed (non-blocking)", { supplierAccountId, errorMessage: error instanceof Error ? error.message : String(error) });
+  }
+}
 
 /**
  * Community Buy Workstream 1 — SupplierAccount is user-keyed and requires
@@ -188,6 +222,7 @@ export const supplierAccountService = {
       data: { supplierState: "SUSPENDED", reasonCode: reason, suspendedAt: new Date() },
     });
     await revokeDeliveryReferencesForSupplierAccount(id, "supplier_suspended", actorId);
+    await alertActiveFulfilmentAtSuspension(id, reason);
     return updated;
   },
 

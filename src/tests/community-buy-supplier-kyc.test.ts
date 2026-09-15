@@ -19,14 +19,18 @@ vi.mock("../lib/prisma", () => ({
 }));
 
 vi.mock("../lib/logger", () => ({ logger: { error: vi.fn() } }));
+vi.mock("../lib/email-queue", () => ({ enqueueEmail: vi.fn().mockResolvedValue(undefined) }));
 
 import { prisma } from "../lib/prisma";
+import { enqueueEmail } from "../lib/email-queue";
 import { supplierAccountService } from "../modules/community-buy/supplier-account.service";
 
 const m = vi.mocked(prisma, true);
+const mailer = vi.mocked(enqueueEmail);
 
 beforeEach(() => {
   vi.clearAllMocks();
+  delete process.env.OPS_ALERT_EMAIL;
   m.communityCampaign.findMany.mockResolvedValue([]);
   m.deliveryReference.updateMany.mockResolvedValue({ count: 0 } as never);
   m.communityBuyDataAccessLog.create.mockResolvedValue({} as never);
@@ -118,6 +122,40 @@ describe("suspend() — spec §6.4/§14.4: admin-only, always revokes data acces
     const result = await supplierAccountService.suspend("acct-1", "reason", "admin-1");
     expect(result.supplierState).toBe("SUSPENDED");
     expect(m.deliveryReference.updateMany).not.toHaveBeenCalled();
+  });
+
+  // M8 — "supplier suspension with active fulfilment" actionable ops alert.
+  it("alerts ops when suspending a supplier with fulfilment still in progress", async () => {
+    process.env.OPS_ALERT_EMAIL = "ops@example.com";
+    m.supplierAccount.findUnique.mockResolvedValue({ id: "acct-1", supplierState: "APPROVED" } as never);
+    m.supplierAccount.update.mockResolvedValue({ id: "acct-1", supplierState: "SUSPENDED" } as never);
+    m.communityCampaign.findMany.mockResolvedValue([{ id: "camp-1", title: "Rice Bulk Buy", fulfilment: { status: "PACKING" } }] as never);
+
+    await supplierAccountService.suspend("acct-1", "policy violation", "admin-1");
+
+    expect(mailer).toHaveBeenCalledWith(expect.objectContaining({ to: "ops@example.com" }));
+    delete process.env.OPS_ALERT_EMAIL;
+  });
+
+  it("never alerts ops when the supplier has no active fulfilment", async () => {
+    process.env.OPS_ALERT_EMAIL = "ops@example.com";
+    m.supplierAccount.findUnique.mockResolvedValue({ id: "acct-1", supplierState: "APPROVED" } as never);
+    m.supplierAccount.update.mockResolvedValue({ id: "acct-1", supplierState: "SUSPENDED" } as never);
+    m.communityCampaign.findMany.mockResolvedValue([]);
+
+    await supplierAccountService.suspend("acct-1", "policy violation", "admin-1");
+
+    expect(mailer).not.toHaveBeenCalled();
+    delete process.env.OPS_ALERT_EMAIL;
+  });
+
+  it("never alerts ops when OPS_ALERT_EMAIL is unset, even with active fulfilment", async () => {
+    m.supplierAccount.findUnique.mockResolvedValue({ id: "acct-1", supplierState: "APPROVED" } as never);
+    m.supplierAccount.update.mockResolvedValue({ id: "acct-1", supplierState: "SUSPENDED" } as never);
+    m.communityCampaign.findMany.mockResolvedValue([{ id: "camp-1", title: "Rice Bulk Buy", fulfilment: { status: "PACKING" } }] as never);
+
+    await supplierAccountService.suspend("acct-1", "policy violation", "admin-1");
+    expect(mailer).not.toHaveBeenCalled();
   });
 });
 

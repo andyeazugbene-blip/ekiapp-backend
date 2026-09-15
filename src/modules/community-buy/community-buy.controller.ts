@@ -1101,6 +1101,16 @@ export async function adminHoldSupplierPayment(request: Request, response: Respo
 // comment for why "release" here does NOT necessarily move real money the
 // way adminReleaseSupplierPayment() above does.
 
+/** M8 — admin queue visibility for near-expiry holds (Appendix A "capture expiry" screen). */
+export async function adminListExpiringHolds(_request: Request, response: Response): Promise<void> {
+  response.json({ items: await campaignAuthorisationService.listExpiringHolds() });
+}
+
+/** M8 — "stuck payout state" scan. Returns configured:false (and an empty list) until an operator sets PAYOUT_STUCK_THRESHOLD_HOURS — never invents a default threshold. */
+export async function adminScanStuckPayouts(_request: Request, response: Response): Promise<void> {
+  response.json(await campaignPayoutService.scanStuckPayouts());
+}
+
 export async function adminListCommunityBuyPayouts(_request: Request, response: Response): Promise<void> {
   response.json({ items: await campaignPayoutService.listForAdmin() });
 }
