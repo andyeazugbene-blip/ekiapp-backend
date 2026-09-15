@@ -1333,13 +1333,19 @@ describe("marketConfigurationService.isCommunityBuyPaymentsEnabled", () => {
     expect(await marketConfigurationService.isCommunityBuyPaymentsEnabled("GB")).toBe(false);
   });
 
-  it("blocks payments when the mode is set to an unimplemented mode (AUTHORISE_THEN_CAPTURE) — never silently routed through the wrong flow", async () => {
+  // M2 — AUTHORISE_THEN_CAPTURE is now a real, implemented mode
+  // (campaign-authorisation.service.ts, spec §11), alongside
+  // PLEDGE_THEN_CHARGE. This test's title/expectation previously asserted
+  // the opposite; superseded now that the mode actually exists — see
+  // community-buy-authorisation.test.ts / community-buy-decision.test.ts
+  // for that mode's own full coverage.
+  it("allows payments when the mode is set to AUTHORISE_THEN_CAPTURE — a real, implemented mode as of M2", async () => {
     m.marketConfiguration.count.mockResolvedValue(1);
     m.marketConfiguration.findUnique.mockResolvedValue({
       countryCode: "GB", communityBuyEnabled: true, communityBuyPaymentsEnabled: true, communityBuyPaymentMode: "AUTHORISE_THEN_CAPTURE",
     } as never);
 
-    expect(await marketConfigurationService.isCommunityBuyPaymentsEnabled("GB")).toBe(false);
+    expect(await marketConfigurationService.isCommunityBuyPaymentsEnabled("GB")).toBe(true);
   });
 
   it("blocks payments when the mode is still the old PAY_NOW_REFUND_ON_FAILURE — client mandate 2026-09 explicitly rejected that model", async () => {

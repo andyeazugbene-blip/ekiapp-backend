@@ -164,6 +164,11 @@ import {
   adminListCampaignContributions,
   adminGetCampaignLedger,
   adminGetLedgerSummary,
+  adminListCommunityBuyPayouts,
+  adminGetCommunityBuyPayout,
+  adminMarkCommunityBuyPayoutReady,
+  adminHoldCommunityBuyPayout,
+  adminReleaseCommunityBuyPayout,
   adminGetSupportCase,
   adminHoldSupplierPayment,
   adminListCampaignsForReview,
@@ -285,6 +290,17 @@ adminRouter.get("/community-buy/supplier-payments", asyncHandler(requireAdminPer
 adminRouter.get("/community-buy/supplier-payments/aggregate", asyncHandler(requireAdminPermission("community_buy.read")), asyncHandler(adminGetSupplierPaymentAggregate));
 adminRouter.post("/community-campaigns/:id/supplier-payment/release", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(require2fa), asyncHandler(adminReleaseSupplierPayment));
 adminRouter.post("/community-campaigns/:id/supplier-payment/hold", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(require2fa), asyncHandler(adminHoldSupplierPayment));
+
+// M2 — AUTHORISE_THEN_CAPTURE payout admin (CommunityBuyPayout). Same
+// permission/2FA gating as the CampaignSupplierPayment routes above; the
+// release route additionally refuses server-side (503
+// PAYOUT_CUSTODY_NOT_CONFIRMED) unless payout custody has been explicitly
+// confirmed — see campaign-payout.service.ts.
+adminRouter.get("/community-buy/payouts", asyncHandler(requireAdminPermission("community_buy.read")), asyncHandler(adminListCommunityBuyPayouts));
+adminRouter.get("/community-campaigns/:id/payout", asyncHandler(requireAdminPermission("community_buy.read")), asyncHandler(adminGetCommunityBuyPayout));
+adminRouter.post("/community-campaigns/:id/payout/mark-ready", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(require2fa), asyncHandler(adminMarkCommunityBuyPayoutReady));
+adminRouter.post("/community-campaigns/:id/payout/hold", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(require2fa), asyncHandler(adminHoldCommunityBuyPayout));
+adminRouter.post("/community-campaigns/:id/payout/release", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(require2fa), asyncHandler(adminReleaseCommunityBuyPayout));
 
 // Four-eyes approvals (architecture doc §7) — generic across gated action
 // types. Deciding a specific pending approval uses its own approvals.read/

@@ -13,6 +13,8 @@ import { marketConfigurationService } from "./market-configuration.service";
 import { supportCaseService } from "./support-case.service";
 import { supplierInvitationService } from "./supplier-invitation.service";
 import { adminApprovalsService } from "../admin/admin-approvals.service";
+import { campaignAuthorisationService } from "./campaign-authorisation.service";
+import { campaignPayoutService } from "./campaign-payout.service";
 
 // ─── Public market availability (used by the mobile app to decide whether
 // to show Regular Deliveries / Community Buy entry points at all — the
@@ -141,6 +143,68 @@ export async function getContribution(request: Request, response: Response): Pro
 export async function retryContributionCharge(request: Request, response: Response): Promise<void> {
   const userId = requireUserId(request);
   response.json({ contribution: await campaignContributionsService.retryCharge(userId, requireIdParam(request)) });
+}
+
+// ─── M2 — AUTHORISE_THEN_CAPTURE participant flow (spec §16) ────────────
+// Deliberately separate endpoints from pledgeContribution/retryContributionCharge
+// above — see campaign-authorisation.service.ts's commit() doc comment for
+// why (that function's paymentMethodId requirement has no equivalent here).
+
+/** spec §16 "POST /community-buys/:id/commit". */
+export async function commitToCampaign(request: Request, response: Response): Promise<void> {
+  const userId = requireUserId(request);
+  const quantity = Number(request.body?.quantity);
+  if (!Number.isInteger(quantity) || quantity <= 0) throw new AppError("A positive integer quantity is required", 400);
+  const result = await campaignAuthorisationService.commit(userId, requireIdParam(request), quantity);
+  response.status(201).json(result);
+}
+
+/** Participant confirms the connected-account SetupIntent client-side, then calls this to attach the resulting PaymentMethod. */
+export async function confirmContributionSetup(request: Request, response: Response): Promise<void> {
+  const userId = requireUserId(request);
+  const authorisation = await campaignAuthorisationService.confirmSetup(userId, requireIdParam(request));
+  response.json({ authorisation });
+}
+
+/** spec §16 "POST /community-buys/:id/withdraw" — only before a hold exists. */
+export async function withdrawContribution(request: Request, response: Response): Promise<void> {
+  const userId = requireUserId(request);
+  const contribution = await campaignAuthorisationService.withdraw(userId, requireIdParam(request));
+  response.json({ contribution });
+}
+
+/** Participant retries a declined hold — e.g. after updating their card. */
+export async function retryContributionHold(request: Request, response: Response): Promise<void> {
+  const userId = requireUserId(request);
+  const authorisation = await campaignAuthorisationService.retryHold(userId, requireIdParam(request));
+  response.json({ authorisation });
+}
+
+/** Role-aware quantities (spec §12/§16 dashboard) for an AUTHORISE_THEN_CAPTURE campaign — participant/organiser/supplier/admin all read the same real counts. */
+export async function getCampaignAuthorisationSummary(request: Request, response: Response): Promise<void> {
+  response.json(await campaignAuthorisationService.getAuthorisationSummary(requireIdParam(request)));
+}
+
+/** spec §16 "POST /community-buys/:id/decision" — organiser proceed/cancel below minimum. */
+export async function decideCampaign(request: Request, response: Response): Promise<void> {
+  const userId = requireUserId(request);
+  const action = request.body?.action;
+  if (action !== "proceed" && action !== "cancel") throw new AppError("action must be \"proceed\" or \"cancel\"", 400);
+  const campaign = await campaignAuthorisationService.decide(userId, requireIdParam(request), action);
+  response.json({ campaign });
+}
+
+/** spec §16 "POST /community-buys/:id/reconfirm" — supplier confirms/declines a reduced quantity below the original minimum. Same dual-path (Vendor vs SupplierAccount) dispatch as confirmSupplierCommitment above. */
+export async function reconfirmCampaign(request: Request, response: Response): Promise<void> {
+  const userId = requireUserId(request);
+  const acting = await resolveActingSupplier(userId);
+  const action = request.body?.action;
+  if (action !== "confirm" && action !== "decline") throw new AppError("action must be \"confirm\" or \"decline\"", 400);
+  const reason = typeof request.body?.reason === "string" ? request.body.reason : undefined;
+  const campaign = acting.kind === "vendor"
+    ? await campaignAuthorisationService.reconfirmForVendor(acting.vendorId, requireIdParam(request), action, reason)
+    : await campaignAuthorisationService.reconfirmForAccount(acting.userId, requireIdParam(request), action, reason);
+  response.json({ campaign });
 }
 
 export async function listMyContributions(request: Request, response: Response): Promise<void> {
@@ -341,6 +405,24 @@ export async function getMySupplierPayment(request: Request, response: Response)
     ? await campaignContributionsService.getMyPaymentForCampaign(acting.vendorId, requireIdParam(request))
     : await campaignContributionsService.getMyPaymentForCampaignAsAccount(acting.userId, requireIdParam(request));
   response.json({ payment });
+}
+
+/** M2 — the AUTHORISE_THEN_CAPTURE-mode twin of getMySupplierPayment() above, reading CommunityBuyPayout instead of CampaignSupplierPayment. */
+export async function getMyCampaignPayout(request: Request, response: Response): Promise<void> {
+  const acting = await resolveActingSupplier(requireUserId(request));
+  const campaignId = requireIdParam(request);
+  const payout = acting.kind === "vendor"
+    ? await (async () => {
+        const supplier = await prisma.supplierProfile.findUnique({ where: { vendorId: acting.vendorId }, select: { id: true } });
+        if (!supplier) throw new AppError("Campaign not found", 404);
+        return campaignPayoutService.getMyPayout({ supplierId: supplier.id }, campaignId);
+      })()
+    : await (async () => {
+        const account = await prisma.supplierAccount.findUnique({ where: { userId: acting.userId }, select: { id: true } });
+        if (!account) throw new AppError("Campaign not found", 404);
+        return campaignPayoutService.getMyPayout({ supplierAccountId: account.id }, campaignId);
+      })();
+  response.json({ payout });
 }
 
 export async function confirmFulfilmentInventory(request: Request, response: Response): Promise<void> {
@@ -784,6 +866,65 @@ export async function adminHoldSupplierPayment(request: Request, response: Respo
   const payment = await campaignContributionsService.holdSupplierPayment(adminId, id, reason);
   await recordAudit({ actorId: adminId, action: "community_supplier_payment.hold", entityType: "CampaignSupplierPayment", entityId: id, reason, afterState: { status: payment.status }, request });
   response.json({ payment });
+}
+
+// ─── M2 — AUTHORISE_THEN_CAPTURE payout admin (CommunityBuyPayout) ──────
+// Parallel to the CampaignSupplierPayment admin functions above, never
+// sharing a code path with them — see campaign-payout.service.ts's doc
+// comment for why "release" here does NOT necessarily move real money the
+// way adminReleaseSupplierPayment() above does.
+
+export async function adminListCommunityBuyPayouts(_request: Request, response: Response): Promise<void> {
+  response.json({ items: await campaignPayoutService.listForAdmin() });
+}
+
+export async function adminGetCommunityBuyPayout(request: Request, response: Response): Promise<void> {
+  response.json({ payout: await campaignPayoutService.get(requireIdParam(request)) });
+}
+
+export async function adminMarkCommunityBuyPayoutReady(request: Request, response: Response): Promise<void> {
+  const adminId = requireUserId(request);
+  const payout = await campaignPayoutService.markReady(adminId, requireIdParam(request));
+  response.json({ payout });
+}
+
+export async function adminHoldCommunityBuyPayout(request: Request, response: Response): Promise<void> {
+  const adminId = requireUserId(request);
+  const reasonCode = request.body?.reasonCode;
+  if (typeof reasonCode !== "string" || !reasonCode.trim()) throw new AppError("reasonCode is required", 400);
+  const payout = await campaignPayoutService.hold(adminId, requireIdParam(request), reasonCode);
+  response.json({ payout });
+}
+
+/**
+ * Same four-eyes gate as adminReleaseSupplierPayment() above, reused
+ * as-is (same actionType-agnostic requiresApproval() call, different
+ * actionType string) — but the underlying service call itself will still
+ * refuse (503 PAYOUT_CUSTODY_NOT_CONFIRMED) unless
+ * COMMUNITY_BUY_PAYOUT_CUSTODY_CONFIRMED=true has been explicitly set,
+ * regardless of approval state. Four-eyes and custody-confirmation are
+ * independent gates; both must pass.
+ */
+export async function adminReleaseCommunityBuyPayout(request: Request, response: Response): Promise<void> {
+  const adminId = requireUserId(request);
+  const id = requireIdParam(request);
+  const existingPayout = await prisma.communityBuyPayout.findUnique({ where: { campaignId: id }, select: { netPayoutAmount: true } });
+  const gated = await adminApprovalsService.requiresApproval("community_buy.payout_release", existingPayout?.netPayoutAmount ?? null);
+  if (gated) {
+    const approval = await adminApprovalsService.requestApproval({
+      actionType: "community_buy.payout_release",
+      businessRefType: "CommunityBuyPayout",
+      businessRefId: id,
+      amount: existingPayout?.netPayoutAmount ?? null,
+      requestedById: adminId,
+      reason: "Community Buy payout release requested",
+    });
+    await recordAudit({ actorId: adminId, action: "community_buy_payout.release_requested", entityType: "CommunityBuyPayout", entityId: id, request });
+    response.status(202).json({ pendingApproval: approval, message: "This release requires a second admin's approval before it executes." });
+    return;
+  }
+  const payout = await campaignPayoutService.triggerManualPayout(adminId, id);
+  response.json({ payout });
 }
 
 export async function adminListMarketConfigurations(_request: Request, response: Response): Promise<void> {

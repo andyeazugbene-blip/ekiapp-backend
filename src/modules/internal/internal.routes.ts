@@ -9,6 +9,7 @@ import { automationDetectors } from "../automation/automation.detectors";
 import { renewalsService } from "../regular-deliveries/renewals.service";
 import { communityCampaignsService } from "../community-buy/community-campaigns.service";
 import { campaignContributionsService } from "../community-buy/campaign-contributions.service";
+import { campaignAuthorisationService } from "../community-buy/campaign-authorisation.service";
 import { escrowService } from "../paystack/escrow.service";
 import { escrowHealthService } from "../paystack/escrow-health.service";
 import { reconciliationService } from "../ledger/reconciliation.service";
@@ -151,6 +152,30 @@ async function runCommunityBuySweep() {
     refundsProcessed: refunds.processed,
     refundsFailed: refunds.failed,
     ambiguousChargesRequeried: requeried,
+  };
+}
+
+// Community Buy M2 — AUTHORISE_THEN_CAPTURE mode's own job set (spec
+// §17.2), completely separate from runCommunityBuySweep() above: a
+// PLEDGE_THEN_CHARGE campaign never reaches any of the statuses these
+// queries filter on, so this never touches an old-mode campaign.
+async function runCommunityBuyAuthorisationSweep() {
+  const holdWindows = await campaignAuthorisationService.openHoldWindows();
+  const decisions = await campaignAuthorisationService.evaluateAuthorisationDecisions();
+  const decisionTimeouts = await campaignAuthorisationService.evaluateDecisionTimeouts();
+  const reconfirmationTimeouts = await campaignAuthorisationService.evaluateReconfirmationTimeouts();
+  const holdExpiry = await campaignAuthorisationService.holdExpiryMonitor();
+  const paymentRecovery = await campaignAuthorisationService.paymentRecoveryTimeout();
+  return {
+    campaignsMovedToHoldWindow: holdWindows.campaignsProcessed,
+    holdsCreated: holdWindows.holdsCreated,
+    decisionsEvaluated: decisions.evaluated,
+    decisionsProceeded: decisions.proceeded,
+    decisionsRequired: decisions.decisionRequired,
+    decisionTimeoutsCancelled: decisionTimeouts.cancelled,
+    reconfirmationTimeoutsCancelled: reconfirmationTimeouts.cancelled,
+    holdsFlaggedExpiring: holdExpiry.flagged,
+    declinedHoldsReleasedOnRecoveryTimeout: paymentRecovery.released,
   };
 }
 
@@ -313,6 +338,7 @@ const jobs: [string, string, () => Promise<Record<string, unknown>>][] = [
   ["automation-sweep", "automation sweep", runAutomationSweep],
   ["renewals-sweep", "renewals sweep", runRenewalsSweep],
   ["community-buy-sweep", "Community Buy sweep", runCommunityBuySweep],
+  ["community-buy-authorisation-sweep", "Community Buy AUTHORISE_THEN_CAPTURE sweep", runCommunityBuyAuthorisationSweep],
   ["escrow-sweep", "escrow timeout/auto-release sweep", runEscrowSweep],
   ["escrow-balance-check", "escrow balance check", runEscrowBalanceCheck],
   ["cart-cleanup", "cart cleanup", runCartCleanup],

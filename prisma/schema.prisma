@@ -2170,6 +2170,15 @@ enum CampaignStatus {
   COMPLETED
   FINANCIALLY_CLOSED
   CANCELLED
+  // M2 — AUTHORISE_THEN_CAPTURE-mode-only states (spec §6.3, §8, §11.3).
+  // Additive: only ever entered by a campaign whose paymentMode is
+  // AUTHORISE_THEN_CAPTURE (see CommunityCampaign.paymentMode) — a
+  // PLEDGE_THEN_CHARGE campaign never reaches any of these, and its
+  // existing LIVE -> RESCUE_WINDOW -> FULFILLING flow is untouched.
+  HOLD_WINDOW // commitment locked; manual-capture holds being placed/monitored
+  DECISION_REQUIRED // below minimum at decisionDeadline; organiser has 24h to proceed/cancel
+  AWAITING_SUPPLIER_RECONFIRMATION // third-party supply proceeding below minimum; supplier must reconfirm
+  PAYMENT_CAPTURE // capturing every hold_succeeded authorisation; -> FULFILLING once done
 }
 
 enum ContributionStatus {
@@ -2295,14 +2304,14 @@ model SupplierInvitation {
 }
 
 model CommunityCampaign {
-  id                    String                     @id @default(cuid())
-  organiserId           String
+  id                        String                             @id @default(cuid())
+  organiserId               String
   // Nullable — a campaign may be self-fulfilled by the organiser with no
   // supplier at all. When set, fulfilmentOwner is SUPPLIER; when null,
   // fulfilmentOwner is SELF. Supplier acceptance/decline is fulfilment
   // workflow state only and never gates publication/LIVE — see submit()
   // and publish() in community-campaigns.service.ts.
-  supplierId            String?
+  supplierId                String?
   // Workstream 3 — additive expand-phase FK alongside supplierId, not a
   // replacement. New assignments write this; a legacy-linked SupplierAccount
   // (has legacySupplierProfileId) also dual-writes supplierId so every
@@ -2311,10 +2320,10 @@ model CommunityCampaign {
   // campaign's supplier through resolveCampaignSupplier() (supplier-
   // resolution.service.ts), never by reading either FK directly, so both
   // paths stay correct without duplicating logic at every call site.
-  supplierAccountId     String?
-  fulfilmentOwner       CampaignFulfilmentOwner    @default(SUPPLIER)
-  title                 String
-  description           String?
+  supplierAccountId         String?
+  fulfilmentOwner           CampaignFulfilmentOwner            @default(SUPPLIER)
+  title                     String
+  description               String?
   // Community Buy Workstream 2: loosened from required to nullable so a
   // draft can exist before the organiser has decided these — real "not yet
   // chosen" (null), never a fabricated placeholder value. submit() is the
@@ -2322,67 +2331,85 @@ model CommunityCampaign {
   // "any authenticated user can create a draft; gates apply only when an
   // action creates supplier, payment or public obligations"). Existing
   // rows are unaffected; this is a pure nullability loosening.
-  country               String?
-  currency              String?
-  targetAmount          Int
-  deadline              DateTime?
-  status                CampaignStatus             @default(DRAFT)
-  reviewNotes           String?
-  reviewedById          String?
-  reviewedAt            DateTime?
-  publishedAt           DateTime?
-  closedAt              DateTime?
-  paidTotal             Int                        @default(0)
+  country                   String?
+  currency                  String?
+  targetAmount              Int
+  deadline                  DateTime?
+  status                    CampaignStatus                     @default(DRAFT)
+  reviewNotes               String?
+  reviewedById              String?
+  reviewedAt                DateTime?
+  publishedAt               DateTime?
+  closedAt                  DateTime?
+  paidTotal                 Int                                @default(0)
   // Flexible-fulfilment quantity model (minimum/goal/maximum shares) —
   // added alongside the original amount-based targetAmount rather than
   // replacing it, since existing reads of targetAmount (admin list views)
   // still work during the UI migration; all NEW campaign creation and
   // state-machine logic treats these as authoritative.
-  minimumShares         Int?
-  goalShares            Int?
-  maximumShares         Int?
-  pricePerShareMinor    Int?
+  minimumShares             Int?
+  goalShares                Int?
+  maximumShares             Int?
+  pricePerShareMinor        Int?
   // Community Buy Workstream 2 — Product step (spec §7 step 1). Additive;
   // pricePerShareMinor above stays the sole authoritative price, never
   // reinterpreted by these.
-  images                String[]                   @default([])
-  unit                  String?
-  quantityPerOrder      Int?
-  qualityNotes          String?
+  images                    String[]                           @default([])
+  unit                      String?
+  quantityPerOrder          Int?
+  qualityNotes              String?
   // Community Buy Workstream 2 — Delivery step (spec §7 step 5). This is
   // only the organiser's stated intent at creation time — no address,
   // courier token, or DeliveryReference (that's Workstream 5's privacy
   // infrastructure, deliberately untouched here).
-  deliveryPreference    CampaignDeliveryPreference @default(COLLECTION)
-  confirmedShares       Int                        @default(0)
-  fundingOutcome        FundingOutcome             @default(PENDING)
-  supplierCommitted     Boolean                    @default(false)
-  supplierCommittedAt   DateTime?
+  deliveryPreference        CampaignDeliveryPreference         @default(COLLECTION)
+  confirmedShares           Int                                @default(0)
+  fundingOutcome            FundingOutcome                     @default(PENDING)
+  supplierCommitted         Boolean                            @default(false)
+  supplierCommittedAt       DateTime?
   // Distinct from CHANGES_REQUIRED (which always means "admin sent this
   // back to the organiser") — a supplier decline never touches campaign
   // status, since the organiser still needs to reassign a new supplier
   // (reassignSupplier() below) before doing anything else. Cleared on
   // reassignment so a fresh supplier starts from a clean slate.
-  supplierDeclinedAt    DateTime?
-  supplierDeclineReason String?
-  rescueDurationMinutes Int                        @default(2880)
-  rescueEndsAt          DateTime?
-  extensionCount        Int                        @default(0)
-  termsLockedAt         DateTime?
-  organiser             OrganiserProfile           @relation(fields: [organiserId], references: [id], onDelete: Restrict)
-  supplier              SupplierProfile?           @relation(fields: [supplierId], references: [id], onDelete: Restrict)
-  supplierAccount       SupplierAccount?           @relation(fields: [supplierAccountId], references: [id], onDelete: Restrict)
-  participants          CampaignParticipant[]
-  contributions         CampaignContribution[]
-  extensionRequests     CampaignExtensionRequest[]
-  supplierPayment       CampaignSupplierPayment?
-  fulfilment            CampaignFulfilment?
-  supportCases          CommunityBuySupportCase[]
-  updates               CampaignUpdate[]
-  fulfilmentAlerts      SupplierFulfilmentAlert[]
-  supplierInvitations   SupplierInvitation[]
-  createdAt             DateTime                   @default(now())
-  updatedAt             DateTime                   @updatedAt
+  supplierDeclinedAt        DateTime?
+  supplierDeclineReason     String?
+  rescueDurationMinutes     Int                                @default(2880)
+  rescueEndsAt              DateTime?
+  extensionCount            Int                                @default(0)
+  termsLockedAt             DateTime?
+  // M2 — snapshotted ONCE at campaign creation from the market's
+  // MarketConfiguration.communityBuyPaymentMode (defaulting to
+  // PLEDGE_THEN_CHARGE when the market has no mode configured, which is
+  // every market today — see communityCampaignsService.create()). Never
+  // re-read from the market after creation: a later market-level flag
+  // flip must not change an already-live campaign's payment mechanics
+  // mid-flight (same immutable-snapshot principle as termsLockedAt).
+  paymentMode               CommunityBuyPaymentMode            @default(PLEDGE_THEN_CHARGE)
+  // AUTHORISE_THEN_CAPTURE-mode-only scheduling/decision fields (spec
+  // §11.3, §8 step 7-9). Null/unused for PLEDGE_THEN_CHARGE campaigns.
+  holdWindowStartsAt        DateTime?
+  decisionDeadline          DateTime?
+  decisionRequiredAt        DateTime?
+  reconfirmationRequestedAt DateTime?
+  reconfirmationDeadline    DateTime?
+  reconfirmationQuantity    Int?
+  organiser                 OrganiserProfile                   @relation(fields: [organiserId], references: [id], onDelete: Restrict)
+  supplier                  SupplierProfile?                   @relation(fields: [supplierId], references: [id], onDelete: Restrict)
+  supplierAccount           SupplierAccount?                   @relation(fields: [supplierAccountId], references: [id], onDelete: Restrict)
+  participants              CampaignParticipant[]
+  contributions             CampaignContribution[]
+  extensionRequests         CampaignExtensionRequest[]
+  supplierPayment           CampaignSupplierPayment?
+  fulfilment                CampaignFulfilment?
+  supportCases              CommunityBuySupportCase[]
+  updates                   CampaignUpdate[]
+  fulfilmentAlerts          SupplierFulfilmentAlert[]
+  supplierInvitations       SupplierInvitation[]
+  paymentAuthorisations     CommunityBuyPaymentAuthorisation[]
+  payout                    CommunityBuyPayout?
+  createdAt                 DateTime                           @default(now())
+  updatedAt                 DateTime                           @updatedAt
 
   @@index([status, country])
   @@index([organiserId])
@@ -2390,6 +2417,7 @@ model CommunityCampaign {
   @@index([supplierAccountId])
   @@index([deadline])
   @@index([rescueEndsAt])
+  @@index([paymentMode, status])
 }
 
 enum CampaignUpdateAuthorRole {
@@ -2546,14 +2574,14 @@ model CampaignParticipant {
 }
 
 model CampaignContribution {
-  id                    String                  @id @default(cuid())
+  id                    String                            @id @default(cuid())
   campaignId            String
   participantId         String
   amount                Int
   currency              String
-  quantity              Int                     @default(1)
-  isOrganiserTopUp      Boolean                 @default(false)
-  status                ContributionStatus      @default(INITIATED)
+  quantity              Int                               @default(1)
+  isOrganiserTopUp      Boolean                           @default(false)
+  status                ContributionStatus                @default(INITIATED)
   stripePaymentIntentId String?
   // Client mandate (2026-09): "Eki never takes the fund upfront... payment
   // go to the owner [only] at end of campaign" — PLEDGE_THEN_CHARGE model.
@@ -2563,13 +2591,20 @@ model CampaignContribution {
   // pledge time; nothing is captured until the campaign succeeds and
   // chargeAllPledgesForCampaign() runs the actual off-session charge.
   paymentMethodId       String?
-  campaign              CommunityCampaign       @relation(fields: [campaignId], references: [id], onDelete: Restrict)
-  participant           CampaignParticipant     @relation(fields: [participantId], references: [id], onDelete: Restrict)
-  paymentMethod         BuyerPaymentMethod?     @relation(fields: [paymentMethodId], references: [id], onDelete: SetNull)
+  campaign              CommunityCampaign                 @relation(fields: [campaignId], references: [id], onDelete: Restrict)
+  participant           CampaignParticipant               @relation(fields: [participantId], references: [id], onDelete: Restrict)
+  paymentMethod         BuyerPaymentMethod?               @relation(fields: [paymentMethodId], references: [id], onDelete: SetNull)
   refund                CampaignRefund?
   chargeAttempts        CampaignChargeAttempt[]
-  createdAt             DateTime                @default(now())
-  updatedAt             DateTime                @updatedAt
+  // M2 — 1:1 sibling, only ever set for AUTHORISE_THEN_CAPTURE-mode
+  // campaigns (see CommunityCampaign.paymentMode). This contribution row
+  // stays the durable commitment/consent record either way (amount,
+  // currency, quantity unchanged); the sibling row owns only the
+  // Stripe-hold-mechanics fields — see CommunityBuyPaymentAuthorisation's
+  // own doc comment for why this isn't a duplicate table.
+  paymentAuthorisation  CommunityBuyPaymentAuthorisation?
+  createdAt             DateTime                          @default(now())
+  updatedAt             DateTime                          @updatedAt
 
   @@index([campaignId, status])
   @@index([participantId])
@@ -2622,6 +2657,138 @@ model CampaignRefund {
   @@index([status])
 }
 
+// ─── M2 — Payment hold/capture (AUTHORISE_THEN_CAPTURE mode) ──────────────
+// Additive throughout: PLEDGE_THEN_CHARGE campaigns never create rows in
+// either model below, and CampaignContribution/CampaignChargeAttempt/
+// CampaignSupplierPayment are untouched by anything here.
+
+enum CommunityBuyHoldStatus {
+  NOT_REQUESTED // no Stripe object created yet
+  HOLD_PENDING // manual-capture PaymentIntent created, awaiting outcome
+  REQUIRES_ACTION
+  HOLD_SUCCEEDED // funds authorised (Stripe status requires_capture)
+  HOLD_DECLINED
+  HOLD_EXPIRING // captureBefore is within the warning buffer, not yet captured/released
+  HOLD_RELEASED // cancelled before charge (never call this "refunded" — spec §11.5)
+}
+
+enum CommunityBuyCaptureStatus {
+  NOT_CAPTURED
+  CAPTURE_PENDING
+  CAPTURED
+  CAPTURE_FAILED
+  REFUNDED
+  DISPUTED
+}
+
+// spec §15.3. 1:1 with CampaignContribution (contributionId unique) — see
+// that field's own doc comment for why this doesn't duplicate amount/
+// currency/quantity. supplierConnectedAccountId/paymentMethodReference are
+// per-authorisation because Stripe Connect Direct Charges require the
+// PaymentMethod to live in the SAME connected-account context as the
+// charge (spec §11.1's "supplier is merchant of record") — this is
+// deliberately NOT the shared BuyerPaymentMethod row (see
+// campaign-authorisation.service.ts's doc comment for the full reasoning).
+model CommunityBuyPaymentAuthorisation {
+  id                         String                    @id @default(cuid())
+  contributionId             String                    @unique
+  campaignId                 String
+  supplierConnectedAccountId String
+  setupIntentId              String
+  paymentMethodReference     String
+  paymentIntentId            String?                   @unique
+  consentedAt                DateTime
+  consentWordingVersion      String
+  consentedChargeAmount      Int
+  consentCurrency            String
+  // Null until HOLD_SUCCEEDED — spec 11.2: "Do not populate authorised_amount" before then.
+  authorisedAmount           Int?
+  holdStatus                 CommunityBuyHoldStatus    @default(NOT_REQUESTED)
+  holdCreatedAt              DateTime?
+  // The ACTUAL provider-reported expiry — never assumed at a fixed window
+  // (spec 11.3 step 5). Reliability of this field is flagged as an
+  // external-dependency item pending Stripe API verification (M2 plan §J).
+  captureBefore              DateTime?
+  holdExpiryWarningAt        DateTime?
+  holdRecoveryDeadline       DateTime?
+  authenticationStatus       String?
+  captureStatus              CommunityBuyCaptureStatus @default(NOT_CAPTURED)
+  providerErrorCode          String?
+  retryCount                 Int                       @default(0)
+  idempotencyKey             String                    @unique
+  latestWebhookEventId       String?
+  contribution               CampaignContribution      @relation(fields: [contributionId], references: [id], onDelete: Restrict)
+  campaign                   CommunityCampaign         @relation(fields: [campaignId], references: [id], onDelete: Restrict)
+  createdAt                  DateTime                  @default(now())
+  updatedAt                  DateTime                  @updatedAt
+
+  @@index([campaignId])
+  @@index([holdStatus])
+  @@index([captureBefore])
+}
+
+enum CommunityBuyPayoutStatus {
+  HELD
+  READY
+  PENDING
+  IN_TRANSIT
+  PAID
+  FAILED
+  REVERSED
+  CANCELLED
+  MANUAL_REVIEW
+}
+
+// spec §15.5. Parallel to CampaignSupplierPayment (PLEDGE_THEN_CHARGE mode),
+// never shared with it — see the M2 plan §H for why: under Direct Charges,
+// the supplier's net share lands in THEIR connected account automatically
+// at capture time (application_fee_amount split), so this model tracks the
+// GOVERNANCE/reporting of that money, not a platform->supplier transfer the
+// way CampaignSupplierPayment.releaseSupplierPayment() does. Whether
+// `status` can ever mean genuine fund custody depends on an unresolved,
+// explicitly-flagged external question (manual vs automatic Stripe Connect
+// payout schedule) — see campaign-payout.service.ts's doc comment.
+model CommunityBuyPayout {
+  id                           String                   @id @default(cuid())
+  campaignId                   String                   @unique
+  supplierId                   String // SupplierAccount.id
+  supplierConnectedAccountId   String
+  currency                     String
+  capturedGrossAmount          Int                      @default(0)
+  providerFeeAmount            Int                      @default(0)
+  supplierPayableAmount        Int                      @default(0)
+  // Always 0 in M2 — CommunityBuyOrganiserFee is out of scope (WS8). Column
+  // exists now so the ledger/reporting shape is forward-compatible.
+  organiserFeeAmount           Int                      @default(0)
+  ekiFeeAmount                 Int                      @default(0)
+  refundDeductionAmount        Int                      @default(0)
+  disputeDeductionAmount       Int                      @default(0)
+  reserveAmount                Int                      @default(0)
+  netPayoutAmount              Int                      @default(0)
+  status                       CommunityBuyPayoutStatus @default(HELD)
+  holdReasonCodes              String[]                 @default([])
+  releaseCondition             String?
+  releaseEligibleAt            DateTime?
+  providerPayoutId             String?
+  providerBalanceTransactionId String?
+  requestedAt                  DateTime?
+  submittedAt                  DateTime?
+  inTransitAt                  DateTime?
+  paidAt                       DateTime?
+  failedAt                     DateTime?
+  reversedAt                   DateTime?
+  failureCode                  String?
+  failureMessage               String?
+  retryCount                   Int                      @default(0)
+  idempotencyKey               String?                  @unique
+  latestProviderEventId        String?
+  campaign                     CommunityCampaign        @relation(fields: [campaignId], references: [id], onDelete: Restrict)
+  createdAt                    DateTime                 @default(now())
+  updatedAt                    DateTime                 @updatedAt
+
+  @@index([status])
+}
+
 // Per-country configuration gate. Every market defaults to Community Buy
 // fully disabled — see scope note above.
 model MarketConfiguration {
@@ -2654,16 +2821,21 @@ model MarketConfiguration {
 
   // Client mandate (2026-09): "Eki does not hold customer funds... payment
   // mode must be country-configurable... if a market has no explicit
-  // approved payment mode, disable Community Buy payment there." The
-  // existing contribution flow (campaign-contributions.service.ts) already
-  // implements exactly one of the three architecture-defined modes —
-  // PAY_NOW_REFUND_ON_FAILURE, referenced in that file as "doc §9" — which
-  // was already live before this field existed. Adding this field makes
-  // that choice explicit and auditable per market instead of an implicit
-  // global assumption; it does not change any charge behavior. The other
-  // two modes (AUTHORISE_THEN_CAPTURE, PLEDGE_THEN_CHARGE) are NOT
-  // implemented — a market set to either is treated as unsupported and
-  // payments stay blocked, same as null.
+  // approved payment mode, disable Community Buy payment there."
+  // PLEDGE_THEN_CHARGE (campaign-contributions.service.ts) is the original
+  // implemented mode. M2 adds a second, real, implemented mode —
+  // AUTHORISE_THEN_CAPTURE (campaign-authorisation.service.ts, spec §11) —
+  // this is the per-market feature flag that selects it; a campaign
+  // snapshots whichever mode is configured here at creation time onto
+  // CommunityCampaign.paymentMode and never re-reads this field afterward
+  // (see that field's own doc comment). Every market defaults to null/
+  // PLEDGE_THEN_CHARGE today — flipping a market to AUTHORISE_THEN_CAPTURE
+  // in production is gated on the external confirmations named in the M2
+  // plan (Stripe Connect Direct Charges country/capability approval,
+  // connected-account payout-schedule configuration, capture_before
+  // reliability) and is not done anywhere by this change. PAY_NOW_
+  // REFUND_ON_FAILURE remains unimplemented — a market set to it is still
+  // treated as unsupported, same as null.
   communityBuyPaymentMode CommunityBuyPaymentMode?
 
   // Client mandate (2026-09): "Community Buy must support Eki's configured
@@ -2725,6 +2897,12 @@ enum LedgerAccountType {
   BUYER_WALLET_LIABILITY
   REFUND_CLEARING
   COMMUNITY_BUY_ESCROW
+  // M2 — informational-only account tracking funds sitting in a supplier's
+  // OWN Stripe Connect balance after a Direct Charge capture (never Eki's
+  // cash) — see campaign-authorisation.service.ts's ledger-posting doc
+  // comment for why this exists instead of crediting SUPPLIER_PAYABLE
+  // against COMMUNITY_BUY_ESCROW the way the old payout path does.
+  SUPPLIER_CONNECTED_BALANCE
 }
 
 enum LedgerOwnerType {

@@ -172,23 +172,40 @@ export const marketConfigurationService = {
 
   /**
    * Client mandate (2026-09): "if a market has no explicit approved payment
-   * mode, disable Community Buy payment there." PLEDGE_THEN_CHARGE is now
-   * the one implemented mode (campaign-contributions.service.ts) — the
-   * client explicitly rejected the earlier PAY_NOW_REFUND_ON_FAILURE model
-   * ("Do NOT implement pay-now-then-refund"). A market still set to
-   * PAY_NOW_REFUND_ON_FAILURE or AUTHORISE_THEN_CAPTURE is correctly
-   * blocked too, not silently routed through the wrong flow. No production
-   * market had payments enabled before this change (verified via the
-   * required flags being off/null everywhere), so repointing this gate is
-   * safe — nothing live is being switched underneath a real user.
+   * mode, disable Community Buy payment there." PLEDGE_THEN_CHARGE
+   * (campaign-contributions.service.ts) and, as of M2, AUTHORISE_THEN_CAPTURE
+   * (campaign-authorisation.service.ts, spec §11) are both real, implemented
+   * modes — the client explicitly rejected only the PAY_NOW_REFUND_ON_FAILURE
+   * model ("Do NOT implement pay-now-then-refund"), which stays blocked. No
+   * production market has payments enabled today (verified via the required
+   * flags being off/null everywhere), so widening this gate is safe —
+   * nothing live is being switched underneath a real user; flipping a
+   * market to AUTHORISE_THEN_CAPTURE is a separate, deliberate admin action
+   * gated on the external confirmations named in the M2 plan.
    */
   async isCommunityBuyPaymentsEnabled(countryCode: string): Promise<boolean> {
     const config = await this.get(countryCode);
     return Boolean(
       config?.communityBuyEnabled
       && config?.communityBuyPaymentsEnabled
-      && config.communityBuyPaymentMode === "PLEDGE_THEN_CHARGE",
+      && (config.communityBuyPaymentMode === "PLEDGE_THEN_CHARGE" || config.communityBuyPaymentMode === "AUTHORISE_THEN_CAPTURE"),
     );
+  },
+
+  /**
+   * M2 — resolves which payment mode a BRAND-NEW campaign should snapshot
+   * (communityCampaignsService.create()) — PLEDGE_THEN_CHARGE unless the
+   * market is both Community-Buy-enabled and explicitly configured for
+   * AUTHORISE_THEN_CAPTURE. Never used after creation — see
+   * CommunityCampaign.paymentMode's own doc comment for why the snapshot,
+   * once taken, is never re-read from here again.
+   */
+  async resolveNewCampaignPaymentMode(countryCode: string): Promise<"PLEDGE_THEN_CHARGE" | "AUTHORISE_THEN_CAPTURE"> {
+    const config = await this.get(countryCode);
+    if (config?.communityBuyEnabled && config.communityBuyPaymentMode === "AUTHORISE_THEN_CAPTURE") {
+      return "AUTHORISE_THEN_CAPTURE";
+    }
+    return "PLEDGE_THEN_CHARGE";
   },
 };
 

@@ -15,6 +15,7 @@ import { communicationService } from "../communications/communication.service";
 import { ledgerService } from "../ledger/ledger.service";
 import { renewalsService } from "../regular-deliveries/renewals.service";
 import { campaignContributionsService } from "../community-buy/campaign-contributions.service";
+import { campaignAuthorisationService } from "../community-buy/campaign-authorisation.service";
 import { LedgerAccountType, LedgerDirection, LedgerOwnerType } from "@prisma/client";
 import { AppError } from "../../shared/errors/app-error";
 import type { StripeWebhookInput, StripeWebhookResult } from "./stripe.types";
@@ -45,6 +46,15 @@ class StripeWebhookService {
 
     if (event.type === "payment_intent.canceled") {
       return this.handlePaymentFailedOrCanceled(event);
+    }
+
+    // M2 — manual-capture hold lifecycle (spec §17.1): fires when Stripe
+    // finishes authorising a hold (capture_method:"manual"). This has no
+    // equivalent in the automatic-capture flows above, so it needs its own
+    // top-level branch rather than folding into handlePaymentSucceeded()
+    // (which only ever runs for payment_intent.succeeded).
+    if (event.type === "payment_intent.amount_capturable_updated") {
+      return this.handleCommunityBuyHoldEvent(event);
     }
 
     if (event.type === "charge.dispute.created") {
@@ -98,6 +108,12 @@ class StripeWebhookService {
 
     if (kind === "community_buy_pledge_charge") {
       return this.handlePledgeChargeResolved(event, paymentIntent, true);
+    }
+
+    // M2 — a captured manual-capture hold arrives as a normal
+    // payment_intent.succeeded, same as any other charge.
+    if (kind === "community_buy_hold") {
+      return this.handleCommunityBuyHoldEvent(event);
     }
 
     return this.processPaymentSucceeded(event, paymentIntent);
@@ -471,6 +487,48 @@ class StripeWebhookService {
     }
   }
 
+  /**
+   * M2 — resolves any payment_intent.* event for a manual-capture
+   * Community Buy hold (metadata.kind === "community_buy_hold"). Same
+   * isDuplicate-inside-a-Serializable-transaction shape as
+   * handlePledgeChargeResolved()/handleRenewalPaymentResolved() above —
+   * the actual state-machine logic (which transition is valid for which
+   * event type) lives in campaignAuthorisationService.resolveHoldWebhook(),
+   * not here, so this stays a thin, reusable wrapper for all four event
+   * types that can carry this metadata.kind (amount_capturable_updated,
+   * payment_failed, canceled, succeeded).
+   */
+  private async handleCommunityBuyHoldEvent(event: Stripe.Event): Promise<StripeWebhookResult> {
+    const paymentIntent = event.data.object as Stripe.PaymentIntent;
+    const authorisationId = paymentIntent.metadata?.authorisationId;
+    if (!authorisationId) {
+      logger.warn("Community Buy hold webhook missing authorisationId", { eventId: event.id, type: event.type });
+      return { received: true, ignored: true, eventId: event.id, type: event.type };
+    }
+
+    try {
+      const isDup = await prisma.$transaction(async (tx) => {
+        if (await this.isDuplicate(tx, event.id, event.type, {})) return true;
+        await tx.webhookEvent.update({ where: { stripeEventId: event.id }, data: { status: "PROCESSED", processedAt: new Date() } });
+        return false;
+      }, { isolationLevel: "Serializable" });
+
+      if (isDup) {
+        return { received: true, duplicate: true, eventId: event.id, type: event.type };
+      }
+
+      const outcome = await campaignAuthorisationService.resolveHoldWebhook(authorisationId, event.type, paymentIntent);
+      logger.info("Webhook processed: community_buy_hold resolved", { eventId: event.id, authorisationId, type: event.type, handled: outcome.handled });
+      return { received: true, eventId: event.id, type: event.type };
+    } catch (error) {
+      if (this.isUniqueConstraintError(error)) {
+        return { received: true, duplicate: true, eventId: event.id, type: event.type };
+      }
+      logger.error("Webhook failed: community_buy_hold resolution", { eventId: event.id, ...serializeError(error) });
+      throw error;
+    }
+  }
+
   // ─── Payment Failed / Canceled ──────────────────────────────────────────
 
   private async handleCheckoutSessionCompleted(event: Stripe.Event): Promise<StripeWebhookResult> {
@@ -671,6 +729,13 @@ class StripeWebhookService {
 
     if (kind === "community_buy_pledge_charge") {
       return this.handlePledgeChargeResolved(event, paymentIntent, false);
+    }
+
+    // M2 — a hold that was declined (payment_intent.payment_failed) or
+    // cancelled/expired (payment_intent.canceled — either Eki-initiated via
+    // cancelHold(), or an unexpected provider-side auto-expiry).
+    if (kind === "community_buy_hold") {
+      return this.handleCommunityBuyHoldEvent(event);
     }
 
     // Gift card purchase canceled/failed: nothing to reverse (payment never completed)

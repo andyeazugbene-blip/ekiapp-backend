@@ -40,6 +40,13 @@ export interface CreateCampaignInput {
   qualityNotes?: string;
   // Delivery step (spec §7 step 5) — organiser intent only, no address data.
   deliveryPreference?: "COLLECTION" | "DELIVERY";
+  // M2 — AUTHORISE_THEN_CAPTURE-mode scheduling (spec §7 step 4, §11.3).
+  // Ignored/unused for a campaign whose snapshotted paymentMode ends up
+  // PLEDGE_THEN_CHARGE. Not yet surfaced in the mobile organiser wizard
+  // (that's a later milestone) — accepted here so the backend and its
+  // tests are complete independent of when mobile UI catches up.
+  holdWindowStartsAt?: string;
+  decisionDeadline?: string;
 }
 
 type SupplyRoute = {
@@ -132,6 +139,43 @@ function validateDeadline(deadline: string | undefined): Date | undefined {
     throw new AppError("Deadline must be a valid future date", 400);
   }
   return parsed;
+}
+
+// M2 — spec §7 step 4: "no hard-coded authorisation duration." Organiser
+// sets both dates explicitly; this only enforces the ordering invariant
+// (hold window can't start before the deadline/commitment-lock, decision
+// can't precede the hold window) — the actual "~5 days before decision"
+// default is a UI suggestion for later milestones, not a backend rule.
+function validateAuthorisationSchedule(
+  holdWindowStartsAt: string | undefined,
+  decisionDeadline: string | undefined,
+  deadline: Date | undefined,
+): { holdWindowStartsAt?: Date; decisionDeadline?: Date } {
+  const result: { holdWindowStartsAt?: Date; decisionDeadline?: Date } = {};
+  if (holdWindowStartsAt !== undefined) {
+    const parsed = new Date(holdWindowStartsAt);
+    if (Number.isNaN(parsed.getTime()) || parsed <= new Date()) {
+      throw new AppError("Hold window start must be a valid future date", 400);
+    }
+    if (deadline && parsed < deadline) {
+      throw new AppError("Hold window cannot start before the commitment lock (deadline)", 400);
+    }
+    result.holdWindowStartsAt = parsed;
+  }
+  if (decisionDeadline !== undefined) {
+    const parsed = new Date(decisionDeadline);
+    if (Number.isNaN(parsed.getTime()) || parsed <= new Date()) {
+      throw new AppError("Decision deadline must be a valid future date", 400);
+    }
+    if (result.holdWindowStartsAt && parsed < result.holdWindowStartsAt) {
+      throw new AppError("Decision deadline cannot be before the hold window starts", 400);
+    }
+    if (deadline && parsed < deadline) {
+      throw new AppError("Decision deadline cannot be before the commitment lock (deadline)", 400);
+    }
+    result.decisionDeadline = parsed;
+  }
+  return result;
 }
 
 function validateQuantityPerOrder(quantityPerOrder: number | undefined): void {
@@ -237,10 +281,18 @@ export const communityCampaignsService = {
     validateQuantityPerOrder(input.quantityPerOrder);
     validateDeliveryPreference(input.deliveryPreference);
     const deadline = validateDeadline(input.deadline);
+    const authorisationSchedule = validateAuthorisationSchedule(input.holdWindowStartsAt, input.decisionDeadline, deadline);
+
+    // M2 — snapshotted once, here, never re-read afterward (see
+    // CommunityCampaign.paymentMode's own doc comment).
+    const paymentMode = await marketConfigurationService.resolveNewCampaignPaymentMode(input.country);
 
     const campaign = await prisma.communityCampaign.create({
       data: {
         organiserId: organiser.id,
+        paymentMode,
+        holdWindowStartsAt: authorisationSchedule.holdWindowStartsAt,
+        decisionDeadline: authorisationSchedule.decisionDeadline,
         fulfilmentOwner: route?.fulfilmentOwner ?? "SELF",
         supplierId: route?.supplierId ?? null,
         supplierAccountId: route?.supplierAccountId ?? null,
@@ -287,7 +339,8 @@ export const communityCampaignsService = {
     const campaign = await this.requireOwnedByOrganiser(userId, campaignId);
 
     const financialFieldsTouched = input.minimumShares !== undefined || input.goalShares !== undefined
-      || input.maximumShares !== undefined || input.pricePerShareMinor !== undefined || input.deadline !== undefined;
+      || input.maximumShares !== undefined || input.pricePerShareMinor !== undefined || input.deadline !== undefined
+      || input.holdWindowStartsAt !== undefined || input.decisionDeadline !== undefined;
     // Community Buy Workstream 2: the wizard's Supply step must stay
     // editable on a draft, same as every other step — but only while
     // still DRAFT/CHANGES_REQUIRED; a LIVE campaign's supplier can only
@@ -330,6 +383,7 @@ export const communityCampaignsService = {
     validateQuantityPerOrder(input.quantityPerOrder);
     validateDeliveryPreference(input.deliveryPreference);
     const deadline = validateDeadline(input.deadline);
+    const authorisationSchedule = validateAuthorisationSchedule(input.holdWindowStartsAt, input.decisionDeadline, deadline ?? campaign.deadline ?? undefined);
 
     const updated = await prisma.communityCampaign.update({
       where: { id: campaignId },
@@ -346,6 +400,8 @@ export const communityCampaignsService = {
           targetAmount: (input.goalShares ?? campaign.goalShares ?? 0) * input.pricePerShareMinor,
         }),
         ...(deadline !== undefined && { deadline }),
+        ...(authorisationSchedule.holdWindowStartsAt !== undefined && { holdWindowStartsAt: authorisationSchedule.holdWindowStartsAt }),
+        ...(authorisationSchedule.decisionDeadline !== undefined && { decisionDeadline: authorisationSchedule.decisionDeadline }),
         ...(input.images !== undefined && { images: input.images }),
         ...(input.unit !== undefined && { unit: input.unit }),
         ...(input.quantityPerOrder !== undefined && { quantityPerOrder: input.quantityPerOrder }),
@@ -606,6 +662,17 @@ export const communityCampaignsService = {
     if (!campaign.pricePerShareMinor || campaign.pricePerShareMinor <= 0) missing.push("pricePerShareMinor");
     if (!campaign.unit) missing.push("unit");
     if (!campaign.quantityPerOrder || campaign.quantityPerOrder < 1) missing.push("quantityPerOrder");
+    if (campaign.paymentMode === "AUTHORISE_THEN_CAPTURE") {
+      if (!campaign.holdWindowStartsAt) missing.push("holdWindowStartsAt");
+      if (!campaign.decisionDeadline) missing.push("decisionDeadline");
+      // M2 scope: Stripe Connect Direct Charges needs a supplier connected
+      // account as the merchant of record (spec §11.1) — organisers have no
+      // Connect account in this codebase (organiser payout is WS8, out of
+      // scope here), so a self-fulfilled campaign has nothing to charge
+      // against under this mode. Blocked explicitly rather than silently
+      // failing later at hold-creation time.
+      if (campaign.fulfilmentOwner === "SELF") missing.push("self_fulfilment_not_supported_for_authorise_then_capture");
+    }
 
     if (campaign.fulfilmentOwner === "SUPPLIER") {
       if (!campaign.supplierId) {
@@ -940,6 +1007,21 @@ export const communityCampaignsService = {
     let failed = 0;
     let rescued = 0;
     for (const campaign of due) {
+      // M2 — an AUTHORISE_THEN_CAPTURE campaign's deadline is only the
+      // commitment lock (spec §7 step 4); success/failure is decided later,
+      // at decisionDeadline, by evaluateAuthorisationDecisions() in
+      // campaign-authorisation.service.ts. This function's confirmedShares-
+      // based success/RESCUE_WINDOW logic below is PLEDGE_THEN_CHARGE-only
+      // and must never run for a new-mode campaign.
+      if (campaign.paymentMode === "AUTHORISE_THEN_CAPTURE") {
+        const claim = await prisma.communityCampaign.updateMany({
+          where: { id: campaign.id, status: "LIVE" },
+          data: { status: "HOLD_WINDOW" },
+        });
+        if (claim.count !== 1) continue;
+        continue;
+      }
+
       const minimum = campaign.minimumShares ?? 0;
       const goal = campaign.goalShares ?? 0;
 

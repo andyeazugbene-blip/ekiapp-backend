@@ -4,6 +4,7 @@ import { AppError } from "../../shared/errors/app-error";
 import { recordAudit } from "../../shared/utils/audit";
 import { adminApprovalsService } from "./admin-approvals.service";
 import { campaignContributionsService } from "../community-buy/campaign-contributions.service";
+import { campaignPayoutService } from "../community-buy/campaign-payout.service";
 import { executeOrderRefund } from "./admin-refunds.controller";
 
 function requireUserId(request: Request): string {
@@ -73,6 +74,22 @@ export async function adminDecideApproval(request: Request, response: Response):
         entityType: "CampaignSupplierPayment",
         entityId: approval.businessRefId,
         afterState: { status: payment.status },
+        request,
+      });
+    } else if (approval.actionType === "community_buy.payout_release") {
+      // M2 twin of the community_buy.supplier_payment_release branch above —
+      // same "mirror the direct path's specific audit entry" reasoning.
+      // triggerManualPayout() itself still refuses (503
+      // PAYOUT_CUSTODY_NOT_CONFIRMED) unless the payout-custody
+      // confirmation env flag is set — four-eyes approval alone can never
+      // bypass that gate.
+      const payout = await campaignPayoutService.triggerManualPayout(adminId, approval.businessRefId);
+      await recordAudit({
+        actorId: adminId,
+        action: "community_buy_payout.released",
+        entityType: "CommunityBuyPayout",
+        entityId: approval.businessRefId,
+        afterState: { status: payout.status },
         request,
       });
     } else if (approval.actionType === "order.refund.large") {

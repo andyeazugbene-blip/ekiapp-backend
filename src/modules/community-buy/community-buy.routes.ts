@@ -7,10 +7,18 @@ import {
   acceptSupplierInvitation,
   applyAsOrganiser,
   applyAsSupplier,
+  commitToCampaign,
+  confirmContributionSetup,
   confirmFulfilmentInventory,
   confirmSupplierCommitment,
+  decideCampaign,
   declineSupplierCommitment,
+  getCampaignAuthorisationSummary,
+  getMyCampaignPayout,
   pledgeContribution,
+  reconfirmCampaign,
+  retryContributionHold,
+  withdrawContribution,
   createSupportCase,
   createOrganiserCampaign,
   createOrganiserTopUp,
@@ -84,6 +92,15 @@ communityBuyRouter.post("/campaigns/:id/contributions", authenticate, asyncHandl
 communityBuyRouter.get("/contributions/:id", authenticate, asyncHandler(getContribution));
 communityBuyRouter.post("/contributions/:id/retry-charge", authenticate, asyncHandler(retryContributionCharge));
 
+// M2 — AUTHORISE_THEN_CAPTURE participant flow (spec §16). Deliberately
+// separate from the pledge/retry-charge routes above — see
+// campaign-authorisation.service.ts's commit() doc comment.
+communityBuyRouter.post("/campaigns/:id/commit", authenticate, asyncHandler(commitToCampaign));
+communityBuyRouter.get("/campaigns/:id/authorisation-summary", authenticate, asyncHandler(getCampaignAuthorisationSummary));
+communityBuyRouter.post("/contributions/:id/confirm-setup", authenticate, asyncHandler(confirmContributionSetup));
+communityBuyRouter.post("/contributions/:id/withdraw", authenticate, asyncHandler(withdrawContribution));
+communityBuyRouter.post("/contributions/:id/retry-hold", authenticate, asyncHandler(retryContributionHold));
+
 // Buyers/organisers join a live campaign — kept on the same router since
 // it's participant-facing, not an organiser-only action.
 communityBuyRouter.post("/campaigns/:id/join", authenticate, asyncHandler(joinCampaign));
@@ -121,6 +138,10 @@ organiserRouter.post("/campaigns/:id/publish", asyncHandler(publishOrganiserCamp
 organiserRouter.post("/campaigns/:id/rescue/top-up", asyncHandler(createOrganiserTopUp));
 organiserRouter.post("/campaigns/:id/rescue/extension-request", asyncHandler(requestCampaignExtension));
 organiserRouter.post("/campaigns/:id/rescue/end", asyncHandler(endCampaignRescue));
+// M2 — spec §16 "POST /community-buys/:id/decision", AUTHORISE_THEN_CAPTURE
+// mode only (DECISION_REQUIRED never occurs for a PLEDGE_THEN_CHARGE
+// campaign, so this is a 409 there regardless).
+organiserRouter.post("/campaigns/:id/decision", asyncHandler(decideCampaign));
 organiserRouter.get("/campaigns/:id/participants", asyncHandler(listCampaignParticipants));
 organiserRouter.get("/campaigns/:id/refund-progress", asyncHandler(getCampaignRefundProgress));
 organiserRouter.get("/campaigns/:id/fulfilment", asyncHandler(getOrganiserFulfilment));
@@ -161,3 +182,7 @@ supplierRouter.post("/campaigns/:id/fulfilment/ready", requireApprovedSupplier()
 supplierRouter.post("/campaigns/:id/fulfilment/dispatch", requireApprovedSupplier(), asyncHandler(markFulfilmentDispatched));
 supplierRouter.post("/campaigns/:id/fulfilment/collect", requireApprovedSupplier(), asyncHandler(markFulfilmentCollected));
 supplierRouter.get("/campaigns/:id/payment", requireApprovedSupplier(), asyncHandler(getMySupplierPayment));
+// M2 — spec §16 "POST /community-buys/:id/reconfirm" and the
+// AUTHORISE_THEN_CAPTURE-mode twin of the payment route above.
+supplierRouter.post("/campaigns/:id/reconfirm", requireApprovedSupplier(), asyncHandler(reconfirmCampaign));
+supplierRouter.get("/campaigns/:id/payout", requireApprovedSupplier(), asyncHandler(getMyCampaignPayout));
