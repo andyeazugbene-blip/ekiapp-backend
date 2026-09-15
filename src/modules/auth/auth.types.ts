@@ -37,7 +37,10 @@ export interface AuthCapabilities {
   canReceiveSupplierPayouts: boolean;
 }
 
-export type LastDestination = "BUY" | "SELL" | "SUPPLY";
+// "COMMUNITY_BUY" is never derived server-side (deriveLastDestination below
+// only ever returns BUY/SELL/SUPPLY) — it exists so a client can persist
+// that preference locally without the type lying about what's possible.
+export type LastDestination = "BUY" | "SELL" | "SUPPLY" | "COMMUNITY_BUY";
 
 export interface AuthUser {
   id: string;

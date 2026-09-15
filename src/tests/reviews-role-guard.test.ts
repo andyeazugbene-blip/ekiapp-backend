@@ -1,6 +1,9 @@
 /**
- * Verifies role/auth gating on the reviews routes:
- *   - POST /api/reviews requires authentication (401) and BUYER role (403 for VENDOR/ADMIN)
+ * Verifies auth gating on the reviews routes:
+ *   - POST /api/reviews requires authentication (401) but no particular
+ *     User.role (universal account model — everyone can buy, so everyone
+ *     can review a genuine purchase; createReview() itself enforces the
+ *     real invariant via order ownership, not the caller's role)
  *   - GET  /api/reviews is public (no token required)
  *   - GET  /api/reviews/me requires authentication (401)
  *
@@ -83,29 +86,29 @@ const validBody = {
   rating: 5,
 };
 
-describe("Reviews route role enforcement", () => {
+describe("Reviews route auth gating (universal account — no role trap)", () => {
   it("POST /api/reviews — 401 when no token", async () => {
     const res = await request(app).post("/api/reviews").send(validBody);
     expect(res.status).toBe(401);
     expect(mockCreate).not.toHaveBeenCalled();
   });
 
-  it("POST /api/reviews — 403 for VENDOR role", async () => {
+  it("POST /api/reviews — 201 for VENDOR role reviewing their own genuine purchase (no role trap)", async () => {
     const res = await request(app)
       .post("/api/reviews")
       .set("Authorization", `Bearer ${vendorToken()}`)
       .send(validBody);
-    expect(res.status).toBe(403);
-    expect(mockCreate).not.toHaveBeenCalled();
+    expect(res.status).toBe(201);
+    expect(mockCreate).toHaveBeenCalledTimes(1);
   });
 
-  it("POST /api/reviews — 403 for ADMIN role", async () => {
+  it("POST /api/reviews — 201 for ADMIN role (no role trap; ownership is enforced by the service, not this route)", async () => {
     const res = await request(app)
       .post("/api/reviews")
       .set("Authorization", `Bearer ${adminToken()}`)
       .send(validBody);
-    expect(res.status).toBe(403);
-    expect(mockCreate).not.toHaveBeenCalled();
+    expect(res.status).toBe(201);
+    expect(mockCreate).toHaveBeenCalledTimes(1);
   });
 
   it("POST /api/reviews — 201 for BUYER role with valid body", async () => {

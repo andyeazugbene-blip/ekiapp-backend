@@ -193,22 +193,15 @@ describe("Anonymous — protected routes return 401", () => {
   }
 });
 
-describe("RBAC — Reviews POST role gate", () => {
-  it("Vendor → 403", async () => {
-    const res = await request(app)
-      .post("/api/reviews")
-      .set("Authorization", `Bearer ${vendorA()}`)
-      .send({ orderId: "o", vendorId: "v", productId: "p", rating: 5 });
-    expect(res.status).toBe(403);
-  });
-  it("Admin → 403", async () => {
-    const res = await request(app)
-      .post("/api/reviews")
-      .set("Authorization", `Bearer ${adminToken()}`)
-      .send({ orderId: "o", vendorId: "v", productId: "p", rating: 5 });
-    expect(res.status).toBe(403);
-  });
-});
+// POST /api/reviews is no longer role-gated (Community Buy Workstream 9 —
+// universal account: everyone can buy, so everyone can review a genuine
+// purchase; ownership is enforced by reviews.service.ts, not the caller's
+// role). That auth-gating contract — and a proper mock of reviews.service
+// so the assertion doesn't hit the real, DB-backed service — now lives in
+// src/tests/reviews-role-guard.test.ts. Duplicating it here would either
+// re-mock the same thing a second time or (as it did before this change)
+// silently start hitting a real, unmocked Prisma call the moment the role
+// gate that used to short-circuit it was removed.
 
 describe("RBAC — distinct buyers cannot read each other (sanity check)", () => {
   it("buyerA token sub=buyer-a, buyerB token sub=buyer-b — confirms tokens are distinct", () => {
