@@ -754,13 +754,23 @@ export const campaignContributionsService = {
         await prisma.campaignRefund.update({ where: { id: refund.id }, data: { status: "REFUND_PROCESSING" } });
         const contribution = await prisma.campaignContribution.findUniqueOrThrow({
           where: { id: refund.contributionId },
-          include: { participant: true },
+          include: { participant: true, paymentAuthorisation: true },
         });
         if (!contribution.stripePaymentIntentId) throw new Error("Contribution has no payment intent to refund");
 
+        // M9/AT-25 fix — this function is payment-mode-agnostic by design
+        // (createRefundRecordsForFailedCampaign() creates a CampaignRefund
+        // for any PAID contribution regardless of mode), but a M2
+        // (AUTHORISE_THEN_CAPTURE) Direct Charge PaymentIntent lives in the
+        // CONNECTED account's own object space — refunding it without that
+        // context would fail with "no such payment_intent" at the platform
+        // level. The sibling paymentAuthorisation row (null for legacy
+        // PLEDGE_THEN_CHARGE contributions) carries the account to use.
+        const stripeAccount = contribution.paymentAuthorisation?.supplierConnectedAccountId;
+
         const stripeRefund = await stripe.refunds.create(
           { payment_intent: contribution.stripePaymentIntentId, amount: refund.amount },
-          { idempotencyKey: refund.idempotencyKey },
+          { idempotencyKey: refund.idempotencyKey, ...(stripeAccount ? { stripeAccount } : {}) },
         );
 
         await prisma.campaignRefund.update({
@@ -768,6 +778,9 @@ export const campaignContributionsService = {
           data: { status: "REFUNDED", stripeRefundId: stripeRefund.id },
         });
         await prisma.campaignContribution.update({ where: { id: refund.contributionId }, data: { status: "REFUNDED" } });
+        if (contribution.paymentAuthorisation) {
+          await prisma.communityBuyPaymentAuthorisation.update({ where: { id: contribution.paymentAuthorisation.id }, data: { captureStatus: "REFUNDED" } }).catch(() => {});
+        }
         await recordAudit({
           actorId: SYSTEM_CRON_ACTOR,
           action: "community_refund.processed",
@@ -775,9 +788,15 @@ export const campaignContributionsService = {
           entityId: refund.id,
           metadata: { amount: refund.amount, stripeRefundId: stripeRefund.id },
         });
+        // M9/AT-25 fix — M2 mode posts its capture ledger legs keyed on
+        // (CommunityBuyPaymentAuthorisation, authorisation.id), not
+        // (CommunityContribution, contributionId) the way the legacy mode
+        // does (see markCaptured()'s own postEntriesSafely calls) — using
+        // the wrong key here would find zero entries to reverse and
+        // silently leave the ledger overstating captured revenue forever.
         await ledgerService.reverseEntries(prisma, {
-          businessRefType: "CommunityContribution",
-          businessRefId: refund.contributionId,
+          businessRefType: contribution.paymentAuthorisation ? "CommunityBuyPaymentAuthorisation" : "CommunityContribution",
+          businessRefId: contribution.paymentAuthorisation ? contribution.paymentAuthorisation.id : refund.contributionId,
           providerRef: stripeRefund.id,
           description: `Refund reverses Community Buy contribution ${refund.contributionId}`,
         }).catch((ledgerError) => {

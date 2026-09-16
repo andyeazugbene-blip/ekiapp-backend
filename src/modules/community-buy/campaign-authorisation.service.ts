@@ -439,9 +439,21 @@ export const campaignAuthorisationService = {
     return prisma.communityBuyPaymentAuthorisation.findUniqueOrThrow({ where: { id: authorisationId } });
   },
 
+  /**
+   * M9/AT-25 fix — this used to filter on holdStatus alone, which does NOT
+   * change when a hold is captured (only captureStatus does). A campaign
+   * cancelled mid-PAYMENT_CAPTURE could have some holds already CAPTURED
+   * while still HOLD_SUCCEEDED, and this loop would wrongly call
+   * cancelHold() on them: marking the contribution CANCELLED, trying to
+   * cancel an already-succeeded PaymentIntent, and telling an actually-
+   * charged participant "you were not charged." The captureStatus filter
+   * below is the fix — only genuinely uncaptured (or failed-to-capture)
+   * holds are ever released here. Already-captured holds are refunded
+   * instead, by refundCapturedHoldsForCampaign() below.
+   */
   async releaseAllHoldsForCampaign(campaignId: string, reasonCode: string): Promise<void> {
     const openHolds = await prisma.communityBuyPaymentAuthorisation.findMany({
-      where: { campaignId, holdStatus: { in: ["HOLD_PENDING", "REQUIRES_ACTION", "HOLD_SUCCEEDED", "HOLD_DECLINED"] } },
+      where: { campaignId, holdStatus: { in: ["HOLD_PENDING", "REQUIRES_ACTION", "HOLD_SUCCEEDED", "HOLD_DECLINED"] }, captureStatus: { in: ["NOT_CAPTURED", "CAPTURE_FAILED"] } },
     });
     for (const hold of openHolds) {
       await this.cancelHold(hold.id, reasonCode).catch((error) => {

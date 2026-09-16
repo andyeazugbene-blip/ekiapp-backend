@@ -46,6 +46,7 @@ vi.mock("../modules/notifications/notifications.service", () => ({
 
 import { prisma } from "../lib/prisma";
 import { stripe } from "../lib/stripe";
+import { notificationsService } from "../modules/notifications/notifications.service";
 import { campaignAuthorisationService } from "../modules/community-buy/campaign-authorisation.service";
 
 const m = vi.mocked(prisma, true);
@@ -499,6 +500,34 @@ describe("onCaptureSucceeded() — CommunityBuyPayout creation, spec §H", () =>
   it("never creates a payout row for a SELF-fulfilled campaign", async () => {
     await campaignAuthorisationService.onCaptureSucceeded(baseCampaign({ fulfilmentOwner: "SELF", supplierAccountId: null }) as any, 1900, 100, 2000, "GBP");
     expect(m.communityBuyPayout.create).not.toHaveBeenCalled();
+  });
+});
+
+describe("releaseAllHoldsForCampaign() — M9/AT-25 fix: never releases an already-captured hold", () => {
+  it("skips a HOLD_SUCCEEDED hold whose captureStatus is CAPTURED — no cancelHold(), no false 'not charged' notification", async () => {
+    m.communityBuyPaymentAuthorisation.findMany.mockResolvedValue([] as any); // the captureStatus filter excludes it before this ever runs
+    await campaignAuthorisationService.releaseAllHoldsForCampaign(CAMPAIGN_ID, "admin_cancelled");
+
+    expect(m.communityBuyPaymentAuthorisation.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: expect.objectContaining({ captureStatus: { in: ["NOT_CAPTURED", "CAPTURE_FAILED"] } }) }),
+    );
+    expect(s.paymentIntents.cancel).not.toHaveBeenCalled();
+    expect(notificationsService.enqueue).not.toHaveBeenCalled();
+  });
+
+  it("still releases a genuinely uncaptured HOLD_SUCCEEDED hold", async () => {
+    m.communityBuyPaymentAuthorisation.findMany.mockResolvedValue([
+      { id: "hold-uncaptured", holdStatus: "HOLD_SUCCEEDED", captureStatus: "NOT_CAPTURED", paymentIntentId: "pi_1", supplierConnectedAccountId: "acct_1", contributionId: "contrib-1" },
+    ] as any);
+    m.communityBuyPaymentAuthorisation.findUniqueOrThrow.mockResolvedValue({ id: "hold-uncaptured", holdStatus: "HOLD_SUCCEEDED", captureStatus: "NOT_CAPTURED", paymentIntentId: "pi_1", supplierConnectedAccountId: "acct_1", contributionId: "contrib-1" } as any);
+    m.communityBuyPaymentAuthorisation.updateMany.mockResolvedValue({ count: 1 } as any);
+    m.campaignContribution.updateMany.mockResolvedValue({ count: 1 } as any);
+    m.campaignContribution.findUniqueOrThrow.mockResolvedValue({ id: "contrib-1", participant: { userId: "participant-1" } } as any);
+
+    await campaignAuthorisationService.releaseAllHoldsForCampaign(CAMPAIGN_ID, "admin_cancelled");
+
+    expect(s.paymentIntents.cancel).toHaveBeenCalledWith("pi_1", undefined, { stripeAccount: "acct_1" });
+    expect(notificationsService.enqueue).toHaveBeenCalledWith(expect.objectContaining({ userId: "participant-1" }));
   });
 });
 

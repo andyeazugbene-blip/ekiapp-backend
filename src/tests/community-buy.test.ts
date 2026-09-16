@@ -2961,6 +2961,58 @@ describe("Phase 9 — admin cancel/end campaign", () => {
     expect(result.status).toBe("CANCELLED");
   });
 
+  // M9/AT-25 — "Cancellation after capture creates per-payment refunds and
+  // tracks failures." Before this fix, cancel() on an AUTHORISE_THEN_CAPTURE
+  // campaign mid-PAYMENT_CAPTURE never created a refund for anyone already
+  // charged, and told every participant "you were not charged" regardless.
+  it("AT-25: cancelling an AUTHORISE_THEN_CAPTURE campaign with an already-captured contribution creates a refund record and tells that participant the truth", async () => {
+    m.communityCampaign.findUnique.mockResolvedValue({ ...baseCampaign, status: "PAYMENT_CAPTURE", paymentMode: "AUTHORISE_THEN_CAPTURE" } as never);
+    m.communityCampaign.update.mockResolvedValue({ id: "camp-1", status: "CANCELLED" } as never);
+    m.communityBuyPaymentAuthorisation.findMany.mockResolvedValue([] as never); // no open holds left to release in this scenario
+    // createRefundRecordsForFailedCampaign() queries PAID contributions first...
+    m.campaignContribution.findMany.mockImplementationOnce(async () => [
+      { id: "contrib-captured", campaignId: "camp-1", amount: 5000, currency: "GBP" },
+    ] as never);
+    m.campaignRefund.create.mockResolvedValue({} as never);
+    m.campaignContribution.update.mockResolvedValue({} as never);
+    // ...then this handler re-queries REFUND_PENDING contributions (with participant) to build the correct notification.
+    m.campaignContribution.findMany.mockImplementationOnce(async () => [
+      { id: "contrib-captured", participant: { userId: "participant-1" } },
+    ] as never);
+
+    await communityCampaignsService.cancel("admin-1", "camp-1", "supplier withdrew");
+
+    expect(m.campaignRefund.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ contributionId: "contrib-captured", amount: 5000, status: "REFUND_PENDING" }),
+    }));
+    expect(notificationsService.enqueue).toHaveBeenCalledWith(expect.objectContaining({
+      userId: "participant-1",
+      data: expect.objectContaining({ event: "admin_cancelled" }),
+      title: "Campaign ended",
+    }));
+    const chargedCall = vi.mocked(notificationsService.enqueue).mock.calls.find((c) => c[0].userId === "participant-1");
+    expect(chargedCall?.[0].body).toMatch(/already been charged.*being refunded/i);
+    // The other participant (never charged) still gets the accurate opposite message.
+    const untouchedCall = vi.mocked(notificationsService.enqueue).mock.calls.find((c) => c[0].userId === "participant-2");
+    expect(untouchedCall?.[0].body).toMatch(/never charged/i);
+  });
+
+  it("AT-25: an AUTHORISE_THEN_CAPTURE cancel with nothing captured yet still releases open holds and sends the plain 'never charged' message to everyone", async () => {
+    m.communityCampaign.findUnique.mockResolvedValue({ ...baseCampaign, status: "HOLD_WINDOW", paymentMode: "AUTHORISE_THEN_CAPTURE" } as never);
+    m.communityCampaign.update.mockResolvedValue({ id: "camp-1", status: "CANCELLED" } as never);
+    m.campaignContribution.findMany.mockResolvedValue([] as never); // nothing PAID
+    m.communityBuyPaymentAuthorisation.findMany.mockResolvedValue([] as never);
+
+    await communityCampaignsService.cancel("admin-1", "camp-1", "below minimum");
+
+    expect(m.campaignRefund.create).not.toHaveBeenCalled();
+    for (const call of vi.mocked(notificationsService.enqueue).mock.calls) {
+      if (call[0].userId === "participant-1" || call[0].userId === "participant-2") {
+        expect(call[0].body).toMatch(/never charged/i);
+      }
+    }
+  });
+
   // M3 gap 3 — admin dashboard visibility must cover AUTHORISE_THEN_CAPTURE's
   // own in-flight statuses the same way it already covers RESCUE_WINDOW,
   // otherwise a campaign stuck mid-decision/reconfirmation is invisible to
@@ -3144,5 +3196,92 @@ describe("marketConfigurationService.listPublic/getPublic — SEC-01: public end
 
     expect(listed[0]).toHaveProperty("communityBuyFeeBps", 300);
     expect(got).toHaveProperty("paymentMode", "LIVE");
+  });
+});
+
+// M9/AT-25 — processPendingRefunds() previously had zero test coverage at
+// all and, before this fix, would have silently failed every M2
+// (AUTHORISE_THEN_CAPTURE) refund: no stripeAccount context (Direct Charge
+// PaymentIntents live in the connected account's own object space) and the
+// wrong ledger businessRefType/Id to reverse (M2 posts its capture legs
+// keyed on CommunityBuyPaymentAuthorisation, not CommunityContribution).
+describe("campaignContributionsService.processPendingRefunds() — AT-25", () => {
+  beforeEach(() => {
+    m.ledgerEntry.findMany.mockResolvedValue([] as never);
+    m.campaignRefund.update.mockResolvedValue({} as never);
+    m.campaignContribution.update.mockResolvedValue({} as never);
+    m.communityBuyPaymentAuthorisation.update.mockResolvedValue({} as never);
+    vi.mocked(notificationsService.enqueue).mockResolvedValue(undefined as never);
+  });
+
+  it("a legacy PLEDGE_THEN_CHARGE refund calls Stripe with no stripeAccount and reverses the ledger keyed on CommunityContribution", async () => {
+    m.campaignRefund.findMany.mockResolvedValue([
+      { id: "refund-legacy", contributionId: "contrib-legacy", amount: 5000, idempotencyKey: "refund:contrib-legacy" },
+    ] as never);
+    m.campaignContribution.findUniqueOrThrow.mockResolvedValue({
+      id: "contrib-legacy", campaignId: "camp-1", stripePaymentIntentId: "pi_legacy",
+      participant: { userId: "participant-1" }, paymentAuthorisation: null,
+    } as never);
+    (stripe.refunds.create as any).mockResolvedValue({ id: "re_legacy" });
+
+    const result = await campaignContributionsService.processPendingRefunds();
+
+    expect(result).toEqual({ processed: 1, failed: 0 });
+    expect(stripe.refunds.create).toHaveBeenCalledWith(
+      { payment_intent: "pi_legacy", amount: 5000 },
+      { idempotencyKey: "refund:contrib-legacy" },
+    );
+    expect(m.campaignRefund.update).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: "refund-legacy" }, data: { status: "REFUNDED", stripeRefundId: "re_legacy" },
+    }));
+    expect(m.communityBuyPaymentAuthorisation.update).not.toHaveBeenCalled();
+    expect(m.ledgerEntry.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ businessRefType: "CommunityContribution", businessRefId: "contrib-legacy" }),
+    }));
+  });
+
+  it("an AUTHORISE_THEN_CAPTURE refund passes stripeAccount from the sibling authorisation and reverses the ledger keyed on CommunityBuyPaymentAuthorisation", async () => {
+    m.campaignRefund.findMany.mockResolvedValue([
+      { id: "refund-m2", contributionId: "contrib-m2", amount: 5000, idempotencyKey: "refund:contrib-m2" },
+    ] as never);
+    m.campaignContribution.findUniqueOrThrow.mockResolvedValue({
+      id: "contrib-m2", campaignId: "camp-2", stripePaymentIntentId: "pi_m2",
+      participant: { userId: "participant-2" },
+      paymentAuthorisation: { id: "auth-m2", supplierConnectedAccountId: "acct_supplier_1" },
+    } as never);
+    (stripe.refunds.create as any).mockResolvedValue({ id: "re_m2" });
+
+    const result = await campaignContributionsService.processPendingRefunds();
+
+    expect(result).toEqual({ processed: 1, failed: 0 });
+    expect(stripe.refunds.create).toHaveBeenCalledWith(
+      { payment_intent: "pi_m2", amount: 5000 },
+      { idempotencyKey: "refund:contrib-m2", stripeAccount: "acct_supplier_1" },
+    );
+    expect(m.communityBuyPaymentAuthorisation.update).toHaveBeenCalledWith({
+      where: { id: "auth-m2" }, data: { captureStatus: "REFUNDED" },
+    });
+    expect(m.ledgerEntry.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ businessRefType: "CommunityBuyPaymentAuthorisation", businessRefId: "auth-m2" }),
+    }));
+  });
+
+  it("a Stripe failure marks the refund REFUND_FAILED with the failure reason and never claims REFUNDED", async () => {
+    m.campaignRefund.findMany.mockResolvedValue([
+      { id: "refund-fail", contributionId: "contrib-fail", amount: 5000, idempotencyKey: "refund:contrib-fail" },
+    ] as never);
+    m.campaignContribution.findUniqueOrThrow.mockResolvedValue({
+      id: "contrib-fail", campaignId: "camp-3", stripePaymentIntentId: "pi_fail",
+      participant: { userId: "participant-3" }, paymentAuthorisation: null,
+    } as never);
+    (stripe.refunds.create as any).mockRejectedValue(new Error("card issuer declined the refund"));
+
+    const result = await campaignContributionsService.processPendingRefunds();
+
+    expect(result).toEqual({ processed: 0, failed: 1 });
+    expect(m.campaignRefund.update).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: "refund-fail" }, data: { status: "REFUND_FAILED", failureReason: "card issuer declined the refund" },
+    }));
+    expect(m.campaignContribution.update).not.toHaveBeenCalledWith(expect.objectContaining({ data: { status: "REFUNDED" } }));
   });
 });

@@ -910,15 +910,14 @@ export const communityCampaignsService = {
       include: { organiser: true, participants: true },
     });
     if (!campaign) throw new AppError("Campaign not found", 404);
-    // M3 — AUTHORISE_THEN_CAPTURE's own in-flight statuses added alongside
-    // the original PLEDGE_THEN_CHARGE-era list, untouched. A campaign in
+    // M3/M9 (AT-25) — AUTHORISE_THEN_CAPTURE's own in-flight statuses added
+    // alongside the original PLEDGE_THEN_CHARGE-era list. A campaign in
     // PAYMENT_CAPTURE may already have SOME captured (PAID) contributions
-    // by the time an admin cancels it — exactly the same "a campaign that
-    // already succeeded is a different, harder problem" boundary this
-    // function's own doc comment already draws for the old mode above;
-    // this does not extend to refunding anything already captured, only to
-    // releasing whatever holds are still open (see the paymentMode branch
-    // below).
+    // by the time an admin cancels it — those get a REAL refund
+    // (createRefundRecordsForFailedCampaign() below is already payment-
+    // mode-agnostic: it only looks at CampaignContribution.status="PAID",
+    // which capture sets regardless of mode), while whatever holds are
+    // still open get released, never captured.
     const cancellable = [
       "DRAFT", "UNDER_REVIEW", "CHANGES_REQUIRED", "APPROVED", "LIVE", "PAUSED", "RESCUE_WINDOW",
       "HOLD_WINDOW", "DECISION_REQUIRED", "AWAITING_SUPPLIER_RECONFIRMATION", "PAYMENT_CAPTURE",
@@ -930,6 +929,11 @@ export const communityCampaignsService = {
       where: { id: campaignId },
       data: { status: "CANCELLED", closedAt: new Date(), reviewNotes: reason },
     });
+    // AT-25 — captured contributions get a real refund record regardless of
+    // payment mode; releaseAllHoldsForCampaign() (M2 only) never touches
+    // those (captureStatus-filtered, see its own doc comment) so the two
+    // calls can never double-process the same authorisation.
+    const refundsCreated = await this.createRefundRecordsForFailedCampaign(campaignId);
     if (campaign.paymentMode === "AUTHORISE_THEN_CAPTURE") {
       // Reuses the exact same hold-release path decide()'s own cancel
       // branch and the timeout sweeps already use — no parallel
@@ -938,12 +942,26 @@ export const communityCampaignsService = {
     } else {
       // Defensive, matching endRescueAndRefund() exactly — see method comment
       // above for why this is always a no-op today, kept as a safety net.
-      await this.createRefundRecordsForFailedCampaign(campaignId);
       await this.cancelPledgesForFailedCampaign(campaignId);
     }
-    await notifyCampaign(campaign.organiser.userId, "admin_cancelled", "Campaign ended by admin", `${campaign.title} has been ended by an administrator. No participant was charged — pledges have been cancelled. Reason: ${reason}`, campaignId, `admin_cancelled:${campaignId}:${campaign.organiser.userId}`, "organiser");
+    // AT-25 — a participant already charged must never be told "you were
+    // not charged." refundedUserIds separates the two truthful messages;
+    // the actual "your refund is being processed"/"refund completed"
+    // notification comes later from processPendingRefunds() once Stripe
+    // confirms — this is just the immediate, accurate "what happened" note.
+    const refundedContributions = refundsCreated > 0
+      ? await prisma.campaignContribution.findMany({ where: { campaignId, status: "REFUND_PENDING" }, include: { participant: true } })
+      : [];
+    const refundedUserIds = new Set(refundedContributions.map((c) => c.participant.userId));
+    const organiserBody = refundedUserIds.size > 0
+      ? `${campaign.title} has been ended by an administrator. ${refundedUserIds.size} participant(s) who were already charged are being refunded; other pledges have been cancelled. Reason: ${reason}`
+      : `${campaign.title} has been ended by an administrator. No participant was charged — pledges have been cancelled. Reason: ${reason}`;
+    await notifyCampaign(campaign.organiser.userId, "admin_cancelled", "Campaign ended by admin", organiserBody, campaignId, `admin_cancelled:${campaignId}:${campaign.organiser.userId}`, "organiser");
     for (const p of campaign.participants) {
-      await notifyCampaign(p.userId, "admin_cancelled", "Campaign ended", `${campaign.title} has been ended by an administrator. Your saved payment method was never charged — your pledge is cancelled.`, campaignId, `admin_cancelled:${campaignId}:${p.userId}`);
+      const body = refundedUserIds.has(p.userId)
+        ? `${campaign.title} has been ended by an administrator. You had already been charged — your payment is being refunded to your original payment method.`
+        : `${campaign.title} has been ended by an administrator. Your saved payment method was never charged — your pledge is cancelled.`;
+      await notifyCampaign(p.userId, "admin_cancelled", "Campaign ended", body, campaignId, `admin_cancelled:${campaignId}:${p.userId}`);
     }
     return updated;
   },
