@@ -1,38 +1,65 @@
 import { prisma } from "../../lib/prisma";
 import { logger } from "../../lib/logger";
 import { AppError } from "../../shared/errors/app-error";
-import { enqueueEmail } from "../../lib/email-queue";
 import { revokeDeliveryReferencesForSupplierAccount } from "./community-buy-privacy.service";
+import { alertOps } from "./ops-alert.service";
+import { campaignPayoutService } from "./campaign-payout.service";
+
+// AT-30 — "before holds" states: participants have already committed
+// (campaign is publicly live or actively progressing toward capture) but
+// no capture has completed yet. Deliberately excludes DRAFT/UNDER_REVIEW/
+// CHANGES_REQUIRED/APPROVED (never published — organiser can just
+// reassign before publishing, no participant is affected yet) and
+// anything at/after FULFILLING (that is AT-31's "after capture" territory).
+const PRE_CAPTURE_REVIEW_STATUSES = ["LIVE", "PAUSED", "RESCUE_WINDOW", "HOLD_WINDOW", "DECISION_REQUIRED", "AWAITING_SUPPLIER_RECONFIRMATION", "PAYMENT_CAPTURE"] as const;
 
 /**
- * M8 — actionable ops alert: "supplier suspension with active fulfilment"
- * is named explicitly in the master build's observability requirements.
- * Same OPS_ALERT_EMAIL pattern already established elsewhere (stripe.
- * service.ts's dispute handler, campaign-payout.service.ts's failed-payout
- * alert) — no separate channel invented.
+ * M8/M10 — actionable ops alerts for supplier suspension. Never auto-
+ * cancels or auto-reassigns anything — spec explicitly requires a human
+ * "replacement/cancellation review" (AT-30), not a silent campaign
+ * cancellation. Two separate alerts for two separate real scenarios:
+ *  - a campaign still progressing toward capture (AT-30 — "before holds")
+ *  - a campaign whose fulfilment has already started (M8 — "active
+ *    fulfilment" observability requirement; also underlies AT-31, where
+ *    data access is additionally revoked and payout held elsewhere).
  */
-async function alertActiveFulfilmentAtSuspension(supplierAccountId: string, reason: string): Promise<void> {
+async function alertSupplierSuspensionReviewNeeded(supplierAccountId: string, reason: string): Promise<void> {
   try {
-    const activeCampaigns = await prisma.communityCampaign.findMany({
-      where: { supplierAccountId, fulfilment: { status: { not: "COMPLETED" } } },
-      select: { id: true, title: true, fulfilment: { select: { status: true } } },
-    });
-    if (activeCampaigns.length === 0) return;
-    const opsAlertEmail = process.env.OPS_ALERT_EMAIL;
-    if (!opsAlertEmail) return;
-    await enqueueEmail({
-      to: opsAlertEmail,
-      subject: `⚠️ Supplier suspended with ${activeCampaigns.length} active fulfilment(s) in progress`,
-      html: `
-        <h2>Supplier Suspended — Active Fulfilment In Progress</h2>
-        <p>Supplier account: ${supplierAccountId}</p>
-        <p>Reason: ${reason}</p>
-        <ul>${activeCampaigns.map((c) => `<li>${c.title} (${c.id}) — fulfilment status: ${c.fulfilment?.status ?? "unknown"}</li>`).join("")}</ul>
-        <p>Data access for these campaigns has already been revoked (spec §14.4: permitted active fulfilment access continues) — this alert is for operational follow-up on the physical fulfilment itself.</p>
-      `,
-    });
+    const [preCaptureCampaigns, activeFulfilmentCampaigns] = await Promise.all([
+      prisma.communityCampaign.findMany({
+        where: { supplierAccountId, status: { in: [...PRE_CAPTURE_REVIEW_STATUSES] } },
+        select: { id: true, title: true, status: true },
+      }),
+      prisma.communityCampaign.findMany({
+        where: { supplierAccountId, fulfilment: { status: { not: "COMPLETED" } } },
+        select: { id: true, title: true, fulfilment: { select: { status: true } } },
+      }),
+    ]);
+
+    if (preCaptureCampaigns.length > 0) {
+      await alertOps(
+        `🚨 Supplier suspended with ${preCaptureCampaigns.length} campaign(s) still before capture — replacement/cancellation review needed`,
+        `<h2>Supplier Suspended — Replacement/Cancellation Review Needed</h2><p>Supplier account: ${supplierAccountId}</p><p>Reason: ${reason}</p><ul>${preCaptureCampaigns.map((c) => `<li>${c.title} (${c.id}) — status: ${c.status}</li>`).join("")}</ul><p>No campaign was cancelled automatically — an admin must decide replacement vs. cancellation for each.</p>`,
+      );
+    }
+    if (activeFulfilmentCampaigns.length > 0) {
+      await alertOps(
+        `⚠️ Supplier suspended with ${activeFulfilmentCampaigns.length} active fulfilment(s) in progress`,
+        `<h2>Supplier Suspended — Active Fulfilment In Progress</h2><p>Supplier account: ${supplierAccountId}</p><p>Reason: ${reason}</p><ul>${activeFulfilmentCampaigns.map((c) => `<li>${c.title} (${c.id}) — fulfilment status: ${c.fulfilment?.status ?? "unknown"}</li>`).join("")}</ul><p>Data access for these campaigns has already been revoked (spec §14.4: permitted active fulfilment access continues) — this alert is for operational follow-up on the physical fulfilment itself.</p>`,
+      );
+      // AT-31 — "holds payout while fulfilment/refund is resolved." Payout
+      // eligibility (campaign-payout.service.ts's assessPayoutEligibility())
+      // already re-checks supplierState on every markReady()/
+      // triggerManualPayout() call and would refuse regardless, but a
+      // payout already sitting READY should be VISIBLY held, not silently
+      // blocked only at the last step — never-throws, safe no-op if no
+      // payout row exists yet for a given campaign.
+      for (const c of activeFulfilmentCampaigns) {
+        await campaignPayoutService.holdForSystemReason(c.id, "supplier_suspended");
+      }
+    }
   } catch (error) {
-    logger.error("Supplier-suspension active-fulfilment alert failed (non-blocking)", { supplierAccountId, errorMessage: error instanceof Error ? error.message : String(error) });
+    logger.error("Supplier-suspension review alert failed (non-blocking)", { supplierAccountId, errorMessage: error instanceof Error ? error.message : String(error) });
   }
 }
 
@@ -222,7 +249,7 @@ export const supplierAccountService = {
       data: { supplierState: "SUSPENDED", reasonCode: reason, suspendedAt: new Date() },
     });
     await revokeDeliveryReferencesForSupplierAccount(id, "supplier_suspended", actorId);
-    await alertActiveFulfilmentAtSuspension(id, reason);
+    await alertSupplierSuspensionReviewNeeded(id, reason);
     return updated;
   },
 

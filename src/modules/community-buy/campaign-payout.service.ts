@@ -7,28 +7,10 @@ import { logger } from "../../lib/logger";
 import { AppError } from "../../shared/errors/app-error";
 import { recordAudit } from "../../shared/utils/audit";
 import { notificationsService } from "../notifications/notifications.service";
-import { enqueueEmail } from "../../lib/email-queue";
 import { env } from "../../config/env";
+import { alertOps } from "./ops-alert.service";
 
 const SYSTEM_WEBHOOK_ACTOR = "system:stripe_webhook";
-
-/**
- * M8 — actionable ops alert for a failed payout or a genuine reconciliation
- * mismatch (master prompt: "actionable alerts... for failed payout,
- * reconciliation mismatch"). Same OPS_ALERT_EMAIL pattern already
- * established in stripe.service.ts's dispute handler — no separate
- * alerting channel invented. A no-op when OPS_ALERT_EMAIL isn't configured,
- * same as that handler.
- */
-async function alertOps(subject: string, html: string): Promise<void> {
-  const opsAlertEmail = process.env.OPS_ALERT_EMAIL;
-  if (!opsAlertEmail) return;
-  try {
-    await enqueueEmail({ to: opsAlertEmail, subject, html });
-  } catch (error) {
-    logger.error("Community Buy payout ops alert failed to send (non-blocking)", { errorMessage: error instanceof Error ? error.message : String(error) });
-  }
-}
 
 /**
  * M8 (spec Appendix B — payout_held/ready/initiated/in_transit/paid/failed)
@@ -351,6 +333,32 @@ export const campaignPayoutService = {
     await recordAudit({ actorId: SYSTEM_WEBHOOK_ACTOR, action: "community_buy_payout.escalated_manual_review", entityType: "CommunityBuyPayout", entityId: payout.id, metadata: { reasonCode } });
     await alertOps(`⚠️ Community Buy payout escalated to MANUAL_REVIEW: campaign ${campaignId}`, `<h2>Reconciliation Mismatch</h2><p>Campaign: ${campaignId}</p><p>Supplier: ${payout.supplierId}</p><p>Reason: ${reasonCode}</p><p>This payout will not proceed until an admin reviews it.</p>`);
     return updated;
+  },
+
+  /**
+   * AT-36 — "paid payout reversal creates compensating event." Deliberately
+   * separate from escalateToManualReview() above, which refuses to touch an
+   * already-PAID payout by design (a completed payout is normally exactly
+   * the state nothing should further disturb) — this is the ONE narrow,
+   * named exception: reconciliation independently retrieving the real
+   * Stripe Payout object and finding it no longer reports "paid" is
+   * provider-confirmed evidence of a genuine reversal, not a guess.
+   */
+  async markReversed(campaignId: string, reasonCode: string) {
+    const payout = await prisma.communityBuyPayout.findUnique({ where: { campaignId } });
+    if (!payout || payout.status !== "PAID") return payout;
+    const claim = await prisma.communityBuyPayout.updateMany({
+      where: { campaignId, status: "PAID" },
+      data: { status: "REVERSED", reversedAt: new Date(), holdReasonCodes: Array.from(new Set([...payout.holdReasonCodes, reasonCode])) },
+    });
+    if (claim.count !== 1) return prisma.communityBuyPayout.findUniqueOrThrow({ where: { campaignId } });
+    await recordAudit({ actorId: SYSTEM_WEBHOOK_ACTOR, action: "community_buy_payout.reversed", entityType: "CommunityBuyPayout", entityId: payout.id, metadata: { reasonCode } });
+    await notifySupplier(payout.supplierId, "payout_reversed", "Payout reversed", "A previously completed Community Buy payout has been reversed by the provider — contact support.", campaignId, payout.retryCount);
+    await alertOps(
+      `🚨 P0: Community Buy payout REVERSED after being paid — campaign ${campaignId}`,
+      `<h2>Payout Reversed</h2><p>Campaign: ${campaignId}</p><p>Supplier: ${payout.supplierId}</p><p>Reason: ${reasonCode}</p><p>This payout was previously confirmed PAID — investigate immediately.</p>`,
+    );
+    return prisma.communityBuyPayout.findUniqueOrThrow({ where: { campaignId } });
   },
 
   /** Best-effort auto-hold on a dispute/refund detected against a captured hold — never throws (called from webhook handlers whose own contract is never-throws). No-op if no payout row exists yet or it's already PAID. */

@@ -164,21 +164,23 @@ async function reconcilePayouts(periodStart: Date, periodEnd: Date, differences:
           note: `Reconciliation caught a missed payout webhook — provider status "${stripePayout.status}" applied via resolvePayoutWebhook()`,
         });
       } else if (payout.status === "PAID" && stripePayout.status !== "paid") {
-        // Genuine contradiction: we believe this was paid, provider now
-        // disagrees (e.g. a subsequent reversal). Never silently correct —
-        // escalate.
+        // AT-36 — genuine contradiction: we believe this was paid, provider
+        // now disagrees (e.g. a subsequent reversal). Never silently
+        // correct — and never escalateToManualReview() here, which
+        // deliberately refuses to touch an already-PAID payout: markReversed()
+        // is the dedicated, narrow exception for exactly this case.
         differences.push({
           businessRefType: "CommunityBuyPayout", businessRefId: payout.id, providerRef: payout.providerPayoutId,
           expectedAmount: payout.netPayoutAmount, actualAmount: stripePayout.amount, kind: "STATUS_MISMATCH",
           note: `Local status=PAID but provider payout status="${stripePayout.status}"`,
         });
-        await campaignPayoutService.escalateToManualReview(payout.campaignId, "payout_status_mismatch");
+        await campaignPayoutService.markReversed(payout.campaignId, "payout_status_mismatch");
       } else if (amountMismatch) {
         differences.push({
           businessRefType: "CommunityBuyPayout", businessRefId: payout.id, providerRef: payout.providerPayoutId,
           expectedAmount: payout.netPayoutAmount, actualAmount: stripePayout.amount, kind: "AMOUNT_MISMATCH",
         });
-        if (payout.status === "PAID") await campaignPayoutService.escalateToManualReview(payout.campaignId, "payout_amount_mismatch");
+        if (payout.status === "PAID") await campaignPayoutService.markReversed(payout.campaignId, "payout_amount_mismatch");
       }
     } catch (error) {
       if (isStripeResourceMissing(error)) {
@@ -186,7 +188,11 @@ async function reconcilePayouts(periodStart: Date, periodEnd: Date, differences:
           businessRefType: "CommunityBuyPayout", businessRefId: payout.id, providerRef: payout.providerPayoutId,
           expectedAmount: payout.netPayoutAmount, actualAmount: null, kind: "MISSING_AT_PROVIDER",
         });
-        await campaignPayoutService.escalateToManualReview(payout.campaignId, "payout_missing_at_provider");
+        if (payout.status === "PAID") {
+          await campaignPayoutService.markReversed(payout.campaignId, "payout_missing_at_provider");
+        } else {
+          await campaignPayoutService.escalateToManualReview(payout.campaignId, "payout_missing_at_provider");
+        }
         continue;
       }
       logger.error("Community Buy reconciliation: payout retrieve failed", { payoutId: payout.id, errorMessage: error instanceof Error ? error.message : String(error) });

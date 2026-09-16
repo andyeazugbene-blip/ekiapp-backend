@@ -20,9 +20,13 @@ vi.mock("../lib/prisma", () => ({
 
 vi.mock("../lib/logger", () => ({ logger: { error: vi.fn() } }));
 vi.mock("../lib/email-queue", () => ({ enqueueEmail: vi.fn().mockResolvedValue(undefined) }));
+vi.mock("../modules/community-buy/campaign-payout.service", () => ({
+  campaignPayoutService: { holdForSystemReason: vi.fn().mockResolvedValue(undefined) },
+}));
 
 import { prisma } from "../lib/prisma";
 import { enqueueEmail } from "../lib/email-queue";
+import { campaignPayoutService } from "../modules/community-buy/campaign-payout.service";
 import { supplierAccountService } from "../modules/community-buy/supplier-account.service";
 
 const m = vi.mocked(prisma, true);
@@ -129,15 +133,40 @@ describe("suspend() — spec §6.4/§14.4: admin-only, always revokes data acces
     process.env.OPS_ALERT_EMAIL = "ops@example.com";
     m.supplierAccount.findUnique.mockResolvedValue({ id: "acct-1", supplierState: "APPROVED" } as never);
     m.supplierAccount.update.mockResolvedValue({ id: "acct-1", supplierState: "SUSPENDED" } as never);
-    m.communityCampaign.findMany.mockResolvedValue([{ id: "camp-1", title: "Rice Bulk Buy", fulfilment: { status: "PACKING" } }] as never);
+    m.communityCampaign.findMany.mockImplementation(async ({ where }: any) =>
+      where.status ? [] : [{ id: "camp-1", title: "Rice Bulk Buy", fulfilment: { status: "PACKING" } }],
+    );
 
     await supplierAccountService.suspend("acct-1", "policy violation", "admin-1");
 
-    expect(mailer).toHaveBeenCalledWith(expect.objectContaining({ to: "ops@example.com" }));
+    expect(mailer).toHaveBeenCalledWith(expect.objectContaining({ to: "ops@example.com", subject: expect.stringContaining("active fulfilment") }));
+    // AT-31 — "holds payout while fulfilment/refund is resolved."
+    expect(campaignPayoutService.holdForSystemReason).toHaveBeenCalledWith("camp-1", "supplier_suspended");
     delete process.env.OPS_ALERT_EMAIL;
   });
 
-  it("never alerts ops when the supplier has no active fulfilment", async () => {
+  // AT-30 — "Suspended supplier before holds triggers replacement/
+  // cancellation review without silent campaign cancellation." Distinct
+  // from the active-fulfilment alert above: this fires for a campaign that
+  // hasn't even reached capture yet, and never touches the campaign's own
+  // status (no auto-cancel, no auto-reassign).
+  it("AT-30: alerts ops for a LIVE campaign still before capture, without cancelling it", async () => {
+    process.env.OPS_ALERT_EMAIL = "ops@example.com";
+    m.supplierAccount.findUnique.mockResolvedValue({ id: "acct-1", supplierState: "APPROVED" } as never);
+    m.supplierAccount.update.mockResolvedValue({ id: "acct-1", supplierState: "SUSPENDED" } as never);
+    m.communityCampaign.findMany.mockImplementation(async ({ where }: any) =>
+      where.status ? [{ id: "camp-live", title: "Bulk Rice Order", status: "LIVE" }] : [],
+    );
+
+    await supplierAccountService.suspend("acct-1", "policy violation", "admin-1");
+
+    expect(mailer).toHaveBeenCalledWith(expect.objectContaining({
+      to: "ops@example.com",
+      subject: expect.stringContaining("replacement/cancellation review needed"),
+    }));
+  });
+
+  it("never alerts ops when the supplier has no active fulfilment and no pre-capture campaigns", async () => {
     process.env.OPS_ALERT_EMAIL = "ops@example.com";
     m.supplierAccount.findUnique.mockResolvedValue({ id: "acct-1", supplierState: "APPROVED" } as never);
     m.supplierAccount.update.mockResolvedValue({ id: "acct-1", supplierState: "SUSPENDED" } as never);

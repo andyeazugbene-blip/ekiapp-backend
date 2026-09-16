@@ -15,6 +15,7 @@ import { createDeliveryReferenceForContribution } from "./community-buy-privacy.
 import { organiserFeeService } from "./organiser-fee.service";
 import { resolveCampaignConnectedAccountId, resolveCampaignSupplierLedgerOwnerId } from "./campaign-supplier-resolution.service";
 import { upsertParticipantWithAttribution } from "./campaign-participant-attribution.service";
+import { alertOps } from "./ops-alert.service";
 
 const SYSTEM_CRON_ACTOR = "system:cron";
 const CONSENT_WORDING_VERSION = "cb-authorise-v1";
@@ -800,6 +801,40 @@ export const campaignAuthorisationService = {
     }
 
     const campaign = await prisma.communityCampaign.findUniqueOrThrow({ where: { id: authorisation.campaignId } });
+
+    // AT-29 — a supplier restricted or suspended AFTER a hold already
+    // succeeded but BEFORE capture must never have that capture proceed
+    // silently: Direct Charge capture both moves the participant's money
+    // AND application-fee-splits it straight into the supplier's connected
+    // account in one call, with no separate "release" step to intervene
+    // afterward. Blocks the capture and escalates for admin review instead
+    // (the P0 review the spec names) — never auto-releases the hold either,
+    // since that's an admin decision this function has no basis to make.
+    if (campaign.supplierAccountId) {
+      const supplierAccount = await prisma.supplierAccount.findUnique({ where: { id: campaign.supplierAccountId }, select: { supplierState: true } });
+      if (supplierAccount?.supplierState === "SUSPENDED" || supplierAccount?.supplierState === "RESTRICTED") {
+        const blockedState = supplierAccount.supplierState;
+        const blockClaim = await prisma.communityBuyPaymentAuthorisation.updateMany({
+          where: { id: authorisationId, captureStatus: "NOT_CAPTURED" },
+          data: { captureStatus: "CAPTURE_FAILED", providerErrorCode: `blocked_supplier_${blockedState.toLowerCase()}` },
+        });
+        if (blockClaim.count === 1) {
+          await recordAudit({
+            actorId: SYSTEM_CRON_ACTOR,
+            action: "community_buy_authorisation.capture_blocked_supplier_state",
+            entityType: "CommunityBuyPaymentAuthorisation",
+            entityId: authorisationId,
+            metadata: { supplierState: blockedState, campaignId: campaign.id },
+          });
+          await alertOps(
+            `🚨 P0: Community Buy capture blocked — supplier ${blockedState}`,
+            `<h2>Capture blocked by supplier restriction</h2><p>Campaign: ${campaign.id}</p><p>Authorisation: ${authorisationId}</p><p>Supplier state: ${blockedState}</p><p>This hold was NOT captured and NOT released — it needs admin review to decide replacement, cancellation, or reinstatement before any further action.</p>`,
+          );
+        }
+        return prisma.communityBuyPaymentAuthorisation.findUniqueOrThrow({ where: { id: authorisationId } });
+      }
+    }
+
     if (!campaign.country) throw new AppError("Campaign is missing its market configuration", 409);
     const config = await marketConfigurationService.get(campaign.country);
     if (config?.communityBuyFeeBps == null) {

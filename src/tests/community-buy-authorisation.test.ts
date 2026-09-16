@@ -384,6 +384,51 @@ describe("captureHold()/captureWorker() — spec §11.4 (AT-19, AT-20, AT-21)", 
     expect(result.failed).toBe(0);
   });
 
+  // AT-29 — "Restricted or suspended payment_capture scope blocks capture
+  // and creates P0 review." Before this fix, campaign-authorisation.
+  // service.ts never checked supplierState at all: a supplier
+  // suspended/restricted AFTER a hold succeeded but BEFORE capture would
+  // still have that capture proceed — moving the participant's money and
+  // application-fee-splitting it into a connected account Eki had already
+  // flagged, in one irreversible Stripe call.
+  it.each(["SUSPENDED", "RESTRICTED"] as const)(
+    "AT-29: blocks capture when the assigned SupplierAccount is %s, never calls Stripe, and records a P0 audit entry",
+    async (blockedState) => {
+      const authStore = makeAuthorisationStore({ "auth-1": baseAuthorisation({ holdStatus: "HOLD_SUCCEEDED", captureStatus: "NOT_CAPTURED", paymentIntentId: "pi_1", authorisedAmount: 2000 }) });
+      m.communityBuyPaymentAuthorisation.findUniqueOrThrow.mockImplementation(authStore.findUniqueOrThrow as any);
+      m.communityBuyPaymentAuthorisation.updateMany.mockImplementation(authStore.updateMany as any);
+      m.communityCampaign.findUniqueOrThrow.mockResolvedValue(baseCampaign() as any);
+      m.supplierAccount.findUnique.mockResolvedValue({ supplierState: blockedState } as any);
+
+      const result = await campaignAuthorisationService.captureHold("auth-1");
+
+      expect(result.captureStatus).toBe("CAPTURE_FAILED");
+      expect(result.providerErrorCode).toBe(`blocked_supplier_${blockedState.toLowerCase()}`);
+      expect(s.paymentIntents.capture).not.toHaveBeenCalled();
+      expect(m.auditLog.create).toHaveBeenCalledWith(expect.objectContaining({
+        data: expect.objectContaining({ action: "community_buy_authorisation.capture_blocked_supplier_state" }),
+      }));
+    },
+  );
+
+  it("AT-29 twin: an APPROVED supplier is never blocked — the check is a pure gate, not a general slowdown", async () => {
+    const authStore = makeAuthorisationStore({ "auth-1": baseAuthorisation({ holdStatus: "HOLD_SUCCEEDED", captureStatus: "NOT_CAPTURED", paymentIntentId: "pi_1", authorisedAmount: 2000 }) });
+    m.communityBuyPaymentAuthorisation.findUniqueOrThrow.mockImplementation(authStore.findUniqueOrThrow as any);
+    m.communityBuyPaymentAuthorisation.updateMany.mockImplementation(authStore.updateMany as any);
+    m.communityCampaign.findUniqueOrThrow.mockResolvedValue(baseCampaign() as any);
+    m.supplierAccount.findUnique.mockResolvedValue({ supplierState: "APPROVED", providerConnectedAccountId: CONNECTED_ACCOUNT_ID } as any);
+    s.paymentIntents.capture.mockResolvedValue({ id: "pi_1", status: "succeeded" } as any);
+    m.$transaction.mockImplementationOnce(async (cb: any) => cb(m));
+    m.campaignContribution.findUniqueOrThrow.mockResolvedValue({ id: "contrib-1", participant: { userId: "user-1" } } as any);
+    m.communityBuyPayout.findUnique.mockResolvedValue(null);
+    m.ledgerAccount.findUnique.mockResolvedValue(null);
+    m.ledgerAccount.create.mockImplementation(async (args: any) => ({ id: `acct-${args.data.type}`, ...args.data }));
+
+    const result = await campaignAuthorisationService.captureHold("auth-1");
+    expect(result.captureStatus).toBe("CAPTURED");
+    expect(s.paymentIntents.capture).toHaveBeenCalled();
+  });
+
   it("AT-20: a capture failure leaves the contribution OUT of PAID/fulfilment — no successful payment entry", async () => {
     const authorisation = baseAuthorisation({ holdStatus: "HOLD_SUCCEEDED", captureStatus: "NOT_CAPTURED", paymentIntentId: "pi_1", authorisedAmount: 2000 });
     m.communityBuyPaymentAuthorisation.findUniqueOrThrow.mockResolvedValue(authorisation as any);

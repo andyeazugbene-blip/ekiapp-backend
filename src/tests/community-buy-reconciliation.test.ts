@@ -37,6 +37,7 @@ vi.mock("../lib/logger", () => ({
 vi.mock("../modules/community-buy/campaign-payout.service", () => ({
   campaignPayoutService: {
     escalateToManualReview: vi.fn().mockResolvedValue(undefined),
+    markReversed: vi.fn().mockResolvedValue(undefined),
     resolvePayoutWebhook: vi.fn().mockResolvedValue({ handled: true }),
   },
 }));
@@ -215,7 +216,7 @@ describe("CommunityBuyPayout reconciliation (connected-account Payout)", () => {
     expect(campaignPayoutService.escalateToManualReview).not.toHaveBeenCalled();
   });
 
-  it("escalates to MANUAL_REVIEW when a locally-PAID payout is contradicted by the provider — never silently corrected", async () => {
+  it("AT-36: marks a locally-PAID payout REVERSED when contradicted by the provider — never silently corrected, never uses the inert escalateToManualReview() (which refuses to touch an already-PAID payout)", async () => {
     m.communityBuyPayout.findMany.mockResolvedValue([
       { id: "payout-2", campaignId: "camp-10", providerPayoutId: "po_2", supplierConnectedAccountId: "acct_10", status: "PAID", netPayoutAmount: 1900 },
     ] as any);
@@ -224,13 +225,14 @@ describe("CommunityBuyPayout reconciliation (connected-account Payout)", () => {
     await communityBuyReconciliationService.runReconciliation(PERIOD_START, PERIOD_END);
 
     expect(campaignPayoutService.resolvePayoutWebhook).not.toHaveBeenCalled();
-    expect(campaignPayoutService.escalateToManualReview).toHaveBeenCalledWith("camp-10", "payout_status_mismatch");
+    expect(campaignPayoutService.markReversed).toHaveBeenCalledWith("camp-10", "payout_status_mismatch");
+    expect(campaignPayoutService.escalateToManualReview).not.toHaveBeenCalled();
     expect(m.reconciliationDifference.createMany).toHaveBeenCalledWith(expect.objectContaining({
       data: expect.arrayContaining([expect.objectContaining({ kind: "STATUS_MISMATCH", status: "OPEN" })]),
     }));
   });
 
-  it("escalates a PAID payout with an amount mismatch", async () => {
+  it("AT-36: marks a PAID payout REVERSED on an amount mismatch too", async () => {
     m.communityBuyPayout.findMany.mockResolvedValue([
       { id: "payout-3", campaignId: "camp-11", providerPayoutId: "po_3", supplierConnectedAccountId: "acct_11", status: "PAID", netPayoutAmount: 1900 },
     ] as any);
@@ -238,7 +240,7 @@ describe("CommunityBuyPayout reconciliation (connected-account Payout)", () => {
 
     await communityBuyReconciliationService.runReconciliation(PERIOD_START, PERIOD_END);
 
-    expect(campaignPayoutService.escalateToManualReview).toHaveBeenCalledWith("camp-11", "payout_amount_mismatch");
+    expect(campaignPayoutService.markReversed).toHaveBeenCalledWith("camp-11", "payout_amount_mismatch");
     expect(m.reconciliationDifference.createMany).toHaveBeenCalledWith(expect.objectContaining({
       data: expect.arrayContaining([expect.objectContaining({ kind: "AMOUNT_MISMATCH", businessRefType: "CommunityBuyPayout" })]),
     }));
@@ -270,5 +272,17 @@ describe("CommunityBuyPayout reconciliation (connected-account Payout)", () => {
       data: expect.arrayContaining([expect.objectContaining({ kind: "MISSING_AT_PROVIDER", businessRefType: "CommunityBuyPayout" })]),
     }));
     expect(campaignPayoutService.escalateToManualReview).toHaveBeenCalledWith("camp-13", "payout_missing_at_provider");
+  });
+
+  it("AT-36: a PAID payout that's gone missing at the provider is marked REVERSED, not MANUAL_REVIEW", async () => {
+    m.communityBuyPayout.findMany.mockResolvedValue([
+      { id: "payout-6", campaignId: "camp-14", providerPayoutId: "po_6", supplierConnectedAccountId: "acct_14", status: "PAID", netPayoutAmount: 1900 },
+    ] as any);
+    s.payouts.retrieve.mockRejectedValue(resourceMissing());
+
+    await communityBuyReconciliationService.runReconciliation(PERIOD_START, PERIOD_END);
+
+    expect(campaignPayoutService.markReversed).toHaveBeenCalledWith("camp-14", "payout_missing_at_provider");
+    expect(campaignPayoutService.escalateToManualReview).not.toHaveBeenCalled();
   });
 });

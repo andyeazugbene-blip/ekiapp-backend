@@ -557,4 +557,46 @@ describe("M8 — supplier notifications (spec Appendix B: payout_held/ready/init
     expect(mailer).toHaveBeenCalledWith(expect.objectContaining({ to: "ops@example.com" }));
     delete process.env.OPS_ALERT_EMAIL;
   });
+
+  // AT-36 — "paid payout reversal creates compensating event."
+  it("markReversed() transitions PAID -> REVERSED, notifies the supplier, and alerts ops", async () => {
+    process.env.OPS_ALERT_EMAIL = "ops@example.com";
+    const { campaignPayoutService } = await import("../modules/community-buy/campaign-payout.service");
+    m.communityBuyPayout.findUnique.mockResolvedValue(basePayout({ status: "PAID", holdReasonCodes: [] }) as any);
+    m.communityBuyPayout.updateMany.mockResolvedValue({ count: 1 } as any);
+    m.communityBuyPayout.findUniqueOrThrow.mockResolvedValue(basePayout({ status: "REVERSED" }) as any);
+    m.supplierAccount.findUnique.mockResolvedValue(eligibleSupplier() as any);
+
+    const result = await campaignPayoutService.markReversed(CAMPAIGN_ID, "payout_status_mismatch");
+
+    expect(result.status).toBe("REVERSED");
+    expect(m.communityBuyPayout.updateMany).toHaveBeenCalledWith({
+      where: { campaignId: CAMPAIGN_ID, status: "PAID" },
+      data: expect.objectContaining({ status: "REVERSED", reversedAt: expect.any(Date) }),
+    });
+    expect(n.enqueue).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ event: "payout_reversed" }) }));
+    expect(mailer).toHaveBeenCalledWith(expect.objectContaining({ to: "ops@example.com", subject: expect.stringContaining("REVERSED") }));
+    delete process.env.OPS_ALERT_EMAIL;
+  });
+
+  it("markReversed() only ever transitions from PAID — a no-op on any other status", async () => {
+    const { campaignPayoutService } = await import("../modules/community-buy/campaign-payout.service");
+    m.communityBuyPayout.findUnique.mockResolvedValue(basePayout({ status: "READY" }) as any);
+
+    const result = await campaignPayoutService.markReversed(CAMPAIGN_ID, "payout_status_mismatch");
+
+    expect(result?.status).toBe("READY");
+    expect(m.communityBuyPayout.updateMany).not.toHaveBeenCalled();
+  });
+
+  it("a lost race on markReversed()'s guarded claim refuses rather than double-applying", async () => {
+    const { campaignPayoutService } = await import("../modules/community-buy/campaign-payout.service");
+    m.communityBuyPayout.findUnique.mockResolvedValue(basePayout({ status: "PAID" }) as any);
+    m.communityBuyPayout.updateMany.mockResolvedValue({ count: 0 } as any);
+    m.communityBuyPayout.findUniqueOrThrow.mockResolvedValue(basePayout({ status: "REVERSED" }) as any);
+
+    const result = await campaignPayoutService.markReversed(CAMPAIGN_ID, "payout_status_mismatch");
+    expect(result.status).toBe("REVERSED"); // already reversed by the winner — read-back reflects it
+    expect(n.enqueue).not.toHaveBeenCalled();
+  });
 });
