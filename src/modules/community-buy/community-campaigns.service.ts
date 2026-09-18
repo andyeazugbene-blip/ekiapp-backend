@@ -7,6 +7,7 @@ import { marketConfigurationService } from "./market-configuration.service";
 import { calculateBoundedServiceFee } from "../../shared/pricing";
 import { campaignContributionsService } from "./campaign-contributions.service";
 import { campaignAuthorisationService } from "./campaign-authorisation.service";
+import { organiserPayoutService } from "./organiser-payout.service";
 import { recordAudit } from "../../shared/utils/audit";
 import { isIndividualDeliveryEnabled, revokeDeliveryReferencesForCampaign, recordDataAccess } from "./community-buy-privacy.service";
 
@@ -1001,7 +1002,11 @@ export const communityCampaignsService = {
       // AWAITING_SUPPLIER_RECONFIRMATION needs to be visible to admin for
       // exactly the same monitoring/recovery reasons RESCUE_WINDOW already
       // is.
-      where: { status: { in: ["SUCCEEDED", "FAILED", "FULFILLING", "CANCELLED", "LIVE", "PAUSED", "RESCUE_WINDOW", "HOLD_WINDOW", "DECISION_REQUIRED", "AWAITING_SUPPLIER_RECONFIRMATION", "PAYMENT_CAPTURE"] } },
+      // Phase 4 — CANCELLATION_UNDER_REVIEW added for the same reason as
+      // RESCUE_WINDOW/DECISION_REQUIRED above: invisible here would make it
+      // impossible for admin to find and act on a pending cancellation
+      // request via the campaign detail page.
+      where: { status: { in: ["SUCCEEDED", "FAILED", "FULFILLING", "CANCELLED", "LIVE", "PAUSED", "RESCUE_WINDOW", "HOLD_WINDOW", "DECISION_REQUIRED", "AWAITING_SUPPLIER_RECONFIRMATION", "PAYMENT_CAPTURE", "CANCELLATION_UNDER_REVIEW"] } },
       include: { organiser: { include: { user: { select: { name: true, email: true } } } }, supplier: { include: { vendor: { select: { storeName: true } } } } },
       orderBy: { updatedAt: "desc" },
       take: limit,
@@ -1164,6 +1169,184 @@ export const communityCampaignsService = {
       await notifyCampaign(p.userId, "admin_cancelled", "Campaign ended", body, campaignId, `admin_cancelled:${campaignId}:${p.userId}`);
     }
     return updated;
+  },
+
+  /**
+   * Phase 4 (cancellation under review) — organiser-initiated. Reachable
+   * from every "live-ish" status a campaign can be in, both before AND
+   * after a successful close. The routing decision (immediate cancel vs.
+   * admin-reviewed) is made purely on whether any real money has been
+   * captured — never on status alone, since under PLEDGE_THEN_CHARGE a
+   * campaign is charged in the exact same instant it leaves LIVE (see
+   * closeDueCampaigns()), so there is no "some paid, still LIVE" window to
+   * special-case.
+   */
+  async requestCancellation(userId: string, campaignId: string, reason: string) {
+    if (!reason?.trim()) throw new AppError("A reason is required", 400);
+    const campaign = await this.requireOwnedByOrganiser(userId, campaignId);
+    const requestable = ["LIVE", "PAUSED", "RESCUE_WINDOW", "FULFILLING", "SUCCEEDED"];
+    if (!requestable.includes(campaign.status)) {
+      throw new AppError("Cancellation can't be requested from this campaign's current status", 409);
+    }
+    const existingPending = await prisma.campaignCancellationRequest.findFirst({ where: { campaignId, status: "PENDING" } });
+    if (existingPending) throw new AppError("A cancellation request is already pending review for this campaign", 409);
+
+    const paidCount = await prisma.campaignContribution.count({ where: { campaignId, status: "PAID" } });
+    const hadFinancialActivity = paidCount > 0;
+
+    if (!hadFinancialActivity) {
+      // Nothing captured yet — reuses the exact same primitives admin
+      // cancel() uses for this identical case, just with organiser-facing
+      // copy (never "ended by an administrator", since they did it
+      // themselves) and no admin review needed.
+      const [updated] = await prisma.$transaction([
+        prisma.communityCampaign.update({ where: { id: campaignId }, data: { status: "CANCELLED", closedAt: new Date(), reviewNotes: reason } }),
+        prisma.campaignCancellationRequest.create({
+          data: { campaignId, requestedByUserId: userId, reason, hadFinancialActivity: false, preCancellationStatus: campaign.status, status: "APPROVED", reviewedAt: new Date(), reviewNotes: "Auto-approved — no funds had been captured yet" },
+        }),
+      ]);
+      await this.cancelPledgesForFailedCampaign(campaignId);
+      const participants = await prisma.campaignParticipant.findMany({ where: { campaignId } });
+      for (const p of participants) {
+        await notifyCampaign(p.userId, "organiser_cancelled", "Campaign ended", `${campaign.title} has been ended by its organiser. Your saved payment method was never charged — your pledge is cancelled.`, campaignId, `organiser_cancelled:${campaignId}:${p.userId}`);
+      }
+      return { campaign: updated, request: null, requiresReview: false as const };
+    }
+
+    // Real money has been captured — this is exactly the "different,
+    // harder problem" cancel()'s own comment flags as out of scope for a
+    // direct admin action. Routes to admin review instead of acting.
+    const claim = await prisma.communityCampaign.updateMany({
+      where: { id: campaignId, status: campaign.status },
+      data: { status: "CANCELLATION_UNDER_REVIEW" },
+    });
+    if (claim.count !== 1) throw new AppError("This campaign's status just changed — try again", 409);
+    const request = await prisma.campaignCancellationRequest.create({
+      data: { campaignId, requestedByUserId: userId, reason, hadFinancialActivity: true, preCancellationStatus: campaign.status, status: "PENDING" },
+    });
+    const participants = await prisma.campaignParticipant.findMany({ where: { campaignId } });
+    for (const p of participants) {
+      await notifyCampaign(p.userId, "cancellation_under_review", "Cancellation under review", `The organiser has requested to end "${campaign.title}". Eki is reviewing this request — you'll be notified once a decision is made.`, campaignId, `cancellation_under_review:${campaignId}:${p.userId}`);
+    }
+    return { campaign: await prisma.communityCampaign.findUniqueOrThrow({ where: { id: campaignId } }), request, requiresReview: true as const };
+  },
+
+  async listCancellationRequestsForAdmin() {
+    return prisma.campaignCancellationRequest.findMany({
+      where: { status: "PENDING" },
+      include: { campaign: { select: { id: true, title: true, confirmedShares: true, paidTotal: true, currency: true } } },
+      orderBy: { createdAt: "asc" },
+    });
+  },
+
+  /**
+   * Admin approves a cancellation that already has captured funds.
+   * Refund creation reuses createRefundRecordsForFailedCampaign() verbatim
+   * (already idempotent — P2002-safe on its unique refund idempotency key);
+   * actual Stripe refund execution stays on the existing
+   * processPendingRefunds() cron sweep, unchanged. Blocks entirely if the
+   * supplier payment or organiser payout has already been released — no
+   * clawback mechanism exists, and inventing one is explicitly out of
+   * scope (this mirrors the exact guard holdSupplierPayment()/
+   * holdOrganiserPayout() already enforce, checked here first so a blocked
+   * approval never leaves the request half-decided).
+   */
+  async approveCancellation(adminId: string, requestId: string) {
+    const request = await prisma.campaignCancellationRequest.findUnique({
+      where: { id: requestId },
+      include: { campaign: { include: { organiser: true, participants: true } } },
+    });
+    if (!request) throw new AppError("Cancellation request not found", 404);
+    if (request.status !== "PENDING") throw new AppError("This cancellation request has already been decided", 409);
+
+    const [supplierPayment, organiserPayout] = await Promise.all([
+      prisma.campaignSupplierPayment.findUnique({ where: { campaignId: request.campaignId } }),
+      prisma.communityBuyOrganiserPayout.findUnique({ where: { campaignId: request.campaignId } }),
+    ]);
+    if (supplierPayment?.status === "PAID") {
+      throw new AppError("The supplier has already been paid for this campaign — cancellation can't be approved automatically. Contact ops for a manual reversal.", 409, undefined, "SUPPLIER_ALREADY_PAID");
+    }
+    if (organiserPayout?.status === "PAID") {
+      throw new AppError("The organiser has already been paid for this campaign — cancellation can't be approved automatically. Contact ops for a manual reversal.", 409, undefined, "ORGANISER_ALREADY_PAID");
+    }
+
+    // Atomic claim — the same guarded-transition pattern every other
+    // admin decision in this file uses; a concurrent double-click only
+    // ever lets one caller win.
+    const requestClaim = await prisma.campaignCancellationRequest.updateMany({
+      where: { id: requestId, status: "PENDING" },
+      data: { status: "APPROVED", reviewedById: adminId, reviewedAt: new Date() },
+    });
+    if (requestClaim.count !== 1) throw new AppError("This cancellation request has already been decided", 409);
+    const campaignClaim = await prisma.communityCampaign.updateMany({
+      where: { id: request.campaignId, status: "CANCELLATION_UNDER_REVIEW" },
+      data: { status: "CANCELLED", closedAt: new Date() },
+    });
+    if (campaignClaim.count !== 1) {
+      logger.error("Cancellation request approved but campaign was not in CANCELLATION_UNDER_REVIEW — leaving campaign status untouched", { requestId, campaignId: request.campaignId });
+    }
+
+    const refundsCreated = await this.createRefundRecordsForFailedCampaign(request.campaignId);
+    // Already guarded above (status !== "PAID" or this function already
+    // threw), so any record here is safe to place on hold.
+    if (supplierPayment) {
+      await campaignContributionsService.holdSupplierPayment(adminId, request.campaignId, "Campaign cancelled — refunds issued").catch((error) => {
+        logger.error("Failed to hold supplier payment for cancelled campaign", { campaignId: request.campaignId, errorMessage: error instanceof Error ? error.message : String(error) });
+      });
+    }
+    if (organiserPayout) {
+      await organiserPayoutService.holdOrganiserPayout(adminId, request.campaignId, "Campaign cancelled — refunds issued").catch((error) => {
+        logger.error("Failed to hold organiser payout for cancelled campaign", { campaignId: request.campaignId, errorMessage: error instanceof Error ? error.message : String(error) });
+      });
+    }
+
+    await recordAudit({
+      actorId: adminId,
+      action: "community_campaign.cancellation_approved",
+      entityType: "CampaignCancellationRequest",
+      entityId: requestId,
+      metadata: { campaignId: request.campaignId, refundsCreated },
+    });
+
+    const organiserBody = `Your request to end "${request.campaign.title}" was approved. ${refundsCreated} participant(s) are being refunded.`;
+    await notifyCampaign(request.campaign.organiser.userId, "cancellation_approved", "Cancellation approved", organiserBody, request.campaignId, `cancellation_approved:${request.campaignId}:${request.campaign.organiser.userId}`, "organiser");
+    for (const p of request.campaign.participants) {
+      await notifyCampaign(p.userId, "cancellation_approved", "Campaign ended — refund in progress", `"${request.campaign.title}" has been ended. Your payment is being refunded to your original payment method.`, request.campaignId, `cancellation_approved:${request.campaignId}:${p.userId}`);
+    }
+
+    return prisma.campaignCancellationRequest.findUniqueOrThrow({ where: { id: requestId } });
+  },
+
+  /** Rejection restores the exact status the campaign was in before the request — the snapshot preCancellationStatus captured at request time (spec requirement 7). */
+  async rejectCancellation(adminId: string, requestId: string, notes?: string) {
+    const request = await prisma.campaignCancellationRequest.findUnique({
+      where: { id: requestId },
+      include: { campaign: { include: { organiser: true } } },
+    });
+    if (!request) throw new AppError("Cancellation request not found", 404);
+    if (request.status !== "PENDING") throw new AppError("This cancellation request has already been decided", 409);
+
+    const requestClaim = await prisma.campaignCancellationRequest.updateMany({
+      where: { id: requestId, status: "PENDING" },
+      data: { status: "REJECTED", reviewedById: adminId, reviewedAt: new Date(), reviewNotes: notes },
+    });
+    if (requestClaim.count !== 1) throw new AppError("This cancellation request has already been decided", 409);
+    await prisma.communityCampaign.updateMany({
+      where: { id: request.campaignId, status: "CANCELLATION_UNDER_REVIEW" },
+      data: { status: request.preCancellationStatus },
+    });
+
+    await notifyCampaign(
+      request.campaign.organiser.userId,
+      "cancellation_rejected",
+      "Cancellation request rejected",
+      `Eki did not approve your request to end "${request.campaign.title}". The campaign continues as before.${notes ? ` Reason: ${notes}` : ""}`,
+      request.campaignId,
+      `cancellation_rejected:${request.campaignId}:${request.campaign.organiser.userId}`,
+      "organiser",
+    );
+
+    return prisma.campaignCancellationRequest.findUniqueOrThrow({ where: { id: requestId } });
   },
 
   // ─── Publishing & discovery ────────────────────────────────────────────

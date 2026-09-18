@@ -73,6 +73,7 @@ import {
   pauseOrganiserCampaign,
   resumeOrganiserCampaign,
   requestCampaignChange,
+  requestCampaignCancellation,
   updateMyOrganiserProfile,
   postCampaignUpdate,
   publishOrganiserCampaign,
@@ -163,6 +164,10 @@ organiserRouter.post("/campaigns/:id/resume", asyncHandler(resumeOrganiserCampai
 // existing support-case model/admin-review flow. Separate from the
 // rescue-window extension-request route above.
 organiserRouter.post("/campaigns/:id/change-request", asyncHandler(requestCampaignChange));
+// Phase 4 (cancellation under review) — organiser-initiated cancellation.
+// Resolves immediately if no funds have been captured yet, otherwise
+// routes to admin review. Separate from both routes above.
+organiserRouter.post("/campaigns/:id/cancellation-request", asyncHandler(requestCampaignCancellation));
 // Rescue-window actions — doc §8. "Fulfil anyway below minimum" does not
 // exist; the only paths out of RESCUE_WINDOW are a real top-up purchase,
 // inviting more participants (no endpoint — just sharing), a single

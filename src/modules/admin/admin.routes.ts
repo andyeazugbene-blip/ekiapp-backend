@@ -157,6 +157,9 @@ import { getAdminAutomationSummary } from "../automation/automation.controller";
 import {
   adminApproveCampaign,
   adminApproveExtension,
+  adminApproveCancellation,
+  adminListCancellationRequests,
+  adminRejectCancellation,
   adminApproveSupplierAccount,
   adminListSupplierAccounts,
   adminRestrictSupplierAccount,
@@ -311,6 +314,12 @@ adminRouter.post("/community-buy/refunds/:id/escalate", asyncHandler(requireAdmi
 adminRouter.get("/community-buy/extension-requests", asyncHandler(requireAdminPermission("community_buy.read")), asyncHandler(adminListExtensionRequests));
 adminRouter.post("/community-buy/extension-requests/:id/approve", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(adminApproveExtension));
 adminRouter.post("/community-buy/extension-requests/:id/reject", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(adminRejectExtension));
+// Phase 4 (cancellation under review) — approve is 2FA-free but can be
+// four-eyes-gated via AdminApprovalRule("community_buy.cancellation_approval"),
+// same as supplier-payment/organiser-payout release.
+adminRouter.get("/community-buy/cancellation-requests", asyncHandler(requireAdminPermission("community_buy.read")), asyncHandler(adminListCancellationRequests));
+adminRouter.post("/community-buy/cancellation-requests/:id/approve", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(adminApproveCancellation));
+adminRouter.post("/community-buy/cancellation-requests/:id/reject", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(adminRejectCancellation));
 adminRouter.get("/community-buy/supplier-payments", asyncHandler(requireAdminPermission("community_buy.read")), asyncHandler(adminListSupplierPayments));
 adminRouter.get("/community-buy/supplier-payments/aggregate", asyncHandler(requireAdminPermission("community_buy.read")), asyncHandler(adminGetSupplierPaymentAggregate));
 adminRouter.post("/community-campaigns/:id/supplier-payment/release", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(require2fa), asyncHandler(adminReleaseSupplierPayment));

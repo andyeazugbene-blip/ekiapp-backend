@@ -369,6 +369,27 @@ export async function endCampaignRescue(request: Request, response: Response): P
   response.json({ campaign: await communityCampaignsService.endRescueAndRefund(userId, requireIdParam(request)) });
 }
 
+// Phase 4 (cancellation under review) — organiser-initiated. The service
+// itself decides whether this resolves immediately (no funds captured
+// yet) or routes to admin review (real money already captured) — the
+// controller only validates input shape.
+export async function requestCampaignCancellation(request: Request, response: Response): Promise<void> {
+  const userId = requireUserId(request);
+  const reason = request.body?.reason;
+  if (typeof reason !== "string" || !reason.trim()) throw new AppError("reason is required", 400);
+  const result = await communityCampaignsService.requestCancellation(userId, requireIdParam(request), reason);
+  await recordAudit({
+    actorId: userId,
+    action: "community_campaign.cancellation_requested",
+    entityType: "CommunityCampaign",
+    entityId: requireIdParam(request),
+    reason,
+    afterState: { status: result.campaign.status, requiresReview: result.requiresReview },
+    request,
+  });
+  response.status(result.requiresReview ? 202 : 200).json(result);
+}
+
 export async function requestCampaignExtension(request: Request, response: Response): Promise<void> {
   const userId = requireUserId(request);
   const body = request.body ?? {};
@@ -1106,6 +1127,46 @@ export async function adminRejectExtension(request: Request, response: Response)
   const extensionRequest = await communityCampaignsService.rejectExtension(adminId, id, notes);
   await recordAudit({ actorId: adminId, action: "community_campaign_extension.reject", entityType: "CampaignExtensionRequest", entityId: id, reason: notes, afterState: { status: extensionRequest.status }, request });
   response.json({ extensionRequest });
+}
+
+export async function adminListCancellationRequests(_request: Request, response: Response): Promise<void> {
+  response.json({ items: await communityCampaignsService.listCancellationRequestsForAdmin() });
+}
+
+// Phase 4 (cancellation under review) — mirrors adminReleaseSupplierPayment()'s
+// exact four-eyes-gate shape: an optional AdminApprovalRule
+// ("community_buy.cancellation_approval") can require a second admin's
+// sign-off before this actually executes; with no rule configured it
+// proceeds directly, same as it always has.
+export async function adminApproveCancellation(request: Request, response: Response): Promise<void> {
+  const adminId = requireUserId(request);
+  const id = requireIdParam(request);
+
+  const gated = await adminApprovalsService.requiresApproval("community_buy.cancellation_approval", null);
+  if (gated) {
+    const approval = await adminApprovalsService.requestApproval({
+      actionType: "community_buy.cancellation_approval",
+      businessRefType: "CampaignCancellationRequest",
+      businessRefId: id,
+      requestedById: adminId,
+      reason: "Cancellation approval requested",
+    });
+    await recordAudit({ actorId: adminId, action: "community_campaign_cancellation.approve_requested", entityType: "CampaignCancellationRequest", entityId: id, request });
+    response.status(202).json({ pendingApproval: approval, message: "This approval requires a second admin's sign-off before it executes." });
+    return;
+  }
+
+  const cancellationRequest = await communityCampaignsService.approveCancellation(adminId, id);
+  response.json({ cancellationRequest });
+}
+
+export async function adminRejectCancellation(request: Request, response: Response): Promise<void> {
+  const adminId = requireUserId(request);
+  const id = requireIdParam(request);
+  const notes = typeof request.body?.notes === "string" ? request.body.notes : undefined;
+  const cancellationRequest = await communityCampaignsService.rejectCancellation(adminId, id, notes);
+  await recordAudit({ actorId: adminId, action: "community_campaign_cancellation.reject", entityType: "CampaignCancellationRequest", entityId: id, reason: notes, afterState: { status: cancellationRequest.status }, request });
+  response.json({ cancellationRequest });
 }
 
 export async function adminListSupplierPayments(_request: Request, response: Response): Promise<void> {

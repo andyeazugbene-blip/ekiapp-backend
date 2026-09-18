@@ -2178,6 +2178,15 @@ enum CampaignStatus {
   COMPLETED
   FINANCIALLY_CLOSED
   CANCELLED
+  // Phase 4 (cancellation under review) — a campaign that has already
+  // captured at least one PAID contribution (PLEDGE_THEN_CHARGE only)
+  // enters this state instead of going straight to CANCELLED when the
+  // organiser requests cancellation; see CampaignCancellationRequest.
+  // Only ever entered from LIVE/PAUSED/RESCUE_WINDOW/FULFILLING/SUCCEEDED,
+  // and only ever exits to CANCELLED (admin approval) or back to whichever
+  // of those it came from (admin rejection, snapshotted as
+  // CampaignCancellationRequest.preCancellationStatus).
+  CANCELLATION_UNDER_REVIEW
   // M2 — AUTHORISE_THEN_CAPTURE-mode-only states (spec §6.3, §8, §11.3).
   // Additive: only ever entered by a campaign whose paymentMode is
   // AUTHORISE_THEN_CAPTURE (see CommunityCampaign.paymentMode) — a
@@ -2491,6 +2500,7 @@ model CommunityCampaign {
   participants              CampaignParticipant[]
   contributions             CampaignContribution[]
   extensionRequests         CampaignExtensionRequest[]
+  cancellationRequests      CampaignCancellationRequest[]
   supplierPayment           CampaignSupplierPayment?
   organiserPayout           CommunityBuyOrganiserPayout?
   fulfilment                CampaignFulfilment?
@@ -2572,6 +2582,43 @@ model CampaignExtensionRequest {
   campaign                  CommunityCampaign      @relation(fields: [campaignId], references: [id], onDelete: Cascade)
   createdAt                 DateTime               @default(now())
   updatedAt                 DateTime               @updatedAt
+
+  @@index([campaignId, status])
+}
+
+enum CancellationRequestStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+// Phase 4 (cancellation under review) — mirrors CampaignExtensionRequest's
+// shape exactly (organiser requests something financially significant,
+// admin approves/rejects). Not @unique on campaignId: a rejected request
+// doesn't block a later, better-justified one on the same campaign — only
+// application logic (one PENDING at a time) is enforced, same pattern as
+// extension requests.
+model CampaignCancellationRequest {
+  id                     String                     @id @default(cuid())
+  campaignId             String
+  requestedByUserId      String
+  reason                 String
+  // Snapshotted at request time — true means at least one PAID
+  // contribution existed, which is exactly what routed this request
+  // through CANCELLATION_UNDER_REVIEW instead of an immediate cancel.
+  hadFinancialActivity   Boolean
+  // Snapshotted so rejection can restore the exact prior operational
+  // state (spec requirement 7) — only meaningful when
+  // hadFinancialActivity is true (the only case that actually leaves
+  // CANCELLATION_UNDER_REVIEW to restore from).
+  preCancellationStatus  CampaignStatus
+  status                 CancellationRequestStatus  @default(PENDING)
+  reviewedById           String?
+  reviewedAt             DateTime?
+  reviewNotes            String?
+  campaign               CommunityCampaign          @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  createdAt              DateTime                   @default(now())
+  updatedAt              DateTime                   @updatedAt
 
   @@index([campaignId, status])
 }
