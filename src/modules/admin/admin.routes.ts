@@ -208,6 +208,7 @@ import {
   adminPauseCampaign,
   adminReleaseSupplierPayment,
   adminResumeCampaign,
+  adminSetCampaignIssueNotes,
   adminRejectCampaign,
   adminRejectExtension,
   adminRequestCampaignChanges,
@@ -293,6 +294,7 @@ adminRouter.post("/community-campaigns/:id/request-changes", asyncHandler(requir
 adminRouter.post("/community-campaigns/:id/reject", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(adminRejectCampaign));
 adminRouter.post("/community-campaigns/:id/pause", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(adminPauseCampaign));
 adminRouter.post("/community-campaigns/:id/resume", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(adminResumeCampaign));
+adminRouter.post("/community-campaigns/:id/issue-notes", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(adminSetCampaignIssueNotes));
 // Cancel/end — Phase 9 (REQ-CB-A-002). No 2FA: matches reject/pause/resume,
 // since cancel is only ever reachable pre-charge (see the service method's
 // own comment) — no money moves, so it sits in the same tier as those,

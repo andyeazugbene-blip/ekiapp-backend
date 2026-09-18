@@ -2636,7 +2636,7 @@ describe("Client correction — supplier is optional, never a publication gate",
     const joined = await campaignContributionsService.join("buyer-1", "camp-8");
     expect(joined).toEqual({ campaignId: "camp-8", userId: "buyer-1" });
 
-    m.communityCampaign.findMany.mockResolvedValue([{ id: "camp-8", status: "LIVE", supplierId: "sup-1", supplierCommitted: false }] as never);
+    m.communityCampaign.findMany.mockResolvedValue([{ id: "camp-8", status: "LIVE", supplierId: "sup-1", supplierCommitted: false, organiser: { firstNameOnlyDisplay: true, user: { name: "Organiser Eight" } } }] as never);
     const live = await communityCampaignsService.listLive("GB");
     expect(live).toHaveLength(1);
     expect(m.communityCampaign.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: { status: "LIVE", country: "GB" } }));

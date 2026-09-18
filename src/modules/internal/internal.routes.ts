@@ -120,6 +120,11 @@ async function runRenewalsSweep() {
 // spec §8.7/§22), reminds participants of approaching deadlines, and
 // submits any pending refunds from a previously-failed campaign.
 async function runCommunityBuySweep() {
+  // Phase 2 (organiser controls) — promotes any scheduled-but-not-yet-open
+  // campaign to LIVE once its scheduledOpenAt passes. Runs before
+  // closeDueCampaigns() so a campaign scheduled to open and close in the
+  // same sweep window is at least briefly LIVE, not skipped entirely.
+  const opened = await communityCampaignsService.openScheduledCampaigns();
   const closing = await communityCampaignsService.closeDueCampaigns();
   const rescueOutcome = await communityCampaignsService.evaluateRescueExpiry();
   const remindedParticipants = await communityCampaignsService.remindApproachingDeadlines();
@@ -143,6 +148,7 @@ async function runCommunityBuySweep() {
   }
 
   return {
+    scheduledCampaignsOpened: opened.opened,
     closed: closing.closed,
     succeeded: closing.succeeded,
     campaignsFailed: closing.failed,

@@ -70,6 +70,10 @@ import {
   refreshOrganiserStripeConnect,
   getMyOrganiserPayout,
   organiserConfirmFulfilmentCompletion,
+  pauseOrganiserCampaign,
+  resumeOrganiserCampaign,
+  requestCampaignChange,
+  updateMyOrganiserProfile,
   postCampaignUpdate,
   publishOrganiserCampaign,
   reassignCampaignSupplier,
@@ -136,6 +140,7 @@ communityBuyRouter.post("/supplier-invitations/:token/decline", asyncHandler(dec
 export const organiserRouter = Router();
 organiserRouter.use(authenticate);
 organiserRouter.get("/profile", asyncHandler(getMyOrganiserProfile));
+organiserRouter.patch("/profile", asyncHandler(updateMyOrganiserProfile));
 organiserRouter.post("/applications", asyncHandler(applyAsOrganiser));
 organiserRouter.get("/suppliers", asyncHandler(listVerifiedSuppliers));
 organiserRouter.get("/campaigns", asyncHandler(listMyOrganiserCampaigns));
@@ -150,6 +155,14 @@ organiserRouter.get("/campaigns/:id/supplier-invitations", asyncHandler(listSupp
 organiserRouter.post("/supplier-invitations/:id/revoke", asyncHandler(revokeSupplierInvitation));
 organiserRouter.post("/campaigns/:id/submit", asyncHandler(submitOrganiserCampaign));
 organiserRouter.post("/campaigns/:id/publish", asyncHandler(publishOrganiserCampaign));
+// Phase 2 (organiser controls) — pause/resume reuse admin pause()/resume()'s
+// exact status transitions, scoped to the organiser's own campaign.
+organiserRouter.post("/campaigns/:id/pause", asyncHandler(pauseOrganiserCampaign));
+organiserRouter.post("/campaigns/:id/resume", asyncHandler(resumeOrganiserCampaign));
+// Phase 2 (organiser controls) — general change request, filed through the
+// existing support-case model/admin-review flow. Separate from the
+// rescue-window extension-request route above.
+organiserRouter.post("/campaigns/:id/change-request", asyncHandler(requestCampaignChange));
 // Rescue-window actions — doc §8. "Fulfil anyway below minimum" does not
 // exist; the only paths out of RESCUE_WINDOW are a real top-up purchase,
 // inviting more participants (no endpoint — just sharing), a single

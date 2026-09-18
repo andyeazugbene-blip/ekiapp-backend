@@ -265,6 +265,15 @@ export async function getMyOrganiserProfile(request: Request, response: Response
   response.json({ profile: await organiserSupplierService.getOrganiserProfile(userId) });
 }
 
+export async function updateMyOrganiserProfile(request: Request, response: Response): Promise<void> {
+  const userId = requireUserId(request);
+  const body = request.body ?? {};
+  if (body.firstNameOnlyDisplay !== undefined && typeof body.firstNameOnlyDisplay !== "boolean") {
+    throw new AppError("firstNameOnlyDisplay must be a boolean", 400);
+  }
+  response.json({ profile: await organiserSupplierService.updateOrganiserProfile(userId, { firstNameOnlyDisplay: body.firstNameOnlyDisplay }) });
+}
+
 export async function listVerifiedSuppliers(request: Request, response: Response): Promise<void> {
   const country = request.query.country;
   if (typeof country !== "string" || !country) throw new AppError("country is required", 400);
@@ -306,6 +315,33 @@ export async function submitOrganiserCampaign(request: Request, response: Respon
 export async function publishOrganiserCampaign(request: Request, response: Response): Promise<void> {
   const userId = requireUserId(request);
   response.json({ campaign: await communityCampaignsService.publish(userId, requireIdParam(request)) });
+}
+
+export async function pauseOrganiserCampaign(request: Request, response: Response): Promise<void> {
+  const userId = requireUserId(request);
+  response.json({ campaign: await communityCampaignsService.pauseByOrganiser(userId, requireIdParam(request)) });
+}
+
+export async function resumeOrganiserCampaign(request: Request, response: Response): Promise<void> {
+  const userId = requireUserId(request);
+  response.json({ campaign: await communityCampaignsService.resumeByOrganiser(userId, requireIdParam(request)) });
+}
+
+// Phase 2 (organiser controls) — a general campaign change request, filed
+// through the existing CommunityBuySupportCase model/admin-review flow
+// (caseType forced to CAMPAIGN_CHANGE_REQUEST here, never client-supplied,
+// so an organiser can't file any of the other case types through this
+// route). Deliberately separate from requestCampaignExtension() (rescue-
+// window extensions, unchanged) and from any supplier negotiation.
+export async function requestCampaignChange(request: Request, response: Response): Promise<void> {
+  const userId = requireUserId(request);
+  const description = request.body?.description;
+  if (typeof description !== "string" || !description.trim()) throw new AppError("description is required", 400);
+  const supportCase = await supportCaseService.create(userId, requireIdParam(request), {
+    caseType: "CAMPAIGN_CHANGE_REQUEST",
+    description,
+  });
+  response.status(201).json({ supportCase });
 }
 
 export async function endCampaignRescue(request: Request, response: Response): Promise<void> {
@@ -812,6 +848,17 @@ export async function adminResumeCampaign(request: Request, response: Response):
   const id = requireIdParam(request);
   const campaign = await communityCampaignsService.resume(adminId, id);
   await recordAudit({ actorId: adminId, action: "community_campaign.resume", entityType: "CommunityCampaign", entityId: id, afterState: { status: campaign.status }, request });
+  response.json({ campaign });
+}
+
+// Phase 2 (admin ops) — the unified campaign-operations view's one shared
+// issue/notes field. Independent of every other admin action here.
+export async function adminSetCampaignIssueNotes(request: Request, response: Response): Promise<void> {
+  const adminId = requireUserId(request);
+  const notes = request.body?.notes;
+  if (typeof notes !== "string") throw new AppError("notes must be a string", 400);
+  const id = requireIdParam(request);
+  const campaign = await communityCampaignsService.setAdminIssueNotes(adminId, id, notes);
   response.json({ campaign });
 }
 

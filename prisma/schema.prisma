@@ -1701,6 +1701,14 @@ enum SupportCaseType {
   ORGANISER_CONDUCT
   SUPPLIER_CONDUCT
   OTHER
+  // Phase 2 (organiser controls) — an organiser's general request to change
+  // something about their own live campaign, filed through the existing
+  // CommunityBuySupportCase model/admin-review flow rather than a new one.
+  // Deliberately separate from CampaignExtensionRequest (rescue-window
+  // extensions, unchanged) and from any future supplier negotiation state
+  // machine — this is admin-reviewed free text only, no automatic effect
+  // on the campaign itself.
+  CAMPAIGN_CHANGE_REQUEST
 }
 
 enum SupportCaseStatus {
@@ -2220,6 +2228,13 @@ model OrganiserProfile {
   chargesEnabled             Boolean                       @default(false)
   payoutsEnabled             Boolean                       @default(false)
   detailsSubmitted           Boolean                       @default(false)
+  // Phase 2 (organiser identity display preference) — controls whether
+  // buyer-facing surfaces show this organiser's full name or first name
+  // only. Defaults true (privacy-preserving default, matching this app's
+  // existing "only fulfilment-necessary data" principle) — an existing
+  // organiser who never touches this setting is shown as first-name-only,
+  // same as a brand-new one.
+  firstNameOnlyDisplay       Boolean                       @default(true)
   user                       User                          @relation(fields: [userId], references: [id], onDelete: Cascade)
   campaigns                  CommunityCampaign[]
   organiserPayouts           CommunityBuyOrganiserPayout[]
@@ -2388,6 +2403,13 @@ model CommunityCampaign {
   minimumShares             Int?
   goalShares                Int?
   maximumShares             Int?
+  // Phase 2 (organiser controls) — optional per-buyer slot limits, distinct
+  // from the campaign-wide maximumShares cap above. Null means no per-buyer
+  // limit (today's behavior, unchanged for every existing campaign).
+  // Enforced in campaign-contributions.service.ts's pledge() alongside the
+  // existing assertCapacityAvailable() check.
+  perBuyerMinShares         Int?
+  perBuyerMaxShares         Int?
   pricePerShareMinor        Int?
   // Community Buy Workstream 2 — Product step (spec §7 step 1). Additive;
   // pricePerShareMinor above stays the sole authoritative price, never
@@ -2401,6 +2423,18 @@ model CommunityCampaign {
   // courier token, or DeliveryReference (that's Workstream 5's privacy
   // infrastructure, deliberately untouched here).
   deliveryPreference        CampaignDeliveryPreference         @default(COLLECTION)
+  // Phase 2 (organiser controls) — optional scheduled opening. Null means
+  // publish() opens the campaign immediately (today's behavior, unchanged).
+  // When set, publish() records publishedAt but leaves status APPROVED;
+  // the existing community-buy-sweep cron (openScheduledCampaigns()) flips
+  // it to LIVE once this time passes — no new campaign state introduced.
+  scheduledOpenAt           DateTime?
+  // Phase 2 (admin ops) — one shared free-text note for the admin unified
+  // campaign-operations view. Deliberately separate from reviewNotes (which
+  // is tied to the approve/reject/changes-requested workflow and is shown
+  // to the organiser) — this is admin-internal-only and never surfaced to
+  // the organiser or participants.
+  adminIssueNotes           String?
   confirmedShares           Int                                @default(0)
   fundingOutcome            FundingOutcome                     @default(PENDING)
   supplierCommitted         Boolean                            @default(false)

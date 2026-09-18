@@ -77,6 +77,44 @@ async function assertCapacityAvailable(campaign: { maximumShares: number | null;
   }
 }
 
+// Phase 2 (organiser controls) — optional per-buyer slot limits, separate
+// from the campaign-wide capacity check above. Only applies to a
+// participant's own regular pledge(); pledgeOrganiserTopUp() is a distinct
+// rescue-window mechanism for a different actor and is untouched.
+async function assertPerBuyerLimits(
+  campaign: { id: string; perBuyerMinShares: number | null; perBuyerMaxShares: number | null },
+  userId: string,
+  quantity: number,
+): Promise<void> {
+  if (campaign.perBuyerMinShares == null && campaign.perBuyerMaxShares == null) return;
+  if (campaign.perBuyerMinShares != null && quantity < campaign.perBuyerMinShares) {
+    throw new AppError(
+      `You must pledge at least ${campaign.perBuyerMinShares} share(s) for this campaign.`,
+      409,
+      undefined,
+      "PER_BUYER_MINIMUM_NOT_MET",
+    );
+  }
+  if (campaign.perBuyerMaxShares != null) {
+    const participant = await prisma.campaignParticipant.findFirst({ where: { campaignId: campaign.id, userId } });
+    const existing = participant
+      ? await prisma.campaignContribution.aggregate({
+          where: { participantId: participant.id, status: { in: ["PLEDGED", "PAYMENT_PROCESSING", "CHARGE_FAILED", "PAID"] } },
+          _sum: { quantity: true },
+        })
+      : null;
+    const existingQuantity = existing?._sum.quantity ?? 0;
+    if (existingQuantity + quantity > campaign.perBuyerMaxShares) {
+      throw new AppError(
+        `You can pledge at most ${campaign.perBuyerMaxShares} share(s) in total for this campaign${existingQuantity > 0 ? ` (you already have ${existingQuantity})` : ""}.`,
+        409,
+        undefined,
+        "PER_BUYER_LIMIT_EXCEEDED",
+      );
+    }
+  }
+}
+
 // country/currency/deadline are nullable on CommunityCampaign (Workstream
 // 2 — a draft may not have chosen them yet), but submit()/publish() never
 // let a campaign reach LIVE without all three set — this assertion is the
@@ -206,6 +244,7 @@ export const campaignContributionsService = {
 
     assertContributableCampaign(campaign, quantity);
     await assertCapacityAvailable(campaign, quantity);
+    await assertPerBuyerLimits(campaign, userId, quantity);
     const paymentMethod = await requirePaymentMethod(userId, paymentMethodId);
 
     const participant = await upsertParticipantWithAttribution(campaign, userId);

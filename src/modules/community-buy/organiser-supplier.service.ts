@@ -51,6 +51,19 @@ export const organiserSupplierService = {
     return prisma.organiserProfile.findUnique({ where: { userId } });
   },
 
+  /**
+   * Phase 2 (organiser identity display preference) — account-level
+   * setting, not per-campaign, so it's set here rather than through
+   * community-campaigns.service.ts's update(). Applies to every campaign
+   * this organiser runs, current and future.
+   */
+  async updateOrganiserProfile(userId: string, input: { firstNameOnlyDisplay?: boolean }) {
+    const existing = await prisma.organiserProfile.findUnique({ where: { userId } });
+    if (!existing) throw new AppError("Organiser profile not found", 404);
+    if (input.firstNameOnlyDisplay === undefined) return existing;
+    return prisma.organiserProfile.update({ where: { userId }, data: { firstNameOnlyDisplay: input.firstNameOnlyDisplay } });
+  },
+
   async getSupplierProfile(vendorId: string) {
     return prisma.supplierProfile.findUnique({ where: { vendorId } });
   },

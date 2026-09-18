@@ -33,6 +33,10 @@ export interface CreateCampaignInput {
   minimumShares?: number;
   goalShares?: number;
   maximumShares?: number;
+  // Phase 2 (organiser controls) — optional per-buyer slot limits. See
+  // CommunityCampaign.perBuyerMinShares/perBuyerMaxShares's own doc comment.
+  perBuyerMinShares?: number;
+  perBuyerMaxShares?: number;
   pricePerShareMinor?: number;
   // Diaspora escrow reconciliation (final V1 settlement doc §N) — the
   // organiser-agreed wholesale price paid to an Eki-registered supplier.
@@ -55,6 +59,9 @@ export interface CreateCampaignInput {
   // tests are complete independent of when mobile UI catches up.
   holdWindowStartsAt?: string;
   decisionDeadline?: string;
+  // Phase 2 (organiser controls) — optional scheduled opening. See
+  // CommunityCampaign.scheduledOpenAt's own doc comment.
+  scheduledOpenAt?: string;
 }
 
 type SupplyRoute = {
@@ -153,6 +160,17 @@ function validateSharesAndPricing(fields: { minimumShares?: number; goalShares?:
   }
 }
 
+// Phase 2 (organiser identity display preference) — shared by every
+// buyer-facing campaign read (get()/listLive()) so the rule lives in one
+// place. Falls back to the full name if there's no name to split (never
+// fabricates a placeholder).
+function resolveOrganiserDisplayName(name: string | null | undefined, firstNameOnlyDisplay: boolean): string {
+  const trimmed = (name ?? "").trim();
+  if (!trimmed) return "Community organiser";
+  if (!firstNameOnlyDisplay) return trimmed;
+  return trimmed.split(/\s+/)[0];
+}
+
 function validateDeadline(deadline: string | undefined): Date | undefined {
   if (deadline === undefined) return undefined;
   const parsed = new Date(deadline);
@@ -197,6 +215,42 @@ function validateAuthorisationSchedule(
     result.decisionDeadline = parsed;
   }
   return result;
+}
+
+// Phase 2 (organiser controls) — mirrors validateSharesAndPricing's shape
+// exactly: independent per-field validity, then a cross-field ordering
+// check against the campaign-wide maximumShares (existing or newly-set).
+function validatePerBuyerLimits(fields: { perBuyerMinShares?: number; perBuyerMaxShares?: number }, maximumShares: number | undefined): void {
+  const { perBuyerMinShares, perBuyerMaxShares } = fields;
+  if (perBuyerMinShares !== undefined && (!Number.isInteger(perBuyerMinShares) || perBuyerMinShares < 1)) {
+    throw new AppError("Per-buyer minimum must be at least 1", 400);
+  }
+  if (perBuyerMaxShares !== undefined) {
+    if (!Number.isInteger(perBuyerMaxShares) || perBuyerMaxShares < 1) {
+      throw new AppError("Per-buyer maximum must be at least 1", 400);
+    }
+    if (perBuyerMinShares !== undefined && perBuyerMaxShares < perBuyerMinShares) {
+      throw new AppError("Per-buyer maximum must be at least the per-buyer minimum", 400);
+    }
+    if (maximumShares !== undefined && perBuyerMaxShares > maximumShares) {
+      throw new AppError("Per-buyer maximum cannot exceed the campaign's total maximum shares", 400);
+    }
+  }
+}
+
+// Phase 2 (organiser controls) — mirrors validateDeadline's shape exactly;
+// additionally ordered before the campaign's own deadline/close (opening
+// after closing would never let a single pledge happen).
+function validateScheduledOpenAt(scheduledOpenAt: string | undefined, deadline: Date | undefined): Date | undefined {
+  if (scheduledOpenAt === undefined) return undefined;
+  const parsed = new Date(scheduledOpenAt);
+  if (Number.isNaN(parsed.getTime()) || parsed <= new Date()) {
+    throw new AppError("Scheduled opening must be a valid future date", 400);
+  }
+  if (deadline && parsed >= deadline) {
+    throw new AppError("Scheduled opening must be before the campaign deadline", 400);
+  }
+  return parsed;
 }
 
 function validateQuantityPerOrder(quantityPerOrder: number | undefined): void {
@@ -316,10 +370,12 @@ export const communityCampaignsService = {
     // only "must be provided" moved to submit().
     const route = await resolveSupplyRoute(input.fulfilmentOwner, input.supplierId, input.supplierAccountId, input.country);
     validateSharesAndPricing(input);
+    validatePerBuyerLimits(input, input.maximumShares);
     validateQuantityPerOrder(input.quantityPerOrder);
     validateDeliveryPreference(input.deliveryPreference);
     const deadline = validateDeadline(input.deadline);
     const authorisationSchedule = validateAuthorisationSchedule(input.holdWindowStartsAt, input.decisionDeadline, deadline);
+    const scheduledOpenAt = validateScheduledOpenAt(input.scheduledOpenAt, deadline);
 
     // M2 — snapshotted once, here, never re-read afterward (see
     // CommunityCampaign.paymentMode's own doc comment).
@@ -345,6 +401,8 @@ export const communityCampaignsService = {
         minimumShares: input.minimumShares,
         goalShares: input.goalShares,
         maximumShares: input.maximumShares,
+        perBuyerMinShares: input.perBuyerMinShares,
+        perBuyerMaxShares: input.perBuyerMaxShares,
         pricePerShareMinor: input.pricePerShareMinor,
         wholesaleAmountMinor: input.wholesaleAmountMinor,
         images: input.images ?? [],
@@ -354,6 +412,7 @@ export const communityCampaignsService = {
         deliveryPreference: input.deliveryPreference ?? "COLLECTION",
         rescueDurationMinutes: input.rescueDurationMinutes ?? 2880,
         deadline,
+        scheduledOpenAt,
         status: "DRAFT",
       },
     });
@@ -379,7 +438,8 @@ export const communityCampaignsService = {
 
     const financialFieldsTouched = input.minimumShares !== undefined || input.goalShares !== undefined
       || input.maximumShares !== undefined || input.pricePerShareMinor !== undefined || input.deadline !== undefined
-      || input.holdWindowStartsAt !== undefined || input.decisionDeadline !== undefined || input.wholesaleAmountMinor !== undefined;
+      || input.holdWindowStartsAt !== undefined || input.decisionDeadline !== undefined || input.wholesaleAmountMinor !== undefined
+      || input.perBuyerMinShares !== undefined || input.perBuyerMaxShares !== undefined;
     // Community Buy Workstream 2: the wizard's Supply step must stay
     // editable on a draft, same as every other step — but only while
     // still DRAFT/CHANGES_REQUIRED; a LIVE campaign's supplier can only
@@ -419,10 +479,12 @@ export const communityCampaignsService = {
         )
       : null;
     validateSharesAndPricing(input);
+    validatePerBuyerLimits(input, input.maximumShares ?? campaign.maximumShares ?? undefined);
     validateQuantityPerOrder(input.quantityPerOrder);
     validateDeliveryPreference(input.deliveryPreference);
     const deadline = validateDeadline(input.deadline);
     const authorisationSchedule = validateAuthorisationSchedule(input.holdWindowStartsAt, input.decisionDeadline, deadline ?? campaign.deadline ?? undefined);
+    const scheduledOpenAt = validateScheduledOpenAt(input.scheduledOpenAt, deadline ?? campaign.deadline ?? undefined);
 
     const updated = await prisma.communityCampaign.update({
       where: { id: campaignId },
@@ -434,12 +496,15 @@ export const communityCampaignsService = {
         ...(input.minimumShares !== undefined && { minimumShares: input.minimumShares }),
         ...(input.goalShares !== undefined && { goalShares: input.goalShares }),
         ...(input.maximumShares !== undefined && { maximumShares: input.maximumShares }),
+        ...(input.perBuyerMinShares !== undefined && { perBuyerMinShares: input.perBuyerMinShares }),
+        ...(input.perBuyerMaxShares !== undefined && { perBuyerMaxShares: input.perBuyerMaxShares }),
         ...(input.pricePerShareMinor !== undefined && {
           pricePerShareMinor: input.pricePerShareMinor,
           targetAmount: (input.goalShares ?? campaign.goalShares ?? 0) * input.pricePerShareMinor,
         }),
         ...(input.wholesaleAmountMinor !== undefined && { wholesaleAmountMinor: input.wholesaleAmountMinor }),
         ...(deadline !== undefined && { deadline }),
+        ...(scheduledOpenAt !== undefined && { scheduledOpenAt }),
         ...(authorisationSchedule.holdWindowStartsAt !== undefined && { holdWindowStartsAt: authorisationSchedule.holdWindowStartsAt }),
         ...(authorisationSchedule.decisionDeadline !== undefined && { decisionDeadline: authorisationSchedule.decisionDeadline }),
         ...(input.images !== undefined && { images: input.images }),
@@ -997,7 +1062,115 @@ export const communityCampaignsService = {
     if (!campaign.country) throw new AppError("Campaign is missing its market configuration", 409);
     const config = await marketConfigurationService.get(campaign.country);
     if (!config?.communityBuyEnabled) throw new AppError("Community Buy is not available in this market yet", 403);
-    return prisma.communityCampaign.update({ where: { id: campaignId }, data: { status: "LIVE", publishedAt: new Date() } });
+    // Phase 2 (organiser controls) — a future scheduledOpenAt means publish()
+    // only records the organiser's publish intent (publishedAt) but leaves
+    // status APPROVED; openScheduledCampaigns() (the existing sweep, see
+    // below) flips it to LIVE once that time passes. No scheduledOpenAt (or
+    // one already in the past) is exactly today's behavior: immediate LIVE.
+    const opensLater = campaign.scheduledOpenAt && campaign.scheduledOpenAt > new Date();
+    return prisma.communityCampaign.update({
+      where: { id: campaignId },
+      data: opensLater ? { publishedAt: new Date() } : { status: "LIVE", publishedAt: new Date() },
+    });
+  },
+
+  /**
+   * Phase 2 (organiser controls) — promotes a scheduled-but-not-yet-open
+   * campaign to LIVE once its scheduledOpenAt passes. Reuses the exact
+   * atomic-claim pattern closeDueCampaigns()/evaluateRescueExpiry() already
+   * use (status-scoped updateMany + count check) so an overlapping sweep
+   * run can never double-fire this transition. Called from the existing
+   * community-buy-sweep cron (internal.routes.ts) — no new job registered.
+   */
+  async openScheduledCampaigns(): Promise<{ opened: number }> {
+    const due = await prisma.communityCampaign.findMany({
+      where: { status: "APPROVED", publishedAt: { not: null }, scheduledOpenAt: { lte: new Date() } },
+      include: { organiser: true },
+    });
+    let opened = 0;
+    for (const campaign of due) {
+      const claim = await prisma.communityCampaign.updateMany({
+        where: { id: campaign.id, status: "APPROVED" },
+        data: { status: "LIVE" },
+      });
+      if (claim.count !== 1) continue;
+      opened++;
+      await notifyCampaign(
+        campaign.organiser.userId,
+        "scheduled_open",
+        "Your campaign is now live",
+        `${campaign.title} has opened for pledges as scheduled.`,
+        campaign.id,
+        `scheduled_open:${campaign.id}`,
+        "organiser",
+      );
+    }
+    return { opened };
+  },
+
+  /**
+   * Phase 2 (organiser controls) — organiser-authorized pause/resume.
+   * Reuses admin pause()/resume()'s exact status transitions and gating
+   * (LIVE<->PAUSED only); the only difference is ownership is checked via
+   * requireOwnedByOrganiser() instead of admin permission, and participants
+   * (not the organiser) are the notified audience, since the organiser is
+   * the actor here.
+   */
+  async pauseByOrganiser(userId: string, campaignId: string) {
+    const campaign = await this.requireOwnedByOrganiser(userId, campaignId);
+    if (campaign.status !== "LIVE") throw new AppError("Only a live campaign can be paused", 409);
+    const updated = await prisma.communityCampaign.update({ where: { id: campaignId }, data: { status: "PAUSED" } });
+    const participants = await prisma.campaignParticipant.findMany({ where: { campaignId } });
+    for (const p of participants) {
+      await notifyCampaign(
+        p.userId,
+        "organiser_paused",
+        "Campaign paused",
+        `${campaign.title} has been paused by its organiser. Pledging is temporarily unavailable.`,
+        campaignId,
+        `organiser_paused:${campaignId}:${p.userId}`,
+      );
+    }
+    return updated;
+  },
+
+  async resumeByOrganiser(userId: string, campaignId: string) {
+    const campaign = await this.requireOwnedByOrganiser(userId, campaignId);
+    if (campaign.status !== "PAUSED") throw new AppError("Only a paused campaign can be resumed", 409);
+    const updated = await prisma.communityCampaign.update({ where: { id: campaignId }, data: { status: "LIVE" } });
+    const participants = await prisma.campaignParticipant.findMany({ where: { campaignId } });
+    for (const p of participants) {
+      await notifyCampaign(
+        p.userId,
+        "organiser_resumed",
+        "Campaign resumed",
+        `${campaign.title} has been resumed by its organiser. Pledging is available again.`,
+        campaignId,
+        `organiser_resumed:${campaignId}:${p.userId}`,
+      );
+    }
+    return updated;
+  },
+
+  /**
+   * Phase 2 (admin ops) — the admin unified campaign-operations view's one
+   * shared issue/notes field. Deliberately independent of every existing
+   * review/payment/supplier state field (approve/reject/pause/resume/
+   * release/hold all stay exactly as they are) — this only ever touches
+   * adminIssueNotes.
+   */
+  async setAdminIssueNotes(adminId: string, campaignId: string, notes: string) {
+    const campaign = await prisma.communityCampaign.findUnique({ where: { id: campaignId } });
+    if (!campaign) throw new AppError("Campaign not found", 404);
+    const updated = await prisma.communityCampaign.update({ where: { id: campaignId }, data: { adminIssueNotes: notes } });
+    await recordAudit({
+      actorId: adminId,
+      action: "community_campaign.admin_issue_notes_updated",
+      entityType: "CommunityCampaign",
+      entityId: campaignId,
+      afterState: { adminIssueNotes: updated.adminIssueNotes },
+    });
+    return updated;
   },
 
   // Community Buy Workstream 2 — participant discovery search (spec Phase
@@ -1006,7 +1179,7 @@ export const communityCampaignsService = {
   // the exact taxonomy the client wants isn't confirmed).
   async listLive(country?: string, q?: string) {
     const search = q?.trim();
-    return prisma.communityCampaign.findMany({
+    const campaigns = await prisma.communityCampaign.findMany({
       where: {
         status: "LIVE",
         ...(country && { country }),
@@ -1022,8 +1195,15 @@ export const communityCampaignsService = {
         // Workstream 3: display name for a no-Vendor supplier — legacy
         // campaigns have no supplierAccountId, so this is always null there.
         supplierAccount: { include: { user: { select: { name: true } } } },
+        organiser: { select: { firstNameOnlyDisplay: true, user: { select: { name: true } } } },
       },
       orderBy: { deadline: "asc" },
+    });
+    // Phase 2 (organiser identity display preference) — same rule as get():
+    // organiser is dropped from each item entirely, not merely the raw name.
+    return campaigns.map((c) => {
+      const { organiser, ...rest } = c;
+      return { ...rest, organiserDisplayName: resolveOrganiserDisplayName(organiser.user.name, organiser.firstNameOnlyDisplay) };
     });
   },
 
@@ -1076,11 +1256,16 @@ export const communityCampaignsService = {
       include: {
         supplier: { include: { vendor: { select: { storeName: true } } } },
         supplierAccount: { include: { user: { select: { name: true } } } },
+        organiser: { select: { firstNameOnlyDisplay: true, user: { select: { name: true } } } },
         contributions: { where: { status: "PAID" }, select: { amount: true, quantity: true } },
         _count: { select: { participants: true } },
       },
     });
     if (!campaign) throw new AppError("Campaign not found", 404);
+    // Phase 2 (organiser identity display preference) — computed here,
+    // server-side, so a raw last name is never sent to a buyer-facing
+    // client at all when the preference is on, not merely hidden by the UI.
+    const organiserDisplayName = resolveOrganiserDisplayName(campaign.organiser.user.name, campaign.organiser.firstNameOnlyDisplay);
     const paidTotal = campaign.contributions.reduce((sum, c) => sum + c.amount, 0);
     // confirmedShares is the authoritative, atomically-maintained count
     // (see campaign-contributions.service.ts) — this is only a display
@@ -1107,7 +1292,12 @@ export const communityCampaignsService = {
       }
     }
 
-    return { ...campaign, paidTotal, progressPct, participantCount: campaign._count.participants, perShareFeeEstimate };
+    // Phase 2 (organiser identity display preference) — organiser is
+    // dropped from the response entirely (not merely the raw name): this
+    // endpoint is public/buyer-facing, and organiserDisplayName is the only
+    // organiser-identity field any caller should read from it.
+    const { organiser: _organiser, ...campaignWithoutRawOrganiser } = campaign;
+    return { ...campaignWithoutRawOrganiser, paidTotal, progressPct, participantCount: campaign._count.participants, perShareFeeEstimate, organiserDisplayName };
   },
 
   // ─── Closing workflow — doc §7 Deadline Evaluation ─────────────────────
