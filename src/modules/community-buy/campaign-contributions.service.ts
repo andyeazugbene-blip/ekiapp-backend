@@ -138,6 +138,53 @@ function assertContributableCampaign(campaign: { pricePerShareMinor: number | nu
   }
 }
 
+// Phase 3 (address + privacy foundation) — the buyer's own delivery
+// address, required only when the campaign's deliveryPreference is
+// DELIVERY. Ignored entirely (never even inspected) for a COLLECTION
+// campaign — "collect address only when the campaign/receiving method
+// requires it."
+interface DeliveryAddressInput {
+  recipientName?: string;
+  addressLine1?: string;
+  addressLine2?: string;
+  city?: string;
+  postcode?: string;
+}
+
+// Coarse prefix match against the organiser's configured coverage areas
+// (already normalized — trimmed/uppercased — at campaign create/update
+// time). Mirrors the existing "coarse only, e.g. a postcode/area" principle
+// documented on DeliveryReference.deliveryArea — this never does real
+// geocoding, just a simple, honest string-prefix check.
+function postcodeMatchesCoverage(postcode: string, coverageAreas: string[]): boolean {
+  const normalized = postcode.trim().toUpperCase().replace(/\s+/g, "");
+  return coverageAreas.some((area) => normalized.startsWith(area.replace(/\s+/g, "")));
+}
+
+async function assertDeliveryAddressWithinCoverage(
+  campaign: { deliveryPreference: string; deliveryCoverageAreas: string[] },
+  deliveryAddress: DeliveryAddressInput | undefined,
+): Promise<void> {
+  if (campaign.deliveryPreference !== "DELIVERY") return;
+
+  if (!deliveryAddress?.recipientName?.trim() || !deliveryAddress.addressLine1?.trim() || !deliveryAddress.city?.trim() || !deliveryAddress.postcode?.trim()) {
+    throw new AppError(
+      "A delivery address (recipient name, address line 1, city and postcode) is required for this campaign.",
+      400,
+      undefined,
+      "DELIVERY_ADDRESS_REQUIRED",
+    );
+  }
+  if (campaign.deliveryCoverageAreas.length === 0 || !postcodeMatchesCoverage(deliveryAddress.postcode, campaign.deliveryCoverageAreas)) {
+    throw new AppError(
+      "This campaign does not deliver to your postcode yet.",
+      409,
+      undefined,
+      "DELIVERY_ADDRESS_OUT_OF_COVERAGE",
+    );
+  }
+}
+
 async function requirePaymentMethod(userId: string, paymentMethodId: string) {
   const paymentMethod = await prisma.buyerPaymentMethod.findUnique({ where: { id: paymentMethodId } });
   if (!paymentMethod || paymentMethod.buyerId !== userId) {
@@ -153,6 +200,7 @@ async function createPledge(
   quantity: number,
   isOrganiserTopUp: boolean,
   paymentMethodId: string,
+  deliveryAddress?: DeliveryAddressInput,
 ): Promise<PledgeResult> {
   const amount = quantity * campaign.pricePerShareMinor;
   // Diaspora escrow reconciliation (final V1 settlement doc §N item 2) —
@@ -180,7 +228,16 @@ async function createPledge(
     if (claim.count !== 1) return null;
 
     const contribution = await tx.campaignContribution.create({
-      data: { campaignId, participantId, amount, buyerServiceFeeAmount, currency: campaign.currency, quantity, isOrganiserTopUp, status: "PLEDGED", paymentMethodId },
+      data: {
+        campaignId, participantId, amount, buyerServiceFeeAmount, currency: campaign.currency, quantity, isOrganiserTopUp, status: "PLEDGED", paymentMethodId,
+        ...(deliveryAddress && {
+          deliveryRecipientName: deliveryAddress.recipientName,
+          deliveryAddressLine1: deliveryAddress.addressLine1,
+          deliveryAddressLine2: deliveryAddress.addressLine2,
+          deliveryCity: deliveryAddress.city,
+          deliveryPostcode: deliveryAddress.postcode,
+        }),
+      },
     });
 
     // First confirmed pledge locks the campaign's financial terms —
@@ -227,7 +284,7 @@ export const campaignContributionsService = {
    * Deliveries uses). No money moves here; only a pledge record and a
    * capacity claim.
    */
-  async pledge(userId: string, campaignId: string, quantity: number, paymentMethodId: string): Promise<PledgeResult> {
+  async pledge(userId: string, campaignId: string, quantity: number, paymentMethodId: string, deliveryAddress?: DeliveryAddressInput): Promise<PledgeResult> {
     const campaign = await prisma.communityCampaign.findUnique({ where: { id: campaignId } });
     if (!campaign || campaign.status !== "LIVE" || !campaign.country || !campaign.deadline) {
       throw new AppError("Campaign not found or not live", 404);
@@ -245,11 +302,12 @@ export const campaignContributionsService = {
     assertContributableCampaign(campaign, quantity);
     await assertCapacityAvailable(campaign, quantity);
     await assertPerBuyerLimits(campaign, userId, quantity);
+    await assertDeliveryAddressWithinCoverage(campaign, deliveryAddress);
     const paymentMethod = await requirePaymentMethod(userId, paymentMethodId);
 
     const participant = await upsertParticipantWithAttribution(campaign, userId);
 
-    return createPledge(campaignId, campaign, participant.id, quantity, false, paymentMethod.id);
+    return createPledge(campaignId, campaign, participant.id, quantity, false, paymentMethod.id, campaign.deliveryPreference === "DELIVERY" ? deliveryAddress : undefined);
   },
 
   /** Doc Screen 106 — organiser pledges the shortfall through the same flow, only while the campaign is in RESCUE_WINDOW. */

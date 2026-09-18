@@ -139,12 +139,32 @@ function requirePaymentMethodIdBody(request: Request): string {
  * moves here — see campaign-contributions.service.ts's pledge() and its
  * file-header comment for the full PLEDGE_THEN_CHARGE flow.
  */
+// Phase 3 (address + privacy foundation) — optional; the service ignores it
+// entirely for a COLLECTION campaign and requires it for a DELIVERY one.
+// No format validation here beyond "must be a string" — assertDeliveryAddressWithinCoverage()
+// in campaign-contributions.service.ts is the single source of truth for
+// presence/coverage rules.
+function readDeliveryAddressBody(request: Request): { recipientName?: string; addressLine1?: string; addressLine2?: string; city?: string; postcode?: string } | undefined {
+  const raw = request.body?.deliveryAddress;
+  if (raw === undefined || raw === null) return undefined;
+  if (typeof raw !== "object" || Array.isArray(raw)) throw new AppError("deliveryAddress must be an object", 400);
+  const pick = (key: string): string | undefined => (typeof raw[key] === "string" ? raw[key] : undefined);
+  return {
+    recipientName: pick("recipientName"),
+    addressLine1: pick("addressLine1"),
+    addressLine2: pick("addressLine2"),
+    city: pick("city"),
+    postcode: pick("postcode"),
+  };
+}
+
 export async function pledgeContribution(request: Request, response: Response): Promise<void> {
   const userId = requireUserId(request);
   const quantity = Number(request.body?.quantity);
   if (!Number.isInteger(quantity) || quantity <= 0) throw new AppError("A positive integer quantity is required", 400);
   const paymentMethodId = requirePaymentMethodIdBody(request);
-  const result = await campaignContributionsService.pledge(userId, requireIdParam(request), quantity, paymentMethodId);
+  const deliveryAddress = readDeliveryAddressBody(request);
+  const result = await campaignContributionsService.pledge(userId, requireIdParam(request), quantity, paymentMethodId, deliveryAddress);
   response.status(201).json(result);
 }
 

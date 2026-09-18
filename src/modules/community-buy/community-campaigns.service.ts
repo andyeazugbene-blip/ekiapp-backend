@@ -8,7 +8,7 @@ import { calculateBoundedServiceFee } from "../../shared/pricing";
 import { campaignContributionsService } from "./campaign-contributions.service";
 import { campaignAuthorisationService } from "./campaign-authorisation.service";
 import { recordAudit } from "../../shared/utils/audit";
-import { isIndividualDeliveryEnabled, revokeDeliveryReferencesForCampaign } from "./community-buy-privacy.service";
+import { isIndividualDeliveryEnabled, revokeDeliveryReferencesForCampaign, recordDataAccess } from "./community-buy-privacy.service";
 
 // Community Buy Workstream 2: only `title` and `country` are hard
 // requirements to start a draft (spec §7 — "any authenticated user can
@@ -52,6 +52,14 @@ export interface CreateCampaignInput {
   qualityNotes?: string;
   // Delivery step (spec §7 step 5) — organiser intent only, no address data.
   deliveryPreference?: "COLLECTION" | "DELIVERY";
+  // Phase 3 (address + privacy foundation) — organiser receiving
+  // configuration. See CommunityCampaign.collectionAddressLine1 and
+  // .deliveryCoverageAreas's own doc comments.
+  collectionAddressLine1?: string;
+  collectionAddressLine2?: string;
+  collectionCity?: string;
+  collectionPostcode?: string;
+  deliveryCoverageAreas?: string[];
   // M2 — AUTHORISE_THEN_CAPTURE-mode scheduling (spec §7 step 4, §11.3).
   // Ignored/unused for a campaign whose snapshotted paymentMode ends up
   // PLEDGE_THEN_CHARGE. Not yet surfaced in the mobile organiser wizard
@@ -283,6 +291,47 @@ function validateDeliveryPreference(deliveryPreference: string | undefined): voi
   }
 }
 
+// Phase 3 (address + privacy foundation) — the organiser's public
+// collection-point address and/or delivery coverage areas. Format/presence
+// only; submit()'s "missing" gate is what actually requires these before a
+// campaign can go live (mirrors every other Product/Delivery-step field's
+// draft-now/gate-at-submit pattern). Coverage areas are normalized
+// (trimmed, uppercased, deduped, empties dropped) so the prefix match in
+// assertDeliveryAddressWithinCoverage() behaves consistently regardless of
+// how the organiser typed them in.
+function validateAndNormalizeCoverageAreas(deliveryCoverageAreas: string[] | undefined): string[] | undefined {
+  if (deliveryCoverageAreas === undefined) return undefined;
+  if (!Array.isArray(deliveryCoverageAreas) || deliveryCoverageAreas.some((a) => typeof a !== "string")) {
+    throw new AppError("deliveryCoverageAreas must be an array of strings", 400);
+  }
+  const normalized = Array.from(
+    new Set(deliveryCoverageAreas.map((a) => a.trim().toUpperCase()).filter(Boolean)),
+  );
+  return normalized;
+}
+
+function validateCollectionAddressFields(fields: {
+  collectionAddressLine1?: string;
+  collectionAddressLine2?: string;
+  collectionCity?: string;
+  collectionPostcode?: string;
+}): void {
+  // Named explicitly (not Object.entries(fields)) — the caller passes the
+  // whole create/update input, which also carries unrelated fields (e.g.
+  // deliveryCoverageAreas, an array) that would break a blind .trim() scan.
+  const checks: [string, string | undefined][] = [
+    ["collectionAddressLine1", fields.collectionAddressLine1],
+    ["collectionAddressLine2", fields.collectionAddressLine2],
+    ["collectionCity", fields.collectionCity],
+    ["collectionPostcode", fields.collectionPostcode],
+  ];
+  for (const [key, value] of checks) {
+    if (value !== undefined && !value.trim()) {
+      throw new AppError(`${key} cannot be blank`, 400);
+    }
+  }
+}
+
 const MAX_EXTENSIONS = 1;
 
 // Client-corrected flow: supplier acceptance/decline/reassignment is
@@ -373,6 +422,8 @@ export const communityCampaignsService = {
     validatePerBuyerLimits(input, input.maximumShares);
     validateQuantityPerOrder(input.quantityPerOrder);
     validateDeliveryPreference(input.deliveryPreference);
+    validateCollectionAddressFields(input);
+    const deliveryCoverageAreas = validateAndNormalizeCoverageAreas(input.deliveryCoverageAreas);
     const deadline = validateDeadline(input.deadline);
     const authorisationSchedule = validateAuthorisationSchedule(input.holdWindowStartsAt, input.decisionDeadline, deadline);
     const scheduledOpenAt = validateScheduledOpenAt(input.scheduledOpenAt, deadline);
@@ -410,6 +461,11 @@ export const communityCampaignsService = {
         quantityPerOrder: input.quantityPerOrder,
         qualityNotes: input.qualityNotes,
         deliveryPreference: input.deliveryPreference ?? "COLLECTION",
+        collectionAddressLine1: input.collectionAddressLine1,
+        collectionAddressLine2: input.collectionAddressLine2,
+        collectionCity: input.collectionCity,
+        collectionPostcode: input.collectionPostcode,
+        deliveryCoverageAreas: deliveryCoverageAreas ?? [],
         rescueDurationMinutes: input.rescueDurationMinutes ?? 2880,
         deadline,
         scheduledOpenAt,
@@ -482,6 +538,8 @@ export const communityCampaignsService = {
     validatePerBuyerLimits(input, input.maximumShares ?? campaign.maximumShares ?? undefined);
     validateQuantityPerOrder(input.quantityPerOrder);
     validateDeliveryPreference(input.deliveryPreference);
+    validateCollectionAddressFields(input);
+    const deliveryCoverageAreas = validateAndNormalizeCoverageAreas(input.deliveryCoverageAreas);
     const deadline = validateDeadline(input.deadline);
     const authorisationSchedule = validateAuthorisationSchedule(input.holdWindowStartsAt, input.decisionDeadline, deadline ?? campaign.deadline ?? undefined);
     const scheduledOpenAt = validateScheduledOpenAt(input.scheduledOpenAt, deadline ?? campaign.deadline ?? undefined);
@@ -503,6 +561,11 @@ export const communityCampaignsService = {
           targetAmount: (input.goalShares ?? campaign.goalShares ?? 0) * input.pricePerShareMinor,
         }),
         ...(input.wholesaleAmountMinor !== undefined && { wholesaleAmountMinor: input.wholesaleAmountMinor }),
+        ...(input.collectionAddressLine1 !== undefined && { collectionAddressLine1: input.collectionAddressLine1 }),
+        ...(input.collectionAddressLine2 !== undefined && { collectionAddressLine2: input.collectionAddressLine2 }),
+        ...(input.collectionCity !== undefined && { collectionCity: input.collectionCity }),
+        ...(input.collectionPostcode !== undefined && { collectionPostcode: input.collectionPostcode }),
+        ...(deliveryCoverageAreas !== undefined && { deliveryCoverageAreas }),
         ...(deadline !== undefined && { deadline }),
         ...(scheduledOpenAt !== undefined && { scheduledOpenAt }),
         ...(authorisationSchedule.holdWindowStartsAt !== undefined && { holdWindowStartsAt: authorisationSchedule.holdWindowStartsAt }),
@@ -776,6 +839,16 @@ export const communityCampaignsService = {
     if (!campaign.pricePerShareMinor || campaign.pricePerShareMinor <= 0) missing.push("pricePerShareMinor");
     if (!campaign.unit) missing.push("unit");
     if (!campaign.quantityPerOrder || campaign.quantityPerOrder < 1) missing.push("quantityPerOrder");
+    // Phase 3 (address + privacy foundation) — receiving configuration must
+    // be set before a campaign can go live, same gate-at-submit pattern as
+    // every other required field above.
+    if (campaign.deliveryPreference === "COLLECTION") {
+      if (!campaign.collectionAddressLine1) missing.push("collectionAddressLine1");
+      if (!campaign.collectionCity) missing.push("collectionCity");
+      if (!campaign.collectionPostcode) missing.push("collectionPostcode");
+    } else if (campaign.deliveryPreference === "DELIVERY") {
+      if (!campaign.deliveryCoverageAreas || campaign.deliveryCoverageAreas.length === 0) missing.push("deliveryCoverageAreas");
+    }
     if (campaign.paymentMode === "AUTHORISE_THEN_CAPTURE") {
       if (!campaign.holdWindowStartsAt) missing.push("holdWindowStartsAt");
       if (!campaign.decisionDeadline) missing.push("decisionDeadline");
@@ -826,19 +899,60 @@ export const communityCampaignsService = {
       where: { campaignId, contributions: { some: { status: "PAID" } } },
       include: {
         user: { select: { name: true, email: true } },
-        contributions: { where: { status: "PAID" }, select: { quantity: true, amount: true, isOrganiserTopUp: true, createdAt: true } },
+        contributions: {
+          where: { status: "PAID" },
+          select: {
+            quantity: true, amount: true, isOrganiserTopUp: true, createdAt: true,
+            // Phase 3 — only ever read here (the owning organiser's own
+            // participant list), never in the supplier-facing manifest.
+            deliveryRecipientName: true, deliveryAddressLine1: true, deliveryAddressLine2: true, deliveryCity: true, deliveryPostcode: true,
+          },
+        },
       },
       orderBy: { joinedAt: "asc" },
     });
     const isSelfSupply = campaign.fulfilmentOwner === "SELF";
-    return participants.map((p) => ({
-      userId: p.userId,
-      ...(isSelfSupply ? {} : { name: p.user.name, email: p.user.email }),
-      joinedAt: p.joinedAt,
-      totalQuantity: p.contributions.reduce((sum, c) => sum + c.quantity, 0),
-      totalPaid: p.contributions.reduce((sum, c) => sum + c.amount, 0),
-      isOrganiser: p.contributions.some((c) => c.isOrganiserTopUp),
-    }));
+    // Phase 3 (address + privacy foundation) — a buyer's delivery address
+    // is only ever meaningful for a DELIVERY campaign, and is shown to its
+    // owning organiser regardless of fulfilmentOwner: unlike name/email
+    // (a relationship/contact-export concern, gated by isSelfSupply above,
+    // unchanged), the organiser is the one who configured delivery coverage
+    // and is responsible for goods actually reaching participants either
+    // way. Never exposed to a supplier — see community-buy-manifest.
+    // service.ts's own "no raw home addresses" doc comment.
+    const showAddress = campaign.deliveryPreference === "DELIVERY";
+    if (showAddress && participants.length > 0) {
+      await recordDataAccess({
+        campaignId,
+        accessorUserId: userId,
+        accessorRole: "ORGANISER",
+        dataCategory: "ADDRESS_DETAIL",
+        action: "VIEWED",
+        purposeCode: "organiser_participant_list",
+      });
+    }
+    return participants.map((p) => {
+      const latestPaid = p.contributions[p.contributions.length - 1];
+      return {
+        userId: p.userId,
+        ...(isSelfSupply ? {} : { name: p.user.name, email: p.user.email }),
+        joinedAt: p.joinedAt,
+        totalQuantity: p.contributions.reduce((sum, c) => sum + c.quantity, 0),
+        totalPaid: p.contributions.reduce((sum, c) => sum + c.amount, 0),
+        isOrganiser: p.contributions.some((c) => c.isOrganiserTopUp),
+        ...(showAddress && latestPaid?.deliveryAddressLine1
+          ? {
+              deliveryAddress: {
+                recipientName: latestPaid.deliveryRecipientName,
+                addressLine1: latestPaid.deliveryAddressLine1,
+                addressLine2: latestPaid.deliveryAddressLine2,
+                city: latestPaid.deliveryCity,
+                postcode: latestPaid.deliveryPostcode,
+              },
+            }
+          : {}),
+      };
+    });
   },
 
   /** "Refund Progress" — real counts, not a fabricated progress bar, for a campaign the organiser owns. */

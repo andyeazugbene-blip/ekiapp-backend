@@ -67,7 +67,7 @@ export async function recordDataAccess(entry: {
   accessorAccountId?: string | null;
   accessorUserId: string;
   accessorRole: "SUPPLIER" | "ORGANISER" | "ADMIN";
-  dataCategory: "DELIVERY_STATUS" | "CONTACT_CHANNEL" | "EMERGENCY_NUMBER" | "MANIFEST";
+  dataCategory: "DELIVERY_STATUS" | "CONTACT_CHANNEL" | "EMERGENCY_NUMBER" | "MANIFEST" | "ADDRESS_DETAIL";
   action: "VIEWED" | "LABEL_GENERATED" | "MESSAGE_SENT" | "PROXY_CALL_STARTED" | "COURIER_SHARED" | "ACCESS_REVOKED" | "ADMIN_OVERRIDE";
   purposeCode: string;
   accessExpiresAt?: Date | null;

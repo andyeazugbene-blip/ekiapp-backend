@@ -2423,6 +2423,25 @@ model CommunityCampaign {
   // courier token, or DeliveryReference (that's Workstream 5's privacy
   // infrastructure, deliberately untouched here).
   deliveryPreference        CampaignDeliveryPreference         @default(COLLECTION)
+  // Phase 3 (address + privacy foundation) — the organiser's public
+  // collection-point address, shown to every buyer once set. Required at
+  // submit() only when deliveryPreference is COLLECTION. Not
+  // privacy-sensitive (it's the organiser's own chosen public location,
+  // same visibility as the campaign itself) — no privacy-service gating
+  // needed, unlike a buyer's own delivery address below.
+  collectionAddressLine1    String?
+  collectionAddressLine2    String?
+  collectionCity            String?
+  collectionPostcode        String?
+  // Phase 3 — coarse coverage areas (postcode/area prefixes, e.g. "SW1",
+  // "E14") this campaign can deliver to. Only meaningful when
+  // deliveryPreference is DELIVERY; required at submit() in that case.
+  // A buyer's own postcode is checked against this list at pledge time
+  // (assertDeliveryAddressWithinCoverage() in
+  // campaign-contributions.service.ts) — empty means no coverage
+  // configured yet, which blocks every delivery pledge until the
+  // organiser sets at least one area.
+  deliveryCoverageAreas     String[]                           @default([])
   // Phase 2 (organiser controls) — optional scheduled opening. Null means
   // publish() opens the campaign immediately (today's behavior, unchanged).
   // When set, publish() records publishedAt but leaves status APPROVED;
@@ -2807,6 +2826,20 @@ model CampaignContribution {
   // pledge time; nothing is captured until the campaign succeeds and
   // chargeAllPledgesForCampaign() runs the actual off-session charge.
   paymentMethodId       String?
+  // Phase 3 (address + privacy foundation) — the buyer's own delivery
+  // address, entered at pledge time, required only when the campaign's
+  // deliveryPreference is DELIVERY (assertDeliveryAddressWithinCoverage()
+  // in campaign-contributions.service.ts). Null for every COLLECTION
+  // pledge and every contribution created before this field existed.
+  // Privacy-sensitive: never selected into the supplier-facing manifest
+  // (community-buy-manifest.service.ts) — only the owning organiser can
+  // read it, via listParticipantsForOrganiser(), and only for a PAID
+  // contribution on a DELIVERY campaign.
+  deliveryRecipientName String?
+  deliveryAddressLine1  String?
+  deliveryAddressLine2  String?
+  deliveryCity          String?
+  deliveryPostcode      String?
   campaign              CommunityCampaign                 @relation(fields: [campaignId], references: [id], onDelete: Restrict)
   participant           CampaignParticipant               @relation(fields: [participantId], references: [id], onDelete: Restrict)
   paymentMethod         BuyerPaymentMethod?               @relation(fields: [paymentMethodId], references: [id], onDelete: SetNull)
@@ -3181,6 +3214,14 @@ enum DataAccessCategory {
   CONTACT_CHANNEL
   EMERGENCY_NUMBER
   MANIFEST
+  // Phase 3 (address + privacy foundation) — a buyer's own structured
+  // delivery address (line1/2, city, postcode, recipient name), distinct
+  // from DELIVERY_STATUS (dispatch/collected progress, no address content).
+  // Only ever logged for the owning organiser's own read
+  // (listParticipantsForOrganiser) — never for a supplier; see
+  // community-buy-manifest.service.ts's own "no raw home addresses"
+  // doc comment, which this category is never used against.
+  ADDRESS_DETAIL
 }
 
 enum DataAccessAction {

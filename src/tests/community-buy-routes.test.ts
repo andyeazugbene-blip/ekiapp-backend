@@ -495,7 +495,7 @@ describe("Participant routes", () => {
       .set("Authorization", `Bearer ${buyerToken()}`)
       .send({ quantity: 2, paymentMethodId: "pm-1" });
     expect(res.status).toBe(201);
-    expect(mockPledge).toHaveBeenCalledWith("buyer-1", "camp-99", 2, "pm-1");
+    expect(mockPledge).toHaveBeenCalledWith("buyer-1", "camp-99", 2, "pm-1", undefined);
   });
 
   it("GET /api/community-buy/my-contributions — 401 without token, 200 for a buyer, and is NOT swallowed by /campaigns/:id", async () => {
