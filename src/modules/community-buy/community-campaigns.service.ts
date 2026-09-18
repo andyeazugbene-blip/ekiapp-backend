@@ -4,6 +4,7 @@ import { AppError } from "../../shared/errors/app-error";
 import { notificationsService } from "../notifications/notifications.service";
 import { automationService } from "../automation/automation.service";
 import { marketConfigurationService } from "./market-configuration.service";
+import { calculateBoundedServiceFee } from "../../shared/pricing";
 import { campaignContributionsService } from "./campaign-contributions.service";
 import { campaignAuthorisationService } from "./campaign-authorisation.service";
 import { recordAudit } from "../../shared/utils/audit";
@@ -33,6 +34,11 @@ export interface CreateCampaignInput {
   goalShares?: number;
   maximumShares?: number;
   pricePerShareMinor?: number;
+  // Diaspora escrow reconciliation (final V1 settlement doc §N) — the
+  // organiser-agreed wholesale price paid to an Eki-registered supplier.
+  // Only meaningful when fulfilmentOwner is SUPPLIER; ignored/irrelevant for
+  // SELF. See CommunityCampaign.wholesaleAmountMinor's own doc comment.
+  wholesaleAmountMinor?: number;
   deadline?: string;
   rescueDurationMinutes?: number;
   // Product step (spec §7 step 1).
@@ -116,8 +122,8 @@ async function resolveSupplyRoute(
 }
 
 /** Every numeric rule create() already enforced, made conditional on the field actually being provided so a partial draft save only validates what it touches. */
-function validateSharesAndPricing(fields: { minimumShares?: number; goalShares?: number; maximumShares?: number; pricePerShareMinor?: number }): void {
-  const { minimumShares, goalShares, maximumShares, pricePerShareMinor } = fields;
+function validateSharesAndPricing(fields: { minimumShares?: number; goalShares?: number; maximumShares?: number; pricePerShareMinor?: number; wholesaleAmountMinor?: number }): void {
+  const { minimumShares, goalShares, maximumShares, pricePerShareMinor, wholesaleAmountMinor } = fields;
   if (minimumShares !== undefined && (!Number.isInteger(minimumShares) || minimumShares < 1)) {
     throw new AppError("Minimum shares must be at least 1", 400);
   }
@@ -131,6 +137,19 @@ function validateSharesAndPricing(fields: { minimumShares?: number; goalShares?:
   }
   if (pricePerShareMinor !== undefined && (!Number.isInteger(pricePerShareMinor) || pricePerShareMinor <= 0)) {
     throw new AppError("Price per share must be positive", 400);
+  }
+  // Diaspora escrow reconciliation — must never exceed the retail total the
+  // organiser is charging participants, or the organiser's payout would be
+  // negative (silently clamped to 0 by releaseOrganiserPayment(), but an
+  // organiser entering a wholesale figure larger than their own retail price
+  // is virtually always a data-entry mistake worth rejecting up front).
+  if (wholesaleAmountMinor !== undefined) {
+    if (!Number.isInteger(wholesaleAmountMinor) || wholesaleAmountMinor < 0) {
+      throw new AppError("Wholesale amount must be a non-negative integer", 400);
+    }
+    if (maximumShares !== undefined && pricePerShareMinor !== undefined && wholesaleAmountMinor > maximumShares * pricePerShareMinor) {
+      throw new AppError("Wholesale amount cannot exceed the campaign's maximum possible retail total", 400);
+    }
   }
 }
 
@@ -327,6 +346,7 @@ export const communityCampaignsService = {
         goalShares: input.goalShares,
         maximumShares: input.maximumShares,
         pricePerShareMinor: input.pricePerShareMinor,
+        wholesaleAmountMinor: input.wholesaleAmountMinor,
         images: input.images ?? [],
         unit: input.unit,
         quantityPerOrder: input.quantityPerOrder,
@@ -359,7 +379,7 @@ export const communityCampaignsService = {
 
     const financialFieldsTouched = input.minimumShares !== undefined || input.goalShares !== undefined
       || input.maximumShares !== undefined || input.pricePerShareMinor !== undefined || input.deadline !== undefined
-      || input.holdWindowStartsAt !== undefined || input.decisionDeadline !== undefined;
+      || input.holdWindowStartsAt !== undefined || input.decisionDeadline !== undefined || input.wholesaleAmountMinor !== undefined;
     // Community Buy Workstream 2: the wizard's Supply step must stay
     // editable on a draft, same as every other step — but only while
     // still DRAFT/CHANGES_REQUIRED; a LIVE campaign's supplier can only
@@ -418,6 +438,7 @@ export const communityCampaignsService = {
           pricePerShareMinor: input.pricePerShareMinor,
           targetAmount: (input.goalShares ?? campaign.goalShares ?? 0) * input.pricePerShareMinor,
         }),
+        ...(input.wholesaleAmountMinor !== undefined && { wholesaleAmountMinor: input.wholesaleAmountMinor }),
         ...(deadline !== undefined && { deadline }),
         ...(authorisationSchedule.holdWindowStartsAt !== undefined && { holdWindowStartsAt: authorisationSchedule.holdWindowStartsAt }),
         ...(authorisationSchedule.decisionDeadline !== undefined && { decisionDeadline: authorisationSchedule.decisionDeadline }),
@@ -1066,7 +1087,27 @@ export const communityCampaignsService = {
     // cross-check, never used to decide success/failure.
     const goal = campaign.goalShares ?? 0;
     const progressPct = goal > 0 ? Math.min(100, Math.round((campaign.confirmedShares / goal) * 100)) : 0;
-    return { ...campaign, paidTotal, progressPct, participantCount: campaign._count.participants };
+
+    // Diaspora escrow reconciliation (final V1 settlement doc §N item 6,
+    // "required buyer disclosure") — PER-SHARE preview computed from the
+    // market's CURRENT rate/bounds; a client multiplies by the quantity a
+    // buyer is choosing to show the real total before payment. The amount
+    // actually charged is always the rate snapshotted at pledge time (see
+    // CampaignContribution.buyerServiceFeeAmount's own doc comment), which
+    // can only differ from this preview if an admin changes the rate
+    // between viewing and pledging. Null when there's no price yet (still
+    // drafting) or no market configuration to compute against.
+    let perShareFeeEstimate: { productSubtotal: number; feeAmount: number; maxTotal: number; feeBps: number } | null = null;
+    if (campaign.pricePerShareMinor && campaign.country) {
+      const config = await marketConfigurationService.get(campaign.country);
+      if (config) {
+        const productSubtotal = campaign.pricePerShareMinor;
+        const feeAmount = calculateBoundedServiceFee(productSubtotal, config.buyerServiceFeeBps, config.buyerServiceFeeMinAmount, config.buyerServiceFeeMaxAmount);
+        perShareFeeEstimate = { productSubtotal, feeAmount, maxTotal: productSubtotal + feeAmount, feeBps: config.buyerServiceFeeBps };
+      }
+    }
+
+    return { ...campaign, paidTotal, progressPct, participantCount: campaign._count.participants, perShareFeeEstimate };
   },
 
   // ─── Closing workflow — doc §7 Deadline Evaluation ─────────────────────
@@ -1134,15 +1175,39 @@ export const communityCampaignsService = {
     return { closed: due.length, succeeded, failed, rescued };
   },
 
-  /** One supplier order per campaign, using the actual final confirmedShares — never the goal — doc §11. Self-fulfilled campaigns have no supplier, so no order/payment/fulfilment record applies — the organiser handles it themselves outside this tracked workflow. */
-  async createSupplierOrder(campaign: { id: string; supplierId: string | null; supplierAccountId?: string | null; title: string; currency: string | null; confirmedShares: number; pricePerShareMinor: number | null }): Promise<void> {
-    if (!campaign.supplierId && !campaign.supplierAccountId) return;
+  /** One supplier order per campaign, using the actual final confirmedShares — never the goal — doc §11. Self-fulfilled campaigns have no supplier order/payment/fulfilment record — the organiser handles fulfilment themselves outside this tracked workflow — but every successful campaign (self or supplier-fulfilled alike) gets an organiser payout record; see createOrganiserPayout() below. */
+  async createSupplierOrder(campaign: {
+    id: string;
+    organiserId: string;
+    supplierId: string | null;
+    supplierAccountId?: string | null;
+    title: string;
+    currency: string | null;
+    confirmedShares: number;
+    pricePerShareMinor: number | null;
+    wholesaleAmountMinor?: number | null;
+  }): Promise<void> {
     if (!campaign.pricePerShareMinor) return;
     if (!campaign.currency) return;
+
+    const amount = campaign.confirmedShares * campaign.pricePerShareMinor;
+
+    // Diaspora escrow reconciliation (final V1 settlement doc §N) — created
+    // for EVERY successful campaign, before the supplier-only branch below,
+    // since self-fulfilled campaigns never reach it. upsert()'s no-op update
+    // makes this safe to call again on a defensive retry, same as the
+    // campaignFulfilment.upsert() calls further down.
+    await this.createOrganiserPayout(campaign.id, campaign.organiserId, amount, campaign.currency);
+
+    if (!campaign.supplierId && !campaign.supplierAccountId) return;
     const existing = await prisma.campaignSupplierPayment.findUnique({ where: { campaignId: campaign.id } });
     if (existing) return; // idempotent — never create a second supplier order/payment record.
 
-    const amount = campaign.confirmedShares * campaign.pricePerShareMinor;
+    // Diaspora escrow reconciliation — snapshotted once, same immutable-
+    // snapshot principle as `amount` above. Null preserves the original
+    // 100%-to-supplier behavior exactly (see CampaignSupplierPayment.
+    // wholesaleAmount's own doc comment).
+    const wholesaleAmount = campaign.wholesaleAmountMinor ?? null;
 
     // Workstream 3: the no-Vendor SupplierAccount path is checked first and
     // is otherwise a complete parallel of the legacy branch below (same
@@ -1154,6 +1219,7 @@ export const communityCampaignsService = {
         data: {
           campaignId: campaign.id,
           amount,
+          wholesaleAmount,
           currency: campaign.currency,
           status: "NOT_RELEASED",
           payoutStripeAccountIdAtApproval: account?.providerConnectedAccountId ?? null,
@@ -1171,6 +1237,7 @@ export const communityCampaignsService = {
       data: {
         campaignId: campaign.id,
         amount,
+        wholesaleAmount,
         currency: campaign.currency,
         status: "NOT_RELEASED",
         payoutStripeAccountIdAtApproval: supplier?.vendor.stripeAccountId ?? null,
@@ -1184,6 +1251,24 @@ export const communityCampaignsService = {
     if (supplier) {
       await notifyCampaign(supplier.vendor.userId, "supplier_order_created", "Campaign order confirmed", `${campaign.title} reached its funding requirement. Final quantity: ${campaign.confirmedShares}.`, campaign.id);
     }
+  },
+
+  /** Diaspora escrow reconciliation — the organiser payout counterpart to createSupplierOrder() above, created for every successful campaign regardless of fulfilmentOwner. Idempotent (upsert with a no-op update). */
+  async createOrganiserPayout(campaignId: string, organiserId: string, amount: number, currency: string): Promise<void> {
+    const organiser = await prisma.organiserProfile.findUnique({ where: { id: organiserId } });
+    if (!organiser) return;
+    await prisma.communityBuyOrganiserPayout.upsert({
+      where: { campaignId },
+      update: {},
+      create: {
+        campaignId,
+        organiserId: organiser.id,
+        amount,
+        currency,
+        status: "NOT_RELEASED",
+        payoutStripeAccountIdAtApproval: organiser.providerConnectedAccountId ?? null,
+      },
+    });
   },
 
   async notifyRescueOpened(campaignId: string, rescueEndsAt: Date): Promise<void> {
@@ -1401,7 +1486,11 @@ export const communityCampaignsService = {
         await prisma.campaignRefund.create({
           data: {
             contributionId: contribution.id,
-            amount: contribution.amount,
+            // Diaspora escrow reconciliation — refund the FULL amount
+            // actually charged (product + buyer service fee), matching
+            // attemptCharge()'s real Stripe amount, so a post-capture
+            // cancellation (AT-25) never leaves the fee portion uncredited.
+            amount: contribution.amount + contribution.buyerServiceFeeAmount,
             currency: contribution.currency,
             status: "REFUND_PENDING",
             idempotencyKey: `refund:${contribution.id}`,

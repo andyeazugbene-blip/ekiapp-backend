@@ -6,7 +6,7 @@ import { stripe } from "../../lib/stripe";
 import { logger } from "../../lib/logger";
 import { AppError } from "../../shared/errors/app-error";
 import { resolveStripeCurrency } from "../../shared/currency";
-import { calculatePlatformFee } from "../../shared/pricing";
+import { calculatePlatformFee, calculateBoundedServiceFee } from "../../shared/pricing";
 import { notificationsService } from "../notifications/notifications.service";
 import { marketConfigurationService } from "./market-configuration.service";
 import { supportCaseService } from "./support-case.service";
@@ -110,13 +110,22 @@ async function requirePaymentMethod(userId: string, paymentMethodId: string) {
 
 async function createPledge(
   campaignId: string,
-  campaign: { pricePerShareMinor: number; currency: string },
+  campaign: { pricePerShareMinor: number; currency: string; country: string | null },
   participantId: string,
   quantity: number,
   isOrganiserTopUp: boolean,
   paymentMethodId: string,
 ): Promise<PledgeResult> {
   const amount = quantity * campaign.pricePerShareMinor;
+  // Diaspora escrow reconciliation (final V1 settlement doc §N item 2) —
+  // computed once at pledge time from the market's current bps/bounds and
+  // never re-read afterward, same immutable-snapshot principle as
+  // paymentMode/termsLockedAt: a later admin rate change must not alter an
+  // already-pledged participant's amount.
+  const marketConfig = campaign.country ? await marketConfigurationService.get(campaign.country) : null;
+  const buyerServiceFeeAmount = marketConfig
+    ? calculateBoundedServiceFee(amount, marketConfig.buyerServiceFeeBps, marketConfig.buyerServiceFeeMinAmount, marketConfig.buyerServiceFeeMaxAmount)
+    : 0;
 
   // Atomic capacity claim — the pledge itself is the only commitment point
   // in this model (no Stripe call to arbitrate a race), so two concurrent
@@ -133,7 +142,7 @@ async function createPledge(
     if (claim.count !== 1) return null;
 
     const contribution = await tx.campaignContribution.create({
-      data: { campaignId, participantId, amount, currency: campaign.currency, quantity, isOrganiserTopUp, status: "PLEDGED", paymentMethodId },
+      data: { campaignId, participantId, amount, buyerServiceFeeAmount, currency: campaign.currency, quantity, isOrganiserTopUp, status: "PLEDGED", paymentMethodId },
     });
 
     // First confirmed pledge locks the campaign's financial terms —
@@ -282,7 +291,12 @@ export const campaignContributionsService = {
       }
       intent = await stripe.paymentIntents.create(
         {
-          amount: contribution.amount,
+          // Diaspora escrow reconciliation — charges the buyer service fee
+          // alongside the product amount in the same off-session capture;
+          // see buyerServiceFeeAmount's own doc comment for why it's a
+          // separate field. `amount` itself is left untouched everywhere
+          // else (capacity, campaign totals, supplier settlement).
+          amount: contribution.amount + contribution.buyerServiceFeeAmount,
           currency: resolveStripeCurrency(contribution.currency),
           customer: contribution.paymentMethod.stripeCustomerId,
           payment_method: contribution.paymentMethod.stripePaymentMethodId,
@@ -374,7 +388,12 @@ export const campaignContributionsService = {
     try {
       intent = await stripe.paymentIntents.create(
         {
-          amount: contribution.amount,
+          // Diaspora escrow reconciliation — charges the buyer service fee
+          // alongside the product amount in the same off-session capture;
+          // see buyerServiceFeeAmount's own doc comment for why it's a
+          // separate field. `amount` itself is left untouched everywhere
+          // else (capacity, campaign totals, supplier settlement).
+          amount: contribution.amount + contribution.buyerServiceFeeAmount,
           currency: resolveStripeCurrency(contribution.currency),
           customer: contribution.paymentMethod.stripeCustomerId,
           payment_method: contribution.paymentMethod.stripePaymentMethodId,
@@ -455,13 +474,24 @@ export const campaignContributionsService = {
     return { handled: true as const };
   },
 
-  async markChargeSucceeded(contribution: { id: string; campaignId: string; currency: string; amount: number; participant: { userId: string } }, stripePaymentIntentId: string) {
+  async markChargeSucceeded(
+    contribution: { id: string; campaignId: string; currency: string; amount: number; buyerServiceFeeAmount: number; participant: { userId: string } },
+    stripePaymentIntentId: string,
+  ) {
+    // The full amount actually charged to Stripe (product + buyer service
+    // fee) — see attemptCharge()'s identical sum and buyerServiceFeeAmount's
+    // own doc comment. Escrowing the full charged amount here, and only
+    // recognizing the fee as Eki revenue at campaign-settlement time (in
+    // releaseOrganiserPayment()), keeps a post-capture refund (AT-25) always
+    // able to reverse the exact amount the participant was actually charged.
+    const chargedAmount = contribution.amount + contribution.buyerServiceFeeAmount;
     await prisma.$transaction(async (tx) => {
       await tx.campaignContribution.update({ where: { id: contribution.id }, data: { status: "PAID", stripePaymentIntentId } });
       // Additive bookkeeping — money is genuinely captured by Stripe at
       // this point but doesn't belong to the supplier yet.
       // COMMUNITY_BUY_ESCROW is the platform-owned holding account until
-      // releaseSupplierPayment() transfers it out net of Eki's fee.
+      // releaseSupplierPayment()/releaseOrganiserPayment() transfer it out
+      // net of Eki's fees.
       await ledgerService.postEntriesSafely(tx, {
         currency: contribution.currency,
         businessRefType: "CommunityContribution",
@@ -469,8 +499,8 @@ export const campaignContributionsService = {
         providerRef: stripePaymentIntentId,
         description: `Community Buy pledge charged for campaign ${contribution.campaignId}`,
         legs: [
-          { accountType: LedgerAccountType.PROVIDER_CASH, ownerType: LedgerOwnerType.PLATFORM, direction: LedgerDirection.DEBIT, amount: contribution.amount },
-          { accountType: LedgerAccountType.COMMUNITY_BUY_ESCROW, ownerType: LedgerOwnerType.PLATFORM, direction: LedgerDirection.CREDIT, amount: contribution.amount },
+          { accountType: LedgerAccountType.PROVIDER_CASH, ownerType: LedgerOwnerType.PLATFORM, direction: LedgerDirection.DEBIT, amount: chargedAmount },
+          { accountType: LedgerAccountType.COMMUNITY_BUY_ESCROW, ownerType: LedgerOwnerType.PLATFORM, direction: LedgerDirection.CREDIT, amount: chargedAmount },
         ],
       });
     });
@@ -922,11 +952,20 @@ export const campaignContributionsService = {
     // never let country stay unset.
     if (!payment.campaign.country) throw new AppError("Campaign is missing its market configuration", 409);
     const config = await marketConfigurationService.get(payment.campaign.country);
-    if (config?.communityBuyFeeBps == null) {
-      throw new AppError("This market has no configured Community Buy processing fee — set one before releasing supplier payments", 409, undefined, "FEE_NOT_CONFIGURED");
+    if (!config) {
+      throw new AppError("This market has no configuration — set one before releasing supplier payments", 409, undefined, "FEE_NOT_CONFIGURED");
     }
-    const feeAmount = calculatePlatformFee(totalPaid, config.communityBuyFeeBps);
-    const netAmount = totalPaid - feeAmount;
+    // Diaspora escrow reconciliation (final V1 settlement doc §N item 4) —
+    // when the organiser gave this campaign a wholesale amount, the supplier
+    // is only ever paid THAT figure (net of their 8% commission); the
+    // remainder (totalPaid - wholesaleAmount) belongs to the organiser and
+    // is released separately by organiserPayoutService.releaseOrganiserPayment().
+    // A null wholesaleAmount preserves the original 100%-to-supplier
+    // behavior exactly — see CampaignSupplierPayment.wholesaleAmount's own
+    // doc comment.
+    const releaseBase = payment.wholesaleAmount ?? totalPaid;
+    const feeAmount = calculatePlatformFee(releaseBase, config.communityBuyFeeBps);
+    const netAmount = releaseBase - feeAmount;
 
     // WS6: atomic claim — same guard shape as WS4/WS5's fixes. Two
     // concurrent releases (an admin double-click, or a four-eyes approval
@@ -971,7 +1010,10 @@ export const campaignContributionsService = {
       providerRef: transfer.id,
       description: `Community Buy settlement for campaign ${campaignId} — supplier net of Eki processing fee`,
       legs: [
-        { accountType: LedgerAccountType.COMMUNITY_BUY_ESCROW, ownerType: LedgerOwnerType.PLATFORM, direction: LedgerDirection.DEBIT, amount: totalPaid },
+        // Debits only releaseBase (wholesaleAmount when set, else the full
+        // totalPaid) — the remainder, if any, belongs to the organiser and
+        // is debited from escrow separately by releaseOrganiserPayment().
+        { accountType: LedgerAccountType.COMMUNITY_BUY_ESCROW, ownerType: LedgerOwnerType.PLATFORM, direction: LedgerDirection.DEBIT, amount: releaseBase },
         { accountType: ledgerAccountType, ownerType: ledgerOwnerType, ownerId: ledgerOwnerId, direction: LedgerDirection.CREDIT, amount: netAmount },
         { accountType: LedgerAccountType.PLATFORM_FEE_REVENUE, ownerType: LedgerOwnerType.PLATFORM, direction: LedgerDirection.CREDIT, amount: feeAmount },
       ],

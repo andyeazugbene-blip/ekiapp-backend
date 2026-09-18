@@ -6,6 +6,7 @@ import { prisma } from "../../lib/prisma";
 import { adminApprovalsService } from "./admin-approvals.service";
 import { campaignContributionsService } from "../community-buy/campaign-contributions.service";
 import { campaignPayoutService } from "../community-buy/campaign-payout.service";
+import { organiserPayoutService } from "../community-buy/organiser-payout.service";
 import { executeOrderRefund } from "./admin-refunds.controller";
 import { recordDataAccess } from "../community-buy/community-buy-privacy.service";
 import { notificationsService } from "../notifications/notifications.service";
@@ -99,6 +100,20 @@ export async function adminDecideApproval(request: Request, response: Response):
         actorId: adminId,
         action: "community_buy_payout.released",
         entityType: "CommunityBuyPayout",
+        entityId: approval.businessRefId,
+        afterState: { status: payout.status },
+        request,
+      });
+    } else if (approval.actionType === "community_buy.organiser_payout_release") {
+      // Diaspora escrow reconciliation — organiser twin of the
+      // community_buy.supplier_payment_release branch above. Same reasoning:
+      // without this, a four-eyes-gated organiser release would only ever
+      // show up as the generic admin_approval.approved_and_executed entry.
+      const payout = await organiserPayoutService.releaseOrganiserPayment(adminId, approval.businessRefId);
+      await recordAudit({
+        actorId: adminId,
+        action: "community_buy_organiser_payout.release",
+        entityType: "CommunityBuyOrganiserPayout",
         entityId: approval.businessRefId,
         afterState: { status: payout.status },
         request,

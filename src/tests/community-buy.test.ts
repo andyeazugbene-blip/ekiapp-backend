@@ -21,6 +21,10 @@ vi.mock("../lib/prisma", () => ({
     deliveryReference: { findMany: vi.fn(), updateMany: vi.fn().mockResolvedValue({ count: 0 }) },
     communityBuyDataAccessLog: { create: vi.fn(), findMany: vi.fn(), findFirst: vi.fn(), updateMany: vi.fn() },
     organiserProfile: { findUnique: vi.fn(), update: vi.fn() },
+    // Diaspora escrow reconciliation — createSupplierOrder() now always
+    // creates/upserts an organiser payout record alongside (or instead of)
+    // the supplier payment.
+    communityBuyOrganiserPayout: { upsert: vi.fn().mockResolvedValue({}), findUnique: vi.fn(), findMany: vi.fn(), update: vi.fn(), updateMany: vi.fn() },
     supplierProfile: { findUnique: vi.fn(), findMany: vi.fn(), update: vi.fn() },
     // Community Buy Workstream 1: verify/restrict/unrestrictSupplier now
     // call syncSupplierAccountForProfile, which reads the linked vendor via
@@ -563,6 +567,7 @@ describe("campaignContributionsService.pledge — PLEDGE_THEN_CHARGE (client man
     } as never);
     m.marketConfiguration.findUnique.mockResolvedValue({
       countryCode: "GB", communityBuyEnabled: true, communityBuyPaymentsEnabled: true, communityBuyPaymentMode: "PLEDGE_THEN_CHARGE",
+      buyerServiceFeeBps: 500, buyerServiceFeeMinAmount: 120, buyerServiceFeeMaxAmount: 500,
     } as never);
     m.buyerPaymentMethod.findUnique.mockResolvedValue({ id: "pm-1", buyerId: "buyer-1", stripeCustomerId: "cus_1", stripePaymentMethodId: "pm_1" } as never);
     m.campaignParticipant.upsert.mockResolvedValue({ id: "part-1" } as never);
@@ -791,7 +796,7 @@ describe("campaignContributionsService.escalateRefund — spec §130 escalate (r
 describe("campaignContributionsService.attemptCharge — the only place a pledge is ever charged (client mandate 2026-09)", () => {
   it("client test #3/#4: charges the saved card off-session and posts the escrow ledger entry when Stripe confirms success", async () => {
     m.campaignContribution.findUniqueOrThrow.mockResolvedValueOnce({
-      id: "contrib-30", campaignId: "camp-20", quantity: 2, status: "PLEDGED", currency: "GBP", amount: 2000,
+      id: "contrib-30", campaignId: "camp-20", quantity: 2, status: "PLEDGED", currency: "GBP", amount: 2000, buyerServiceFeeAmount: 0,
       participant: { userId: "buyer-1" },
       paymentMethod: { stripeCustomerId: "cus_1", stripePaymentMethodId: "pm_1" },
     } as never);
@@ -946,7 +951,7 @@ describe("campaignContributionsService.attemptCharge / requeryAmbiguousCharge �
   it("requeryAmbiguousCharge() safely replays the SAME idempotency key and posts the ledger exactly once when Stripe confirms success", async () => {
     m.campaignChargeAttempt.findFirst.mockResolvedValueOnce({ id: "attempt-timeout", idempotencyKey: "contrib-timeout:1", status: "PENDING", stripePaymentIntentId: null } as never);
     m.campaignContribution.findUniqueOrThrow.mockResolvedValueOnce({
-      id: "contrib-timeout", status: "PAYMENT_PROCESSING", campaignId: "camp-timeout", currency: "GBP", amount: 1000,
+      id: "contrib-timeout", status: "PAYMENT_PROCESSING", campaignId: "camp-timeout", currency: "GBP", amount: 1000, buyerServiceFeeAmount: 0,
       participant: { userId: "buyer-timeout" },
       paymentMethod: { stripeCustomerId: "cus_timeout", stripePaymentMethodId: "pm_timeout" },
     } as never);
@@ -1029,7 +1034,7 @@ describe("campaignContributionsService.resolveProcessingCharge — reliability s
   it("posts the escrow ledger entry and marks the pledge PAID exactly once when the webhook later confirms success", async () => {
     m.campaignChargeAttempt.findFirst.mockResolvedValueOnce({ id: "attempt-5", status: "PENDING" } as never);
     m.campaignContribution.findUnique.mockResolvedValueOnce({
-      id: "contrib-5", status: "PAYMENT_PROCESSING", campaignId: "camp-25", currency: "GBP", amount: 1000,
+      id: "contrib-5", status: "PAYMENT_PROCESSING", campaignId: "camp-25", currency: "GBP", amount: 1000, buyerServiceFeeAmount: 0,
       participant: { userId: "buyer-5" },
     } as never);
     m.campaignChargeAttempt.updateMany.mockResolvedValueOnce({ count: 1 } as never);
@@ -1184,13 +1189,18 @@ describe("campaignContributionsService.releaseSupplierPayment — owner settleme
     expect(entries.some((e: any) => e.amount === 500)).toBe(true); // Eki fee
   });
 
-  it("refuses to release when the market has no configured processing fee — never invents a default percentage", async () => {
+  it("refuses to release when the market has no configuration at all — never invents a default percentage", async () => {
+    // Diaspora escrow reconciliation: communityBuyFeeBps is now a NOT NULL
+    // column with a client-confirmed V1 default (8%), so a configured
+    // market can no longer have a null fee — the only way this guard can
+    // still fire is a market with no MarketConfiguration row whatsoever.
     m.campaignSupplierPayment.findUnique.mockResolvedValueOnce({
       id: "payment-2", campaignId: "camp-41", currency: "GBP", status: "NOT_RELEASED", payoutStripeAccountIdAtApproval: null,
       campaign: { country: "GB", supplier: { vendor: { id: "vendor-2", stripeAccountId: "acct_2", stripePayoutsEnabled: true } } },
     } as never);
     m.campaignContribution.aggregate.mockResolvedValueOnce({ _sum: { amount: 5000 } } as never);
-    m.marketConfiguration.findUnique.mockResolvedValue({ countryCode: "GB", communityBuyFeeBps: null } as never);
+    m.marketConfiguration.count.mockResolvedValueOnce(1 as never); // skip ensureDefaults()'s seed loop
+    m.marketConfiguration.findUnique.mockResolvedValueOnce(null as never);
     m.vendor.findUnique.mockResolvedValue({ stripePayoutsEnabled: true, stripeChargesEnabled: true, isSuspended: false } as never);
 
     await expect(campaignContributionsService.releaseSupplierPayment("admin-1", "camp-41")).rejects.toMatchObject({ statusCode: 409, code: "FEE_NOT_CONFIGURED" });
@@ -2971,7 +2981,7 @@ describe("Phase 9 — admin cancel/end campaign", () => {
     m.communityBuyPaymentAuthorisation.findMany.mockResolvedValue([] as never); // no open holds left to release in this scenario
     // createRefundRecordsForFailedCampaign() queries PAID contributions first...
     m.campaignContribution.findMany.mockImplementationOnce(async () => [
-      { id: "contrib-captured", campaignId: "camp-1", amount: 5000, currency: "GBP" },
+      { id: "contrib-captured", campaignId: "camp-1", amount: 5000, buyerServiceFeeAmount: 0, currency: "GBP" },
     ] as never);
     m.campaignRefund.create.mockResolvedValue({} as never);
     m.campaignContribution.update.mockResolvedValue({} as never);

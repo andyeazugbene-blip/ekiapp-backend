@@ -65,6 +65,10 @@ import {
   markFulfilmentDispatched,
   markFulfilmentReady,
   onboardSupplierStripeConnect,
+  onboardOrganiserStripeConnect,
+  getOrganiserStripeConnectStatus,
+  refreshOrganiserStripeConnect,
+  getMyOrganiserPayout,
   organiserConfirmFulfilmentCompletion,
   postCampaignUpdate,
   publishOrganiserCampaign,
@@ -162,6 +166,13 @@ organiserRouter.get("/campaigns/:id/refund-progress", asyncHandler(getCampaignRe
 organiserRouter.get("/campaigns/:id/fulfilment", asyncHandler(getOrganiserFulfilment));
 organiserRouter.post("/campaigns/:id/fulfilment/confirm-completion", asyncHandler(organiserConfirmFulfilmentCompletion));
 organiserRouter.get("/campaigns/:id/organiser-fee", asyncHandler(getMyCommunityBuyOrganiserFee));
+// Diaspora escrow reconciliation (final V1 settlement doc §N) — organiser
+// Stripe Connect onboarding + own payout view, mirroring the supplier
+// equivalents below exactly.
+organiserRouter.post("/stripe-connect/onboard", asyncHandler(onboardOrganiserStripeConnect));
+organiserRouter.get("/stripe-connect/status", asyncHandler(getOrganiserStripeConnectStatus));
+organiserRouter.post("/stripe-connect/refresh", asyncHandler(refreshOrganiserStripeConnect));
+organiserRouter.get("/campaigns/:id/payout", asyncHandler(getMyOrganiserPayout));
 
 // TEMPORARY compatibility shim for the currently-deployed mobile app — see
 // the long comment in community-buy.controller.ts. Remove once the new

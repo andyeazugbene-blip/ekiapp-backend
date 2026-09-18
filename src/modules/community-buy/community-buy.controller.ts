@@ -16,6 +16,8 @@ import { adminApprovalsService } from "../admin/admin-approvals.service";
 import { campaignAuthorisationService } from "./campaign-authorisation.service";
 import { campaignPayoutService } from "./campaign-payout.service";
 import { organiserFeeService } from "./organiser-fee.service";
+import { organiserPayoutService } from "./organiser-payout.service";
+import { organiserStripeConnectService } from "./organiser-stripe-connect.service";
 import { attributionReviewService } from "./campaign-participant-attribution.service";
 import { communityBuyManifestService } from "./community-buy-manifest.service";
 import { searchDataAccessLog, revokeDeliveryReferencesForSupplierAccount, isIndividualDeliveryEnabled, FULFILMENT_ACCESS_PRESERVED_SCOPE } from "./community-buy-privacy.service";
@@ -1093,6 +1095,73 @@ export async function adminHoldSupplierPayment(request: Request, response: Respo
   const payment = await campaignContributionsService.holdSupplierPayment(adminId, id, reason);
   await recordAudit({ actorId: adminId, action: "community_supplier_payment.hold", entityType: "CampaignSupplierPayment", entityId: id, reason, afterState: { status: payment.status }, request });
   response.json({ payment });
+}
+
+// ─── Diaspora escrow reconciliation — organiser payout admin ────────────
+// Mirrors the CampaignSupplierPayment admin functions above exactly (same
+// four-eyes gate shape, same audit actions) for the organiser's own payout.
+
+export async function adminListOrganiserPayouts(_request: Request, response: Response): Promise<void> {
+  response.json({ items: await organiserPayoutService.listForAdmin() });
+}
+
+export async function adminReleaseOrganiserPayout(request: Request, response: Response): Promise<void> {
+  const adminId = requireUserId(request);
+  const id = requireIdParam(request);
+
+  const existingPayout = await prisma.communityBuyOrganiserPayout.findUnique({ where: { campaignId: id }, select: { amount: true } });
+  const gated = await adminApprovalsService.requiresApproval("community_buy.organiser_payout_release", existingPayout?.amount ?? null);
+  if (gated) {
+    const approval = await adminApprovalsService.requestApproval({
+      actionType: "community_buy.organiser_payout_release",
+      businessRefType: "CommunityBuyOrganiserPayout",
+      businessRefId: id,
+      amount: existingPayout?.amount ?? null,
+      requestedById: adminId,
+      reason: "Organiser payout release requested",
+    });
+    await recordAudit({ actorId: adminId, action: "community_buy_organiser_payout.release_requested", entityType: "CommunityBuyOrganiserPayout", entityId: id, request });
+    response.status(202).json({ pendingApproval: approval, message: "This release requires a second admin's approval before it executes." });
+    return;
+  }
+
+  const payout = await organiserPayoutService.releaseOrganiserPayment(adminId, id);
+  await recordAudit({ actorId: adminId, action: "community_buy_organiser_payout.release", entityType: "CommunityBuyOrganiserPayout", entityId: id, afterState: { status: payout.status }, request });
+  response.json({ payout });
+}
+
+export async function adminHoldOrganiserPayout(request: Request, response: Response): Promise<void> {
+  const adminId = requireUserId(request);
+  const reason = request.body?.reason;
+  if (typeof reason !== "string" || !reason.trim()) throw new AppError("reason is required", 400);
+  const id = requireIdParam(request);
+  const payout = await organiserPayoutService.holdOrganiserPayout(adminId, id, reason);
+  await recordAudit({ actorId: adminId, action: "community_buy_organiser_payout.hold", entityType: "CommunityBuyOrganiserPayout", entityId: id, reason, afterState: { status: payout.status }, request });
+  response.json({ payout });
+}
+
+// ─── Diaspora escrow reconciliation — organiser Stripe Connect + own payout view ───
+
+export async function onboardOrganiserStripeConnect(request: Request, response: Response): Promise<void> {
+  response.status(200).json(await organiserStripeConnectService.onboard(requireUserId(request)));
+}
+
+export async function getOrganiserStripeConnectStatus(request: Request, response: Response): Promise<void> {
+  response.status(200).json(await organiserStripeConnectService.getStatus(requireUserId(request)));
+}
+
+export async function refreshOrganiserStripeConnect(request: Request, response: Response): Promise<void> {
+  response.status(200).json(await organiserStripeConnectService.refresh(requireUserId(request)));
+}
+
+/** Organiser's own read-only view of their payout for one campaign. */
+export async function getMyOrganiserPayout(request: Request, response: Response): Promise<void> {
+  const userId = requireUserId(request);
+  const id = requireIdParam(request);
+  const organiser = await prisma.organiserProfile.findUnique({ where: { userId } });
+  if (!organiser) throw new AppError("Organiser profile required", 403);
+  const payout = await organiserPayoutService.getMyPayout(organiser.id, id);
+  response.json({ payout });
 }
 
 // ─── M2 — AUTHORISE_THEN_CAPTURE payout admin (CommunityBuyPayout) ──────

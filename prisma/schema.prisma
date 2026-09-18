@@ -2200,20 +2200,31 @@ enum ContributionStatus {
 }
 
 model OrganiserProfile {
-  id               String              @id @default(cuid())
-  userId           String              @unique
-  isVerified       Boolean             @default(false)
-  verifiedAt       DateTime?
+  id                         String                        @id @default(cuid())
+  userId                     String                        @unique
+  isVerified                 Boolean                       @default(false)
+  verifiedAt                 DateTime?
   // Admin risk control — doc §Risk Controls. Independent of isVerified: a
   // verified organiser can be temporarily restricted without revoking
   // verification (revocable, distinct from rejection).
-  isRestricted     Boolean             @default(false)
-  restrictedReason String?
-  country          String
-  user             User                @relation(fields: [userId], references: [id], onDelete: Cascade)
-  campaigns        CommunityCampaign[]
-  createdAt        DateTime            @default(now())
-  updatedAt        DateTime            @updatedAt
+  isRestricted               Boolean                       @default(false)
+  restrictedReason           String?
+  country                    String
+  // Diaspora escrow reconciliation (final V1 settlement doc §N) — mirrors
+  // supplier-stripe-connect.service.ts's Express-account pattern exactly.
+  // Organisers never received a payout of any kind before this: the
+  // organiser is now the primary commercial recipient of released Community
+  // Buy proceeds (net of Eki's organiser commission), so they need their own
+  // Connect destination, same as a SupplierAccount/Vendor already has.
+  providerConnectedAccountId String?
+  chargesEnabled             Boolean                       @default(false)
+  payoutsEnabled             Boolean                       @default(false)
+  detailsSubmitted           Boolean                       @default(false)
+  user                       User                          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  campaigns                  CommunityCampaign[]
+  organiserPayouts           CommunityBuyOrganiserPayout[]
+  createdAt                  DateTime                      @default(now())
+  updatedAt                  DateTime                      @updatedAt
 }
 
 model SupplierProfile {
@@ -2350,6 +2361,17 @@ model CommunityCampaign {
   country                   String?
   currency                  String?
   targetAmount              Int
+  // Diaspora escrow reconciliation (final V1 settlement doc §N) — the
+  // organiser-agreed price paid to an Eki-registered verified supplier for
+  // this campaign's goods, distinct from pricePerShareMinor (what
+  // participants pay). Null means no Eki-mediated wholesale split applies:
+  // self-supply, an external (non-Eki) supplier the organiser pays
+  // privately, or a supplier-fulfilled campaign created before this field
+  // existed — all three preserve releaseSupplierPayment()'s original
+  // full-amount-to-supplier behavior exactly. Set only when fulfilmentOwner
+  // is SUPPLIER; the supplier must see this (and their commission/net) at
+  // invitation-accept time — see supplier-invitation acceptance.
+  wholesaleAmountMinor      Int?
   deadline                  DateTime?
   status                    CampaignStatus                     @default(DRAFT)
   reviewNotes               String?
@@ -2417,6 +2439,7 @@ model CommunityCampaign {
   contributions             CampaignContribution[]
   extensionRequests         CampaignExtensionRequest[]
   supplierPayment           CampaignSupplierPayment?
+  organiserPayout           CommunityBuyOrganiserPayout?
   fulfilment                CampaignFulfilment?
   supportCases              CommunityBuySupportCase[]
   updates                   CampaignUpdate[]
@@ -2521,6 +2544,17 @@ model CampaignSupplierPayment {
   currency                        String
   status                          SupplierPaymentStatus @default(NOT_RELEASED)
   payoutStripeAccountIdAtApproval String?
+  // Diaspora escrow reconciliation (final V1 settlement doc §N) — snapshotted
+  // once from CommunityCampaign.wholesaleAmountMinor at createSupplierOrder()
+  // time. Null preserves the original behavior exactly: releaseSupplierPayment()
+  // pays the supplier the full collected amount net of communityBuyFeeBps
+  // (every campaign created before this field existed, or any supplier
+  // campaign the organiser never gave a wholesale figure). When set,
+  // releaseSupplierPayment() pays the supplier only THIS amount (net of the
+  // same fee bps, now interpreted as the supplier's Eki commission rate),
+  // and the remainder is released to the organiser separately via
+  // CommunityBuyOrganiserPayout.
+  wholesaleAmount                 Int?
   // Eki's processing fee taken out of `amount` at release time (client
   // mandate 2026-09: "Eki takes its configured processing fee"), and what
   // the supplier actually received after it — both snapshotted at release,
@@ -2538,6 +2572,48 @@ model CampaignSupplierPayment {
   updatedAt                       DateTime              @updatedAt
 
   @@index([status])
+}
+
+// Diaspora escrow reconciliation (final V1 settlement doc §N) — the
+// organiser's net Community Buy proceeds. Created for EVERY successful
+// campaign (self-supply, external-supplier-via-self, AND supplier-fulfilled
+// alike) — unlike CampaignSupplierPayment, which only ever exists for
+// fulfilmentOwner=SUPPLIER. Deliberately its own model, not a retrofit of
+// CampaignSupplierPayment: a supplier payable and an organiser payable are
+// two distinct recipients that can both exist for the same campaign, and
+// giving each its own row keeps the admin release action, four-eyes gate and
+// ledger legs for one from ever being confused with the other. Mirrors
+// CampaignSupplierPayment's exact shape/lifecycle (same SupplierPaymentStatus
+// enum, same recompute-live-at-release discipline) rather than inventing a
+// new one.
+model CommunityBuyOrganiserPayout {
+  id                              String                @id @default(cuid())
+  campaignId                      String                @unique
+  organiserId                     String
+  // Organiser's GROSS retail proceeds before Eki's commission: total
+  // collected minus the wholesale amount already earmarked for an Eki
+  // supplier (0 when a legacy supplier campaign has no wholesaleAmount —
+  // then 100% already went to the supplier via the unmodified legacy path,
+  // so there is genuinely nothing left for the organiser). Recomputed live
+  // at release time from actual PAID contributions, same discipline as
+  // CampaignSupplierPayment.amount.
+  amount                          Int                   @default(0)
+  currency                        String
+  status                          SupplierPaymentStatus @default(NOT_RELEASED)
+  payoutStripeAccountIdAtApproval String?
+  commissionAmount                Int?
+  netAmount                       Int?
+  stripeTransferId                String?
+  holdReason                      String?
+  releasedById                    String?
+  releasedAt                      DateTime?
+  organiser                       OrganiserProfile      @relation(fields: [organiserId], references: [id], onDelete: Restrict)
+  campaign                        CommunityCampaign     @relation(fields: [campaignId], references: [id], onDelete: Restrict)
+  createdAt                       DateTime              @default(now())
+  updatedAt                       DateTime              @updatedAt
+
+  @@index([status])
+  @@index([organiserId])
 }
 
 // Operational fulfilment tracking for the supplier, separate from
@@ -2589,7 +2665,7 @@ enum FulfilmentMethod {
 // recordDataAccess() contract) at every existing state transition, plus
 // the new participant-facing receipt-confirmation/problem-report actions.
 model CampaignFulfilmentEvent {
-  id             String                    @id @default(cuid())
+  id             String                   @id @default(cuid())
   campaignId     String
   contributionId String?
   actorUserId    String
@@ -2597,8 +2673,8 @@ model CampaignFulfilmentEvent {
   eventType      FulfilmentEventType
   note           String?
   metadata       Json?
-  campaign       CommunityCampaign         @relation(fields: [campaignId], references: [id], onDelete: Restrict)
-  createdAt      DateTime                  @default(now())
+  campaign       CommunityCampaign        @relation(fields: [campaignId], references: [id], onDelete: Restrict)
+  createdAt      DateTime                 @default(now())
 
   @@index([campaignId, createdAt])
   @@index([contributionId])
@@ -2625,10 +2701,10 @@ enum FulfilmentEventType {
 }
 
 model CampaignParticipant {
-  id            String                 @id @default(cuid())
-  campaignId    String
-  userId        String
-  joinedAt      DateTime               @default(now())
+  id                            String                 @id @default(cuid())
+  campaignId                    String
+  userId                        String
+  joinedAt                      DateTime               @default(now())
   // M7 (spec §14.5/§15.2) — organiser acquisition attribution. Computed
   // exactly once, server-side, inside join() — the spec names no organiser-
   // facing "edit attribution" action, only an admin investigation outcome
@@ -2644,12 +2720,12 @@ model CampaignParticipant {
   // Points at the ORIGINAL CampaignParticipant row a reorder's attribution
   // was retained from (spec AT-45) — null for a fresh/independent
   // acquisition. No FK: deliberately cross-campaign and read-only.
-  repeatCampaignParentId    String?
-  attributionStatus         AttributionStatus @default(ACTIVE)
-  attributionOverrideReason String?
-  campaign      CommunityCampaign      @relation(fields: [campaignId], references: [id], onDelete: Cascade)
-  user          User                   @relation(fields: [userId], references: [id], onDelete: Cascade)
-  contributions CampaignContribution[]
+  repeatCampaignParentId        String?
+  attributionStatus             AttributionStatus      @default(ACTIVE)
+  attributionOverrideReason     String?
+  campaign                      CommunityCampaign      @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  user                          User                   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  contributions                 CampaignContribution[]
 
   @@unique([campaignId, userId])
   @@index([userId])
@@ -2678,6 +2754,14 @@ model CampaignContribution {
   amount                Int
   currency              String
   quantity              Int                               @default(1)
+  // Diaspora escrow reconciliation (final V1 settlement doc §N) — Eki's 5%
+  // buyer service fee (bounded £1.20-£5.00), charged ON TOP of `amount` at
+  // the same off-session capture attemptCharge() already makes. Kept
+  // separate from `amount` deliberately: `amount` stays product-subtotal-
+  // only so capacity checks, campaign totals and supplier settlement math
+  // (all keyed on quantity × pricePerShareMinor) are completely unaffected.
+  // Defaults to 0 for every contribution created before this field existed.
+  buyerServiceFeeAmount Int                               @default(0)
   isOrganiserTopUp      Boolean                           @default(false)
   status                ContributionStatus                @default(INITIATED)
   stripePaymentIntentId String?
@@ -3024,7 +3108,7 @@ model OrganiserFeeAccrualEvent {
 // except to set revokedAt/revocationReason on the ONE row a later
 // revocation targets.
 model CommunityBuyDataAccessLog {
-  id                String              @id @default(cuid())
+  id                String             @id @default(cuid())
   campaignId        String
   contributionId    String?
   participantId     String?
@@ -3034,7 +3118,7 @@ model CommunityBuyDataAccessLog {
   dataCategory      DataAccessCategory
   action            DataAccessAction
   purposeCode       String
-  accessedAt        DateTime            @default(now())
+  accessedAt        DateTime           @default(now())
   accessExpiresAt   DateTime?
   // Privacy-preserving equivalent of IP address (spec §15.8's own wording)
   // — a hash, never the raw address.
@@ -3044,7 +3128,7 @@ model CommunityBuyDataAccessLog {
   adminOverrideId   String?
   revokedAt         DateTime?
   revocationReason  String?
-  createdAt         DateTime            @default(now())
+  createdAt         DateTime           @default(now())
 
   @@index([campaignId, accessedAt])
   @@index([accessorUserId, accessedAt])
@@ -3124,14 +3208,32 @@ model MarketConfiguration {
   // treated as unsupported, same as null.
   communityBuyPaymentMode CommunityBuyPaymentMode?
 
-  // Client mandate (2026-09): "Community Buy must support Eki's configured
-  // processing/commission fee... do not hardcode an arbitrary fee." Taken
-  // out of the pledged total at supplier-payment release time — see
-  // releaseSupplierPayment() in campaign-contributions.service.ts. Null
-  // means "not configured" and blocks release the same way an unset
-  // communityBuyPaymentMode blocks payments — never falls back to a guessed
-  // percentage.
-  communityBuyFeeBps Int?
+  // Diaspora final V1 settlement doc §N item 4 — "supplier-side Eki platform
+  // commission": 8% of the agreed wholesale settlement, taken at
+  // releaseSupplierPayment() time. Originally "Community Buy processing fee"
+  // taken from the FULL collected total (client mandate 2026-09); now
+  // confirmed as the client's final V1 number and given a real default so
+  // it's never an unresolved decision. When a campaign has no
+  // wholesaleAmountMinor (self-supply, external supplier, or a pre-existing
+  // campaign), this still applies to the full collected total exactly as it
+  // always did — see CampaignSupplierPayment.wholesaleAmount's own comment.
+  communityBuyFeeBps Int @default(800)
+
+  // Diaspora final V1 settlement doc §N item 3 — "organiser-owned campaign
+  // and Eki platform commission": 10% of the campaign's retail PRODUCT
+  // subtotal only (excludes delivery, the buyer service fee, refunds and
+  // chargebacks), taken when releasing the organiser's net proceeds. Never
+  // confuse with organiserFeeBps above (M7's pre-existing, unrelated
+  // organiser-reward-FROM-Eki accrual, paid in the opposite direction).
+  organiserCommissionBps   Int @default(1000)
+  // Diaspora final V1 settlement doc §N item 2 — Eki's buyer-side service
+  // fee: 5% of the buyer's Community Buy product subtotal, bounded to
+  // between buyerServiceFeeMinAmount and buyerServiceFeeMaxAmount (minor
+  // units), excluding delivery/collection. Charged on top of the product
+  // amount at the same capture attemptCharge() already makes.
+  buyerServiceFeeBps       Int @default(500)
+  buyerServiceFeeMinAmount Int @default(120)
+  buyerServiceFeeMaxAmount Int @default(500)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -3189,6 +3291,10 @@ enum LedgerAccountType {
   // comment for why this exists instead of crediting SUPPLIER_PAYABLE
   // against COMMUNITY_BUY_ESCROW the way the old payout path does.
   SUPPLIER_CONNECTED_BALANCE
+  // Diaspora escrow reconciliation — the organiser's net Community Buy
+  // proceeds, released from COMMUNITY_BUY_ESCROW via
+  // CommunityBuyOrganiserPayout, mirroring SUPPLIER_PAYABLE/VENDOR_PAYABLE.
+  ORGANISER_PAYABLE
 }
 
 enum LedgerOwnerType {
@@ -3196,6 +3302,7 @@ enum LedgerOwnerType {
   VENDOR
   BUYER
   SUPPLIER
+  ORGANISER
 }
 
 model LedgerEntry {

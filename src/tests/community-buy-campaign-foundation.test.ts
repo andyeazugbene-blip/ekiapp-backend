@@ -224,6 +224,7 @@ describe("campaignContributionsService.pledge — the guarded-transaction capaci
     } as never);
     m.marketConfiguration.findUnique.mockResolvedValue({
       countryCode: "GB", communityBuyEnabled: true, communityBuyPaymentsEnabled: true, communityBuyPaymentMode: "PLEDGE_THEN_CHARGE",
+      buyerServiceFeeBps: 500, buyerServiceFeeMinAmount: 120, buyerServiceFeeMaxAmount: 500,
     } as never);
     m.buyerPaymentMethod.findUnique.mockResolvedValue({ id: "pm-1", buyerId: "buyer-1", stripeCustomerId: "cus_1", stripePaymentMethodId: "pm_1" } as never);
     m.campaignParticipant.findUnique.mockResolvedValue(null as never);
@@ -266,6 +267,7 @@ describe("campaignContributionsService.pledge — the guarded-transaction capaci
     } as never);
     m.marketConfiguration.findUnique.mockResolvedValue({
       countryCode: "GB", communityBuyEnabled: true, communityBuyPaymentsEnabled: true, communityBuyPaymentMode: "PLEDGE_THEN_CHARGE",
+      buyerServiceFeeBps: 500, buyerServiceFeeMinAmount: 120, buyerServiceFeeMaxAmount: 500,
     } as never);
     m.buyerPaymentMethod.findUnique.mockResolvedValue({ id: "pm-1", buyerId: "buyer-1", stripeCustomerId: "cus_1", stripePaymentMethodId: "pm_1" } as never);
     m.campaignParticipant.findUnique.mockResolvedValue(null as never);

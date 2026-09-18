@@ -219,6 +219,9 @@ import {
   adminUpdateMarketConfiguration,
   adminVerifyOrganiser,
   adminVerifySupplier,
+  adminListOrganiserPayouts,
+  adminReleaseOrganiserPayout,
+  adminHoldOrganiserPayout,
 } from "../community-buy/community-buy.controller";
 import {
   disable2fa,
@@ -310,6 +313,9 @@ adminRouter.get("/community-buy/supplier-payments", asyncHandler(requireAdminPer
 adminRouter.get("/community-buy/supplier-payments/aggregate", asyncHandler(requireAdminPermission("community_buy.read")), asyncHandler(adminGetSupplierPaymentAggregate));
 adminRouter.post("/community-campaigns/:id/supplier-payment/release", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(require2fa), asyncHandler(adminReleaseSupplierPayment));
 adminRouter.post("/community-campaigns/:id/supplier-payment/hold", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(require2fa), asyncHandler(adminHoldSupplierPayment));
+adminRouter.get("/community-buy/organiser-payouts", asyncHandler(requireAdminPermission("community_buy.read")), asyncHandler(adminListOrganiserPayouts));
+adminRouter.post("/community-campaigns/:id/organiser-payout/release", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(require2fa), asyncHandler(adminReleaseOrganiserPayout));
+adminRouter.post("/community-campaigns/:id/organiser-payout/hold", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(require2fa), asyncHandler(adminHoldOrganiserPayout));
 
 // M2 — AUTHORISE_THEN_CAPTURE payout admin (CommunityBuyPayout). Same
 // permission/2FA gating as the CampaignSupplierPayment routes above; the

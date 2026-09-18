@@ -18,6 +18,25 @@ export function calculatePlatformFee(subtotalAmount: number, feeBps: number): nu
   return Math.round((subtotalAmount * feeBps) / 10000);
 }
 
+/**
+ * Bounded service fee in cents: `feeBps` of `subtotalAmount`, clamped to
+ * [minAmount, maxAmount]. Used for Community Buy's buyer-side Eki service
+ * fee (final V1 settlement doc §N item 2: 5%, min £1.20, max £5.00).
+ */
+export function calculateBoundedServiceFee(subtotalAmount: number, feeBps: number, minAmount: number, maxAmount: number): number {
+  if (!Number.isFinite(subtotalAmount) || subtotalAmount < 0) {
+    throw new Error("subtotalAmount must be a non-negative finite number");
+  }
+  if (!Number.isFinite(feeBps) || feeBps < 0) {
+    throw new Error("feeBps must be a non-negative finite number");
+  }
+  if (!Number.isFinite(minAmount) || !Number.isFinite(maxAmount) || minAmount < 0 || maxAmount < minAmount) {
+    throw new Error("minAmount/maxAmount must be non-negative with minAmount <= maxAmount");
+  }
+  const raw = calculatePlatformFee(subtotalAmount, feeBps);
+  return Math.min(maxAmount, Math.max(minAmount, raw));
+}
+
 export function calculateWithdrawalFee(amount: number, feeBps: number): number {
   if (!Number.isFinite(amount) || amount < 0) {
     throw new Error("amount must be a non-negative finite number");

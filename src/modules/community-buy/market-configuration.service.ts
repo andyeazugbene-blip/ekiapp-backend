@@ -164,9 +164,14 @@ export const marketConfigurationService = {
     deliveryMethods: string[];
     legalTermsVersion: string | null;
     communityBuyPaymentMode: CommunityBuyPaymentMode | null;
-    // Client mandate (2026-09): Eki's configured processing/commission fee,
-    // taken at supplier-payment release time. No default — see schema note.
-    communityBuyFeeBps: number | null;
+    // Diaspora final V1 settlement doc §N — all four now have a real,
+    // client-confirmed default (see schema notes) rather than being
+    // unresolved; admin can still override per market.
+    communityBuyFeeBps: number;
+    organiserCommissionBps: number;
+    buyerServiceFeeBps: number;
+    buyerServiceFeeMinAmount: number;
+    buyerServiceFeeMaxAmount: number;
   }>) {
     await this.ensureDefaults();
     return prisma.marketConfiguration.update({ where: { countryCode }, data });
