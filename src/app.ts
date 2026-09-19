@@ -98,7 +98,12 @@ app.use(
     origin: allowedOrigins ?? true,
     credentials: true,
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Content-Type", "Authorization", "X-Request-ID", "x-job-secret"],
+    // X-Client-App/X-Client-Platform are sent by services/api/client.ts on
+    // every request, including from the web build (Platform.OS === "web") —
+    // missing from this list meant any browser-origin caller failed CORS
+    // preflight outright (native app requests aren't subject to browser
+    // CORS, so this only ever affected web).
+    allowedHeaders: ["Content-Type", "Authorization", "X-Request-ID", "x-job-secret", "X-Client-App", "X-Client-Platform"],
   }),
 );
 
