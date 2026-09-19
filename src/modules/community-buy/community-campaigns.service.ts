@@ -340,7 +340,11 @@ const MAX_EXTENSIONS = 1;
 // (DRAFT/CHANGES_REQUIRED only), a supplier can respond at any point up to
 // the campaign actually closing out. Excludes only the terminal/closing
 // statuses where a supplier decision no longer means anything.
-const SUPPLIER_RESPONSE_STATUSES = [
+// Phase 5 (organiser<->supplier negotiation) — exported so
+// campaign-supplier-proposal.service.ts can gate proposal submission on
+// the exact same "still negotiable" window, rather than defining a
+// second, potentially-drifting copy of this list.
+export const SUPPLIER_RESPONSE_STATUSES = [
   "DRAFT",
   "CHANGES_REQUIRED",
   "UNDER_REVIEW",
@@ -350,7 +354,10 @@ const SUPPLIER_RESPONSE_STATUSES = [
   "RESCUE_WINDOW",
 ] as const;
 
-async function notifyCampaign(
+// Exported (Phase 5) so campaign-supplier-proposal.service.ts can reuse the
+// exact same notification shape/dedupe/audience-tagging convention instead
+// of duplicating it.
+export async function notifyCampaign(
   userId: string,
   event: string,
   title: string,

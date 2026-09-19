@@ -15,6 +15,13 @@ import {
   confirmSupplierCommitment,
   decideCampaign,
   declineSupplierCommitment,
+  submitSupplierProposal,
+  listMySupplierProposals,
+  resubmitSupplierProposal,
+  withdrawSupplierProposal,
+  listCampaignSupplierProposalsForOrganiser,
+  acceptSupplierProposal,
+  rejectSupplierProposal,
   getCampaignAuthorisationSummary,
   getMyCampaignPayout,
   pledgeContribution,
@@ -168,6 +175,12 @@ organiserRouter.post("/campaigns/:id/change-request", asyncHandler(requestCampai
 // Resolves immediately if no funds have been captured yet, otherwise
 // routes to admin review. Separate from both routes above.
 organiserRouter.post("/campaigns/:id/cancellation-request", asyncHandler(requestCampaignCancellation));
+// Phase 5 (organiser<->supplier negotiation) — accept/reject are flat
+// (not nested under campaigns) since ownership is derived from the
+// proposal itself, same precedent as supplier-invitations/:id/revoke below.
+organiserRouter.get("/campaigns/:id/proposals", asyncHandler(listCampaignSupplierProposalsForOrganiser));
+organiserRouter.post("/proposals/:id/accept", asyncHandler(acceptSupplierProposal));
+organiserRouter.post("/proposals/:id/reject", asyncHandler(rejectSupplierProposal));
 // Rescue-window actions — doc §8. "Fulfil anyway below minimum" does not
 // exist; the only paths out of RESCUE_WINDOW are a real top-up purchase,
 // inviting more participants (no endpoint — just sharing), a single
@@ -222,6 +235,13 @@ supplierRouter.post("/stripe-connect/refresh", asyncHandler(refreshSupplierStrip
 supplierRouter.get("/campaigns", requireApprovedSupplier(), asyncHandler(listMySupplierCampaigns));
 supplierRouter.post("/campaigns/:id/supplier-commitment", requireApprovedSupplier(), asyncHandler(confirmSupplierCommitment));
 supplierRouter.post("/campaigns/:id/decline", requireApprovedSupplier(), asyncHandler(declineSupplierCommitment));
+// Phase 5 (organiser<->supplier negotiation) — separate from the binary
+// commitment/decline above: an iterative proposal to change price/slots/
+// ready-by date, gated through Eki review before the organiser ever sees it.
+supplierRouter.post("/campaigns/:id/proposals", requireApprovedSupplier(), asyncHandler(submitSupplierProposal));
+supplierRouter.get("/campaigns/:id/proposals", requireApprovedSupplier(), asyncHandler(listMySupplierProposals));
+supplierRouter.post("/campaigns/:id/proposals/:proposalId/resubmit", requireApprovedSupplier(), asyncHandler(resubmitSupplierProposal));
+supplierRouter.post("/campaigns/:id/proposals/:proposalId/withdraw", requireApprovedSupplier(), asyncHandler(withdrawSupplierProposal));
 supplierRouter.get("/campaigns/:id/fulfilment", requireApprovedSupplier(), asyncHandler(getSupplierFulfilment));
 supplierRouter.post("/campaigns/:id/fulfilment/confirm-inventory", requireApprovedSupplier(), asyncHandler(confirmFulfilmentInventory));
 supplierRouter.post("/campaigns/:id/fulfilment/plan", requireApprovedSupplier(), asyncHandler(setFulfilmentPlan));

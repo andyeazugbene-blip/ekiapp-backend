@@ -9,6 +9,7 @@ import { automationDetectors } from "../automation/automation.detectors";
 import { renewalsService } from "../regular-deliveries/renewals.service";
 import { communityCampaignsService } from "../community-buy/community-campaigns.service";
 import { campaignContributionsService } from "../community-buy/campaign-contributions.service";
+import { campaignSupplierProposalService } from "../community-buy/campaign-supplier-proposal.service";
 import { campaignAuthorisationService } from "../community-buy/campaign-authorisation.service";
 import { privacyExpirySweep } from "../community-buy/community-buy-privacy.service";
 import { escrowService } from "../paystack/escrow.service";
@@ -129,6 +130,9 @@ async function runCommunityBuySweep() {
   const rescueOutcome = await communityCampaignsService.evaluateRescueExpiry();
   const remindedParticipants = await communityCampaignsService.remindApproachingDeadlines();
   const refunds = await campaignContributionsService.processPendingRefunds();
+  // Phase 5 (organiser<->supplier negotiation) — reminds/expires overdue
+  // supplier proposals, same sweep, no new job registered.
+  const supplierProposals = await campaignSupplierProposalService.remindAndExpireOverdue();
 
   // Reliability scenario #6 "provider timeout" recovery — the Community
   // Buy equivalent of the renewals requery above.
@@ -158,6 +162,8 @@ async function runCommunityBuySweep() {
     remindedParticipants,
     refundsProcessed: refunds.processed,
     refundsFailed: refunds.failed,
+    supplierProposalsReminded: supplierProposals.reminded,
+    supplierProposalsExpired: supplierProposals.expired,
     ambiguousChargesRequeried: requeried,
   };
 }

@@ -20,6 +20,7 @@ import { organiserPayoutService } from "./organiser-payout.service";
 import { organiserStripeConnectService } from "./organiser-stripe-connect.service";
 import { attributionReviewService } from "./campaign-participant-attribution.service";
 import { communityBuyManifestService } from "./community-buy-manifest.service";
+import { campaignSupplierProposalService, type ProposalInput } from "./campaign-supplier-proposal.service";
 import { searchDataAccessLog, revokeDeliveryReferencesForSupplierAccount, isIndividualDeliveryEnabled, FULFILMENT_ACCESS_PRESERVED_SCOPE } from "./community-buy-privacy.service";
 
 // ─── Public market availability (used by the mobile app to decide whether
@@ -538,6 +539,119 @@ export async function sendSupplierContactMessage(request: Request, response: Res
     ? await communityBuyManifestService.sendContactMessageForVendor(acting.vendorId, campaignId, userId, contributionId, channel, message)
     : await communityBuyManifestService.sendContactMessageForAccount(acting.userId, campaignId, contributionId, channel, message);
   response.json(result);
+}
+
+// ─── Phase 5 (organiser<->supplier negotiation) ────────────────────────
+
+function requireProposalIdParam(request: Request): string {
+  const id = request.params.proposalId;
+  if (typeof id !== "string" || id.length === 0) throw new AppError("Invalid proposalId", 400);
+  return id;
+}
+
+function readProposalInputBody(request: Request): ProposalInput {
+  const body = request.body ?? {};
+  const message = typeof body.message === "string" ? body.message : "";
+  const proposedWholesaleAmountMinor = body.proposedWholesaleAmountMinor !== undefined ? Number(body.proposedWholesaleAmountMinor) : undefined;
+  const proposedMaximumShares = body.proposedMaximumShares !== undefined ? Number(body.proposedMaximumShares) : undefined;
+  const proposedReadyByDate = typeof body.proposedReadyByDate === "string" ? body.proposedReadyByDate : undefined;
+  if (proposedWholesaleAmountMinor !== undefined && !Number.isFinite(proposedWholesaleAmountMinor)) {
+    throw new AppError("proposedWholesaleAmountMinor must be a number", 400);
+  }
+  if (proposedMaximumShares !== undefined && !Number.isFinite(proposedMaximumShares)) {
+    throw new AppError("proposedMaximumShares must be a number", 400);
+  }
+  return { message, proposedWholesaleAmountMinor, proposedMaximumShares, proposedReadyByDate };
+}
+
+// Supplier-facing
+export async function submitSupplierProposal(request: Request, response: Response): Promise<void> {
+  const userId = requireUserId(request);
+  const acting = await resolveActingSupplier(userId);
+  const campaignId = requireIdParam(request);
+  const input = readProposalInputBody(request);
+  const proposal = acting.kind === "vendor"
+    ? await campaignSupplierProposalService.submitForVendor(acting.vendorId, campaignId, input)
+    : await campaignSupplierProposalService.submitForAccount(acting.userId, campaignId, input);
+  response.status(201).json({ proposal });
+}
+
+export async function resubmitSupplierProposal(request: Request, response: Response): Promise<void> {
+  const userId = requireUserId(request);
+  const acting = await resolveActingSupplier(userId);
+  const campaignId = requireIdParam(request);
+  const proposalId = requireProposalIdParam(request);
+  const input = readProposalInputBody(request);
+  const proposal = acting.kind === "vendor"
+    ? await campaignSupplierProposalService.resubmitForVendor(acting.vendorId, campaignId, proposalId, input)
+    : await campaignSupplierProposalService.resubmitForAccount(acting.userId, campaignId, proposalId, input);
+  response.json({ proposal });
+}
+
+export async function withdrawSupplierProposal(request: Request, response: Response): Promise<void> {
+  const userId = requireUserId(request);
+  const acting = await resolveActingSupplier(userId);
+  const campaignId = requireIdParam(request);
+  const proposalId = requireProposalIdParam(request);
+  const proposal = acting.kind === "vendor"
+    ? await campaignSupplierProposalService.withdrawForVendor(acting.vendorId, campaignId, proposalId)
+    : await campaignSupplierProposalService.withdrawForAccount(acting.userId, campaignId, proposalId);
+  response.json({ proposal });
+}
+
+export async function listMySupplierProposals(request: Request, response: Response): Promise<void> {
+  const userId = requireUserId(request);
+  const acting = await resolveActingSupplier(userId);
+  const campaignId = requireIdParam(request);
+  const items = acting.kind === "vendor"
+    ? await campaignSupplierProposalService.listMineForVendor(acting.vendorId, campaignId)
+    : await campaignSupplierProposalService.listMineForAccount(acting.userId, campaignId);
+  response.json({ items });
+}
+
+// Organiser-facing
+export async function listCampaignSupplierProposalsForOrganiser(request: Request, response: Response): Promise<void> {
+  const userId = requireUserId(request);
+  response.json({ items: await campaignSupplierProposalService.listForOrganiser(userId, requireIdParam(request)) });
+}
+
+// Flat route (not nested under a campaign) — ownership is derived from the
+// proposal itself, same as requireIdParam's other flat-resource uses
+// (e.g. supplier-invitations/:id/revoke).
+export async function acceptSupplierProposal(request: Request, response: Response): Promise<void> {
+  const userId = requireUserId(request);
+  const proposal = await campaignSupplierProposalService.accept(userId, requireIdParam(request));
+  response.json({ proposal });
+}
+
+export async function rejectSupplierProposal(request: Request, response: Response): Promise<void> {
+  const userId = requireUserId(request);
+  const notes = typeof request.body?.notes === "string" ? request.body.notes : undefined;
+  const proposal = await campaignSupplierProposalService.reject(userId, requireIdParam(request), notes);
+  response.json({ proposal });
+}
+
+// Admin-facing
+export async function adminListSupplierProposals(_request: Request, response: Response): Promise<void> {
+  response.json({ items: await campaignSupplierProposalService.listForAdmin() });
+}
+
+export async function adminApproveSupplierProposal(request: Request, response: Response): Promise<void> {
+  const adminId = requireUserId(request);
+  const id = requireIdParam(request);
+  const proposal = await campaignSupplierProposalService.approveForAdmin(adminId, id);
+  await recordAudit({ actorId: adminId, action: "community_campaign_supplier_proposal.admin_approve", entityType: "CampaignSupplierProposal", entityId: id, afterState: { status: proposal.status }, request });
+  response.json({ proposal });
+}
+
+export async function adminRequestSupplierProposalChanges(request: Request, response: Response): Promise<void> {
+  const adminId = requireUserId(request);
+  const notes = request.body?.notes;
+  if (typeof notes !== "string" || !notes.trim()) throw new AppError("notes is required", 400);
+  const id = requireIdParam(request);
+  const proposal = await campaignSupplierProposalService.requestChangesForAdmin(adminId, id, notes);
+  await recordAudit({ actorId: adminId, action: "community_campaign_supplier_proposal.admin_request_changes", entityType: "CampaignSupplierProposal", entityId: id, reason: notes, afterState: { status: proposal.status }, request });
+  response.json({ proposal });
 }
 
 export async function getSupplierEmergencyContact(request: Request, response: Response): Promise<void> {

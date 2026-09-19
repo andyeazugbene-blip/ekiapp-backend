@@ -2354,6 +2354,61 @@ model SupplierInvitation {
   @@index([email])
 }
 
+// Phase 5 (organiser<->supplier negotiation) — a supplier-initiated
+// proposal to change a campaign's wholesale price, maximum slots, and/or
+// target readiness date. Deliberately a NEW model rather than overloading
+// supplierCommitted/supplierDeclinedAt (those mean "will I supply this
+// campaign at all", a binary decision unrelated to this iterative
+// price/terms negotiation). Every submission mutates the SAME row
+// (revisionCount tracks iterations) rather than creating a new row per
+// round — recordAudit() already gives a full before/after trail per
+// transition, so a single row stays simpler without losing auditability.
+enum SupplierProposalStatus {
+  SUBMITTED             // awaiting Eki admin review
+  ADMIN_CHANGES_NEEDED  // Eki sent it back to the supplier with notes
+  AWAITING_ORGANISER    // Eki approved; organiser must accept or reject
+  ORGANISER_ACCEPTED    // terminal — campaign fields updated
+  ORGANISER_REJECTED    // terminal — campaign unchanged; supplier may submit a new proposal later
+  WITHDRAWN             // terminal — supplier withdrew before a decision
+  EXPIRED               // terminal — respondByDeadline passed with no action
+}
+
+model CampaignSupplierProposal {
+  id                           String                 @id @default(cuid())
+  campaignId                   String
+  campaign                     CommunityCampaign      @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  // Dual-path supplier identity, resolved once at submission time from
+  // whichever FK the campaign has set — mirrors every other supplier-
+  // facing model in this module (see supplier-resolution precedent in
+  // campaign-contributions.service.ts).
+  supplierId                   String?
+  supplierAccountId            String?
+  submittedByUserId            String
+  // Proposed changes — all independently nullable; a proposal only ever
+  // sets the fields it actually wants to change.
+  proposedWholesaleAmountMinor Int?
+  proposedMaximumShares        Int?
+  proposedReadyByDate          DateTime?
+  message                      String
+  status                       SupplierProposalStatus @default(SUBMITTED)
+  revisionCount                Int                    @default(0)
+  adminReviewedById            String?
+  adminReviewedAt              DateTime?
+  // Admin-to-supplier only (see community-buy-supplier-proposal.service.ts's
+  // own read-scoping doc comment) — never exposed to the organiser or any
+  // other supplier.
+  adminNotes                   String?
+  organiserRespondedById       String?
+  organiserRespondedAt         DateTime?
+  organiserNotes               String?
+  respondByDeadline            DateTime
+  remindedAt                   DateTime?
+  createdAt                    DateTime               @default(now())
+  updatedAt                    DateTime               @updatedAt
+
+  @@index([campaignId, status])
+}
+
 model CommunityCampaign {
   id                        String                             @id @default(cuid())
   organiserId               String
@@ -2396,6 +2451,14 @@ model CommunityCampaign {
   // is SUPPLIER; the supplier must see this (and their commission/net) at
   // invitation-accept time — see supplier-invitation acceptance.
   wholesaleAmountMinor      Int?
+  // Phase 5 (organiser<->supplier negotiation) — the supplier-agreed target
+  // readiness date, set only when an organiser accepts a
+  // CampaignSupplierProposal that included one. Purely informational for
+  // campaign-fulfilment.service.ts (a helpful default once fulfilment
+  // actually starts post-success) — never auto-writes
+  // CampaignFulfilment.estimatedReadyAt, which stays the supplier's own
+  // live commitment at that later stage.
+  agreedReadyByDate         DateTime?
   deadline                  DateTime?
   status                    CampaignStatus                     @default(DRAFT)
   reviewNotes               String?
@@ -2508,6 +2571,7 @@ model CommunityCampaign {
   updates                   CampaignUpdate[]
   fulfilmentAlerts          SupplierFulfilmentAlert[]
   supplierInvitations       SupplierInvitation[]
+  supplierProposals         CampaignSupplierProposal[]
   paymentAuthorisations     CommunityBuyPaymentAuthorisation[]
   payout                    CommunityBuyPayout?
   deliveryReferences        DeliveryReference[]

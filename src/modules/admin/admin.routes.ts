@@ -160,6 +160,9 @@ import {
   adminApproveCancellation,
   adminListCancellationRequests,
   adminRejectCancellation,
+  adminListSupplierProposals,
+  adminApproveSupplierProposal,
+  adminRequestSupplierProposalChanges,
   adminApproveSupplierAccount,
   adminListSupplierAccounts,
   adminRestrictSupplierAccount,
@@ -320,6 +323,11 @@ adminRouter.post("/community-buy/extension-requests/:id/reject", asyncHandler(re
 adminRouter.get("/community-buy/cancellation-requests", asyncHandler(requireAdminPermission("community_buy.read")), asyncHandler(adminListCancellationRequests));
 adminRouter.post("/community-buy/cancellation-requests/:id/approve", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(adminApproveCancellation));
 adminRouter.post("/community-buy/cancellation-requests/:id/reject", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(adminRejectCancellation));
+// Phase 5 (organiser<->supplier negotiation) — Eki's review queue for
+// supplier-submitted proposals, gating them before the organiser ever sees one.
+adminRouter.get("/community-buy/supplier-proposals", asyncHandler(requireAdminPermission("community_buy.read")), asyncHandler(adminListSupplierProposals));
+adminRouter.post("/community-buy/supplier-proposals/:id/approve", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(adminApproveSupplierProposal));
+adminRouter.post("/community-buy/supplier-proposals/:id/request-changes", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(adminRequestSupplierProposalChanges));
 adminRouter.get("/community-buy/supplier-payments", asyncHandler(requireAdminPermission("community_buy.read")), asyncHandler(adminListSupplierPayments));
 adminRouter.get("/community-buy/supplier-payments/aggregate", asyncHandler(requireAdminPermission("community_buy.read")), asyncHandler(adminGetSupplierPaymentAggregate));
 adminRouter.post("/community-campaigns/:id/supplier-payment/release", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(require2fa), asyncHandler(adminReleaseSupplierPayment));
