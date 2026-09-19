@@ -154,7 +154,7 @@ describe("createPledge() — buyer service fee computed and stored separately fr
 describe("attemptCharge() — charges the buyer service fee alongside the product amount", () => {
   it("Stripe PaymentIntent amount is amount + buyerServiceFeeAmount, and the escrow ledger entry matches the real charge", async () => {
     m.campaignContribution.findUniqueOrThrow.mockResolvedValueOnce({
-      id: "contrib-fee-3", campaignId: "camp-fee-3", quantity: 1, status: "PLEDGED", currency: "GBP", amount: 2000, buyerServiceFeeAmount: 120,
+      id: "contrib-fee-3", campaignId: "camp-fee-3", quantity: 1, status: "PLEDGED", currency: "GBP", amount: 2000, buyerServiceFeeAmount: 120, deliveryFeeAmountMinor: 0,
       participant: { userId: "buyer-3" },
       paymentMethod: { stripeCustomerId: "cus_3", stripePaymentMethodId: "pm_3" },
     } as never);

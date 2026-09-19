@@ -163,7 +163,7 @@ describe("approveCancellation() — refund/reversal without double-processing", 
     m.communityBuyOrganiserPayout.findUnique.mockResolvedValue({ status: "NOT_RELEASED" });
     m.campaignCancellationRequest.updateMany.mockResolvedValue({ count: 1 });
     m.communityCampaign.updateMany.mockResolvedValue({ count: 1 });
-    m.campaignContribution.findMany.mockResolvedValueOnce([{ id: "contrib-1", amount: 1000, buyerServiceFeeAmount: 50, currency: "GBP" }]);
+    m.campaignContribution.findMany.mockResolvedValueOnce([{ id: "contrib-1", amount: 1000, buyerServiceFeeAmount: 50, deliveryFeeAmountMinor: 0, currency: "GBP" }]);
     m.campaignRefund.create.mockResolvedValue({});
     m.campaignContribution.update.mockResolvedValue({});
     m.campaignSupplierPayment.update.mockResolvedValue({});
@@ -205,7 +205,7 @@ describe("approveCancellation() — refund/reversal without double-processing", 
   });
 
   it("createRefundRecordsForFailedCampaign() itself never creates a duplicate refund for the same contribution (existing idempotency, reused verbatim)", async () => {
-    m.campaignContribution.findMany.mockResolvedValue([{ id: "contrib-9", amount: 500, buyerServiceFeeAmount: 20, currency: "GBP" }]);
+    m.campaignContribution.findMany.mockResolvedValue([{ id: "contrib-9", amount: 500, buyerServiceFeeAmount: 20, deliveryFeeAmountMinor: 0, currency: "GBP" }]);
     m.campaignRefund.create.mockRejectedValueOnce(Object.assign(new Error("Unique constraint failed"), { code: "P2002" }));
     m.campaignContribution.update.mockResolvedValue({});
 

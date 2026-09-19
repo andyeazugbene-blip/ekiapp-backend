@@ -16,7 +16,7 @@ vi.mock("../lib/prisma", () => ({
     supplierAccount: { findUnique: vi.fn() },
     organiserProfile: { findUnique: vi.fn() },
     marketConfiguration: { findUnique: vi.fn(), count: vi.fn().mockResolvedValue(1) },
-    deliveryReference: { upsert: vi.fn(), findMany: vi.fn(), updateMany: vi.fn() },
+    deliveryReference: { upsert: vi.fn(), findUnique: vi.fn(), findMany: vi.fn(), updateMany: vi.fn() },
     communityBuyDataAccessLog: { create: vi.fn(), findMany: vi.fn(), updateMany: vi.fn() },
   },
 }));
