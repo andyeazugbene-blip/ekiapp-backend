@@ -61,6 +61,9 @@ export interface CreateCampaignInput {
   collectionCity?: string;
   collectionPostcode?: string;
   deliveryCoverageAreas?: string[];
+  // Phase 6 (delivery + collection/tracking) — see
+  // CommunityCampaign.deliveryFeeAmountMinor's own doc comment.
+  deliveryFeeAmountMinor?: number;
   // M2 — AUTHORISE_THEN_CAPTURE-mode scheduling (spec §7 step 4, §11.3).
   // Ignored/unused for a campaign whose snapshotted paymentMode ends up
   // PLEDGE_THEN_CHARGE. Not yet surfaced in the mobile organiser wizard
@@ -292,6 +295,16 @@ function validateDeliveryPreference(deliveryPreference: string | undefined): voi
   }
 }
 
+// Phase 6 (delivery + collection/tracking) — real, organiser-set delivery
+// charge. Format only; submit()'s "missing" gate requires it once
+// deliveryPreference is DELIVERY, same two-stage pattern as the collection
+// address / coverage-area fields above.
+function validateDeliveryFeeAmount(deliveryFeeAmountMinor: number | undefined): void {
+  if (deliveryFeeAmountMinor !== undefined && (!Number.isInteger(deliveryFeeAmountMinor) || deliveryFeeAmountMinor < 0)) {
+    throw new AppError("Delivery fee must be a non-negative integer", 400);
+  }
+}
+
 // Phase 3 (address + privacy foundation) — the organiser's public
 // collection-point address and/or delivery coverage areas. Format/presence
 // only; submit()'s "missing" gate is what actually requires these before a
@@ -431,6 +444,7 @@ export const communityCampaignsService = {
     validateQuantityPerOrder(input.quantityPerOrder);
     validateDeliveryPreference(input.deliveryPreference);
     validateCollectionAddressFields(input);
+    validateDeliveryFeeAmount(input.deliveryFeeAmountMinor);
     const deliveryCoverageAreas = validateAndNormalizeCoverageAreas(input.deliveryCoverageAreas);
     const deadline = validateDeadline(input.deadline);
     const authorisationSchedule = validateAuthorisationSchedule(input.holdWindowStartsAt, input.decisionDeadline, deadline);
@@ -474,6 +488,7 @@ export const communityCampaignsService = {
         collectionCity: input.collectionCity,
         collectionPostcode: input.collectionPostcode,
         deliveryCoverageAreas: deliveryCoverageAreas ?? [],
+        deliveryFeeAmountMinor: input.deliveryFeeAmountMinor,
         rescueDurationMinutes: input.rescueDurationMinutes ?? 2880,
         deadline,
         scheduledOpenAt,
@@ -503,7 +518,7 @@ export const communityCampaignsService = {
     const financialFieldsTouched = input.minimumShares !== undefined || input.goalShares !== undefined
       || input.maximumShares !== undefined || input.pricePerShareMinor !== undefined || input.deadline !== undefined
       || input.holdWindowStartsAt !== undefined || input.decisionDeadline !== undefined || input.wholesaleAmountMinor !== undefined
-      || input.perBuyerMinShares !== undefined || input.perBuyerMaxShares !== undefined;
+      || input.perBuyerMinShares !== undefined || input.perBuyerMaxShares !== undefined || input.deliveryFeeAmountMinor !== undefined;
     // Community Buy Workstream 2: the wizard's Supply step must stay
     // editable on a draft, same as every other step — but only while
     // still DRAFT/CHANGES_REQUIRED; a LIVE campaign's supplier can only
@@ -547,6 +562,7 @@ export const communityCampaignsService = {
     validateQuantityPerOrder(input.quantityPerOrder);
     validateDeliveryPreference(input.deliveryPreference);
     validateCollectionAddressFields(input);
+    validateDeliveryFeeAmount(input.deliveryFeeAmountMinor);
     const deliveryCoverageAreas = validateAndNormalizeCoverageAreas(input.deliveryCoverageAreas);
     const deadline = validateDeadline(input.deadline);
     const authorisationSchedule = validateAuthorisationSchedule(input.holdWindowStartsAt, input.decisionDeadline, deadline ?? campaign.deadline ?? undefined);
@@ -574,6 +590,7 @@ export const communityCampaignsService = {
         ...(input.collectionCity !== undefined && { collectionCity: input.collectionCity }),
         ...(input.collectionPostcode !== undefined && { collectionPostcode: input.collectionPostcode }),
         ...(deliveryCoverageAreas !== undefined && { deliveryCoverageAreas }),
+        ...(input.deliveryFeeAmountMinor !== undefined && { deliveryFeeAmountMinor: input.deliveryFeeAmountMinor }),
         ...(deadline !== undefined && { deadline }),
         ...(scheduledOpenAt !== undefined && { scheduledOpenAt }),
         ...(authorisationSchedule.holdWindowStartsAt !== undefined && { holdWindowStartsAt: authorisationSchedule.holdWindowStartsAt }),
@@ -856,6 +873,10 @@ export const communityCampaignsService = {
       if (!campaign.collectionPostcode) missing.push("collectionPostcode");
     } else if (campaign.deliveryPreference === "DELIVERY") {
       if (!campaign.deliveryCoverageAreas || campaign.deliveryCoverageAreas.length === 0) missing.push("deliveryCoverageAreas");
+      // Phase 6 (delivery + collection/tracking) — a real delivery charge
+      // must be set (0 is a valid "free delivery" choice; only null/unset
+      // or negative is missing) before this campaign can go live.
+      if (campaign.deliveryFeeAmountMinor == null || campaign.deliveryFeeAmountMinor < 0) missing.push("deliveryFeeAmountMinor");
     }
     if (campaign.paymentMode === "AUTHORISE_THEN_CAPTURE") {
       if (!campaign.holdWindowStartsAt) missing.push("holdWindowStartsAt");
@@ -1981,10 +2002,11 @@ export const communityCampaignsService = {
           data: {
             contributionId: contribution.id,
             // Diaspora escrow reconciliation — refund the FULL amount
-            // actually charged (product + buyer service fee), matching
-            // attemptCharge()'s real Stripe amount, so a post-capture
-            // cancellation (AT-25) never leaves the fee portion uncredited.
-            amount: contribution.amount + contribution.buyerServiceFeeAmount,
+            // actually charged (product + buyer service fee + Phase 6
+            // delivery fee), matching attemptCharge()'s real Stripe amount,
+            // so a post-capture cancellation (AT-25) never leaves any
+            // portion uncredited.
+            amount: contribution.amount + contribution.buyerServiceFeeAmount + contribution.deliveryFeeAmountMinor,
             currency: contribution.currency,
             status: "REFUND_PENDING",
             idempotencyKey: `refund:${contribution.id}`,

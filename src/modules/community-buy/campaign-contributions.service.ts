@@ -195,7 +195,7 @@ async function requirePaymentMethod(userId: string, paymentMethodId: string) {
 
 async function createPledge(
   campaignId: string,
-  campaign: { pricePerShareMinor: number; currency: string; country: string | null },
+  campaign: { pricePerShareMinor: number; currency: string; country: string | null; deliveryPreference: string; deliveryFeeAmountMinor: number | null },
   participantId: string,
   quantity: number,
   isOrganiserTopUp: boolean,
@@ -212,6 +212,10 @@ async function createPledge(
   const buyerServiceFeeAmount = marketConfig
     ? calculateBoundedServiceFee(amount, marketConfig.buyerServiceFeeBps, marketConfig.buyerServiceFeeMinAmount, marketConfig.buyerServiceFeeMaxAmount)
     : 0;
+  // Phase 6 (delivery + collection/tracking) — flat, once per contribution
+  // (not per share), same snapshot-at-pledge-time rationale as
+  // buyerServiceFeeAmount above. 0 for every COLLECTION pledge.
+  const deliveryFeeAmountMinor = campaign.deliveryPreference === "DELIVERY" ? campaign.deliveryFeeAmountMinor ?? 0 : 0;
 
   // Atomic capacity claim — the pledge itself is the only commitment point
   // in this model (no Stripe call to arbitrate a race), so two concurrent
@@ -229,7 +233,7 @@ async function createPledge(
 
     const contribution = await tx.campaignContribution.create({
       data: {
-        campaignId, participantId, amount, buyerServiceFeeAmount, currency: campaign.currency, quantity, isOrganiserTopUp, status: "PLEDGED", paymentMethodId,
+        campaignId, participantId, amount, buyerServiceFeeAmount, deliveryFeeAmountMinor, currency: campaign.currency, quantity, isOrganiserTopUp, status: "PLEDGED", paymentMethodId,
         ...(deliveryAddress && {
           deliveryRecipientName: deliveryAddress.recipientName,
           deliveryAddressLine1: deliveryAddress.addressLine1,
@@ -389,11 +393,13 @@ export const campaignContributionsService = {
       intent = await stripe.paymentIntents.create(
         {
           // Diaspora escrow reconciliation — charges the buyer service fee
-          // alongside the product amount in the same off-session capture;
-          // see buyerServiceFeeAmount's own doc comment for why it's a
-          // separate field. `amount` itself is left untouched everywhere
-          // else (capacity, campaign totals, supplier settlement).
-          amount: contribution.amount + contribution.buyerServiceFeeAmount,
+          // and (Phase 6) the delivery fee alongside the product amount in
+          // the same off-session capture, never a second payment; see
+          // buyerServiceFeeAmount's/deliveryFeeAmountMinor's own doc
+          // comments for why they're separate fields. `amount` itself is
+          // left untouched everywhere else (capacity, campaign totals,
+          // supplier settlement).
+          amount: contribution.amount + contribution.buyerServiceFeeAmount + contribution.deliveryFeeAmountMinor,
           currency: resolveStripeCurrency(contribution.currency),
           customer: contribution.paymentMethod.stripeCustomerId,
           payment_method: contribution.paymentMethod.stripePaymentMethodId,
@@ -486,11 +492,13 @@ export const campaignContributionsService = {
       intent = await stripe.paymentIntents.create(
         {
           // Diaspora escrow reconciliation — charges the buyer service fee
-          // alongside the product amount in the same off-session capture;
-          // see buyerServiceFeeAmount's own doc comment for why it's a
-          // separate field. `amount` itself is left untouched everywhere
-          // else (capacity, campaign totals, supplier settlement).
-          amount: contribution.amount + contribution.buyerServiceFeeAmount,
+          // and (Phase 6) the delivery fee alongside the product amount in
+          // the same off-session capture, never a second payment; see
+          // buyerServiceFeeAmount's/deliveryFeeAmountMinor's own doc
+          // comments for why they're separate fields. `amount` itself is
+          // left untouched everywhere else (capacity, campaign totals,
+          // supplier settlement).
+          amount: contribution.amount + contribution.buyerServiceFeeAmount + contribution.deliveryFeeAmountMinor,
           currency: resolveStripeCurrency(contribution.currency),
           customer: contribution.paymentMethod.stripeCustomerId,
           payment_method: contribution.paymentMethod.stripePaymentMethodId,
@@ -572,16 +580,17 @@ export const campaignContributionsService = {
   },
 
   async markChargeSucceeded(
-    contribution: { id: string; campaignId: string; currency: string; amount: number; buyerServiceFeeAmount: number; participant: { userId: string } },
+    contribution: { id: string; campaignId: string; currency: string; amount: number; buyerServiceFeeAmount: number; deliveryFeeAmountMinor: number; participant: { userId: string } },
     stripePaymentIntentId: string,
   ) {
     // The full amount actually charged to Stripe (product + buyer service
-    // fee) — see attemptCharge()'s identical sum and buyerServiceFeeAmount's
-    // own doc comment. Escrowing the full charged amount here, and only
-    // recognizing the fee as Eki revenue at campaign-settlement time (in
+    // fee + Phase 6 delivery fee) — see attemptCharge()'s identical sum and
+    // buyerServiceFeeAmount's/deliveryFeeAmountMinor's own doc comments.
+    // Escrowing the full charged amount here, and only recognizing the fee
+    // as Eki revenue at campaign-settlement time (in
     // releaseOrganiserPayment()), keeps a post-capture refund (AT-25) always
     // able to reverse the exact amount the participant was actually charged.
-    const chargedAmount = contribution.amount + contribution.buyerServiceFeeAmount;
+    const chargedAmount = contribution.amount + contribution.buyerServiceFeeAmount + contribution.deliveryFeeAmountMinor;
     await prisma.$transaction(async (tx) => {
       await tx.campaignContribution.update({ where: { id: contribution.id }, data: { status: "PAID", stripePaymentIntentId } });
       // Additive bookkeeping — money is genuinely captured by Stripe at

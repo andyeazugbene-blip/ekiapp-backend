@@ -796,7 +796,7 @@ describe("campaignContributionsService.escalateRefund — spec §130 escalate (r
 describe("campaignContributionsService.attemptCharge — the only place a pledge is ever charged (client mandate 2026-09)", () => {
   it("client test #3/#4: charges the saved card off-session and posts the escrow ledger entry when Stripe confirms success", async () => {
     m.campaignContribution.findUniqueOrThrow.mockResolvedValueOnce({
-      id: "contrib-30", campaignId: "camp-20", quantity: 2, status: "PLEDGED", currency: "GBP", amount: 2000, buyerServiceFeeAmount: 0,
+      id: "contrib-30", campaignId: "camp-20", quantity: 2, status: "PLEDGED", currency: "GBP", amount: 2000, buyerServiceFeeAmount: 0, deliveryFeeAmountMinor: 0,
       participant: { userId: "buyer-1" },
       paymentMethod: { stripeCustomerId: "cus_1", stripePaymentMethodId: "pm_1" },
     } as never);
@@ -951,7 +951,7 @@ describe("campaignContributionsService.attemptCharge / requeryAmbiguousCharge �
   it("requeryAmbiguousCharge() safely replays the SAME idempotency key and posts the ledger exactly once when Stripe confirms success", async () => {
     m.campaignChargeAttempt.findFirst.mockResolvedValueOnce({ id: "attempt-timeout", idempotencyKey: "contrib-timeout:1", status: "PENDING", stripePaymentIntentId: null } as never);
     m.campaignContribution.findUniqueOrThrow.mockResolvedValueOnce({
-      id: "contrib-timeout", status: "PAYMENT_PROCESSING", campaignId: "camp-timeout", currency: "GBP", amount: 1000, buyerServiceFeeAmount: 0,
+      id: "contrib-timeout", status: "PAYMENT_PROCESSING", campaignId: "camp-timeout", currency: "GBP", amount: 1000, buyerServiceFeeAmount: 0, deliveryFeeAmountMinor: 0,
       participant: { userId: "buyer-timeout" },
       paymentMethod: { stripeCustomerId: "cus_timeout", stripePaymentMethodId: "pm_timeout" },
     } as never);
@@ -1034,7 +1034,7 @@ describe("campaignContributionsService.resolveProcessingCharge — reliability s
   it("posts the escrow ledger entry and marks the pledge PAID exactly once when the webhook later confirms success", async () => {
     m.campaignChargeAttempt.findFirst.mockResolvedValueOnce({ id: "attempt-5", status: "PENDING" } as never);
     m.campaignContribution.findUnique.mockResolvedValueOnce({
-      id: "contrib-5", status: "PAYMENT_PROCESSING", campaignId: "camp-25", currency: "GBP", amount: 1000, buyerServiceFeeAmount: 0,
+      id: "contrib-5", status: "PAYMENT_PROCESSING", campaignId: "camp-25", currency: "GBP", amount: 1000, buyerServiceFeeAmount: 0, deliveryFeeAmountMinor: 0,
       participant: { userId: "buyer-5" },
     } as never);
     m.campaignChargeAttempt.updateMany.mockResolvedValueOnce({ count: 1 } as never);
@@ -2981,7 +2981,7 @@ describe("Phase 9 — admin cancel/end campaign", () => {
     m.communityBuyPaymentAuthorisation.findMany.mockResolvedValue([] as never); // no open holds left to release in this scenario
     // createRefundRecordsForFailedCampaign() queries PAID contributions first...
     m.campaignContribution.findMany.mockImplementationOnce(async () => [
-      { id: "contrib-captured", campaignId: "camp-1", amount: 5000, buyerServiceFeeAmount: 0, currency: "GBP" },
+      { id: "contrib-captured", campaignId: "camp-1", amount: 5000, buyerServiceFeeAmount: 0, deliveryFeeAmountMinor: 0, currency: "GBP" },
     ] as never);
     m.campaignRefund.create.mockResolvedValue({} as never);
     m.campaignContribution.update.mockResolvedValue({} as never);

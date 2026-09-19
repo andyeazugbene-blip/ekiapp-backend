@@ -2514,6 +2514,18 @@ model CommunityCampaign {
   // configured yet, which blocks every delivery pledge until the
   // organiser sets at least one area.
   deliveryCoverageAreas     String[]                           @default([])
+  // Phase 6 (delivery + collection/tracking) — the real, organiser-set
+  // per-order delivery charge, only meaningful/required when
+  // deliveryPreference is DELIVERY. Deliberately separate from the buyer's
+  // Eki service fee (CampaignContribution.buyerServiceFeeAmount) — never
+  // folded into that 5% calculation, and never a fabricated system
+  // default: the organiser sets this the same way they set
+  // pricePerShareMinor. Snapshotted onto CampaignContribution.
+  // deliveryFeeAmountMinor at pledge time (same immutability rationale as
+  // buyerServiceFeeAmount — a later organiser edit must not alter an
+  // already-pledged participant's amount); locked once termsLockedAt is
+  // set, same as every other financial field.
+  deliveryFeeAmountMinor    Int?
   // Phase 2 (organiser controls) — optional scheduled opening. Null means
   // publish() opens the campaign immediately (today's behavior, unchanged).
   // When set, publish() records publishedAt but leaves status APPROVED;
@@ -2926,6 +2938,14 @@ model CampaignContribution {
   // (all keyed on quantity × pricePerShareMinor) are completely unaffected.
   // Defaults to 0 for every contribution created before this field existed.
   buyerServiceFeeAmount Int                               @default(0)
+  // Phase 6 (delivery + collection/tracking) — snapshotted once from
+  // CommunityCampaign.deliveryFeeAmountMinor at pledge time, exactly like
+  // buyerServiceFeeAmount above. Flat per contribution (one delivery per
+  // pledge, not per share) — 0 for every COLLECTION pledge and every
+  // contribution created before this field existed. Charged on top of
+  // `amount` at the same off-session capture attemptCharge() already
+  // makes; never a second payment.
+  deliveryFeeAmountMinor Int                               @default(0)
   isOrganiserTopUp      Boolean                           @default(false)
   status                ContributionStatus                @default(INITIATED)
   stripePaymentIntentId String?
@@ -3022,6 +3042,20 @@ model DeliveryReference {
   expiresAt             DateTime?
   revokedAt             DateTime?
   revocationReason      String?
+  // Phase 6 (delivery + collection/tracking) — a short, randomly generated
+  // (never sequential/predictable) code shown only to the owning
+  // participant, for physical handover at a COLLECTION-method campaign.
+  // Null for every DELIVERY-method row and for every row created before
+  // this field existed. Unique per campaign (not globally) so a supplier
+  // can verify a buyer's code by campaign + code alone, no contributionId
+  // needed at the point of handover.
+  collectionCode           String?
+  collectionCodeRedeemedAt DateTime?
+  // The supplier/organiser user who verified the code at handover —
+  // distinct from campaign.organiserId/supplierId (the campaign's owner),
+  // since the actual person at the counter may be staff, not the account
+  // owner. Never the buyer's own userId.
+  collectionCodeRedeemedByUserId String?
   campaign              CommunityCampaign          @relation(fields: [campaignId], references: [id], onDelete: Restrict)
   contribution          CampaignContribution       @relation(fields: [contributionId], references: [id], onDelete: Restrict)
   createdAt             DateTime                   @default(now())
@@ -3029,6 +3063,7 @@ model DeliveryReference {
 
   @@index([campaignId, status])
   @@index([status, expiresAt])
+  @@unique([campaignId, collectionCode])
 }
 
 enum DeliveryReferenceStatus {

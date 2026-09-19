@@ -48,6 +48,9 @@ import {
   confirmFulfilmentReceipt,
   reportFulfilmentProblem,
   reportFulfilmentException,
+  getMyDeliveryReference,
+  verifySupplierCollectionCode,
+  verifyOrganiserCollectionCode,
   getFulfilmentEvents,
   adminGetFulfilmentEvents,
   getPublicMarketConfig,
@@ -109,6 +112,8 @@ communityBuyRouter.get("/campaigns/:id/fulfilment", asyncHandler(getParticipantF
 // M5 — participant-authorized evidence actions (requires an owned PAID contribution; enforced in the service, not here).
 communityBuyRouter.post("/campaigns/:id/fulfilment/confirm-receipt", authenticate, asyncHandler(confirmFulfilmentReceipt));
 communityBuyRouter.post("/campaigns/:id/fulfilment/report-problem", authenticate, asyncHandler(reportFulfilmentProblem));
+// Phase 6 (delivery + collection/tracking) — participant's own delivery status/collection code.
+communityBuyRouter.get("/campaigns/:id/fulfilment/my-delivery", authenticate, asyncHandler(getMyDeliveryReference));
 communityBuyRouter.get("/campaigns/:id/fulfilment/events", authenticate, asyncHandler(getFulfilmentEvents));
 communityBuyRouter.get("/campaigns/:id/updates", authenticate, asyncHandler(getCampaignUpdates));
 // Organiser or supplier posts a real broadcast update — authorization
@@ -196,6 +201,8 @@ organiserRouter.get("/campaigns/:id/participants", asyncHandler(listCampaignPart
 organiserRouter.get("/campaigns/:id/refund-progress", asyncHandler(getCampaignRefundProgress));
 organiserRouter.get("/campaigns/:id/fulfilment", asyncHandler(getOrganiserFulfilment));
 organiserRouter.post("/campaigns/:id/fulfilment/confirm-completion", asyncHandler(organiserConfirmFulfilmentCompletion));
+// Phase 6 — self-fulfilled campaigns only (verifyCollectionCodeForOrganiser rejects any other campaign).
+organiserRouter.post("/campaigns/:id/fulfilment/collection/verify", asyncHandler(verifyOrganiserCollectionCode));
 organiserRouter.get("/campaigns/:id/organiser-fee", asyncHandler(getMyCommunityBuyOrganiserFee));
 // Diaspora escrow reconciliation (final V1 settlement doc §N) — organiser
 // Stripe Connect onboarding + own payout view, mirroring the supplier
@@ -249,6 +256,8 @@ supplierRouter.post("/campaigns/:id/fulfilment/start-packing", requireApprovedSu
 supplierRouter.post("/campaigns/:id/fulfilment/ready", requireApprovedSupplier(), asyncHandler(markFulfilmentReady));
 supplierRouter.post("/campaigns/:id/fulfilment/dispatch", requireApprovedSupplier(), asyncHandler(markFulfilmentDispatched));
 supplierRouter.post("/campaigns/:id/fulfilment/collect", requireApprovedSupplier(), asyncHandler(markFulfilmentCollected));
+// Phase 6 — campaign + code alone, no contributionId needed at the counter.
+supplierRouter.post("/campaigns/:id/fulfilment/collection/verify", requireApprovedSupplier(), asyncHandler(verifySupplierCollectionCode));
 // M5 — same gate as every other supplier fulfilment action above.
 supplierRouter.post("/campaigns/:id/fulfilment/exception", requireApprovedSupplier(), asyncHandler(reportFulfilmentException));
 supplierRouter.get("/campaigns/:id/payment", requireApprovedSupplier(), asyncHandler(getMySupplierPayment));

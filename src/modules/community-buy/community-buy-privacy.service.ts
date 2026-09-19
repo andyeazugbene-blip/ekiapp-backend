@@ -1,3 +1,4 @@
+import crypto from "crypto";
 import { prisma } from "../../lib/prisma";
 import { logger } from "../../lib/logger";
 
@@ -123,6 +124,10 @@ export async function createDeliveryReferenceForContribution(contributionId: str
     });
     if (!campaign) return;
     const status = campaign.deliveryPreference === "DELIVERY" ? "PENDING" : "NOT_REQUIRED";
+    // Phase 6 — a collection code only ever makes sense for a COLLECTION
+    // handover; a DELIVERY row has nothing physical for a supplier to check
+    // against, so it stays null exactly like the courier fields above.
+    const collectionCode = campaign.deliveryPreference === "COLLECTION" ? await generateCollectionCode(contribution.campaignId) : null;
     await prisma.deliveryReference.upsert({
       where: { contributionId },
       create: {
@@ -131,6 +136,7 @@ export async function createDeliveryReferenceForContribution(contributionId: str
         participantId: contribution.participantId,
         deliveryMethod: campaign.deliveryPreference,
         status,
+        collectionCode,
       },
       update: {},
     });
@@ -140,6 +146,28 @@ export async function createDeliveryReferenceForContribution(contributionId: str
       errorMessage: error instanceof Error ? error.message : String(error),
     });
   }
+}
+
+// Phase 6 (delivery + collection/tracking) — a real, physically-shown-at-
+// handover code, so it must stay retrievable by its owning participant
+// (unlike a one-time-shown OTP such as escrow.service.ts's DeliveryOtp) —
+// stored as plaintext, not a hash, and protected instead by: authorization
+// (only the owning participant can ever read it), a single-use atomic
+// claim at verification, and the app's existing generalRateLimiter on
+// every route. 6-digit numeric mirrors the same crypto.randomInt(100000,
+// 999999) convention escrow.service.ts already uses for its own delivery
+// code. Unique per campaign (not globally, and never reused across
+// campaigns), so a supplier can verify a buyer's code by campaign + code
+// alone — no contributionId needed at the point of physical handover.
+async function generateCollectionCode(campaignId: string): Promise<string> {
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const code = String(crypto.randomInt(100000, 999999));
+    const clash = await prisma.deliveryReference.findUnique({ where: { campaignId_collectionCode: { campaignId, collectionCode: code } } });
+    if (!clash) return code;
+  }
+  // Astronomically unlikely with a ~900,000-value space and this few live
+  // codes per campaign — fail loudly rather than ever silently reuse one.
+  throw new Error(`Could not generate a unique collection code for campaign ${campaignId} after 5 attempts`);
 }
 
 const REVOCABLE_STATUSES = ["NOT_REQUIRED", "PENDING", "LABEL_GENERATED", "HANDED_TO_COURIER", "EXCEPTION"] as const;

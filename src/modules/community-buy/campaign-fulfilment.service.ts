@@ -105,6 +105,63 @@ async function recordFulfilmentEvent(entry: {
   }
 }
 
+// Phase 6 (delivery + collection/tracking) — closes the wiring gap between
+// the campaign-wide CampaignFulfilment state machine and each individual
+// participant's own DeliveryReference row: dispatching the whole campaign
+// hands every DELIVERY-method participant's order to the courier at once.
+// Best-effort/never-throws, same contract as recordFulfilmentEvent() —
+// a logging/bookkeeping failure here must never roll back the dispatch
+// transition it's riding behind.
+async function bulkMarkHandedToCourier(campaignId: string): Promise<void> {
+  try {
+    await prisma.deliveryReference.updateMany({
+      where: { campaignId, deliveryMethod: "DELIVERY", status: "PENDING" },
+      data: { status: "HANDED_TO_COURIER" },
+    });
+  } catch (error) {
+    logger.error("Failed to bulk-update DeliveryReference to HANDED_TO_COURIER", {
+      campaignId,
+      errorMessage: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
+// Phase 6 — no real courier-webhook integration exists (see
+// community-buy-privacy.service.ts's own doc comment on why one isn't
+// invented here), so the participant's own receipt confirmation IS the
+// delivered signal for a DELIVERY-method order — never touches a
+// COLLECTION-method row, which only ever completes via a verified
+// collection code (a stronger, physical-handover proof). Never throws
+// beyond what confirmReceiptForParticipant() itself already risks — this
+// runs after that function's own idempotent event check.
+async function markOwnDeliveryReferenceDelivered(contributionId: string): Promise<void> {
+  try {
+    await prisma.deliveryReference.updateMany({
+      where: { contributionId, deliveryMethod: "DELIVERY", status: { not: "DELIVERED" } },
+      data: { status: "DELIVERED" },
+    });
+  } catch (error) {
+    logger.error("Failed to mark DeliveryReference DELIVERED from participant receipt confirmation", {
+      contributionId,
+      errorMessage: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
+async function markOwnDeliveryReferenceException(contributionId: string): Promise<void> {
+  try {
+    await prisma.deliveryReference.updateMany({
+      where: { contributionId, status: { notIn: ["DELIVERED", "COLLECTED", "REVOKED"] } },
+      data: { status: "EXCEPTION" },
+    });
+  } catch (error) {
+    logger.error("Failed to mark DeliveryReference EXCEPTION from participant problem report", {
+      contributionId,
+      errorMessage: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
 async function requireOrganiserOwned(userId: string, campaignId: string) {
   const organiser = await prisma.organiserProfile.findUnique({ where: { userId } });
   const campaign = await prisma.communityCampaign.findUnique({ where: { id: campaignId } });
@@ -240,6 +297,7 @@ export const campaignFulfilmentService = {
     if (claim.count !== 1) throw new AppError("This campaign is not ready for dispatch", 409);
     const updated = await prisma.campaignFulfilment.findUniqueOrThrow({ where: { campaignId } });
     await recordFulfilmentEvent({ campaignId, actorUserId, actorRole: "SUPPLIER", eventType: "DISPATCHED" });
+    await bulkMarkHandedToCourier(campaignId);
     await notifyOrganiserAndParticipants(campaign.id, campaign.title, "Your Community Buy has been dispatched", `${campaign.title} has been dispatched by the supplier.`);
     return updated;
   },
@@ -367,6 +425,7 @@ export const campaignFulfilmentService = {
     if (claim.count !== 1) throw new AppError("This campaign is not ready for dispatch", 409);
     const updated = await prisma.campaignFulfilment.findUniqueOrThrow({ where: { campaignId } });
     await recordFulfilmentEvent({ campaignId, actorUserId, actorRole: "SUPPLIER", eventType: "DISPATCHED" });
+    await bulkMarkHandedToCourier(campaignId);
     await notifyOrganiserAndParticipants(campaign.id, campaign.title, "Your Community Buy has been dispatched", `${campaign.title} has been dispatched by the supplier.`);
     return updated;
   },
@@ -399,6 +458,7 @@ export const campaignFulfilmentService = {
     });
     if (already) return { confirmed: true };
     await recordFulfilmentEvent({ campaignId, contributionId: contribution.id, actorUserId: userId, actorRole: "PARTICIPANT", eventType: "PARTICIPANT_RECEIPT_CONFIRMED" });
+    await markOwnDeliveryReferenceDelivered(contribution.id);
     return { confirmed: true };
   },
 
@@ -412,6 +472,7 @@ export const campaignFulfilmentService = {
   async reportFulfilmentProblem(userId: string, campaignId: string, description: string, evidenceUrls?: string[]) {
     const contribution = await requireOwnPaidContribution(userId, campaignId);
     await recordFulfilmentEvent({ campaignId, contributionId: contribution.id, actorUserId: userId, actorRole: "PARTICIPANT", eventType: "PARTICIPANT_PROBLEM_REPORTED", note: description });
+    await markOwnDeliveryReferenceException(contribution.id);
     return supportCaseService.create(userId, campaignId, { caseType: "FULFILMENT_ISSUE", description, evidenceUrls });
   },
 
@@ -452,6 +513,63 @@ export const campaignFulfilmentService = {
   async getFulfilmentEventsForAdmin(campaignId: string) {
     return prisma.campaignFulfilmentEvent.findMany({ where: { campaignId }, orderBy: { createdAt: "asc" } });
   },
+
+  // ─── Phase 6 (delivery + collection/tracking) — per-participant delivery
+  // status/collection code. Distinct from the campaign-wide fulfilment
+  // reads/actions above: these operate on DeliveryReference (one row per
+  // captured contribution), never on CampaignFulfilment.
+
+  /**
+   * Participant's own delivery/collection status, including their
+   * collection code while it's still unredeemed. Never another
+   * participant's row — requireOwnPaidContribution() already proved
+   * ownership of the exact contribution this reference belongs to.
+   */
+  async getMyDeliveryReference(userId: string, campaignId: string) {
+    const contribution = await requireOwnPaidContribution(userId, campaignId);
+    const reference = await prisma.deliveryReference.findUnique({ where: { contributionId: contribution.id } });
+    if (!reference) return null;
+    return {
+      deliveryMethod: reference.deliveryMethod,
+      status: reference.status,
+      // Only ever shown to its owner, and only until it's actually used —
+      // once redeemed there is nothing left for the buyer to act on.
+      collectionCode: reference.collectionCodeRedeemedAt ? null : reference.collectionCode,
+      collectionCodeRedeemedAt: reference.collectionCodeRedeemedAt,
+    };
+  },
+
+  /** Supplier verifies a buyer's collection code at physical handover (Vendor path). Campaign + code alone — no contributionId needed at the counter. */
+  async verifyCollectionCodeForVendor(vendorId: string, campaignId: string, code: string) {
+    const { actorUserId } = await requireSupplierOwned(vendorId, campaignId);
+    return claimCollectionCode(campaignId, code, actorUserId);
+  },
+
+  /** Workstream 3 twin of verifyCollectionCodeForVendor() above, for the no-Vendor SupplierAccount path. */
+  async verifyCollectionCodeForAccount(userId: string, campaignId: string, code: string) {
+    const { actorUserId } = await requireSupplierAccountOwned(userId, campaignId);
+    return claimCollectionCode(campaignId, code, actorUserId);
+  },
+
+  /**
+   * Self-fulfilled campaigns have no supplier and no CampaignFulfilment
+   * row at all (createSupplierOrder() only creates one on the
+   * SUPPLIER-fulfilment branch — the organiser handles fulfilment tracking
+   * itself, outside that state machine) — but a COLLECTION-method
+   * self-fulfilled campaign's participants still get a real DeliveryReference
+   * and collection code, so the organiser (who is physically handing goods
+   * over) needs a way to verify one too. Deliberately its own lightweight
+   * ownership check (requireOrganiserOwnedCampaignOnly, not
+   * requireOrganiserOwned) since it must not 404 for lack of a
+   * CampaignFulfilment row that will never exist here.
+   */
+  async verifyCollectionCodeForOrganiser(userId: string, campaignId: string, code: string) {
+    const campaign = await requireOrganiserOwnedCampaignOnly(userId, campaignId);
+    if (campaign.fulfilmentOwner !== "SELF") {
+      throw new AppError("This campaign has an assigned supplier — only they can verify collection for it", 409);
+    }
+    return claimCollectionCode(campaignId, code, userId, "ORGANISER");
+  },
 };
 
 /** Shared by confirmReceiptForParticipant()/reportFulfilmentProblem() — participant-authorized, never trusts a client-supplied contribution id without checking ownership + capture status. */
@@ -464,6 +582,61 @@ async function requireOwnPaidContribution(userId: string, campaignId: string) {
   });
   if (!contribution) throw new AppError("No captured order found for you on this campaign yet", 404);
   return contribution;
+}
+
+/**
+ * Phase 6 — same organiser-ownership check as requireOrganiserOwned()
+ * above, minus its CampaignFulfilment requirement. Needed because a
+ * self-fulfilled campaign never has a CampaignFulfilment row, so
+ * requireOrganiserOwned() would 404 it even though the organiser
+ * genuinely owns it and needs to verify a collection code.
+ */
+async function requireOrganiserOwnedCampaignOnly(userId: string, campaignId: string) {
+  const organiser = await prisma.organiserProfile.findUnique({ where: { userId } });
+  const campaign = await prisma.communityCampaign.findUnique({ where: { id: campaignId } });
+  if (!campaign || !organiser || campaign.organiserId !== organiser.id) {
+    throw new AppError("Campaign not found", 404);
+  }
+  return campaign;
+}
+
+// Generic message on every failure path (wrong code, already-redeemed code,
+// lost the atomic-claim race) — deliberately never distinguishes which, so
+// a supplier/organiser probing this endpoint learns nothing that would help
+// them guess a real buyer's code.
+const INVALID_COLLECTION_CODE_MESSAGE = "Invalid or already-used collection code";
+
+/**
+ * Shared by every verifyCollectionCodeFor*() actor above — campaign-scoped
+ * lookup by code alone (collectionCode is unique per campaign, never
+ * globally), then an atomic single-use claim so two staff members typing
+ * the same code at the same moment can never both "succeed".
+ */
+async function claimCollectionCode(campaignId: string, code: string, actorUserId: string, actorRole: "SUPPLIER" | "ORGANISER" = "SUPPLIER") {
+  const trimmed = code.trim();
+  if (!trimmed) throw new AppError(INVALID_COLLECTION_CODE_MESSAGE, 409, undefined, "INVALID_COLLECTION_CODE");
+  const reference = await prisma.deliveryReference.findUnique({
+    where: { campaignId_collectionCode: { campaignId, collectionCode: trimmed } },
+  });
+  if (!reference || reference.collectionCodeRedeemedAt) {
+    throw new AppError(INVALID_COLLECTION_CODE_MESSAGE, 409, undefined, "INVALID_COLLECTION_CODE");
+  }
+  const claim = await prisma.deliveryReference.updateMany({
+    where: { id: reference.id, collectionCodeRedeemedAt: null },
+    data: { collectionCodeRedeemedAt: new Date(), collectionCodeRedeemedByUserId: actorUserId, status: "COLLECTED" },
+  });
+  if (claim.count !== 1) {
+    throw new AppError(INVALID_COLLECTION_CODE_MESSAGE, 409, undefined, "INVALID_COLLECTION_CODE");
+  }
+  await recordFulfilmentEvent({
+    campaignId,
+    contributionId: reference.contributionId,
+    actorUserId,
+    actorRole,
+    eventType: "COLLECTED",
+    note: "Collection code verified at handover",
+  });
+  return { verified: true as const, contributionId: reference.contributionId };
 }
 
 async function notifyOrganiser(campaignId: string, event: string, title: string, body: string, dedupeKey: string) {

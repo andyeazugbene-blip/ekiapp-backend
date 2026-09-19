@@ -759,6 +759,37 @@ export async function reportFulfilmentException(request: Request, response: Resp
   response.status(201).json(result);
 }
 
+// ─── Phase 6 (delivery + collection/tracking) ──────────────────────────
+
+/** Participant's own delivery/collection status, including their collection code while it's still unredeemed. */
+export async function getMyDeliveryReference(request: Request, response: Response): Promise<void> {
+  const userId = requireUserId(request);
+  response.json({ delivery: await campaignFulfilmentService.getMyDeliveryReference(userId, requireIdParam(request)) });
+}
+
+function requireCollectionCodeBody(request: Request): string {
+  const code = request.body?.code;
+  if (typeof code !== "string" || !code.trim()) throw new AppError("code is required", 400);
+  return code;
+}
+
+/** Supplier verifies a buyer's collection code at physical handover — campaign + code alone, no contributionId needed at the counter. */
+export async function verifySupplierCollectionCode(request: Request, response: Response): Promise<void> {
+  const acting = await resolveActingSupplier(requireUserId(request));
+  const code = requireCollectionCodeBody(request);
+  const result = acting.kind === "vendor"
+    ? await campaignFulfilmentService.verifyCollectionCodeForVendor(acting.vendorId, requireIdParam(request), code)
+    : await campaignFulfilmentService.verifyCollectionCodeForAccount(acting.userId, requireIdParam(request), code);
+  response.json(result);
+}
+
+/** Organiser verifies a buyer's collection code — only for a self-fulfilled campaign, where the organiser is the one physically handing goods over. */
+export async function verifyOrganiserCollectionCode(request: Request, response: Response): Promise<void> {
+  const userId = requireUserId(request);
+  const code = requireCollectionCodeBody(request);
+  response.json(await campaignFulfilmentService.verifyCollectionCodeForOrganiser(userId, requireIdParam(request), code));
+}
+
 /** M5 — the append-only evidence timeline; organiser/supplier (own campaign) or admin only. */
 export async function getFulfilmentEvents(request: Request, response: Response): Promise<void> {
   const userId = requireUserId(request);
