@@ -229,7 +229,10 @@ app.get("/.well-known/apple-app-site-association", (_req, res) => {
           // failed Universal Links validation on real devices (tapping a
           // culinarytales.app link always fell back to Safari).
           appID: "83BMQKN6K7.com.ekiapp.mobilee",
-          paths: ["/store/*", "/product/*", "/order/*", "/chat/*", "/invite/*", "/find-order"],
+          // /community-buy/* — Community Buy share links
+          // (getPublicCommunityBuyUrl() in the mobile app) point at
+          // /community-buy/:campaignId and were missing from this list.
+          paths: ["/store/*", "/product/*", "/order/*", "/chat/*", "/invite/*", "/find-order", "/community-buy/*"],
         },
       ],
     },
