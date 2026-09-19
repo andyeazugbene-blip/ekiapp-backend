@@ -219,7 +219,16 @@ app.get("/.well-known/apple-app-site-association", (_req, res) => {
       apps: [],
       details: [
         {
-          appID: "6776307497.com.ekiapp.mobilee",
+          // appID must be <AppleTeamID>.<BundleID> — 83BMQKN6K7 is the real
+          // Apple Developer Team ID (EHIMA GROUP LTD), confirmed directly
+          // from a signed EAS iOS build's credentials output. The previous
+          // value here was the numeric App Store Connect app ID
+          // (6776307497, matches eas.json's ascAppId), which is a different
+          // identifier — Apple validates the team-ID prefix against the
+          // app's actual code-signing team, so the wrong value silently
+          // failed Universal Links validation on real devices (tapping a
+          // culinarytales.app link always fell back to Safari).
+          appID: "83BMQKN6K7.com.ekiapp.mobilee",
           paths: ["/store/*", "/product/*", "/order/*", "/chat/*", "/invite/*", "/find-order"],
         },
       ],
