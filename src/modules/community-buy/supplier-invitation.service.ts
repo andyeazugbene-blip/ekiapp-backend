@@ -2,6 +2,7 @@ import crypto from "crypto";
 
 import bcrypt from "bcryptjs";
 
+import { env } from "../../config/env";
 import { prisma } from "../../lib/prisma";
 import { enqueueEmail } from "../../lib/email-queue";
 import { logger } from "../../lib/logger";
@@ -26,7 +27,11 @@ import { notificationsService } from "../notifications/notifications.service";
 
 const BCRYPT_ROUNDS = 12;
 const INVITATION_EXPIRY_DAYS = 7;
-const FRONTEND_URL = process.env.FRONTEND_URL ?? "http://localhost:3000";
+// A bare process.env.FRONTEND_URL fallback silently sent real invitees a
+// dead http://localhost:3000 link in production when the env var was unset
+// (same root cause as the Stripe Connect accountLinks HTTPS bug elsewhere in
+// this module). env.frontendUrl already has the correct production fallback.
+const FRONTEND_URL = env.frontendUrl;
 const INVITATION_ACTOR_PREFIX = "supplier-invitation";
 
 // Statuses in which inviting/being invited to supply still means something —

@@ -1,10 +1,15 @@
+import { env } from "../../config/env";
 import { logger } from "../../lib/logger";
 import { prisma } from "../../lib/prisma";
 import { stripe } from "../../lib/stripe";
 import { AppError } from "../../shared/errors/app-error";
 import { supplierAccountService } from "./supplier-account.service";
 
-const FRONTEND_URL = process.env.FRONTEND_URL ?? "http://localhost:3000";
+// Stripe rejects a livemode accountLinks.create() whose refresh_url/return_url
+// aren't HTTPS ("Livemode requests must always be redirected via HTTPS") —
+// a bare process.env.FRONTEND_URL fallback to localhost silently broke this
+// in production. env.frontendUrl already has the correct HTTPS-safe fallback.
+const FRONTEND_URL = env.frontendUrl;
 
 /**
  * Community Buy Workstream 3 — Stripe Connect onboarding for the no-Vendor
