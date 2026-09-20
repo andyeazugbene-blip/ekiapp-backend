@@ -103,6 +103,25 @@ function nextHoldIdempotencyKey(contributionId: string, retryCount: number): str
   return `hold:${contributionId}:${retryCount + 1}`;
 }
 
+/**
+ * grossAmount (the actual authorised/captured Stripe amount) is product
+ * amount + buyerServiceFeeAmount (see commit()'s own doc comment on why
+ * that fee is folded into consentedChargeAmount). Applying
+ * communityBuyFeeBps to the WHOLE gross — as this file used to, from
+ * before buyerServiceFeeAmount was ever charged here — hands the supplier
+ * part of a buyer service fee that belongs entirely to Eki: the platform
+ * fee is only ever a percentage of the SUPPLIER's product revenue,
+ * exactly like PLEDGE_THEN_CHARGE's createSupplierOrder() (which computes
+ * amount from confirmedShares × pricePerShareMinor alone, never mixing in
+ * buyerServiceFeeAmount). buyerServiceFeeAmount itself is not
+ * "communityBuyFeeBps of the fee" — it goes to Eki in full, on top of
+ * communityBuyFeeBps's cut of the product amount.
+ */
+function computeApplicationFeeAmount(grossAmount: number, buyerServiceFeeAmount: number, communityBuyFeeBps: number): number {
+  const productAmount = grossAmount - buyerServiceFeeAmount;
+  return calculatePlatformFee(productAmount, communityBuyFeeBps) + buyerServiceFeeAmount;
+}
+
 async function notifyParticipant(userId: string, event: string, title: string, body: string, campaignId: string): Promise<void> {
   try {
     await notificationsService.enqueue({
@@ -851,7 +870,8 @@ export const campaignAuthorisationService = {
       throw new AppError("This market has no configured Community Buy processing fee", 409, undefined, "FEE_NOT_CONFIGURED");
     }
     const grossAmount = authorisation.authorisedAmount ?? authorisation.consentedChargeAmount;
-    const applicationFeeAmount = calculatePlatformFee(grossAmount, config.communityBuyFeeBps);
+    const contributionForFee = await prisma.campaignContribution.findUniqueOrThrow({ where: { id: authorisation.contributionId }, select: { buyerServiceFeeAmount: true } });
+    const applicationFeeAmount = computeApplicationFeeAmount(grossAmount, contributionForFee.buyerServiceFeeAmount, config.communityBuyFeeBps);
 
     const claim = await prisma.communityBuyPaymentAuthorisation.updateMany({ where: { id: authorisationId, captureStatus: "NOT_CAPTURED" }, data: { captureStatus: "CAPTURE_PENDING" } });
     if (claim.count !== 1) return prisma.communityBuyPaymentAuthorisation.findUniqueOrThrow({ where: { id: authorisationId } });
@@ -1019,7 +1039,8 @@ export const campaignAuthorisationService = {
       const campaign = await prisma.communityCampaign.findUniqueOrThrow({ where: { id: authorisation.campaignId } });
       const config = campaign.country ? await marketConfigurationService.get(campaign.country) : null;
       const grossAmount = authorisation.authorisedAmount ?? authorisation.consentedChargeAmount;
-      const applicationFeeAmount = calculatePlatformFee(grossAmount, config?.communityBuyFeeBps ?? 0);
+      const contributionForFee = await prisma.campaignContribution.findUniqueOrThrow({ where: { id: authorisation.contributionId }, select: { buyerServiceFeeAmount: true } });
+      const applicationFeeAmount = computeApplicationFeeAmount(grossAmount, contributionForFee.buyerServiceFeeAmount, config?.communityBuyFeeBps ?? 0);
       await this.markCaptured(authorisation, paymentIntent, applicationFeeAmount, grossAmount);
       return { handled: true };
     }

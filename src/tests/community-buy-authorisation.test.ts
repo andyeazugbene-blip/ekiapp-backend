@@ -350,7 +350,7 @@ describe("captureHold()/captureWorker() — spec §11.4 (AT-19, AT-20, AT-21)", 
     m.communityCampaign.findUniqueOrThrow.mockResolvedValue(baseCampaign() as any);
     s.paymentIntents.capture.mockResolvedValue({ id: "pi_1", status: "succeeded" } as any);
     m.$transaction.mockImplementationOnce(async (cb: any) => cb(m));
-    m.campaignContribution.findUniqueOrThrow.mockResolvedValue({ id: "contrib-1", participant: { userId: "user-1" } } as any);
+    m.campaignContribution.findUniqueOrThrow.mockResolvedValue({ id: "contrib-1", participant: { userId: "user-1" }, buyerServiceFeeAmount: 0 } as any);
     m.supplierAccount.findUnique.mockResolvedValue({ providerConnectedAccountId: CONNECTED_ACCOUNT_ID } as any);
     m.communityBuyPayout.findUnique.mockResolvedValue(null);
     m.ledgerAccount.findUnique.mockResolvedValue(null);
@@ -369,6 +369,40 @@ describe("captureHold()/captureWorker() — spec §11.4 (AT-19, AT-20, AT-21)", 
     expect(m.campaignContribution.update).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ status: "PAID" }) }));
   });
 
+  // Regression: applicationFeeAmount used to be calculatePlatformFee(grossAmount,
+  // communityBuyFeeBps) applied to the WHOLE captured amount — once
+  // buyerServiceFeeAmount started actually being charged (the AUTHORISE_
+  // THEN_CAPTURE fee-gap fix), that formula silently handed the supplier
+  // part of a fee that belongs entirely to Eki. grossAmount here (2120) is
+  // 2000 product + 120 buyerServiceFeeAmount; communityBuyFeeBps is 500
+  // (5%). Correct split: Eki gets 5% of the 2000 product (100) PLUS the
+  // full 120 service fee = 220. Supplier gets exactly 2000 - 100 = 1900 —
+  // never any part of the 120. The old (buggy) formula would have produced
+  // applicationFeeAmount=106 and netAmount=2014, both asserted against here.
+  it("splits application_fee_amount correctly when buyerServiceFeeAmount is non-zero — the supplier never receives any part of it", async () => {
+    const authStore = makeAuthorisationStore({ "auth-1": baseAuthorisation({ holdStatus: "HOLD_SUCCEEDED", captureStatus: "NOT_CAPTURED", paymentIntentId: "pi_1", authorisedAmount: 2120 }) });
+    m.communityBuyPaymentAuthorisation.findUniqueOrThrow.mockImplementation(authStore.findUniqueOrThrow as any);
+    m.communityBuyPaymentAuthorisation.updateMany.mockImplementation(authStore.updateMany as any);
+    m.communityCampaign.findUniqueOrThrow.mockResolvedValue(baseCampaign() as any);
+    s.paymentIntents.capture.mockResolvedValue({ id: "pi_1", status: "succeeded" } as any);
+    m.$transaction.mockImplementationOnce(async (cb: any) => cb(m));
+    m.campaignContribution.findUniqueOrThrow.mockResolvedValue({ id: "contrib-1", participant: { userId: "user-1" }, buyerServiceFeeAmount: 120 } as any);
+    m.supplierAccount.findUnique.mockResolvedValue({ providerConnectedAccountId: CONNECTED_ACCOUNT_ID } as any);
+    m.communityBuyPayout.findUnique.mockResolvedValue(null);
+    m.ledgerAccount.findUnique.mockResolvedValue(null);
+    m.ledgerAccount.create.mockImplementation(async (args: any) => ({ id: `acct-${args.data.type}`, ...args.data }));
+
+    await campaignAuthorisationService.captureHold("auth-1");
+
+    expect(s.paymentIntents.capture).toHaveBeenCalledWith(
+      "pi_1",
+      { application_fee_amount: 220 },
+      expect.objectContaining({ stripeAccount: CONNECTED_ACCOUNT_ID }),
+    );
+    const amounts = m.ledgerEntry.create.mock.calls.map((call: any) => call[0].data.amount);
+    expect(amounts).toEqual([220, 220, 1900, 1900]);
+  });
+
   // M3 gap 1 fix — a HOLD_EXPIRING hold is only a warning flag
   // (hold_expiry_monitor's admin alert), not terminal/declined; the
   // underlying Stripe authorisation is still live and must remain
@@ -383,7 +417,7 @@ describe("captureHold()/captureWorker() — spec §11.4 (AT-19, AT-20, AT-21)", 
     m.communityCampaign.findUniqueOrThrow.mockResolvedValue(baseCampaign() as any);
     s.paymentIntents.capture.mockResolvedValue({ id: "pi_1", status: "succeeded" } as any);
     m.$transaction.mockImplementationOnce(async (cb: any) => cb(m));
-    m.campaignContribution.findUniqueOrThrow.mockResolvedValue({ id: "contrib-1", participant: { userId: "user-1" } } as any);
+    m.campaignContribution.findUniqueOrThrow.mockResolvedValue({ id: "contrib-1", participant: { userId: "user-1" }, buyerServiceFeeAmount: 0 } as any);
     m.supplierAccount.findUnique.mockResolvedValue({ providerConnectedAccountId: CONNECTED_ACCOUNT_ID } as any);
     m.communityBuyPayout.findUnique.mockResolvedValue(null);
     m.ledgerAccount.findUnique.mockResolvedValue(null);
@@ -403,7 +437,7 @@ describe("captureHold()/captureWorker() — spec §11.4 (AT-19, AT-20, AT-21)", 
     m.communityCampaign.findUniqueOrThrow.mockResolvedValue(baseCampaign() as any);
     s.paymentIntents.capture.mockResolvedValue({ id: "pi_1", status: "succeeded" } as any);
     m.$transaction.mockImplementation(async (cb: any) => cb(m));
-    m.campaignContribution.findUniqueOrThrow.mockResolvedValue({ id: "contrib-1", participant: { userId: "user-1" } } as any);
+    m.campaignContribution.findUniqueOrThrow.mockResolvedValue({ id: "contrib-1", participant: { userId: "user-1" }, buyerServiceFeeAmount: 0 } as any);
     m.supplierAccount.findUnique.mockResolvedValue({ providerConnectedAccountId: CONNECTED_ACCOUNT_ID } as any);
     m.communityBuyPayout.findUnique.mockResolvedValue(null);
     m.ledgerAccount.findUnique.mockResolvedValue(null);
@@ -452,7 +486,7 @@ describe("captureHold()/captureWorker() — spec §11.4 (AT-19, AT-20, AT-21)", 
     m.supplierAccount.findUnique.mockResolvedValue({ supplierState: "APPROVED", providerConnectedAccountId: CONNECTED_ACCOUNT_ID } as any);
     s.paymentIntents.capture.mockResolvedValue({ id: "pi_1", status: "succeeded" } as any);
     m.$transaction.mockImplementationOnce(async (cb: any) => cb(m));
-    m.campaignContribution.findUniqueOrThrow.mockResolvedValue({ id: "contrib-1", participant: { userId: "user-1" } } as any);
+    m.campaignContribution.findUniqueOrThrow.mockResolvedValue({ id: "contrib-1", participant: { userId: "user-1" }, buyerServiceFeeAmount: 0 } as any);
     m.communityBuyPayout.findUnique.mockResolvedValue(null);
     m.ledgerAccount.findUnique.mockResolvedValue(null);
     m.ledgerAccount.create.mockImplementation(async (args: any) => ({ id: `acct-${args.data.type}`, ...args.data }));
@@ -468,7 +502,7 @@ describe("captureHold()/captureWorker() — spec §11.4 (AT-19, AT-20, AT-21)", 
     m.communityCampaign.findUniqueOrThrow.mockResolvedValue(baseCampaign() as any);
     m.communityBuyPaymentAuthorisation.updateMany.mockResolvedValue({ count: 1 } as any);
     s.paymentIntents.capture.mockRejectedValue(new Error("card no longer valid"));
-    m.campaignContribution.findUniqueOrThrow.mockResolvedValue({ id: "contrib-1", participant: { userId: "user-1" } } as any);
+    m.campaignContribution.findUniqueOrThrow.mockResolvedValue({ id: "contrib-1", participant: { userId: "user-1" }, buyerServiceFeeAmount: 0 } as any);
 
     const result = await campaignAuthorisationService.captureHold("auth-1");
 
@@ -501,7 +535,7 @@ describe("captureHold()/captureWorker() — spec §11.4 (AT-19, AT-20, AT-21)", 
       throw new Error("declined");
     });
     m.$transaction.mockImplementation(async (cb: any) => cb(m));
-    m.campaignContribution.findUniqueOrThrow.mockResolvedValue({ id: "contrib-ok", participant: { userId: "user-1" } } as any);
+    m.campaignContribution.findUniqueOrThrow.mockResolvedValue({ id: "contrib-ok", participant: { userId: "user-1" }, buyerServiceFeeAmount: 0 } as any);
     m.supplierAccount.findUnique.mockResolvedValue({ providerConnectedAccountId: CONNECTED_ACCOUNT_ID } as any);
     m.communityBuyPayout.findUnique.mockResolvedValue(null);
     m.ledgerAccount.findUnique.mockResolvedValue(null);
@@ -531,6 +565,31 @@ describe("resolveHoldWebhook() — spec §17.1 (AT-22, AT-23)", () => {
     const outcome = await campaignAuthorisationService.resolveHoldWebhook("auth-1", "payment_intent.amount_capturable_updated", { id: "pi_1" } as any);
     expect(outcome.handled).toBe(true);
     expect(m.communityBuyPaymentAuthorisation.updateMany).not.toHaveBeenCalled();
+  });
+
+  // Regression: this webhook-driven capture path (the reconciliation
+  // fallback for when Stripe confirms capture independently of the
+  // synchronous captureHold() call above) had its own, separate copy of
+  // the same buggy fee-split formula — fixed the same way, verified here
+  // since no prior test exercised a genuinely NEW capture through this
+  // branch at all (AT-22 above only covers the already-CAPTURED no-op).
+  it("payment_intent.succeeded on a not-yet-captured hold splits application_fee_amount correctly (buyerServiceFeeAmount stays entirely with Eki)", async () => {
+    m.communityBuyPaymentAuthorisation.findUnique.mockResolvedValue(baseAuthorisation({ captureStatus: "NOT_CAPTURED", consentedChargeAmount: 2120 }) as any);
+    m.communityCampaign.findUniqueOrThrow.mockResolvedValue(baseCampaign() as any);
+    m.campaignContribution.findUniqueOrThrow.mockResolvedValue({ id: "contrib-1", participant: { userId: "user-1" }, buyerServiceFeeAmount: 120 } as any);
+    m.supplierAccount.findUnique.mockResolvedValue({ providerConnectedAccountId: CONNECTED_ACCOUNT_ID } as any);
+    m.communityBuyPayout.findUnique.mockResolvedValue(null);
+    m.ledgerAccount.findUnique.mockResolvedValue(null);
+    m.ledgerAccount.create.mockImplementation(async (args: any) => ({ id: `acct-${args.data.type}`, ...args.data }));
+    m.communityBuyPaymentAuthorisation.updateMany.mockResolvedValue({ count: 1 } as any);
+    m.communityBuyPaymentAuthorisation.findUniqueOrThrow.mockResolvedValue(baseAuthorisation({ captureStatus: "CAPTURED" }) as any);
+    m.$transaction.mockImplementationOnce(async (cb: any) => cb(m));
+
+    const outcome = await campaignAuthorisationService.resolveHoldWebhook("auth-1", "payment_intent.succeeded", { id: "pi_1" } as any);
+
+    expect(outcome.handled).toBe(true);
+    const amounts = m.ledgerEntry.create.mock.calls.map((call: any) => call[0].data.amount);
+    expect(amounts).toEqual([220, 220, 1900, 1900]);
   });
 
   it("an unexpected provider-side cancellation (issuer auto-expiry) that never went through cancelHold() still resolves to HOLD_RELEASED", async () => {
