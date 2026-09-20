@@ -1089,6 +1089,30 @@ export async function adminVerifyOrganiser(request: Request, response: Response)
   response.json({ profile });
 }
 
+/**
+ * Stripe Connect production hardening — admin-only live status refresh.
+ * Read-only from the admin's perspective (no business state changes, no
+ * money movement); does a real stripe.accounts.retrieve() and syncs the
+ * result to OrganiserProfile, same as the organiser's own self-service
+ * getStatus() does, just callable by an admin for ANY organiser rather
+ * than only the caller's own. Audited because it's still a live external
+ * API call an admin is directing at a specific organiser's real account.
+ */
+export async function adminGetOrganiserStripeConnectStatus(request: Request, response: Response): Promise<void> {
+  const adminId = requireUserId(request);
+  const id = requireIdParam(request);
+  const status = await organiserStripeConnectService.getStatusForAdmin(id);
+  await recordAudit({
+    actorId: adminId,
+    action: "community_organiser.stripe_connect_status_refreshed",
+    entityType: "CommunityOrganiserProfile",
+    entityId: id,
+    metadata: { fetchedLive: status.fetchedLive, chargesEnabled: status.chargesEnabled, payoutsEnabled: status.payoutsEnabled, disabledReason: status.stripeDisabledReason },
+    request,
+  });
+  response.json({ status });
+}
+
 export async function adminListPendingSuppliers(_request: Request, response: Response): Promise<void> {
   response.json({ items: await organiserSupplierService.listPendingSuppliers() });
 }

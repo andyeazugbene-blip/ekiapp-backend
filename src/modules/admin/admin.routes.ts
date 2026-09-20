@@ -225,6 +225,7 @@ import {
   adminUpdateSupportCase,
   adminUpdateMarketConfiguration,
   adminVerifyOrganiser,
+  adminGetOrganiserStripeConnectStatus,
   adminVerifySupplier,
   adminListOrganiserPayouts,
   adminReleaseOrganiserPayout,
@@ -309,6 +310,11 @@ adminRouter.post("/community-campaigns/:id/cancel", asyncHandler(requireAdminPer
 adminRouter.get("/community-campaigns/:id/contributions", asyncHandler(requireAdminPermission("community_buy.read")), asyncHandler(adminListCampaignContributions));
 adminRouter.get("/community-buy/organisers/pending", asyncHandler(requireAdminPermission("community_buy.read")), asyncHandler(adminListPendingOrganisers));
 adminRouter.post("/community-buy/organisers/:id/verify", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(adminVerifyOrganiser));
+// Stripe Connect production hardening — read-only from the admin's
+// perspective (no business-state mutation), but still a real live Stripe
+// API call an admin is directing, so gated + audited like the mutate
+// actions above rather than the plain .read list/detail routes.
+adminRouter.get("/community-buy/organisers/:id/stripe-connect/status", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(adminGetOrganiserStripeConnectStatus));
 adminRouter.get("/community-buy/suppliers/pending", asyncHandler(requireAdminPermission("community_buy.read")), asyncHandler(adminListPendingSuppliers));
 adminRouter.post("/community-buy/suppliers/:id/verify", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(adminVerifySupplier));
 adminRouter.get("/community-buy/refunds", asyncHandler(requireAdminPermission("community_buy.read")), asyncHandler(adminListRefunds));

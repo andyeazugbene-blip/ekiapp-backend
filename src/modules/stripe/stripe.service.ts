@@ -18,6 +18,7 @@ import { campaignContributionsService } from "../community-buy/campaign-contribu
 import { campaignAuthorisationService } from "../community-buy/campaign-authorisation.service";
 import { campaignPayoutService } from "../community-buy/campaign-payout.service";
 import { organiserFeeService } from "../community-buy/organiser-fee.service";
+import { organiserStripeConnectService } from "../community-buy/organiser-stripe-connect.service";
 import { LedgerAccountType, LedgerDirection, LedgerOwnerType } from "@prisma/client";
 import { AppError } from "../../shared/errors/app-error";
 import type { StripeWebhookInput, StripeWebhookResult } from "./stripe.types";
@@ -78,6 +79,21 @@ class StripeWebhookService {
     // CommunityBuyPayout PAID anywhere in this codebase.
     if (event.type === "payout.paid" || event.type === "payout.failed" || event.type === "payout.canceled") {
       return this.handleCommunityBuyPayoutEvent(event);
+    }
+
+    // Stripe Connect production hardening — connected-account status
+    // changes (onboarding completed, requirements changed, restricted,
+    // disabled). Same operational dependency as the payout events above:
+    // only arrives if the Dashboard webhook endpoint is also subscribed to
+    // connected-account events. Organiser-only for now (community-buy
+    // organiser-payout.service.ts's own fail-closed gates are what actually
+    // decide payout eligibility; this keeps the DB's view of readiness
+    // current instead of only ever updating on that organiser's own next
+    // manual status check). Every connected account on the platform shares
+    // this one event type, so this always resolves which (if any) EKI
+    // record it belongs to rather than assuming.
+    if (event.type === "account.updated") {
+      return this.handleOrganiserConnectAccountUpdated(event);
     }
 
     if (event.type === "checkout.session.completed") {
@@ -573,6 +589,32 @@ class StripeWebhookService {
         return { received: true, duplicate: true, eventId: event.id, type: event.type };
       }
       logger.error("Webhook failed: community_buy_payout resolution", { eventId: event.id, ...serializeError(error) });
+      throw error;
+    }
+  }
+
+  private async handleOrganiserConnectAccountUpdated(event: Stripe.Event): Promise<StripeWebhookResult> {
+    const account = event.data.object as Stripe.Account;
+
+    try {
+      const isDup = await prisma.$transaction(async (tx) => {
+        if (await this.isDuplicate(tx, event.id, event.type, {})) return true;
+        await tx.webhookEvent.update({ where: { stripeEventId: event.id }, data: { status: "PROCESSED", processedAt: new Date() } });
+        return false;
+      }, { isolationLevel: "Serializable" });
+
+      if (isDup) {
+        return { received: true, duplicate: true, eventId: event.id, type: event.type };
+      }
+
+      const outcome = await organiserStripeConnectService.handleAccountUpdated(account);
+      logger.info("Webhook processed: account.updated", { eventId: event.id, accountId: account.id, handled: outcome.handled });
+      return { received: true, eventId: event.id, type: event.type };
+    } catch (error) {
+      if (this.isUniqueConstraintError(error)) {
+        return { received: true, duplicate: true, eventId: event.id, type: event.type };
+      }
+      logger.error("Webhook failed: account.updated resolution", { eventId: event.id, ...serializeError(error) });
       throw error;
     }
   }

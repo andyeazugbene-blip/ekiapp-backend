@@ -2237,6 +2237,21 @@ model OrganiserProfile {
   chargesEnabled             Boolean                       @default(false)
   payoutsEnabled             Boolean                       @default(false)
   detailsSubmitted           Boolean                       @default(false)
+  // Stripe Connect production hardening — field-name identifiers only
+  // (e.g. "individual.dob.day", never an actual value), safe to surface to
+  // admins. Synced by both the admin-triggered live refresh
+  // (organiserStripeConnectService.getStatusForAdmin()) and the
+  // account.updated webhook (handleAccountUpdated()) — same derivation
+  // helper (deriveConnectAccountFields), so the two paths can never drift.
+  stripeRequirementsCurrentlyDue   String[]                 @default([])
+  stripeRequirementsEventuallyDue String[]                  @default([])
+  stripeRequirementsPastDue       String[]                  @default([])
+  stripeDisabledReason            String?
+  // Set only by a genuinely fresh stripe.accounts.retrieve()/webhook
+  // payload — never by a cached-fallback read. Lets a caller (e.g. the
+  // admin endpoint) tell a live number from a stale one, which matters
+  // because payout readiness must never be claimed from a stale read.
+  stripeStatusFetchedAt           DateTime?
   // Phase 2 (organiser identity display preference) — controls whether
   // buyer-facing surfaces show this organiser's full name or first name
   // only. Defaults true (privacy-preserving default, matching this app's

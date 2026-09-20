@@ -41,11 +41,16 @@ vi.mock("../modules/community-buy/campaign-authorisation.service", () => ({
   campaignAuthorisationService: { markCaptureDisputed: vi.fn().mockResolvedValue({ campaignId: "camp-1" }), markCaptureRefunded: vi.fn().mockResolvedValue({ campaignId: "camp-1" }) },
 }));
 
+vi.mock("../modules/community-buy/organiser-stripe-connect.service", () => ({
+  organiserStripeConnectService: { handleAccountUpdated: vi.fn().mockResolvedValue({ handled: true }) },
+}));
+
 import { prisma } from "../lib/prisma";
 import { stripe } from "../lib/stripe";
 import { stripeWebhookService } from "../modules/stripe/stripe.service";
 import { campaignPayoutService } from "../modules/community-buy/campaign-payout.service";
 import { campaignAuthorisationService } from "../modules/community-buy/campaign-authorisation.service";
+import { organiserStripeConnectService } from "../modules/community-buy/organiser-stripe-connect.service";
 
 const m = vi.mocked(prisma, true);
 const constructEvent = vi.mocked(stripe.webhooks.constructEvent);
@@ -88,6 +93,52 @@ describe("payout.paid / payout.failed / payout.canceled dispatch", () => {
 
     const result = await stripeWebhookService.handleWebhook({ signature: "sig", rawBody: Buffer.from("x") });
     expect(result.duplicate).toBe(true);
+    expect(campaignPayoutService.resolvePayoutWebhook).not.toHaveBeenCalled();
+  });
+});
+
+describe("account.updated — Stripe Connect production hardening", () => {
+  it("routes account.updated to organiserStripeConnectService.handleAccountUpdated", async () => {
+    constructEvent.mockReturnValue({ id: "evt_acct_1", type: "account.updated", data: { object: { id: "acct_1", charges_enabled: true, payouts_enabled: true } } } as never);
+    mockDedupTransaction();
+
+    const result = await stripeWebhookService.handleWebhook({ signature: "sig", rawBody: Buffer.from("x") });
+
+    expect(result.received).toBe(true);
+    expect(organiserStripeConnectService.handleAccountUpdated).toHaveBeenCalledWith(expect.objectContaining({ id: "acct_1" }));
+  });
+
+  it("a connected account that belongs to no organiser (vendor/supplier, or unrelated) is a safe no-op — never throws", async () => {
+    constructEvent.mockReturnValue({ id: "evt_acct_2", type: "account.updated", data: { object: { id: "acct_vendor_1" } } } as never);
+    mockDedupTransaction();
+    vi.mocked(organiserStripeConnectService.handleAccountUpdated).mockResolvedValueOnce({ handled: false });
+
+    const result = await stripeWebhookService.handleWebhook({ signature: "sig", rawBody: Buffer.from("x") });
+    expect(result.received).toBe(true);
+  });
+
+  it("a duplicate delivery of the same account.updated event is a no-op — handleAccountUpdated never re-runs", async () => {
+    constructEvent.mockReturnValue({ id: "evt_acct_dup", type: "account.updated", data: { object: { id: "acct_1" } } } as never);
+    $transaction.mockImplementationOnce(async (cb: (tx: unknown) => unknown) => {
+      const tx = { webhookEvent: { create: vi.fn().mockRejectedValue(Object.assign(new Error("unique"), { code: "P2002" })) } };
+      return cb(tx);
+    });
+
+    const result = await stripeWebhookService.handleWebhook({ signature: "sig", rawBody: Buffer.from("x") });
+    expect(result.duplicate).toBe(true);
+    expect(organiserStripeConnectService.handleAccountUpdated).not.toHaveBeenCalled();
+  });
+});
+
+describe("invalid webhook signature — generic, applies before any event-type dispatch", () => {
+  it("propagates a signature verification failure without processing any event — never silently swallowed", async () => {
+    constructEvent.mockImplementation(() => {
+      throw new Error("Webhook signature verification failed");
+    });
+
+    await expect(stripeWebhookService.handleWebhook({ signature: "bad-sig", rawBody: Buffer.from("x") })).rejects.toMatchObject({ statusCode: 400, message: "Invalid signature" });
+    expect(m.$transaction).not.toHaveBeenCalled();
+    expect(organiserStripeConnectService.handleAccountUpdated).not.toHaveBeenCalled();
     expect(campaignPayoutService.resolvePayoutWebhook).not.toHaveBeenCalled();
   });
 });
