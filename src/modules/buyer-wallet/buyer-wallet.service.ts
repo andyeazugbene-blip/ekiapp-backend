@@ -1,4 +1,4 @@
-import type { BuyerWallet, BuyerWalletTransaction } from "@prisma/client";
+import { Prisma, type BuyerWallet, type BuyerWalletTransaction } from "@prisma/client";
 
 import { env } from "../../config/env";
 import { logger } from "../../lib/logger";
@@ -8,13 +8,27 @@ import { stripe } from "../../lib/stripe";
 import { AppError } from "../../shared/errors/app-error";
 import type { ApplyWalletInput, ListWalletTransactionsQuery, TopUpInput, TopUpResponse } from "./buyer-wallet.types";
 
+// getWallet() and listTransactions() both call this, and the mobile Wallet
+// screen fires them concurrently on load — a genuinely reproduced race
+// (confirmed via a real device/browser test, not a guess): both requests'
+// findUnique() can return null before either create() commits, so the
+// loser hits a unique-constraint violation on buyerId instead of ever
+// seeing the winner's row. Same create-and-catch-P2002 pattern already
+// used for webhook idempotency elsewhere in this codebase.
 async function getOrCreateWallet(buyerId: string): Promise<BuyerWallet> {
   const existing = await prisma.buyerWallet.findUnique({ where: { buyerId } });
   if (existing) return existing;
 
-  return prisma.buyerWallet.create({
-    data: { buyerId, currency: env.defaultCurrency },
-  });
+  try {
+    return await prisma.buyerWallet.create({
+      data: { buyerId, currency: env.defaultCurrency },
+    });
+  } catch (error) {
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") {
+      return prisma.buyerWallet.findUniqueOrThrow({ where: { buyerId } });
+    }
+    throw error;
+  }
 }
 
 export const buyerWalletService = {
