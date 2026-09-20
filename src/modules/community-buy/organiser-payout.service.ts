@@ -84,10 +84,23 @@ export const organiserPayoutService = {
 
     const paidAgg = await prisma.campaignContribution.aggregate({
       where: { campaignId, status: "PAID" },
-      _sum: { amount: true, buyerServiceFeeAmount: true },
+      _sum: { amount: true, buyerServiceFeeAmount: true, deliveryFeeAmountMinor: true },
     });
     const totalCollected = paidAgg._sum.amount ?? 0;
-    const totalBuyerFees = paidAgg._sum.buyerServiceFeeAmount ?? 0;
+    // Phase 6 (delivery + collection/tracking) — deliveryFeeAmountMinor was
+    // correctly charged (chargedAmount already includes it — see
+    // campaign-contributions.service.ts's markChargeSucceeded()) but never
+    // recognized anywhere at settlement: releaseSupplierPayment() only ever
+    // debits the product-amount-derived releaseBase from escrow, and this
+    // function used to recognize buyerServiceFeeAmount alone. The delivery
+    // fee is buyer-paid, courier-facing revenue that never belongs to the
+    // supplier or organiser (there is no real courier to pay out to yet —
+    // see community-buy-privacy.service.ts's own doc comment on why one
+    // isn't invented), so it is recognized as platform revenue here
+    // exactly like buyerServiceFeeAmount is, at the one release point every
+    // successful campaign reaches regardless of fulfilment type. 0 for
+    // every COLLECTION campaign.
+    const totalBuyerFees = (paidAgg._sum.buyerServiceFeeAmount ?? 0) + (paidAgg._sum.deliveryFeeAmountMinor ?? 0);
     if (totalCollected <= 0) {
       throw new AppError("No contributions have been successfully charged for this campaign yet", 409, undefined, "NOTHING_COLLECTED_YET");
     }
@@ -115,9 +128,9 @@ export const organiserPayoutService = {
 
     // Nothing due to the organiser (legacy no-wholesale supplier campaign) —
     // settle this record administratively without attempting a $0 transfer.
-    // Buyer-service-fee revenue is still recognized here since this is the
-    // one release point every successful campaign reaches regardless of
-    // fulfilment type.
+    // Buyer-service-fee and delivery-fee revenue are still recognized here
+    // since this is the one release point every successful campaign
+    // reaches regardless of fulfilment type.
     if (organiserGross <= 0) {
       const claim = await prisma.communityBuyOrganiserPayout.updateMany({
         where: { campaignId, status: { in: ["NOT_RELEASED", "ON_HOLD"] } },
@@ -129,7 +142,7 @@ export const organiserPayoutService = {
           currency: payout.currency,
           businessRefType: "CommunityBuyOrganiserPayout",
           businessRefId: payout.id,
-          description: `Community Buy buyer service fee revenue for campaign ${campaignId} (no organiser proceeds — full amount settled to supplier)`,
+          description: `Community Buy buyer service fee + delivery fee revenue for campaign ${campaignId} (no organiser proceeds — full amount settled to supplier)`,
           legs: [
             { accountType: LedgerAccountType.COMMUNITY_BUY_ESCROW, ownerType: LedgerOwnerType.PLATFORM, direction: LedgerDirection.DEBIT, amount: totalBuyerFees },
             { accountType: LedgerAccountType.PLATFORM_FEE_REVENUE, ownerType: LedgerOwnerType.PLATFORM, direction: LedgerDirection.CREDIT, amount: totalBuyerFees },

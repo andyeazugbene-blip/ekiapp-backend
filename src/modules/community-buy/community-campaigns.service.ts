@@ -1203,6 +1203,18 @@ export const communityCampaignsService = {
     // those (captureStatus-filtered, see its own doc comment) so the two
     // calls can never double-process the same authorisation.
     const refundsCreated = await this.createRefundRecordsForFailedCampaign(campaignId);
+    // Individual Delivery correctness, same defensive shape as
+    // reassignSupplier()'s call to this function: today this is a no-op for
+    // every reachable case (a DELIVERY-mode campaign is always
+    // PLEDGE_THEN_CHARGE — validateDeliveryPaymentModeCompatibility() above
+    // forbids AT+DELIVERY — so it can only hit this function pre-charge,
+    // never with a real address-bearing DeliveryReference row; the
+    // AT-mode-only PAYMENT_CAPTURE/HOLD_WINDOW/etc statuses that CAN have
+    // PAID contributions can only ever be COLLECTION, which never has an
+    // address to revoke). Called anyway so this stays correct if either
+    // gate is ever loosened, rather than silently leaving a cancelled
+    // campaign's delivery address visible to the supplier.
+    await revokeDeliveryReferencesForCampaign(campaignId, "campaign_cancelled", adminId);
     if (campaign.paymentMode === "AUTHORISE_THEN_CAPTURE") {
       // Reuses the exact same hold-release path decide()'s own cancel
       // branch and the timeout sweeps already use — no parallel

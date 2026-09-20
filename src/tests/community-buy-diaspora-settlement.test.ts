@@ -398,6 +398,38 @@ describe("organiserPayoutService.releaseOrganiserPayment() — the organiser's n
     expect(feeRevenueLeg).toBeTruthy();
   });
 
+  // Regression: deliveryFeeAmountMinor was correctly charged (chargedAmount
+  // already includes it) but never recognized anywhere at settlement —
+  // releaseSupplierPayment() only ever debits the product-amount-derived
+  // releaseBase, so the delivery fee portion sat in escrow with no ledger
+  // destination for anyone. Fixed by folding it into the same
+  // buyer-fee-revenue recognition this function already does for
+  // buyerServiceFeeAmount, since delivery fee is equally buyer-paid,
+  // courier-facing revenue that never belongs to the supplier or organiser.
+  it("delivery fee revenue is recognized at release exactly like buyer service fee — Individual Delivery correctness", async () => {
+    process.env.COMMUNITY_BUY_ORGANISER_PAYOUT_ENABLED = "true";
+    const { organiserPayoutService } = await import("../modules/community-buy/organiser-payout.service");
+    m.communityBuyOrganiserPayout.findUnique.mockResolvedValue({
+      id: "payout-delivery-1", campaignId: "camp-delivery-1", organiserId: "org-delivery-1", currency: "GBP", status: "NOT_RELEASED", payoutStripeAccountIdAtApproval: null,
+      campaign: { country: "GB" }, organiser: { id: "org-delivery-1", userId: "user-delivery-1", providerConnectedAccountId: null, payoutsEnabled: false, chargesEnabled: false },
+    } as never);
+    // buyerServiceFeeAmount=120, deliveryFeeAmountMinor=300 — combined 420 must be recognized as platform revenue.
+    m.campaignContribution.aggregate.mockResolvedValue({ _sum: { amount: 10000, buyerServiceFeeAmount: 120, deliveryFeeAmountMinor: 300 } } as never);
+    m.campaignSupplierPayment.findUnique.mockResolvedValue({ wholesaleAmount: null } as never);
+    m.marketConfiguration.count.mockResolvedValue(1 as never);
+    m.marketConfiguration.findUnique.mockResolvedValue({ countryCode: "GB", organiserCommissionBps: 1000 } as never);
+    m.communityBuyOrganiserPayout.updateMany.mockResolvedValue({ count: 1 } as never);
+    m.communityBuyOrganiserPayout.findUniqueOrThrow.mockResolvedValue({ id: "payout-delivery-1", status: "PAID", amount: 0, netAmount: 0 } as never);
+
+    await organiserPayoutService.releaseOrganiserPayment("admin-1", "camp-delivery-1");
+
+    const feeRevenueLeg = m.ledgerEntry.create.mock.calls.find((c: any) => c[0].data.amount === 420);
+    expect(feeRevenueLeg).toBeTruthy();
+    // Never double-counted as a separate, smaller leg for just one of the two fees.
+    expect(m.ledgerEntry.create.mock.calls.some((c: any) => c[0].data.amount === 120)).toBe(false);
+    expect(m.ledgerEntry.create.mock.calls.some((c: any) => c[0].data.amount === 300)).toBe(false);
+  });
+
   it("is idempotent — re-releasing an already-PAID payout is a safe no-op, never a second transfer", async () => {
     process.env.COMMUNITY_BUY_ORGANISER_PAYOUT_ENABLED = "true";
     const { organiserPayoutService } = await import("../modules/community-buy/organiser-payout.service");

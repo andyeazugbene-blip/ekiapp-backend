@@ -2943,6 +2943,18 @@ describe("Phase 9 — admin cancel/end campaign", () => {
     },
   );
 
+  it("revokes any DeliveryReference rows for the cancelled campaign — Individual Delivery correctness", async () => {
+    m.communityCampaign.findUnique.mockResolvedValue({ ...baseCampaign, status: "LIVE" } as never);
+    m.communityCampaign.update.mockResolvedValue({ id: "camp-1", status: "CANCELLED" } as never);
+
+    await communityCampaignsService.cancel("admin-1", "camp-1", "test");
+
+    expect(m.deliveryReference.updateMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ campaignId: "camp-1" }),
+      data: expect.objectContaining({ status: "REVOKED", revocationReason: "campaign_cancelled" }),
+    }));
+  });
+
   it.each(["SUCCEEDED", "FULFILLING", "COMPLETED", "FINANCIALLY_CLOSED", "FAILED", "REJECTED", "CANCELLED", "REFUNDING"])(
     "refuses to cancel a %s campaign (already past the point money could have moved) and sends no notification",
     async (status) => {
