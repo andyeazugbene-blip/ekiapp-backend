@@ -278,6 +278,11 @@ const mockVendorFindUnique = vi.fn();
 // as the approved supplier; buyer-1 (and anyone else) is not, preserving
 // this file's existing "403 for a buyer, 200 for a vendor" assertions.
 const mockSupplierAccountFindUnique = vi.fn();
+// resolveActingSupplier() (community-buy.controller.ts) only takes the
+// legacy vendorId-keyed path once a SupplierProfile genuinely exists for
+// that vendor — vendor-user-1 is this file's stand-in for a real
+// legacy-applied supplier, so it needs one here too.
+const mockSupplierProfileFindUnique = vi.fn();
 // Four-eyes gate on supplier-payment release (see admin-approvals.service.ts)
 // looks up the payment amount before deciding whether to release directly
 // or create a pending approval.
@@ -301,6 +306,7 @@ vi.mock("../lib/prisma", async () => {
     prisma: new Proxy(actual.prisma, {
       get(target, prop) {
         if (prop === "vendor") return { findUnique: (...a: unknown[]) => mockVendorFindUnique(...a) };
+        if (prop === "supplierProfile") return { findUnique: (...a: unknown[]) => mockSupplierProfileFindUnique(...a) };
         if (prop === "supplierAccount") return { findUnique: (...a: unknown[]) => mockSupplierAccountFindUnique(...a) };
         if (prop === "campaignSupplierPayment") return { findUnique: (...a: unknown[]) => mockCampaignSupplierPaymentFindUnique(...a) };
         if (prop === "campaignContribution") return { findUnique: (...a: unknown[]) => mockCampaignContributionFindUnique(...a) };
@@ -367,6 +373,9 @@ beforeEach(() => {
   // inherit vendor-user-1's vendor row.
   mockVendorFindUnique.mockImplementation(async ({ where }: any) =>
     where?.userId === "vendor-user-1" ? { id: "vendor-db-1" } : null,
+  );
+  mockSupplierProfileFindUnique.mockImplementation(async ({ where }: any) =>
+    where?.vendorId === "vendor-db-1" ? { id: "supplier-profile-1" } : null,
   );
   // Workstream 3: "account-supplier-1" models a genuinely new no-Vendor
   // supplier — approved SupplierAccount, no Vendor row at all — so route
@@ -798,6 +807,23 @@ describe("Supplier routes — Centre landing/apply open to any authenticated use
     const res = await request(app).post("/api/supplier/campaigns/camp-77/supplier-commitment").set("Authorization", `Bearer ${accountSupplierToken()}`);
     expect(res.status).toBe(200);
     expect(mockConfirmSupplierCommitmentForAccount).toHaveBeenCalledWith("account-supplier-1", "camp-77");
+    expect(mockConfirmSupplierCommitment).not.toHaveBeenCalled();
+  });
+
+  // Regression: resolveActingSupplier() used to check raw Vendor existence
+  // instead of SupplierProfile existence, so an existing marketplace Vendor
+  // who applied as a Community Buy supplier ONLY through the new
+  // no-Vendor-required path (a real, approved SupplierAccount, no
+  // SupplierProfile ever created) was silently misrouted into the legacy
+  // vendorId-keyed branch on every supplier-facing route — where
+  // supplierProfile.findUnique({where:{vendorId}}) returns null, so the
+  // service method 404s with "Campaign not found" even for a genuinely
+  // assigned, approved supplier.
+  it("POST /api/supplier/campaigns/:id/supplier-commitment — a Vendor with an approved SupplierAccount but NO SupplierProfile routes to the account path, not the legacy vendor path", async () => {
+    mockSupplierProfileFindUnique.mockResolvedValue(null); // vendor-db-1 never used the legacy application flow
+    const res = await request(app).post("/api/supplier/campaigns/camp-77/supplier-commitment").set("Authorization", `Bearer ${vendorToken()}`);
+    expect(res.status).toBe(200);
+    expect(mockConfirmSupplierCommitmentForAccount).toHaveBeenCalledWith("vendor-user-1", "camp-77");
     expect(mockConfirmSupplierCommitment).not.toHaveBeenCalled();
   });
 

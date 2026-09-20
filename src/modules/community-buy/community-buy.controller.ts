@@ -70,14 +70,29 @@ type ActingSupplier = { kind: "vendor"; vendorId: string } | { kind: "account"; 
  * Workstream 3 — every supplier-facing route below used to force
  * requireVendorId(), which throws for the no-Vendor SupplierAccount path
  * (item 6/9/K: no Vendor should ever be required to act as a supplier).
- * Vendor is checked first — safe even for a Vendor whose SupplierAccount is
- * also synced (legacySupplierProfileId), since resolveSupplierChoice()
- * dual-writes supplierId for any legacy-linked account, so the untouched
- * vendorId-keyed service methods keep matching exactly as before.
+ *
+ * The vendor branch is only correct for a Vendor who actually went through
+ * the LEGACY Community-Buy application (organiser-supplier.service.ts's
+ * applyAsSupplier(vendorId, ...), which creates a SupplierProfile) — that
+ * flow's own sync (resolveSupplierChoice()) dual-writes supplierId for any
+ * such legacy-linked account, so the untouched vendorId-keyed service
+ * methods keep matching exactly as before. Checking raw Vendor existence
+ * instead of SupplierProfile existence silently misrouted every Vendor who
+ * applied ONLY through the new no-Vendor-required path (POST
+ * /supplier/applications) into the legacy branch — supplierProfile.
+ * findUnique({where:{vendorId}}) returned null for them, so every
+ * supplier-facing route (commitment, proposals, fulfilment, payment,
+ * payout — all 20+ call sites below) failed with a spurious "Campaign not
+ * found", even though their SupplierAccount was genuinely APPROVED and
+ * correctly assigned. A real vendor is free to use either application path
+ * going forward, so this must check which one they actually used.
  */
 async function resolveActingSupplier(userId: string): Promise<ActingSupplier> {
   const vendor = await prisma.vendor.findUnique({ where: { userId }, select: { id: true } });
-  if (vendor) return { kind: "vendor", vendorId: vendor.id };
+  if (vendor) {
+    const supplierProfile = await prisma.supplierProfile.findUnique({ where: { vendorId: vendor.id }, select: { id: true } });
+    if (supplierProfile) return { kind: "vendor", vendorId: vendor.id };
+  }
   const account = await prisma.supplierAccount.findUnique({ where: { userId }, select: { id: true } });
   if (account) return { kind: "account", userId };
   throw new AppError("Vendor profile or Supplier account required", 403);

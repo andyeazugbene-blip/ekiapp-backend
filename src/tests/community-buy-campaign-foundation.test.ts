@@ -12,6 +12,7 @@ vi.mock("../lib/prisma", () => ({
   prisma: {
     organiserProfile: { findUnique: vi.fn(), create: vi.fn() },
     supplierProfile: { findUnique: vi.fn() },
+    supplierAccount: { findUnique: vi.fn() },
     communityCampaign: { create: vi.fn(), update: vi.fn(), updateMany: vi.fn(), findUnique: vi.fn(), findUniqueOrThrow: vi.fn() },
     campaignContribution: { create: vi.fn(), findUniqueOrThrow: vi.fn() },
     campaignParticipant: { upsert: vi.fn(), findUnique: vi.fn(), findFirst: vi.fn(), create: vi.fn() },
@@ -195,6 +196,42 @@ describe("communityCampaignsService.submit — the authoritative gate (C, D, H)"
     } as never);
     m.organiserProfile.findUnique.mockResolvedValue({ id: "org-1", isVerified: true, isRestricted: false });
     m.supplierProfile.findUnique.mockResolvedValue({ id: "sup-1", isVerified: false, isRestricted: false });
+    m.marketConfiguration.findUnique.mockResolvedValue({ countryCode: "GB", communityBuyEnabled: true } as never);
+
+    await expect(communityCampaignsService.submit("u1", "camp-1")).rejects.toMatchObject({
+      code: "SUBMIT_REQUIREMENTS_NOT_MET",
+      details: { missing: ["supplier_eligibility"] },
+    });
+  });
+
+  // Regression: a Workstream-3 campaign (no-Vendor-required supplier) has
+  // supplierId === null by design — only supplierAccountId is set (see
+  // CreateCampaignInput's own doc comment). This gate used to check
+  // supplierId alone, so it rejected with "missing: supplierId" for EVERY
+  // such campaign, permanently blocking it from ever reaching review even
+  // with a real, approved supplier assigned.
+  it("F2: a SUPPLIER-route draft using the Workstream-3 supplierAccountId (no legacy supplierId) succeeds once the account is APPROVED", async () => {
+    m.communityCampaign.findUnique.mockResolvedValue({
+      id: "camp-1", organiserId: "org-1", status: "DRAFT", fulfilmentOwner: "SUPPLIER", supplierId: null, supplierAccountId: "acct-1",
+      ...validDraftFields, deadline: new Date(validDraftFields.deadline),
+    } as never);
+    m.organiserProfile.findUnique.mockResolvedValue({ id: "org-1", isVerified: true, isRestricted: false });
+    m.supplierAccount.findUnique.mockResolvedValue({ id: "acct-1", supplierState: "APPROVED" } as never);
+    m.marketConfiguration.findUnique.mockResolvedValue({ countryCode: "GB", communityBuyEnabled: true } as never);
+    m.communityCampaign.update.mockResolvedValue({ id: "camp-1", status: "UNDER_REVIEW" });
+
+    const result = await communityCampaignsService.submit("u1", "camp-1");
+    expect(result.status).toBe("UNDER_REVIEW");
+    expect(m.supplierProfile.findUnique).not.toHaveBeenCalled();
+  });
+
+  it("F3: a SUPPLIER-route draft using supplierAccountId is rejected with supplier_eligibility when the account isn't APPROVED", async () => {
+    m.communityCampaign.findUnique.mockResolvedValue({
+      id: "camp-1", organiserId: "org-1", status: "DRAFT", fulfilmentOwner: "SUPPLIER", supplierId: null, supplierAccountId: "acct-1",
+      ...validDraftFields, deadline: new Date(validDraftFields.deadline),
+    } as never);
+    m.organiserProfile.findUnique.mockResolvedValue({ id: "org-1", isVerified: true, isRestricted: false });
+    m.supplierAccount.findUnique.mockResolvedValue({ id: "acct-1", supplierState: "UNDER_REVIEW" } as never);
     m.marketConfiguration.findUnique.mockResolvedValue({ countryCode: "GB", communityBuyEnabled: true } as never);
 
     await expect(communityCampaignsService.submit("u1", "camp-1")).rejects.toMatchObject({

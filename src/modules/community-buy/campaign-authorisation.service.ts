@@ -6,7 +6,7 @@ import { stripe } from "../../lib/stripe";
 import { logger } from "../../lib/logger";
 import { AppError } from "../../shared/errors/app-error";
 import { resolveStripeCurrency } from "../../shared/currency";
-import { calculatePlatformFee } from "../../shared/pricing";
+import { calculatePlatformFee, calculateBoundedServiceFee } from "../../shared/pricing";
 import { notificationsService } from "../notifications/notifications.service";
 import { ledgerService } from "../ledger/ledger.service";
 import { recordAudit } from "../../shared/utils/audit";
@@ -158,6 +158,16 @@ export const campaignAuthorisationService = {
       throw new AppError(`Only ${Math.max(0, maximum - campaign.confirmedShares)} share(s) remain available.`, 409, undefined, "CAPACITY_UNAVAILABLE");
     }
     const amount = quantity * campaign.pricePerShareMinor;
+    // Same immutable-snapshot-at-commitment-time rationale as createPledge()'s
+    // identical calculation for PLEDGE_THEN_CHARGE (campaign-contributions.
+    // service.ts) — this was missing here entirely, so every
+    // AUTHORISE_THEN_CAPTURE contribution silently never charged (or even
+    // recorded) a buyer service fee at all, a real revenue gap distinct
+    // from Individual Delivery's own commit()-side gap.
+    const marketConfig = await marketConfigurationService.get(campaign.country);
+    const buyerServiceFeeAmount = marketConfig
+      ? calculateBoundedServiceFee(amount, marketConfig.buyerServiceFeeBps, marketConfig.buyerServiceFeeMinAmount, marketConfig.buyerServiceFeeMaxAmount)
+      : 0;
 
     const participant = await upsertParticipantWithAttribution(campaign, userId);
 
@@ -174,7 +184,7 @@ export const campaignAuthorisationService = {
       });
       if (claim.count !== 1) return null;
       const contribution = await tx.campaignContribution.create({
-        data: { campaignId, participantId: participant.id, amount, currency: campaign.currency!, quantity, isOrganiserTopUp: false, status: "PLEDGED", paymentMethodId: null },
+        data: { campaignId, participantId: participant.id, amount, buyerServiceFeeAmount, currency: campaign.currency!, quantity, isOrganiserTopUp: false, status: "PLEDGED", paymentMethodId: null },
       });
       if (!fresh.termsLockedAt) {
         await tx.communityCampaign.update({ where: { id: campaignId }, data: { termsLockedAt: new Date() } });
@@ -203,7 +213,7 @@ export const campaignAuthorisationService = {
         paymentMethodReference: "", // filled in by confirmSetup() once the participant completes the SetupIntent client-side
         consentedAt: new Date(),
         consentWordingVersion: CONSENT_WORDING_VERSION,
-        consentedChargeAmount: amount,
+        consentedChargeAmount: amount + buyerServiceFeeAmount,
         consentCurrency: campaign.currency,
         holdStatus: "NOT_REQUESTED",
         idempotencyKey: `hold:${claimed.id}:0`, // attempt-0 sentinel, never sent to Stripe — createHold() overwrites this before the first real attempt

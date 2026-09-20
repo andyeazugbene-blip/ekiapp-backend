@@ -9,7 +9,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 vi.mock("../lib/prisma", () => ({
   prisma: {
-    communityCampaign: { findUnique: vi.fn(), findMany: vi.fn(), update: vi.fn(), updateMany: vi.fn() },
+    communityCampaign: { findUnique: vi.fn(), findMany: vi.fn(), create: vi.fn(), update: vi.fn(), updateMany: vi.fn() },
     campaignContribution: { findUnique: vi.fn(), findUniqueOrThrow: vi.fn() },
     campaignFulfilment: { findUnique: vi.fn(), findUniqueOrThrow: vi.fn(), updateMany: vi.fn() },
     supplierProfile: { findUnique: vi.fn() },
@@ -100,6 +100,56 @@ describe("AT-38: deliveryPreference=DELIVERY is rejected at campaign creation/up
     m.communityCampaign.update.mockResolvedValue({ id: "camp-1", deliveryPreference: "DELIVERY" } as never);
     const result = await communityCampaignsService.update("u1", "camp-1", { deliveryPreference: "DELIVERY" });
     expect(result.deliveryPreference).toBe("DELIVERY");
+  });
+});
+
+// commit()/AUTHORISE_THEN_CAPTURE (campaign-authorisation.service.ts) never
+// accepts a deliveryAddress and never adds deliveryFeeAmountMinor into
+// consentedChargeAmount — paymentMode and individual-delivery are two
+// independently-toggled gates, so nothing else stops both being on for the
+// same campaign without this explicit cross-check.
+describe("DELIVERY is rejected for an AUTHORISE_THEN_CAPTURE campaign, even with the individual-delivery flag on", () => {
+  it("create() rejects DELIVERY when the resolved market payment mode is AUTHORISE_THEN_CAPTURE", async () => {
+    process.env.COMMUNITY_BUY_INDIVIDUAL_DELIVERY_ENABLED = "true";
+    m.organiserProfile.findUnique.mockResolvedValue({ id: "org-1", userId: "u1", isVerified: true, isRestricted: false } as never);
+    m.marketConfiguration.findUnique.mockResolvedValue({ countryCode: "GB", communityBuyEnabled: true, communityBuyPaymentMode: "AUTHORISE_THEN_CAPTURE" } as never);
+    await expect(
+      communityCampaignsService.create("u1", { title: "Rice", country: "GB", deliveryPreference: "DELIVERY" }),
+    ).rejects.toMatchObject({ statusCode: 400, code: "INDIVIDUAL_DELIVERY_NOT_AVAILABLE" });
+  });
+
+  it("create() still accepts DELIVERY for a PLEDGE_THEN_CHARGE market with the flag on", async () => {
+    process.env.COMMUNITY_BUY_INDIVIDUAL_DELIVERY_ENABLED = "true";
+    m.organiserProfile.findUnique.mockResolvedValue({ id: "org-1", userId: "u1", isVerified: true, isRestricted: false } as never);
+    m.marketConfiguration.findUnique.mockResolvedValue({ countryCode: "GB", communityBuyEnabled: true, communityBuyPaymentMode: null } as never);
+    m.communityCampaign.create.mockResolvedValue({ id: "camp-new", deliveryPreference: "DELIVERY" } as never);
+    const result = await communityCampaignsService.create("u1", { title: "Rice", country: "GB", deliveryPreference: "DELIVERY" });
+    expect(result.deliveryPreference).toBe("DELIVERY");
+  });
+
+  it("update() rejects DELIVERY when the campaign's own (immutable, already-snapshotted) paymentMode is AUTHORISE_THEN_CAPTURE", async () => {
+    process.env.COMMUNITY_BUY_INDIVIDUAL_DELIVERY_ENABLED = "true";
+    m.communityCampaign.findUnique.mockResolvedValue({ id: "camp-1", organiserId: "org-1", status: "DRAFT", termsLockedAt: null, supplierId: null, paymentMode: "AUTHORISE_THEN_CAPTURE", deliveryPreference: "COLLECTION" } as never);
+    m.organiserProfile.findUnique.mockResolvedValue({ id: "org-1", userId: "u1" } as never);
+    await expect(
+      communityCampaignsService.update("u1", "camp-1", { deliveryPreference: "DELIVERY" }),
+    ).rejects.toMatchObject({ statusCode: 400, code: "INDIVIDUAL_DELIVERY_NOT_AVAILABLE" });
+    expect(m.communityCampaign.update).not.toHaveBeenCalled();
+  });
+
+  it("update() with no deliveryPreference change still rejects an AUTHORISE_THEN_CAPTURE campaign already (somehow) marked DELIVERY", async () => {
+    process.env.COMMUNITY_BUY_INDIVIDUAL_DELIVERY_ENABLED = "true";
+    m.communityCampaign.findUnique.mockResolvedValue({ id: "camp-1", organiserId: "org-1", status: "DRAFT", termsLockedAt: null, supplierId: null, paymentMode: "AUTHORISE_THEN_CAPTURE", deliveryPreference: "DELIVERY" } as never);
+    m.organiserProfile.findUnique.mockResolvedValue({ id: "org-1", userId: "u1" } as never);
+    await expect(communityCampaignsService.update("u1", "camp-1", { title: "New title" })).rejects.toMatchObject({ statusCode: 400, code: "INDIVIDUAL_DELIVERY_NOT_AVAILABLE" });
+  });
+
+  it("COLLECTION is always accepted for an AUTHORISE_THEN_CAPTURE campaign — only DELIVERY is refused", async () => {
+    process.env.COMMUNITY_BUY_INDIVIDUAL_DELIVERY_ENABLED = "true";
+    m.communityCampaign.findUnique.mockResolvedValue({ id: "camp-1", organiserId: "org-1", status: "DRAFT", termsLockedAt: null, supplierId: null, paymentMode: "AUTHORISE_THEN_CAPTURE", deliveryPreference: "COLLECTION" } as never);
+    m.organiserProfile.findUnique.mockResolvedValue({ id: "org-1", userId: "u1" } as never);
+    m.communityCampaign.update.mockResolvedValue({ id: "camp-1", title: "New title" } as never);
+    await expect(communityCampaignsService.update("u1", "camp-1", { title: "New title" })).resolves.toMatchObject({ title: "New title" });
   });
 });
 

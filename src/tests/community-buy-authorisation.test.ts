@@ -130,7 +130,10 @@ function makeAuthorisationStore(initial: Record<string, any>) {
 beforeEach(() => {
   vi.clearAllMocks();
   m.marketConfiguration.count.mockResolvedValue(1);
-  m.marketConfiguration.findUnique.mockResolvedValue({ countryCode: "GB", communityBuyEnabled: true, communityBuyPaymentsEnabled: true, communityBuyPaymentMode: "AUTHORISE_THEN_CAPTURE", communityBuyFeeBps: 500 } as any);
+  m.marketConfiguration.findUnique.mockResolvedValue({
+    countryCode: "GB", communityBuyEnabled: true, communityBuyPaymentsEnabled: true, communityBuyPaymentMode: "AUTHORISE_THEN_CAPTURE", communityBuyFeeBps: 500,
+    buyerServiceFeeBps: 500, buyerServiceFeeMinAmount: 120, buyerServiceFeeMaxAmount: 500,
+  } as any);
   // upsertParticipantWithAttribution() defaults — a fresh, non-organiser, non-reorder join.
   m.campaignParticipant.findUnique.mockResolvedValue(null as any);
   m.organiserProfile.findUnique.mockResolvedValue({ id: "org-1", userId: "organiser-user-1" } as any);
@@ -177,6 +180,36 @@ describe("commit() — spec §11.2 commitment phase (AT-04, AT-05)", () => {
     m.supplierAccount.findUnique.mockResolvedValue({ providerConnectedAccountId: null } as any);
     await expect(campaignAuthorisationService.commit("user-1", CAMPAIGN_ID, 1)).rejects.toMatchObject({ code: "SUPPLIER_NOT_PAYOUT_READY" });
     expect(s.setupIntents.create).not.toHaveBeenCalled();
+  });
+
+  // Regression: commit() used to compute `amount` only (quantity ×
+  // pricePerShareMinor) with no buyerServiceFeeAmount at all — unlike
+  // createPledge()'s identical PLEDGE_THEN_CHARGE calculation — so every
+  // AUTHORISE_THEN_CAPTURE contribution silently never charged or recorded
+  // a buyer service fee. consentedChargeAmount is what actually gets
+  // authorised/captured via Stripe (see createHold()/captureHold()), so
+  // this was a real, silent revenue gap, not just a missing DB field.
+  it("computes buyerServiceFeeAmount, stores it on the contribution, and folds it into consentedChargeAmount (the amount actually authorised/captured)", async () => {
+    m.communityCampaign.findUnique.mockResolvedValue(baseCampaign() as any);
+    m.supplierAccount.findUnique.mockResolvedValue({ providerConnectedAccountId: CONNECTED_ACCOUNT_ID } as any);
+    m.campaignParticipant.upsert.mockResolvedValue({ id: "participant-1" } as any);
+    const txContribution = { create: vi.fn().mockResolvedValue({ id: "contrib-1" }) };
+    m.$transaction.mockImplementationOnce(async (cb: any) =>
+      cb({
+        communityCampaign: { findUniqueOrThrow: vi.fn().mockResolvedValue(baseCampaign()), updateMany: vi.fn().mockResolvedValue({ count: 1 }), update: vi.fn() },
+        campaignContribution: txContribution,
+      }),
+    );
+    s.setupIntents.create.mockResolvedValue({ id: "seti_1", client_secret: "seti_1_secret_x" } as any);
+    m.communityBuyPaymentAuthorisation.create.mockResolvedValue(baseAuthorisation() as any);
+
+    // 2 shares × 1000 = 2000 subtotal; 500 bps (5%) = 100, within the
+    // 120-500 bound → clamped up to the 120 minimum.
+    await campaignAuthorisationService.commit("user-1", CAMPAIGN_ID, 2);
+
+    expect(txContribution.create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ amount: 2000, buyerServiceFeeAmount: 120 }) }));
+    const authCreateCall = m.communityBuyPaymentAuthorisation.create.mock.calls[0][0];
+    expect(authCreateCall.data.consentedChargeAmount).toBe(2120);
   });
 
   it("rejects a commit() call against a PLEDGE_THEN_CHARGE campaign — the two flows never cross", async () => {
@@ -586,5 +619,114 @@ describe("listExpiringHolds() — M8 admin queue visibility (Appendix A 'capture
     expect(m.communityBuyPaymentAuthorisation.findMany).toHaveBeenCalledWith(
       expect.objectContaining({ where: { holdStatus: "HOLD_EXPIRING", captureStatus: "NOT_CAPTURED" } }),
     );
+  });
+});
+
+describe("withdraw() — spec §16 \"POST /community-buys/:id/withdraw\" (withdraw before lock)", () => {
+  const CONTRIBUTION_ID = "contrib-withdraw-1";
+
+  function baseWithdrawContribution(overrides: Partial<any> = {}) {
+    return {
+      id: CONTRIBUTION_ID,
+      campaignId: CAMPAIGN_ID,
+      quantity: 2,
+      status: "PLEDGED",
+      participant: { userId: "user-1" },
+      paymentAuthorisation: baseAuthorisation({ holdStatus: "NOT_REQUESTED" }),
+      campaign: baseCampaign(),
+      ...overrides,
+    };
+  }
+
+  function mockTransaction(claimCount: 0 | 1) {
+    const tx = {
+      campaignContribution: { updateMany: vi.fn().mockResolvedValue({ count: claimCount }) },
+      communityCampaign: { update: vi.fn().mockResolvedValue({}) },
+      communityBuyPaymentAuthorisation: { update: vi.fn().mockResolvedValue({}) },
+    };
+    m.$transaction.mockImplementationOnce(async (cb: any) => cb(tx));
+    return tx;
+  }
+
+  it("withdraws a PLEDGED contribution before any hold exists, atomically releasing claimed capacity", async () => {
+    m.campaignContribution.findUnique.mockResolvedValue(baseWithdrawContribution() as any);
+    const tx = mockTransaction(1);
+    m.campaignContribution.findUniqueOrThrow.mockResolvedValue({ ...baseWithdrawContribution(), status: "CANCELLED" } as any);
+
+    const result = await campaignAuthorisationService.withdraw("user-1", CONTRIBUTION_ID);
+
+    expect(result.status).toBe("CANCELLED");
+    expect(tx.campaignContribution.updateMany).toHaveBeenCalledWith({ where: { id: CONTRIBUTION_ID, status: "PLEDGED" }, data: { status: "CANCELLED" } });
+    expect(tx.communityCampaign.update).toHaveBeenCalledWith({ where: { id: CAMPAIGN_ID }, data: { confirmedShares: { decrement: 2 } } });
+    expect(tx.communityBuyPaymentAuthorisation.update).toHaveBeenCalledWith({
+      where: { id: baseAuthorisation().id },
+      data: { holdStatus: "HOLD_RELEASED" },
+    });
+  });
+
+  it("withdraws cleanly when no paymentAuthorisation row exists yet (hold never created)", async () => {
+    m.campaignContribution.findUnique.mockResolvedValue(baseWithdrawContribution({ paymentAuthorisation: null }) as any);
+    const tx = mockTransaction(1);
+    m.campaignContribution.findUniqueOrThrow.mockResolvedValue({ ...baseWithdrawContribution({ paymentAuthorisation: null }), status: "CANCELLED" } as any);
+
+    await campaignAuthorisationService.withdraw("user-1", CONTRIBUTION_ID);
+
+    expect(tx.communityBuyPaymentAuthorisation.update).not.toHaveBeenCalled();
+    expect(tx.communityCampaign.update).toHaveBeenCalled();
+  });
+
+  it("rejects for a non-owning user without revealing the contribution exists (404, not 403)", async () => {
+    m.campaignContribution.findUnique.mockResolvedValue(baseWithdrawContribution({ participant: { userId: "someone-else" } }) as any);
+
+    await expect(campaignAuthorisationService.withdraw("user-1", CONTRIBUTION_ID)).rejects.toMatchObject({ statusCode: 404 });
+    expect(m.$transaction).not.toHaveBeenCalled();
+  });
+
+  it("rejects when the contribution does not exist (404)", async () => {
+    m.campaignContribution.findUnique.mockResolvedValue(null as any);
+
+    await expect(campaignAuthorisationService.withdraw("user-1", CONTRIBUTION_ID)).rejects.toMatchObject({ statusCode: 404 });
+    expect(m.$transaction).not.toHaveBeenCalled();
+  });
+
+  it("rejects a PLEDGE_THEN_CHARGE campaign's contribution — this withdrawal path is AUTHORISE_THEN_CAPTURE-only", async () => {
+    m.campaignContribution.findUnique.mockResolvedValue(
+      baseWithdrawContribution({ campaign: baseCampaign({ paymentMode: "PLEDGE_THEN_CHARGE" }) }) as any,
+    );
+
+    await expect(campaignAuthorisationService.withdraw("user-1", CONTRIBUTION_ID)).rejects.toMatchObject({ statusCode: 409 });
+    expect(m.$transaction).not.toHaveBeenCalled();
+  });
+
+  it("rejects an already-withdrawn (CANCELLED) contribution — duplicate withdraw request", async () => {
+    m.campaignContribution.findUnique.mockResolvedValue(baseWithdrawContribution({ status: "CANCELLED" }) as any);
+
+    await expect(campaignAuthorisationService.withdraw("user-1", CONTRIBUTION_ID)).rejects.toMatchObject({ statusCode: 409 });
+    expect(m.$transaction).not.toHaveBeenCalled();
+  });
+
+  it("rejects a PAID contribution — already captured, no longer withdrawable", async () => {
+    m.campaignContribution.findUnique.mockResolvedValue(baseWithdrawContribution({ status: "PAID" }) as any);
+
+    await expect(campaignAuthorisationService.withdraw("user-1", CONTRIBUTION_ID)).rejects.toMatchObject({ statusCode: 409 });
+    expect(m.$transaction).not.toHaveBeenCalled();
+  });
+
+  it("rejects once a hold has been requested — must be released via cancelHold(), never plainly withdrawn", async () => {
+    m.campaignContribution.findUnique.mockResolvedValue(
+      baseWithdrawContribution({ paymentAuthorisation: baseAuthorisation({ holdStatus: "HOLD_REQUESTED" }) }) as any,
+    );
+
+    await expect(campaignAuthorisationService.withdraw("user-1", CONTRIBUTION_ID)).rejects.toMatchObject({ statusCode: 409 });
+    expect(m.$transaction).not.toHaveBeenCalled();
+  });
+
+  it("concurrent withdraw requests — the loser's atomic claim fails cleanly, no double capacity release", async () => {
+    m.campaignContribution.findUnique.mockResolvedValue(baseWithdrawContribution() as any);
+    const tx = mockTransaction(0); // another request already won the PLEDGED->CANCELLED claim
+
+    await expect(campaignAuthorisationService.withdraw("user-1", CONTRIBUTION_ID)).rejects.toMatchObject({ statusCode: 409 });
+    expect(tx.communityCampaign.update).not.toHaveBeenCalled();
+    expect(tx.communityBuyPaymentAuthorisation.update).not.toHaveBeenCalled();
   });
 });

@@ -295,6 +295,29 @@ function validateDeliveryPreference(deliveryPreference: string | undefined): voi
   }
 }
 
+/**
+ * campaign-authorisation.service.ts's commit()/AUTHORISE_THEN_CAPTURE flow
+ * was built with no knowledge of delivery at all: it never accepts a
+ * deliveryAddress, never validates deliveryCoverageAreas, and never adds
+ * deliveryFeeAmountMinor into consentedChargeAmount the way createPledge()
+ * does for PLEDGE_THEN_CHARGE. paymentMode and individual-delivery are two
+ * independently-toggled gates (per-market payment mode vs a global env
+ * var), so nothing else stops both being on for the same campaign — this
+ * is the one place that combination is refused outright, the same
+ * fail-closed shape as validateDeliveryPreference above, rather than
+ * silently under-charging a real buyer or leaving their order address-less.
+ */
+function validateDeliveryPaymentModeCompatibility(paymentMode: string, deliveryPreference: string): void {
+  if (paymentMode === "AUTHORISE_THEN_CAPTURE" && deliveryPreference === "DELIVERY") {
+    throw new AppError(
+      "Individual delivery is not yet supported for this market's payment mode — use collection point.",
+      400,
+      undefined,
+      "INDIVIDUAL_DELIVERY_NOT_AVAILABLE",
+    );
+  }
+}
+
 // Phase 6 (delivery + collection/tracking) — real, organiser-set delivery
 // charge. Format only; submit()'s "missing" gate requires it once
 // deliveryPreference is DELIVERY, same two-stage pattern as the collection
@@ -453,6 +476,7 @@ export const communityCampaignsService = {
     // M2 — snapshotted once, here, never re-read afterward (see
     // CommunityCampaign.paymentMode's own doc comment).
     const paymentMode = await marketConfigurationService.resolveNewCampaignPaymentMode(input.country);
+    validateDeliveryPaymentModeCompatibility(paymentMode, input.deliveryPreference ?? "COLLECTION");
 
     const campaign = await prisma.communityCampaign.create({
       data: {
@@ -561,6 +585,7 @@ export const communityCampaignsService = {
     validatePerBuyerLimits(input, input.maximumShares ?? campaign.maximumShares ?? undefined);
     validateQuantityPerOrder(input.quantityPerOrder);
     validateDeliveryPreference(input.deliveryPreference);
+    validateDeliveryPaymentModeCompatibility(campaign.paymentMode, input.deliveryPreference ?? campaign.deliveryPreference);
     validateCollectionAddressFields(input);
     validateDeliveryFeeAmount(input.deliveryFeeAmountMinor);
     const deliveryCoverageAreas = validateAndNormalizeCoverageAreas(input.deliveryCoverageAreas);
@@ -891,11 +916,22 @@ export const communityCampaignsService = {
     }
 
     if (campaign.fulfilmentOwner === "SUPPLIER") {
-      if (!campaign.supplierId) {
-        missing.push("supplierId");
-      } else {
+      // Workstream 3: a campaign assigned through the no-Vendor-required
+      // SupplierAccount path has supplierId === null by design (only
+      // supplierAccountId is set — see CreateCampaignInput's own doc
+      // comment). Checking supplierId alone here meant every such campaign
+      // failed this gate permanently with "missing: supplierId", even
+      // though a real, approved supplier was assigned — submit() never
+      // knew the new field existed. Same dual-path check as
+      // confirmSupplierCommitment (legacy) vs confirmSupplierCommitmentForAccount (new).
+      if (campaign.supplierId) {
         const supplier = await prisma.supplierProfile.findUnique({ where: { id: campaign.supplierId } });
         if (!supplier || !supplier.isVerified || supplier.isRestricted) missing.push("supplier_eligibility");
+      } else if (campaign.supplierAccountId) {
+        const account = await prisma.supplierAccount.findUnique({ where: { id: campaign.supplierAccountId } });
+        if (!account || account.supplierState !== "APPROVED") missing.push("supplier_eligibility");
+      } else {
+        missing.push("supplierId");
       }
     }
 
