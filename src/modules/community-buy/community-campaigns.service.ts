@@ -1547,9 +1547,15 @@ export const communityCampaignsService = {
   },
 
   // Community Buy Workstream 2 — participant discovery search (spec Phase
-  // 4). Real DB query against title/description; no invented category
-  // field (none exists on the model, and Figma access is still blocked so
-  // the exact taxonomy the client wants isn't confirmed).
+  // 4), extended per the Figma "Search yam, garri, location" reference: a
+  // single combined field must match product/title text AND a real
+  // location (the organiser's own collection city), not just title/
+  // description — no invented category field (none exists on the model).
+  // `country` stays a real, separate param for internal/business-rule
+  // scoping (e.g. Buyer Home's own-country preview) — it is deliberately
+  // no longer exposed as a user-facing browse-by-country control on the
+  // Discover screen itself (client correction: country must not be a
+  // clickable browse category).
   async listLive(country?: string, q?: string) {
     const search = q?.trim();
     const campaigns = await prisma.communityCampaign.findMany({
@@ -1560,6 +1566,7 @@ export const communityCampaignsService = {
           OR: [
             { title: { contains: search, mode: "insensitive" } },
             { description: { contains: search, mode: "insensitive" } },
+            { collectionCity: { contains: search, mode: "insensitive" } },
           ],
         }),
       },

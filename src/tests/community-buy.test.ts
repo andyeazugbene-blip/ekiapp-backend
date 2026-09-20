@@ -2642,6 +2642,25 @@ describe("Client correction — supplier is optional, never a publication gate",
     expect(m.communityCampaign.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: { status: "LIVE", country: "GB" } }));
   });
 
+  // 8b. Figma "Search yam, garri, location" — a single search box must also match a real location (collection city), not just title/description.
+  it("8b. listLive() search matches collectionCity in addition to title/description — client correction: no separate country-click browsing", async () => {
+    m.communityCampaign.findMany.mockResolvedValue([{ id: "camp-8b", status: "LIVE", collectionCity: "Coventry", organiser: { firstNameOnlyDisplay: true, user: { name: "Organiser Eight" } } }] as never);
+
+    const live = await communityCampaignsService.listLive(undefined, "coventry");
+
+    expect(live).toHaveLength(1);
+    expect(m.communityCampaign.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: {
+        status: "LIVE",
+        OR: [
+          { title: { contains: "coventry", mode: "insensitive" } },
+          { description: { contains: "coventry", mode: "insensitive" } },
+          { collectionCity: { contains: "coventry", mode: "insensitive" } },
+        ],
+      },
+    }));
+  });
+
   // 9. unauthorized supplier assignment still rejected (unverified supplier at create time)
   it("9. create() with fulfilmentOwner SUPPLIER still rejects an unverified supplier", async () => {
     m.organiserProfile.findUnique.mockResolvedValue({ id: "org-1", isVerified: true, isRestricted: false } as never);
