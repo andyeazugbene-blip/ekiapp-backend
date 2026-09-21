@@ -8,14 +8,25 @@ import { isIndividualDeliveryEnabled } from "./community-buy-privacy.service";
  * Every market approved for the current launch scope (client mandate
  * 2026-09, section 5: "GB, US, CA and the approved European markets such
  * as France, Spain, Portugal, Switzerland, Belgium, Italy and Croatia" —
- * explicit, not silently added or removed). All flags default OFF — see
- * the schema-level note on MarketConfiguration. Turning any of these on
- * for a given country is a deliberate admin action, gated on the legal/
- * payment-provider review the client's spec requires (§8.4), not
- * something this codebase decides. Africa is deliberately absent: the
- * client requires it built-but-not-launched, and this list controls
- * exactly what a fresh/QA database seeds — omission here, not a code
- * gate, is what keeps Africa unavailable (see market-controls admin UI).
+ * explicit, not silently added or removed). Africa is deliberately absent:
+ * the client requires it built-but-not-launched, and this list controls
+ * exactly what a fresh/QA database seeds — omission here, not a code gate,
+ * is what keeps Africa unavailable (see market-controls admin UI).
+ *
+ * Client decision (2026-09-22, "FINAL CLIENT DECISIONS — APPLY NOW"):
+ * Community Buy is now approved to launch in exactly these ten markets —
+ * communityBuyEnabled/organiserApplicationsEnabled/
+ * supplierApplicationsEnabled/communityBuyPaymentsEnabled all default true
+ * for a market in this list. communityBuyPaymentMode is pinned to
+ * PLEDGE_THEN_CHARGE, the only client-approved mode. paymentProvider/
+ * paymentMode/identityProvider reflect production reality (Stripe live,
+ * stripeIdentityService is the one real verification provider) — see
+ * migrations/20260921230255_community_buy_launch_markets_enable for the
+ * matching data migration that brings an already-existing (pre-decision)
+ * database to this same state. regularDeliveriesEnabled (the ordinary,
+ * non-Community-Buy marketplace's own flag) is untouched by this decision
+ * — it was scoped to Community Buy launch availability only — and keeps
+ * its column default (false) here exactly as before.
  */
 const INITIAL_MARKETS: { countryCode: string; currency: string }[] = [
   { countryCode: "GB", currency: "GBP" },
@@ -30,11 +41,22 @@ const INITIAL_MARKETS: { countryCode: string; currency: string }[] = [
   { countryCode: "HR", currency: "EUR" },
 ];
 
+const APPROVED_LAUNCH_MARKET_DEFAULTS = {
+  communityBuyEnabled: true,
+  organiserApplicationsEnabled: true,
+  supplierApplicationsEnabled: true,
+  communityBuyPaymentsEnabled: true,
+  communityBuyPaymentMode: "PLEDGE_THEN_CHARGE" as const,
+  paymentProvider: "stripe",
+  paymentMode: "LIVE" as const,
+  identityProvider: "stripe_identity",
+};
+
 async function ensure(countryCode: string, currency: string) {
   await prisma.marketConfiguration.upsert({
     where: { countryCode },
     update: {},
-    create: { countryCode, currency },
+    create: { countryCode, currency, ...APPROVED_LAUNCH_MARKET_DEFAULTS },
   });
 }
 
