@@ -543,6 +543,17 @@ export async function getSupplierManifest(request: Request, response: Response):
   response.json({ manifest });
 }
 
+/** Figma S25 — real home-delivery address/phone/instructions, only ever returned when this supplier is genuinely the responsible party (see buildFulfilmentDeliveries()'s own 403 otherwise). */
+export async function getSupplierFulfilmentDeliveries(request: Request, response: Response): Promise<void> {
+  const userId = requireUserId(request);
+  const acting = await resolveActingSupplier(userId);
+  const campaignId = requireIdParam(request);
+  const deliveries = acting.kind === "vendor"
+    ? await communityBuyManifestService.getFulfilmentDeliveriesForVendor(acting.vendorId, campaignId, userId)
+    : await communityBuyManifestService.getFulfilmentDeliveriesForAccount(acting.userId, campaignId);
+  response.json({ deliveries });
+}
+
 export async function sendSupplierContactMessage(request: Request, response: Response): Promise<void> {
   const userId = requireUserId(request);
   const acting = await resolveActingSupplier(userId);
@@ -696,6 +707,24 @@ export async function getMyCampaignPayout(request: Request, response: Response):
         return campaignPayoutService.getMyPayout({ supplierAccountId: account.id }, campaignId);
       })();
   response.json({ payout });
+}
+
+/** Figma S17/S18/S22 — real AUTHORISE_THEN_CAPTURE progress counts, same dual-path dispatch as every other supplier-facing read above. */
+export async function getMyPaymentProgress(request: Request, response: Response): Promise<void> {
+  const acting = await resolveActingSupplier(requireUserId(request));
+  const campaignId = requireIdParam(request);
+  const progress = acting.kind === "vendor"
+    ? await (async () => {
+        const supplier = await prisma.supplierProfile.findUnique({ where: { vendorId: acting.vendorId }, select: { id: true } });
+        if (!supplier) throw new AppError("Campaign not found", 404);
+        return campaignPayoutService.getMyPaymentProgress({ supplierId: supplier.id }, campaignId);
+      })()
+    : await (async () => {
+        const account = await prisma.supplierAccount.findUnique({ where: { userId: acting.userId }, select: { id: true } });
+        if (!account) throw new AppError("Campaign not found", 404);
+        return campaignPayoutService.getMyPaymentProgress({ supplierAccountId: account.id }, campaignId);
+      })();
+  response.json({ progress });
 }
 
 export async function confirmFulfilmentInventory(request: Request, response: Response): Promise<void> {

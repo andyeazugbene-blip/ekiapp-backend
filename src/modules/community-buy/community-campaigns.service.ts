@@ -64,6 +64,9 @@ export interface CreateCampaignInput {
   // Phase 6 (delivery + collection/tracking) — see
   // CommunityCampaign.deliveryFeeAmountMinor's own doc comment.
   deliveryFeeAmountMinor?: number;
+  // Figma S35 "Delivery Arrangement" — see
+  // CommunityCampaign.deliveryResponsibility's own doc comment.
+  deliveryResponsibility?: "ORGANISER" | "SUPPLIER" | "SHARED";
   // M2 — AUTHORISE_THEN_CAPTURE-mode scheduling (spec §7 step 4, §11.3).
   // Ignored/unused for a campaign whose snapshotted paymentMode ends up
   // PLEDGE_THEN_CHARGE. Not yet surfaced in the mobile organiser wizard
@@ -328,6 +331,15 @@ function validateDeliveryFeeAmount(deliveryFeeAmountMinor: number | undefined): 
   }
 }
 
+// Figma S35 — SUPPLIER/SHARED name an actual supplier as (partly)
+// responsible for delivery; that's meaningless for a SELF-fulfilled
+// campaign, which has no supplier at all to be responsible.
+function validateDeliveryResponsibility(fulfilmentOwner: "SELF" | "SUPPLIER", deliveryResponsibility: string | undefined): void {
+  if (deliveryResponsibility && deliveryResponsibility !== "ORGANISER" && fulfilmentOwner === "SELF") {
+    throw new AppError("Delivery responsibility can only be given to a supplier when this campaign has one", 400);
+  }
+}
+
 // Phase 3 (address + privacy foundation) — the organiser's public
 // collection-point address and/or delivery coverage areas. Format/presence
 // only; submit()'s "missing" gate is what actually requires these before a
@@ -468,6 +480,7 @@ export const communityCampaignsService = {
     validateDeliveryPreference(input.deliveryPreference);
     validateCollectionAddressFields(input);
     validateDeliveryFeeAmount(input.deliveryFeeAmountMinor);
+    validateDeliveryResponsibility(route?.fulfilmentOwner ?? "SELF", input.deliveryResponsibility);
     const deliveryCoverageAreas = validateAndNormalizeCoverageAreas(input.deliveryCoverageAreas);
     const deadline = validateDeadline(input.deadline);
     const authorisationSchedule = validateAuthorisationSchedule(input.holdWindowStartsAt, input.decisionDeadline, deadline);
@@ -507,6 +520,7 @@ export const communityCampaignsService = {
         quantityPerOrder: input.quantityPerOrder,
         qualityNotes: input.qualityNotes,
         deliveryPreference: input.deliveryPreference ?? "COLLECTION",
+        deliveryResponsibility: input.deliveryResponsibility ?? "ORGANISER",
         collectionAddressLine1: input.collectionAddressLine1,
         collectionAddressLine2: input.collectionAddressLine2,
         collectionCity: input.collectionCity,
@@ -588,6 +602,7 @@ export const communityCampaignsService = {
     validateDeliveryPaymentModeCompatibility(campaign.paymentMode, input.deliveryPreference ?? campaign.deliveryPreference);
     validateCollectionAddressFields(input);
     validateDeliveryFeeAmount(input.deliveryFeeAmountMinor);
+    validateDeliveryResponsibility(route?.fulfilmentOwner ?? campaign.fulfilmentOwner, input.deliveryResponsibility);
     const deliveryCoverageAreas = validateAndNormalizeCoverageAreas(input.deliveryCoverageAreas);
     const deadline = validateDeadline(input.deadline);
     const authorisationSchedule = validateAuthorisationSchedule(input.holdWindowStartsAt, input.decisionDeadline, deadline ?? campaign.deadline ?? undefined);
@@ -616,6 +631,7 @@ export const communityCampaignsService = {
         ...(input.collectionPostcode !== undefined && { collectionPostcode: input.collectionPostcode }),
         ...(deliveryCoverageAreas !== undefined && { deliveryCoverageAreas }),
         ...(input.deliveryFeeAmountMinor !== undefined && { deliveryFeeAmountMinor: input.deliveryFeeAmountMinor }),
+        ...(input.deliveryResponsibility !== undefined && { deliveryResponsibility: input.deliveryResponsibility }),
         ...(deadline !== undefined && { deadline }),
         ...(scheduledOpenAt !== undefined && { scheduledOpenAt }),
         ...(authorisationSchedule.holdWindowStartsAt !== undefined && { holdWindowStartsAt: authorisationSchedule.holdWindowStartsAt }),
@@ -969,8 +985,11 @@ export const communityCampaignsService = {
           select: {
             quantity: true, amount: true, isOrganiserTopUp: true, createdAt: true,
             // Phase 3 — only ever read here (the owning organiser's own
-            // participant list), never in the supplier-facing manifest.
-            deliveryRecipientName: true, deliveryAddressLine1: true, deliveryAddressLine2: true, deliveryCity: true, deliveryPostcode: true,
+            // participant list) and in getFulfilmentDeliveriesForVendor/
+            // Account() (community-buy-manifest.service.ts) when the
+            // supplier is the responsible party — never in the plain
+            // supplier-facing manifest.
+            deliveryRecipientName: true, deliveryAddressLine1: true, deliveryAddressLine2: true, deliveryCity: true, deliveryPostcode: true, deliveryPhone: true, deliveryInstructions: true,
           },
         },
       },
@@ -978,14 +997,15 @@ export const communityCampaignsService = {
     });
     const isSelfSupply = campaign.fulfilmentOwner === "SELF";
     // Phase 3 (address + privacy foundation) — a buyer's delivery address
-    // is only ever meaningful for a DELIVERY campaign, and is shown to its
-    // owning organiser regardless of fulfilmentOwner: unlike name/email
-    // (a relationship/contact-export concern, gated by isSelfSupply above,
-    // unchanged), the organiser is the one who configured delivery coverage
-    // and is responsible for goods actually reaching participants either
-    // way. Never exposed to a supplier — see community-buy-manifest.
-    // service.ts's own "no raw home addresses" doc comment.
-    const showAddress = campaign.deliveryPreference === "DELIVERY";
+    // is only ever meaningful for a DELIVERY campaign. Figma S35 correction:
+    // the organiser sees it unless deliveryResponsibility names the
+    // supplier as EXCLUSIVELY responsible — SHARED still shows it here too,
+    // since "shared" means both parties may need it, not neither. Never
+    // exposed to the plain supplier manifest regardless — see
+    // community-buy-manifest.service.ts's own "no raw home addresses"
+    // doc comment; the SUPPLIER/SHARED case is served by that same file's
+    // separate getFulfilmentDeliveriesForVendor/Account(), never by this one.
+    const showAddress = campaign.deliveryPreference === "DELIVERY" && campaign.deliveryResponsibility !== "SUPPLIER";
     if (showAddress && participants.length > 0) {
       await recordDataAccess({
         campaignId,
@@ -1013,6 +1033,8 @@ export const communityCampaignsService = {
                 addressLine2: latestPaid.deliveryAddressLine2,
                 city: latestPaid.deliveryCity,
                 postcode: latestPaid.deliveryPostcode,
+                phone: latestPaid.deliveryPhone,
+                instructions: latestPaid.deliveryInstructions,
               },
             }
           : {}),

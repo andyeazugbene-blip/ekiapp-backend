@@ -16,7 +16,7 @@ vi.mock("../lib/prisma", () => ({
     communityBuyPayout: { findMany: vi.fn(), findUnique: vi.fn(), findUniqueOrThrow: vi.fn(), findFirst: vi.fn(), update: vi.fn(), updateMany: vi.fn() },
     supplierAccount: { findUnique: vi.fn() },
     campaignFulfilment: { findUnique: vi.fn() },
-    communityBuyPaymentAuthorisation: { count: vi.fn() },
+    communityBuyPaymentAuthorisation: { count: vi.fn(), findMany: vi.fn() },
     communityCampaign: { findUnique: vi.fn() },
     auditLog: { create: vi.fn() },
   },
@@ -598,5 +598,63 @@ describe("M8 — supplier notifications (spec Appendix B: payout_held/ready/init
     const result = await campaignPayoutService.markReversed(CAMPAIGN_ID, "payout_status_mismatch");
     expect(result.status).toBe("REVERSED"); // already reversed by the winner — read-back reflects it
     expect(n.enqueue).not.toHaveBeenCalled();
+  });
+});
+
+// Figma S17/S18/S22 — every label here must map to a real
+// CommunityBuyPaymentAuthorisation enum value, never an invented count.
+describe("getMyPaymentProgress — real AUTHORISE_THEN_CAPTURE supplier progress counts", () => {
+  it("404s when the campaign doesn't belong to this supplier", async () => {
+    const { campaignPayoutService } = await import("../modules/community-buy/campaign-payout.service");
+    m.communityCampaign.findUnique.mockResolvedValue({ id: CAMPAIGN_ID, supplierAccountId: "some-other-account", paymentMode: "AUTHORISE_THEN_CAPTURE" } as any);
+    await expect(campaignPayoutService.getMyPaymentProgress({ supplierAccountId: "acct-1" }, CAMPAIGN_ID)).rejects.toMatchObject({ statusCode: 404 });
+  });
+
+  it("refuses for a PLEDGE_THEN_CHARGE campaign — never invents authorise/capture states for a mode that doesn't have them", async () => {
+    const { campaignPayoutService } = await import("../modules/community-buy/campaign-payout.service");
+    m.communityCampaign.findUnique.mockResolvedValue({ id: CAMPAIGN_ID, supplierAccountId: "acct-1", paymentMode: "PLEDGE_THEN_CHARGE" } as any);
+    await expect(campaignPayoutService.getMyPaymentProgress({ supplierAccountId: "acct-1" }, CAMPAIGN_ID)).rejects.toMatchObject({ code: "NOT_AUTHORISE_THEN_CAPTURE_MODE" });
+  });
+
+  it("aggregates real per-buyer authorisation rows into committed/confirmed/action-required/declined/captured counts", async () => {
+    const { campaignPayoutService } = await import("../modules/community-buy/campaign-payout.service");
+    m.communityCampaign.findUnique.mockResolvedValue({ id: CAMPAIGN_ID, supplierAccountId: "acct-1", paymentMode: "AUTHORISE_THEN_CAPTURE", currency: "GBP" } as any);
+    m.communityBuyPaymentAuthorisation.findMany.mockResolvedValue([
+      { holdStatus: "HOLD_SUCCEEDED", captureStatus: "CAPTURED", retryCount: 0 },
+      { holdStatus: "HOLD_SUCCEEDED", captureStatus: "CAPTURE_PENDING", retryCount: 0 },
+      { holdStatus: "REQUIRES_ACTION", captureStatus: "NOT_CAPTURED", retryCount: 0 },
+      { holdStatus: "HOLD_DECLINED", captureStatus: "NOT_CAPTURED", retryCount: 0 },
+      { holdStatus: "HOLD_SUCCEEDED", captureStatus: "CAPTURE_FAILED", retryCount: 2 },
+    ] as any);
+    m.communityBuyPayout.findUnique.mockResolvedValue(null as any);
+
+    const result = await campaignPayoutService.getMyPaymentProgress({ supplierAccountId: "acct-1" }, CAMPAIGN_ID);
+
+    expect(result).toEqual({
+      committed: 5,
+      paymentMethodsConfirmed: 3,
+      actionRequired: 1,
+      declined: 1,
+      captured: 1,
+      captureFailedRetrying: 1,
+      readyForFulfilment: 1,
+      releaseStatus: "PENDING_CAMPAIGN_OUTCOME",
+      supplierPayableAmount: 0,
+      netPayoutAmount: 0,
+      currency: "GBP",
+    });
+  });
+
+  it("reports the real CommunityBuyPayout status/amounts once a payout row exists", async () => {
+    const { campaignPayoutService } = await import("../modules/community-buy/campaign-payout.service");
+    m.communityCampaign.findUnique.mockResolvedValue({ id: CAMPAIGN_ID, supplierId: "supplier-1", paymentMode: "AUTHORISE_THEN_CAPTURE", currency: "GBP" } as any);
+    m.communityBuyPaymentAuthorisation.findMany.mockResolvedValue([{ holdStatus: "HOLD_SUCCEEDED", captureStatus: "CAPTURED", retryCount: 0 }] as any);
+    m.communityBuyPayout.findUnique.mockResolvedValue({ status: "HELD", supplierPayableAmount: 4200, netPayoutAmount: 4200, currency: "GBP" } as any);
+
+    const result = await campaignPayoutService.getMyPaymentProgress({ supplierId: "supplier-1" }, CAMPAIGN_ID);
+
+    expect(result.releaseStatus).toBe("HELD");
+    expect(result.supplierPayableAmount).toBe(4200);
+    expect(result.netPayoutAmount).toBe(4200);
   });
 });

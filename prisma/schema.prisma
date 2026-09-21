@@ -2161,6 +2161,15 @@ enum CampaignDeliveryPreference {
   DELIVERY
 }
 
+// Figma S35 — who is responsible for actually getting a DELIVERY campaign's
+// orders to buyers, and therefore who is allowed to read a buyer's delivery
+// address/phone/instructions (see CommunityCampaign.deliveryResponsibility).
+enum CampaignDeliveryResponsibility {
+  ORGANISER
+  SUPPLIER
+  SHARED
+}
+
 enum CampaignStatus {
   DRAFT
   UNDER_REVIEW
@@ -2541,6 +2550,15 @@ model CommunityCampaign {
   // already-pledged participant's amount); locked once termsLockedAt is
   // set, same as every other financial field.
   deliveryFeeAmountMinor    Int?
+  // Figma S35 "Delivery Arrangement" — who is actually responsible for
+  // getting a DELIVERY-preference campaign's orders to buyers. Only
+  // meaningful when deliveryPreference is DELIVERY; irrelevant for
+  // COLLECTION (buyers collect themselves either way). Defaults to
+  // ORGANISER — the pre-existing behavior (listParticipantsForOrganiser()
+  // has always been the organiser-only address read; this field makes that
+  // implicit default explicit and, for the first time, gives SUPPLIER/
+  // SHARED a real server-enforced meaning instead of no meaning at all).
+  deliveryResponsibility    CampaignDeliveryResponsibility     @default(ORGANISER)
   // Phase 2 (organiser controls) — optional scheduled opening. Null means
   // publish() opens the campaign immediately (today's behavior, unchanged).
   // When set, publish() records publishedAt but leaves status APPROVED;
@@ -2986,6 +3004,12 @@ model CampaignContribution {
   deliveryAddressLine2  String?
   deliveryCity          String?
   deliveryPostcode      String?
+  // Figma S25 "Prepare Home Deliveries" — same privacy rule and same
+  // pledge-time-only collection as the address fields above; phone/
+  // instructions were never captured at all until now (Figma's read view
+  // has always needed them, the buyer-side form just never asked).
+  deliveryPhone         String?
+  deliveryInstructions  String?
   campaign              CommunityCampaign                 @relation(fields: [campaignId], references: [id], onDelete: Restrict)
   participant           CampaignParticipant               @relation(fields: [participantId], references: [id], onDelete: Restrict)
   paymentMethod         BuyerPaymentMethod?               @relation(fields: [paymentMethodId], references: [id], onDelete: SetNull)

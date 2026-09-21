@@ -149,6 +149,10 @@ interface DeliveryAddressInput {
   addressLine2?: string;
   city?: string;
   postcode?: string;
+  // Figma S25 "Prepare Home Deliveries" — optional; required is still just
+  // recipientName/addressLine1/city/postcode below, unchanged.
+  phone?: string;
+  instructions?: string;
 }
 
 // Coarse prefix match against the organiser's configured coverage areas
@@ -240,6 +244,8 @@ async function createPledge(
           deliveryAddressLine2: deliveryAddress.addressLine2,
           deliveryCity: deliveryAddress.city,
           deliveryPostcode: deliveryAddress.postcode,
+          deliveryPhone: deliveryAddress.phone,
+          deliveryInstructions: deliveryAddress.instructions,
         }),
       },
     });

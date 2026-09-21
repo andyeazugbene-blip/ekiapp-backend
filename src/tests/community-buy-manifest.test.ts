@@ -213,3 +213,64 @@ describe("AT-44: self-supply must not expose full participant identity through t
     expect(manifest[0].deliveryStatus).toBe("NOT_REQUIRED");
   });
 });
+
+// Figma S25 "Prepare Home Deliveries" — the one supplier-facing read that
+// DOES carry a real address/phone/instructions, gated on the real,
+// persisted CommunityCampaign.deliveryResponsibility.
+describe("getFulfilmentDeliveriesForAccount() — S25 real home-delivery details", () => {
+  it("403s when deliveryResponsibility is ORGANISER (the default) — this supplier is not responsible", async () => {
+    m.supplierAccount.findUnique.mockResolvedValue({ id: "acct-1", supplierState: "APPROVED", controlScope: null } as never);
+    m.communityCampaign.findUnique.mockResolvedValue({ id: "camp-1", supplierAccountId: "acct-1", deliveryPreference: "DELIVERY", deliveryResponsibility: "ORGANISER" } as never);
+
+    await expect(communityBuyManifestService.getFulfilmentDeliveriesForAccount("user-1", "camp-1")).rejects.toMatchObject({ statusCode: 403, code: "NOT_RESPONSIBLE_FOR_DELIVERY" });
+    expect(m.campaignContribution.findMany).not.toHaveBeenCalled();
+  });
+
+  it("403s for a COLLECTION campaign regardless of deliveryResponsibility — nothing to deliver", async () => {
+    m.supplierAccount.findUnique.mockResolvedValue({ id: "acct-1", supplierState: "APPROVED", controlScope: null } as never);
+    m.communityCampaign.findUnique.mockResolvedValue({ id: "camp-1", supplierAccountId: "acct-1", deliveryPreference: "COLLECTION", deliveryResponsibility: "SUPPLIER" } as never);
+
+    await expect(communityBuyManifestService.getFulfilmentDeliveriesForAccount("user-1", "camp-1")).rejects.toMatchObject({ statusCode: 403 });
+  });
+
+  it("returns the real address/phone/instructions when deliveryResponsibility is SUPPLIER, and logs the access", async () => {
+    m.supplierAccount.findUnique.mockResolvedValue({ id: "acct-1", supplierState: "APPROVED", controlScope: null } as never);
+    m.communityCampaign.findUnique.mockResolvedValue({ id: "camp-1", supplierAccountId: "acct-1", deliveryPreference: "DELIVERY", deliveryResponsibility: "SUPPLIER" } as never);
+    m.campaignContribution.findMany.mockResolvedValue([
+      {
+        id: "contrib-1", quantity: 2,
+        deliveryRecipientName: "Amaka N.", deliveryAddressLine1: "12 High St", deliveryAddressLine2: null, deliveryCity: "Coventry", deliveryPostcode: "CV1 1AA",
+        deliveryPhone: "+441234567890", deliveryInstructions: "Leave with neighbour",
+        deliveryReference: { status: "PENDING" },
+      },
+    ] as never);
+    m.communityBuyDataAccessLog.create.mockResolvedValue({} as never);
+
+    const deliveries = await communityBuyManifestService.getFulfilmentDeliveriesForAccount("user-1", "camp-1");
+
+    expect(deliveries).toEqual([{
+      contributionId: "contrib-1", quantity: 2,
+      recipientName: "Amaka N.", addressLine1: "12 High St", addressLine2: null, city: "Coventry", postcode: "CV1 1AA",
+      phone: "+441234567890", instructions: "Leave with neighbour",
+      deliveryStatus: "PENDING",
+    }]);
+    expect(m.communityBuyDataAccessLog.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ dataCategory: "ADDRESS_DETAIL", action: "VIEWED", accessorRole: "SUPPLIER" }),
+    }));
+  });
+
+  it("also works when deliveryResponsibility is SHARED", async () => {
+    m.supplierAccount.findUnique.mockResolvedValue({ id: "acct-1", supplierState: "APPROVED", controlScope: null } as never);
+    m.communityCampaign.findUnique.mockResolvedValue({ id: "camp-1", supplierAccountId: "acct-1", deliveryPreference: "DELIVERY", deliveryResponsibility: "SHARED" } as never);
+    m.campaignContribution.findMany.mockResolvedValue([] as never);
+
+    await expect(communityBuyManifestService.getFulfilmentDeliveriesForAccount("user-1", "camp-1")).resolves.toEqual([]);
+  });
+
+  it("never leaks another supplier's campaign — ownership check runs before the responsibility check", async () => {
+    m.supplierAccount.findUnique.mockResolvedValue({ id: "acct-1", supplierState: "APPROVED", controlScope: null } as never);
+    m.communityCampaign.findUnique.mockResolvedValue({ id: "camp-1", supplierAccountId: "some-other-account", deliveryPreference: "DELIVERY", deliveryResponsibility: "SUPPLIER" } as never);
+
+    await expect(communityBuyManifestService.getFulfilmentDeliveriesForAccount("user-1", "camp-1")).rejects.toMatchObject({ statusCode: 404 });
+  });
+});

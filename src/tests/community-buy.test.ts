@@ -2579,6 +2579,32 @@ describe("Client correction — supplier is optional, never a publication gate",
     expect(submitted.status).toBe("UNDER_REVIEW");
   });
 
+  // Figma S35 — deliveryResponsibility can only name a supplier when one actually exists on the campaign.
+  it("3b. create() rejects deliveryResponsibility SUPPLIER on a SELF-fulfilled campaign", async () => {
+    m.organiserProfile.findUnique.mockResolvedValue({ id: "org-1", isVerified: true, isRestricted: false } as never);
+    m.marketConfiguration.findUnique.mockResolvedValue({ countryCode: "GB", communityBuyEnabled: true } as never);
+    m.marketConfiguration.count.mockResolvedValue(1);
+
+    await expect(
+      communityCampaignsService.create("organiser-user-1", { ...baseInput, fulfilmentOwner: "SELF", deliveryResponsibility: "SUPPLIER" }),
+    ).rejects.toMatchObject({ statusCode: 400 });
+    expect(m.communityCampaign.create).not.toHaveBeenCalled();
+  });
+
+  it("3c. create() accepts deliveryResponsibility SUPPLIER on a SUPPLIER-fulfilled campaign and persists it", async () => {
+    m.organiserProfile.findUnique.mockResolvedValue({ id: "org-1", isVerified: true, isRestricted: false } as never);
+    m.marketConfiguration.findUnique.mockResolvedValue({ countryCode: "GB", communityBuyEnabled: true } as never);
+    m.marketConfiguration.count.mockResolvedValue(1);
+    m.supplierProfile.findUnique.mockResolvedValue({ id: "sup-1", isVerified: true, isRestricted: false, country: "GB", vendor: { userId: "supplier-user-1" } } as never);
+    m.communityCampaign.create.mockResolvedValue({ id: "camp-3c", fulfilmentOwner: "SUPPLIER", deliveryResponsibility: "SUPPLIER" } as never);
+
+    await communityCampaignsService.create("organiser-user-1", { ...baseInput, fulfilmentOwner: "SUPPLIER", supplierId: "sup-1", deliveryResponsibility: "SUPPLIER" });
+
+    expect(m.communityCampaign.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ deliveryResponsibility: "SUPPLIER" }),
+    }));
+  });
+
   // 4. supplier-selected campaign publishes before acceptance
   it("4. submit() moves a SUPPLIER-mode campaign to UNDER_REVIEW even though supplierCommitted is still false", async () => {
     m.communityCampaign.findUnique.mockResolvedValue({

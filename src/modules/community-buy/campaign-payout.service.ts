@@ -161,6 +161,54 @@ export const campaignPayoutService = {
     return payout;
   },
 
+  /**
+   * Figma S17/S18/S22 — a real, AUTHORISE_THEN_CAPTURE-mode supplier
+   * progress view, built entirely from CommunityBuyPaymentAuthorisation's
+   * own real per-buyer state (never a fabricated count). Every label maps
+   * to an actual enum value already on that model:
+   *   committed            = every authorisation row that exists for this campaign
+   *   paymentMethodsConfirmed = holdStatus HOLD_SUCCEEDED (funds authorised/on hold)
+   *   actionRequired        = holdStatus REQUIRES_ACTION
+   *   declined              = holdStatus HOLD_DECLINED
+   *   captured              = captureStatus CAPTURED ("payment completed")
+   *   captureFailed         = captureStatus CAPTURE_FAILED (retryCount>0 rows are mid-recovery)
+   *   readyForFulfilment    = same as captured — this mode has no separate
+   *                           "ready" concept beyond a successful capture
+   *   releaseStatus         = the real CommunityBuyPayout.status once that
+   *                           row exists (only created at first capture —
+   *                           see onCaptureSucceeded()); otherwise "PENDING_CAMPAIGN_OUTCOME",
+   *                           an honest label, not a Prisma enum value, since no payout
+   *                           row can exist yet.
+   */
+  async getMyPaymentProgress(supplierAccountIdOrVendorSupplierId: { supplierAccountId?: string; supplierId?: string }, campaignId: string) {
+    const campaign = await prisma.communityCampaign.findUnique({ where: { id: campaignId } });
+    if (!campaign) throw new AppError("Campaign not found", 404);
+    const matches = supplierAccountIdOrVendorSupplierId.supplierAccountId
+      ? campaign.supplierAccountId === supplierAccountIdOrVendorSupplierId.supplierAccountId
+      : campaign.supplierId === supplierAccountIdOrVendorSupplierId.supplierId;
+    if (!matches) throw new AppError("Campaign not found", 404);
+    if (campaign.paymentMode !== "AUTHORISE_THEN_CAPTURE") {
+      throw new AppError("This campaign does not use the authorise/capture payment mode", 409, undefined, "NOT_AUTHORISE_THEN_CAPTURE_MODE");
+    }
+
+    const rows = await prisma.communityBuyPaymentAuthorisation.findMany({ where: { campaignId }, select: { holdStatus: true, captureStatus: true, retryCount: true } });
+    const payout = await prisma.communityBuyPayout.findUnique({ where: { campaignId }, select: { status: true, supplierPayableAmount: true, netPayoutAmount: true, currency: true } });
+
+    return {
+      committed: rows.length,
+      paymentMethodsConfirmed: rows.filter((r) => r.holdStatus === "HOLD_SUCCEEDED").length,
+      actionRequired: rows.filter((r) => r.holdStatus === "REQUIRES_ACTION").length,
+      declined: rows.filter((r) => r.holdStatus === "HOLD_DECLINED").length,
+      captured: rows.filter((r) => r.captureStatus === "CAPTURED").length,
+      captureFailedRetrying: rows.filter((r) => r.captureStatus === "CAPTURE_FAILED" && r.retryCount > 0).length,
+      readyForFulfilment: rows.filter((r) => r.captureStatus === "CAPTURED").length,
+      releaseStatus: payout?.status ?? "PENDING_CAMPAIGN_OUTCOME",
+      supplierPayableAmount: payout?.supplierPayableAmount ?? 0,
+      netPayoutAmount: payout?.netPayoutAmount ?? 0,
+      currency: payout?.currency ?? campaign.currency,
+    };
+  },
+
   /** Admin marks fulfilment-confirmed / no open disputes -> HELD becomes READY. Never moves money by itself. Re-verifies eligibility server-side rather than trusting the admin's own judgement — see assessPayoutEligibility(). */
   async markReady(adminId: string, campaignId: string) {
     const payout = await prisma.communityBuyPayout.findUnique({ where: { campaignId } });

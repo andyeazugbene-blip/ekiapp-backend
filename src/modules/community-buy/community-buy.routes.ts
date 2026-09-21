@@ -24,6 +24,7 @@ import {
   rejectSupplierProposal,
   getCampaignAuthorisationSummary,
   getMyCampaignPayout,
+  getMyPaymentProgress,
   pledgeContribution,
   reconfirmCampaign,
   retryContributionHold,
@@ -58,6 +59,7 @@ import {
   getSupplierFulfilment,
   getSupplierInvitation,
   getSupplierManifest,
+  getSupplierFulfilmentDeliveries,
   getSupplierStripeConnectStatus,
   joinCampaign,
   legacyCancelFailedCampaignShim,
@@ -268,6 +270,7 @@ supplierRouter.get("/campaigns/:id/payment", requireApprovedSupplierForOwnCampai
 // AUTHORISE_THEN_CAPTURE-mode twin of the payment route above.
 supplierRouter.post("/campaigns/:id/reconfirm", requireApprovedSupplierForOwnCampaign(), asyncHandler(reconfirmCampaign));
 supplierRouter.get("/campaigns/:id/payout", requireApprovedSupplierForOwnCampaign(), asyncHandler(getMyCampaignPayout));
+supplierRouter.get("/campaigns/:id/payment-progress", requireApprovedSupplierForOwnCampaign(), asyncHandler(getMyPaymentProgress));
 
 // M4 (spec §14.3, AT-39/40/41/44) — deliberately NOT gated by
 // requireApprovedSupplier() (that gate is a blunt supplierState==="APPROVED"
@@ -277,5 +280,9 @@ supplierRouter.get("/campaigns/:id/payout", requireApprovedSupplierForOwnCampaig
 // resolveForAccount does the real ownership + capture + control_scope
 // check, campaign by campaign, on every call.
 supplierRouter.get("/campaigns/:id/manifest", asyncHandler(getSupplierManifest));
+// Figma S25 — same deliberately-not-blunt-gated pattern as manifest above;
+// buildFulfilmentDeliveries() additionally 403s unless deliveryResponsibility
+// genuinely names this supplier (SUPPLIER or SHARED), never ORGANISER.
+supplierRouter.get("/campaigns/:id/fulfilment/deliveries", asyncHandler(getSupplierFulfilmentDeliveries));
 supplierRouter.post("/campaigns/:id/contributions/:contributionId/contact", asyncHandler(sendSupplierContactMessage));
 supplierRouter.get("/campaigns/:id/contributions/:contributionId/emergency-contact", asyncHandler(getSupplierEmergencyContact));

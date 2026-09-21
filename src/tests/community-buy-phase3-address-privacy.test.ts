@@ -255,6 +255,40 @@ describe("Privacy — organiser sees address only for a DELIVERY campaign; suppl
     );
   });
 
+  // Figma S35 — deliveryResponsibility === SUPPLIER means the organiser is
+  // NOT the responsible party; this endpoint must withhold it here too
+  // (the supplier reads it instead, via getFulfilmentDeliveriesForAccount()).
+  it("listParticipantsForOrganiser() withholds the address when deliveryResponsibility is SUPPLIER", async () => {
+    m.organiserProfile.findUnique.mockResolvedValue({ userId: "u1", id: "org-1" });
+    m.communityCampaign.findUnique.mockResolvedValue({ ...baseCampaign, organiserId: "org-1", deliveryPreference: "DELIVERY", deliveryResponsibility: "SUPPLIER", fulfilmentOwner: "SUPPLIER" });
+    m.campaignParticipant.findMany.mockResolvedValue([
+      {
+        userId: "buyer-1", joinedAt: new Date(), user: { name: "Ada Buyer", email: "ada@example.com" },
+        contributions: [{ quantity: 2, amount: 2000, isOrganiserTopUp: false, createdAt: new Date(), deliveryRecipientName: "Ada Buyer", deliveryAddressLine1: "1 SW1 Ave", deliveryAddressLine2: null, deliveryCity: "London", deliveryPostcode: "SW1A 1AA" }],
+      },
+    ]);
+
+    const result = await communityCampaignsService.listParticipantsForOrganiser("u1", "camp-1");
+
+    expect(Object.keys(result[0])).not.toContain("deliveryAddress");
+    expect(m.communityBuyDataAccessLog.create).not.toHaveBeenCalled();
+  });
+
+  it("listParticipantsForOrganiser() still includes the address when deliveryResponsibility is SHARED", async () => {
+    m.organiserProfile.findUnique.mockResolvedValue({ userId: "u1", id: "org-1" });
+    m.communityCampaign.findUnique.mockResolvedValue({ ...baseCampaign, organiserId: "org-1", deliveryPreference: "DELIVERY", deliveryResponsibility: "SHARED", fulfilmentOwner: "SUPPLIER" });
+    m.campaignParticipant.findMany.mockResolvedValue([
+      {
+        userId: "buyer-1", joinedAt: new Date(), user: { name: "Ada Buyer", email: "ada@example.com" },
+        contributions: [{ quantity: 2, amount: 2000, isOrganiserTopUp: false, createdAt: new Date(), deliveryRecipientName: "Ada Buyer", deliveryAddressLine1: "1 SW1 Ave", deliveryAddressLine2: null, deliveryCity: "London", deliveryPostcode: "SW1A 1AA", deliveryPhone: null, deliveryInstructions: null }],
+      },
+    ]);
+
+    const result = await communityCampaignsService.listParticipantsForOrganiser("u1", "camp-1");
+
+    expect(result[0].deliveryAddress).toBeTruthy();
+  });
+
   it("listParticipantsForOrganiser() never includes a deliveryAddress key for a COLLECTION campaign, and logs no address access", async () => {
     m.organiserProfile.findUnique.mockResolvedValue({ userId: "u1", id: "org-1" });
     m.communityCampaign.findUnique.mockResolvedValue({ ...baseCampaign, organiserId: "org-1", deliveryPreference: "COLLECTION", fulfilmentOwner: "SUPPLIER" });

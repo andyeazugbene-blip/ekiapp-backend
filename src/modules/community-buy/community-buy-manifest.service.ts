@@ -16,7 +16,7 @@ import { isDataAccessAllowed, recordDataAccess } from "./community-buy-privacy.s
  */
 
 interface ResolvedAccess {
-  campaign: { id: string; deliveryPreference: string };
+  campaign: { id: string; deliveryPreference: string; deliveryResponsibility: string };
   accessorAccountId: string;
 }
 
@@ -78,6 +78,61 @@ async function buildManifest(access: ResolvedAccess, actorUserId: string) {
     purposeCode: "fulfilment_manifest",
   });
   return rows;
+}
+
+/**
+ * Figma S25 "Prepare Home Deliveries" — the one supplier-facing read that
+ * DOES expose a real home address/phone/instructions, deliberately kept
+ * separate from buildManifest() above (which must never carry them —
+ * see its own "no raw home addresses" comment) rather than adding an
+ * optional field to the same shape, so a future caller of the manifest
+ * can never accidentally receive PII by omitting a flag. Gated on the
+ * real, persisted CommunityCampaign.deliveryResponsibility — SUPPLIER or
+ * SHARED only; ORGANISER (the default) returns nothing here at all, same
+ * 403 a mismatched campaign would give, not an empty-but-200 response
+ * that would leak "this campaign exists and you're its supplier."
+ */
+async function buildFulfilmentDeliveries(access: ResolvedAccess, actorUserId: string) {
+  if (access.campaign.deliveryPreference !== "DELIVERY" || access.campaign.deliveryResponsibility === "ORGANISER") {
+    throw new AppError("You are not responsible for delivery on this campaign.", 403, undefined, "NOT_RESPONSIBLE_FOR_DELIVERY");
+  }
+  const contributions = await prisma.campaignContribution.findMany({
+    where: { campaignId: access.campaign.id, status: "PAID" },
+    select: {
+      id: true,
+      quantity: true,
+      deliveryRecipientName: true,
+      deliveryAddressLine1: true,
+      deliveryAddressLine2: true,
+      deliveryCity: true,
+      deliveryPostcode: true,
+      deliveryPhone: true,
+      deliveryInstructions: true,
+      deliveryReference: { select: { status: true } },
+    },
+    orderBy: { createdAt: "asc" },
+  });
+  await recordDataAccess({
+    campaignId: access.campaign.id,
+    accessorAccountId: access.accessorAccountId,
+    accessorUserId: actorUserId,
+    accessorRole: "SUPPLIER",
+    dataCategory: "ADDRESS_DETAIL",
+    action: "VIEWED",
+    purposeCode: "fulfilment_home_delivery",
+  });
+  return contributions.map((c) => ({
+    contributionId: c.id,
+    quantity: c.quantity,
+    recipientName: c.deliveryRecipientName,
+    addressLine1: c.deliveryAddressLine1,
+    addressLine2: c.deliveryAddressLine2,
+    city: c.deliveryCity,
+    postcode: c.deliveryPostcode,
+    phone: c.deliveryPhone,
+    instructions: c.deliveryInstructions,
+    deliveryStatus: c.deliveryReference?.status ?? "NOT_REQUIRED",
+  }));
 }
 
 const MAX_MESSAGE_LENGTH = 1000;
@@ -187,5 +242,14 @@ export const communityBuyManifestService = {
   async getEmergencyContactForAccount(userId: string, campaignId: string, contributionId: string) {
     const access = await resolveForAccount(userId, campaignId);
     return readEmergencyContact(access, userId, contributionId);
+  },
+
+  async getFulfilmentDeliveriesForVendor(vendorId: string, campaignId: string, actorUserId: string) {
+    const access = await resolveForVendor(vendorId, campaignId);
+    return buildFulfilmentDeliveries(access, actorUserId);
+  },
+  async getFulfilmentDeliveriesForAccount(userId: string, campaignId: string) {
+    const access = await resolveForAccount(userId, campaignId);
+    return buildFulfilmentDeliveries(access, userId);
   },
 };
