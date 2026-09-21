@@ -274,13 +274,22 @@ describe("Organiser-facing pause/resume", () => {
   it("pauseByOrganiser() pauses a live campaign owned by the caller and notifies every participant", async () => {
     m.organiserProfile.findUnique.mockResolvedValue({ userId: "u1", id: "org-1" });
     m.communityCampaign.findUnique.mockResolvedValue({ ...baseCampaign, organiserId: "org-1", status: "LIVE" });
-    m.communityCampaign.update.mockResolvedValue({ ...baseCampaign, status: "PAUSED" });
+    m.communityCampaign.updateMany.mockResolvedValue({ count: 1 });
+    m.communityCampaign.findUniqueOrThrow.mockResolvedValue({ ...baseCampaign, status: "PAUSED" });
     m.campaignParticipant.findMany.mockResolvedValue([{ userId: "buyer-1" }, { userId: "buyer-2" }]);
 
     const result = await communityCampaignsService.pauseByOrganiser("u1", "camp-1");
 
     expect(result.status).toBe("PAUSED");
-    expect(m.communityCampaign.update).toHaveBeenCalledWith({ where: { id: "camp-1" }, data: { status: "PAUSED" } });
+    expect(m.communityCampaign.updateMany).toHaveBeenCalledWith({ where: { id: "camp-1", status: "LIVE" }, data: { status: "PAUSED" } });
+  });
+
+  it("Phase 8 — pauseByOrganiser() loses the race when the success sweep already moved this campaign off LIVE", async () => {
+    m.organiserProfile.findUnique.mockResolvedValue({ userId: "u1", id: "org-1" });
+    m.communityCampaign.findUnique.mockResolvedValue({ ...baseCampaign, organiserId: "org-1", status: "LIVE" });
+    m.communityCampaign.updateMany.mockResolvedValue({ count: 0 });
+
+    await expect(communityCampaignsService.pauseByOrganiser("u1", "camp-1")).rejects.toMatchObject({ statusCode: 409 });
   });
 
   it("resumeByOrganiser() rejects a campaign that isn't PAUSED", async () => {

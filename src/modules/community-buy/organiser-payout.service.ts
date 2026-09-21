@@ -59,7 +59,17 @@ export const organiserPayoutService = {
     const payout = await prisma.communityBuyOrganiserPayout.findUnique({ where: { campaignId } });
     if (!payout) throw new AppError("No organiser payout record exists for this campaign", 404);
     if (payout.status === "PAID") throw new AppError("This payout has already been paid", 409);
-    return prisma.communityBuyOrganiserPayout.update({ where: { campaignId }, data: { status: "ON_HOLD", holdReason: reason } });
+    // Phase 8 — guarded claim: releaseOrganiserPayment() can be concurrently
+    // mid-transfer (status already claimed to PROCESSING) by the time this
+    // read/write pair runs. An unconditional write would clobber that back
+    // to ON_HOLD even though a real Stripe transfer is in flight or has
+    // already landed.
+    const claim = await prisma.communityBuyOrganiserPayout.updateMany({
+      where: { campaignId, status: { in: ["NOT_RELEASED", "ON_HOLD"] } },
+      data: { status: "ON_HOLD", holdReason: reason },
+    });
+    if (claim.count !== 1) throw new AppError("This payout cannot be held from its current state", 409);
+    return prisma.communityBuyOrganiserPayout.findUniqueOrThrow({ where: { campaignId } });
   },
 
   /**

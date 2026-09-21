@@ -1145,10 +1145,18 @@ export const campaignContributionsService = {
     const payment = await prisma.campaignSupplierPayment.findUnique({ where: { campaignId } });
     if (!payment) throw new AppError("No supplier payment record exists for this campaign", 404);
     if (payment.status === "PAID") throw new AppError("This payment has already been paid", 409);
-    return prisma.campaignSupplierPayment.update({
-      where: { campaignId },
+    // Phase 8 — guarded claim: releaseSupplierPayment() can be concurrently
+    // mid-transfer (status already claimed to PROCESSING) by the time this
+    // read/write pair runs. An unconditional write would clobber that back
+    // to ON_HOLD even though a real Stripe transfer is in flight or has
+    // already landed — corrupting the audit trail into showing "held" on
+    // money that actually moved.
+    const claim = await prisma.campaignSupplierPayment.updateMany({
+      where: { campaignId, status: { in: ["NOT_RELEASED", "ON_HOLD"] } },
       data: { status: "ON_HOLD", holdReason: reason },
     });
+    if (claim.count !== 1) throw new AppError("This payment cannot be held from its current state", 409);
+    return prisma.campaignSupplierPayment.findUniqueOrThrow({ where: { campaignId } });
   },
 
   async listSupplierPaymentsForAdmin() {

@@ -441,3 +441,29 @@ describe("organiserPayoutService.releaseOrganiserPayment() — the organiser's n
     expect(stripe.transfers.create).not.toHaveBeenCalled();
   });
 });
+
+describe("organiserPayoutService.holdOrganiserPayout — Phase 8: race-safe against a concurrent release", () => {
+  it("holds a NOT_RELEASED payout", async () => {
+    const { organiserPayoutService } = await import("../modules/community-buy/organiser-payout.service");
+    m.communityBuyOrganiserPayout.findUnique.mockResolvedValue({ campaignId: "camp-ohold-1", status: "NOT_RELEASED", holdReasonCodes: [] } as never);
+    m.communityBuyOrganiserPayout.updateMany.mockResolvedValue({ count: 1 } as never);
+    m.communityBuyOrganiserPayout.findUniqueOrThrow.mockResolvedValue({ campaignId: "camp-ohold-1", status: "ON_HOLD" } as never);
+
+    const result = await organiserPayoutService.holdOrganiserPayout("admin-1", "camp-ohold-1", "dispute");
+
+    expect(result.status).toBe("ON_HOLD");
+    expect(m.communityBuyOrganiserPayout.updateMany).toHaveBeenCalledWith({
+      where: { campaignId: "camp-ohold-1", status: { in: ["NOT_RELEASED", "ON_HOLD"] } },
+      data: { status: "ON_HOLD", holdReason: "dispute" },
+    });
+  });
+
+  it("Phase 8 — loses the race when releaseOrganiserPayment() already claimed PROCESSING between the read and this write, never clobbering an in-flight transfer back to ON_HOLD", async () => {
+    const { organiserPayoutService } = await import("../modules/community-buy/organiser-payout.service");
+    m.communityBuyOrganiserPayout.findUnique.mockResolvedValue({ campaignId: "camp-ohold-2", status: "NOT_RELEASED", holdReasonCodes: [] } as never);
+    m.communityBuyOrganiserPayout.updateMany.mockResolvedValue({ count: 0 } as never);
+
+    await expect(organiserPayoutService.holdOrganiserPayout("admin-1", "camp-ohold-2", "dispute")).rejects.toMatchObject({ statusCode: 409 });
+    expect(stripe.transfers.create).not.toHaveBeenCalled();
+  });
+});

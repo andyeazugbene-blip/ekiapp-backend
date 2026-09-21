@@ -235,10 +235,17 @@ export const campaignPayoutService = {
     const payout = await prisma.communityBuyPayout.findUnique({ where: { campaignId } });
     if (!payout) throw new AppError("No payout record exists for this campaign", 404);
     if (payout.status === "PAID") throw new AppError("This payout has already been paid", 409);
-    const updated = await prisma.communityBuyPayout.update({
-      where: { campaignId },
+    // Phase 8 — guarded claim: triggerManualPayout() can be concurrently
+    // mid-release (status already claimed to PENDING, or already IN_TRANSIT
+    // awaiting the provider webhook) by the time this read/write pair runs.
+    // An unconditional write would clobber that back to HELD even though a
+    // real Stripe payout is in flight — corrupting the audit trail.
+    const claim = await prisma.communityBuyPayout.updateMany({
+      where: { campaignId, status: { notIn: ["PAID", "PENDING", "IN_TRANSIT"] } },
       data: { status: "HELD", holdReasonCodes: Array.from(new Set([...payout.holdReasonCodes, reasonCode])) },
     });
+    if (claim.count !== 1) throw new AppError("This payout cannot be held from its current state", 409);
+    const updated = await prisma.communityBuyPayout.findUniqueOrThrow({ where: { campaignId } });
     await recordAudit({ actorId: adminId, action: "community_buy_payout.held", entityType: "CommunityBuyPayout", entityId: payout.id, metadata: { reasonCode } });
     await notifySupplier(payout.supplierId, "payout_held", "Payout on hold", "Your Community Buy payout has been placed on hold — check the Supplier Centre for details.", campaignId, reasonCode);
     return updated;

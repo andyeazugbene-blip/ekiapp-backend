@@ -1153,8 +1153,12 @@ export const communityCampaignsService = {
     // APPROVED / UNDER_REVIEW → CHANGES_REQUIRED directly (no pledging to freeze).
     const wasLive = campaign.status === "LIVE";
 
-    const updated = await prisma.communityCampaign.update({
-      where: { id: campaignId },
+    // Phase 8 — guarded claim: LIVE is also what closeDueCampaigns() sweeps
+    // out of on a real success/rescue determination. Without this, a
+    // concurrent sweep win could still be unconditionally overwritten back
+    // to CHANGES_REQUIRED by this call after losing the race.
+    const claim = await prisma.communityCampaign.updateMany({
+      where: { id: campaignId, status: { in: allowedStatuses as unknown as (typeof campaign)["status"][] } },
       data: {
         status: "CHANGES_REQUIRED",
         reviewNotes: notes,
@@ -1162,6 +1166,10 @@ export const communityCampaignsService = {
         reviewedAt: new Date(),
       },
     });
+    if (claim.count !== 1) {
+      throw new AppError("Changes can only be requested on a campaign that is under review, approved, or live", 409);
+    }
+    const updated = await prisma.communityCampaign.findUniqueOrThrow({ where: { id: campaignId } });
 
     const notificationBody = wasLive
       ? `Your campaign "${campaign.title}" has been temporarily paused by Eki admin. Please review and action the following feedback before it can resume accepting pledges: ${notes}`
@@ -1187,7 +1195,14 @@ export const communityCampaignsService = {
     const campaign = await prisma.communityCampaign.findUnique({ where: { id: campaignId }, include: { organiser: true } });
     if (!campaign) throw new AppError("Campaign not found", 404);
     if (campaign.status !== "LIVE") throw new AppError("Only a live campaign can be paused", 409);
-    const updated = await prisma.communityCampaign.update({ where: { id: campaignId }, data: { status: "PAUSED" } });
+    // Phase 8 — guarded claim: LIVE is also what closeDueCampaigns() sweeps
+    // out of (LIVE -> FULFILLING/RESCUE_WINDOW) on a real success/rescue
+    // determination. Without this, a concurrent sweep win could still be
+    // unconditionally overwritten back to PAUSED by this call after losing
+    // the race, showing "paused" on a campaign that's actually charging.
+    const claim = await prisma.communityCampaign.updateMany({ where: { id: campaignId, status: "LIVE" }, data: { status: "PAUSED" } });
+    if (claim.count !== 1) throw new AppError("Only a live campaign can be paused", 409);
+    const updated = await prisma.communityCampaign.findUniqueOrThrow({ where: { id: campaignId } });
     // CBA-09 fix: unlike every other admin state transition on a campaign
     // (approve/reject/changes-requested/cancel), pause()/resume() never
     // notified the organiser at all — they'd have no explanation for why
@@ -1332,12 +1347,26 @@ export const communityCampaignsService = {
       // cancel() uses for this identical case, just with organiser-facing
       // copy (never "ended by an administrator", since they did it
       // themselves) and no admin review needed.
-      const [updated] = await prisma.$transaction([
-        prisma.communityCampaign.update({ where: { id: campaignId }, data: { status: "CANCELLED", closedAt: new Date(), reviewNotes: reason } }),
-        prisma.campaignCancellationRequest.create({
+      // Phase 8 — guarded claim: paidCount was read a moment ago and could
+      // already be stale if the success sweep concurrently moved this
+      // campaign past LIVE and started charging. An unconditional write
+      // here would falsely tell every participant "you were never
+      // charged" on a campaign that's actually mid-capture.
+      const claimed = await prisma.$transaction(async (tx) => {
+        const campaignClaim = await tx.communityCampaign.updateMany({
+          where: { id: campaignId, status: campaign.status },
+          data: { status: "CANCELLED", closedAt: new Date(), reviewNotes: reason },
+        });
+        if (campaignClaim.count !== 1) return null;
+        await tx.campaignCancellationRequest.create({
           data: { campaignId, requestedByUserId: userId, reason, hadFinancialActivity: false, preCancellationStatus: campaign.status, status: "APPROVED", reviewedAt: new Date(), reviewNotes: "Auto-approved — no funds had been captured yet" },
-        }),
-      ]);
+        });
+        return tx.communityCampaign.findUniqueOrThrow({ where: { id: campaignId } });
+      });
+      if (!claimed) {
+        throw new AppError("This campaign's status just changed — try again", 409);
+      }
+      const updated = claimed;
       await this.cancelPledgesForFailedCampaign(campaignId);
       const participants = await prisma.campaignParticipant.findMany({ where: { campaignId } });
       for (const p of participants) {
@@ -1549,7 +1578,11 @@ export const communityCampaignsService = {
   async pauseByOrganiser(userId: string, campaignId: string) {
     const campaign = await this.requireOwnedByOrganiserForWrite(userId, campaignId);
     if (campaign.status !== "LIVE") throw new AppError("Only a live campaign can be paused", 409);
-    const updated = await prisma.communityCampaign.update({ where: { id: campaignId }, data: { status: "PAUSED" } });
+    // Phase 8 — same guarded claim as admin pause() above, same reason: a
+    // concurrent success-sweep win must never be overwritten back to PAUSED.
+    const claim = await prisma.communityCampaign.updateMany({ where: { id: campaignId, status: "LIVE" }, data: { status: "PAUSED" } });
+    if (claim.count !== 1) throw new AppError("Only a live campaign can be paused", 409);
+    const updated = await prisma.communityCampaign.findUniqueOrThrow({ where: { id: campaignId } });
     const participants = await prisma.campaignParticipant.findMany({ where: { campaignId } });
     for (const p of participants) {
       await notifyCampaign(
@@ -2008,10 +2041,20 @@ export const communityCampaignsService = {
     if (campaign.status !== "RESCUE_WINDOW") {
       throw new AppError("Only a campaign in its rescue window can be ended this way", 409);
     }
-    const updated = await prisma.communityCampaign.update({
-      where: { id: campaignId },
+    // Phase 8 — guarded claim: RESCUE_WINDOW is also what evaluateRescueExpiry()
+    // sweeps out of (-> FULFILLING on a top-up success, or -> FAILED on
+    // expiry). Without this, a concurrent sweep win (e.g. a top-up landing
+    // right as the organiser ends it) could still be unconditionally
+    // overwritten back to FAILED by this call after losing the race, even
+    // though charging has already started.
+    const claim = await prisma.communityCampaign.updateMany({
+      where: { id: campaignId, status: "RESCUE_WINDOW" },
       data: { status: "FAILED", fundingOutcome: "BELOW_MINIMUM", closedAt: new Date() },
     });
+    if (claim.count !== 1) {
+      throw new AppError("Only a campaign in its rescue window can be ended this way", 409);
+    }
+    const updated = await prisma.communityCampaign.findUniqueOrThrow({ where: { id: campaignId } });
     // Under PLEDGE_THEN_CHARGE, a campaign can only reach FAILED before it
     // was ever charged (charging happens exclusively on success — see
     // chargePledgesAfterSuccess) — so createRefundRecordsForFailedCampaign
@@ -2077,13 +2120,29 @@ export const communityCampaignsService = {
       throw new AppError("Supplier reconfirmation and price-unchanged confirmation are required before approval", 400);
     }
 
-    await prisma.$transaction([
-      prisma.campaignExtensionRequest.update({ where: { id: requestId }, data: { status: "APPROVED", reviewedById: adminId, reviewedAt: new Date() } }),
-      prisma.communityCampaign.update({
-        where: { id: request.campaignId },
+    // Phase 8 — an extension approval typically takes real admin review
+    // time, during which the rescue window this request was made against
+    // can genuinely expire (evaluateRescueExpiry() moves RESCUE_WINDOW ->
+    // FULFILLING/FAILED on its own schedule, unaware a request is pending).
+    // A plain, unconditional update here could resurrect an already-FAILED
+    // campaign back to LIVE, or clobber a campaign the sweep just started
+    // charging. Both claims are guarded inside one transaction so either
+    // both land or neither does.
+    const claimed = await prisma.$transaction(async (tx) => {
+      const requestClaim = await tx.campaignExtensionRequest.updateMany({
+        where: { id: requestId, status: "PENDING" },
+        data: { status: "APPROVED", reviewedById: adminId, reviewedAt: new Date() },
+      });
+      if (requestClaim.count !== 1) return false;
+      const campaignClaim = await tx.communityCampaign.updateMany({
+        where: { id: request.campaignId, status: "RESCUE_WINDOW" },
         data: { status: "LIVE", deadline: request.requestedDeadline, rescueEndsAt: null, extensionCount: { increment: 1 } },
-      }),
-    ]);
+      });
+      return campaignClaim.count === 1;
+    });
+    if (!claimed) {
+      throw new AppError("This extension request or its campaign has already moved past the state this approval expected — refresh and check the campaign's current status", 409);
+    }
 
     const body = `${request.campaign.title}'s deadline has been extended to ${request.requestedDeadline.toISOString()}.`;
     await notifyCampaign(request.campaign.organiser.userId, "extension_approved", "Campaign extended", body, request.campaignId, undefined, "organiser");

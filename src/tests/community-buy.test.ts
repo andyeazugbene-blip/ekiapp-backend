@@ -13,7 +13,7 @@ vi.mock("../lib/prisma", () => ({
     notification: { findMany: vi.fn() },
     campaignUpdate: { create: vi.fn(), findMany: vi.fn() },
     campaignExtensionRequest: { create: vi.fn(), findUnique: vi.fn(), update: vi.fn(), findMany: vi.fn() },
-    campaignSupplierPayment: { findUnique: vi.fn(), create: vi.fn(), update: vi.fn(), updateMany: vi.fn(), findMany: vi.fn() },
+    campaignSupplierPayment: { findUnique: vi.fn(), create: vi.fn(), update: vi.fn(), updateMany: vi.fn(), findMany: vi.fn(), findUniqueOrThrow: vi.fn() },
     campaignFulfilment: { upsert: vi.fn(), findUnique: vi.fn(), findUniqueOrThrow: vi.fn(), update: vi.fn(), updateMany: vi.fn() },
     // M3: cancel() now branches into campaignAuthorisationService.releaseAllHoldsForCampaign() for AUTHORISE_THEN_CAPTURE campaigns.
     communityBuyPaymentAuthorisation: { findMany: vi.fn(), findUnique: vi.fn(), findUniqueOrThrow: vi.fn(), update: vi.fn(), updateMany: vi.fn() },
@@ -288,7 +288,8 @@ describe("communityCampaignsService rescue-window organiser actions", () => {
   it("endRescueAndRefund moves RESCUE_WINDOW to FAILED and creates refund records", async () => {
     m.organiserProfile.findUnique.mockResolvedValue({ id: "org-1", userId: "organiser-user-1" } as never);
     m.communityCampaign.findUnique.mockResolvedValue({ id: "camp-6", organiserId: "org-1", status: "RESCUE_WINDOW", title: "Ending" } as never);
-    m.communityCampaign.update.mockResolvedValue({ id: "camp-6", status: "FAILED" } as never);
+    m.communityCampaign.updateMany.mockResolvedValue({ count: 1 } as never);
+    m.communityCampaign.findUniqueOrThrow.mockResolvedValue({ id: "camp-6", status: "FAILED" } as never);
     m.campaignContribution.findMany.mockResolvedValue([{ id: "contrib-9", amount: 1200, currency: "GBP" }] as never);
     m.campaignRefund.create.mockResolvedValue({ id: "refund-9" } as never);
     m.campaignParticipant.findMany.mockResolvedValue([{ userId: "participant-1" }] as never);
@@ -306,7 +307,7 @@ describe("communityCampaignsService rescue-window organiser actions", () => {
     m.communityCampaign.findUnique.mockResolvedValue({ id: "camp-7", organiserId: "org-1", status: "LIVE" } as never);
 
     await expect(communityCampaignsService.endRescueAndRefund("organiser-user-1", "camp-7")).rejects.toMatchObject({ statusCode: 409 });
-    expect(m.communityCampaign.update).not.toHaveBeenCalled();
+    expect(m.communityCampaign.updateMany).not.toHaveBeenCalled();
   });
 
   it("requestExtension rejects a second extension — doc §8, one permitted maximum", async () => {
@@ -344,6 +345,10 @@ describe("communityCampaignsService rescue-window organiser actions", () => {
         participants: [{ userId: "participant-1" }],
       },
     } as never);
+    m.$transaction.mockImplementationOnce(async (cb: any) => cb({
+      campaignExtensionRequest: { updateMany: vi.fn().mockResolvedValue({ count: 1 }) },
+      communityCampaign: { updateMany: vi.fn().mockResolvedValue({ count: 1 }) },
+    }));
 
     await communityCampaignsService.approveExtension("admin-1", "ext-2");
 
@@ -353,6 +358,27 @@ describe("communityCampaignsService rescue-window organiser actions", () => {
     expect(notificationsService.enqueue).toHaveBeenCalledWith(
       expect.objectContaining({ userId: "participant-1", data: expect.not.objectContaining({ audience: "organiser" }) }),
     );
+  });
+
+  it("Phase 8 — approveExtension() loses the race when the rescue window already expired (evaluateRescueExpiry moved the campaign off RESCUE_WINDOW) between request and approval", async () => {
+    m.campaignExtensionRequest.findUnique.mockResolvedValue({
+      id: "ext-3", status: "PENDING", campaignId: "camp-10y", requestedDeadline: new Date(Date.now() + 100000),
+      supplierReconfirmed: true, priceUnchangedConfirmed: true,
+      campaign: {
+        id: "camp-10y", title: "Rice Bulk Buy", extensionCount: 0,
+        organiser: { userId: "organiser-user-1" },
+        participants: [],
+      },
+    } as never);
+    m.$transaction.mockImplementationOnce(async (cb: any) => cb({
+      campaignExtensionRequest: { updateMany: vi.fn().mockResolvedValue({ count: 1 }) },
+      // The request row claim succeeds, but the campaign already moved off
+      // RESCUE_WINDOW (the sweep beat this approval to it) — count 0.
+      communityCampaign: { updateMany: vi.fn().mockResolvedValue({ count: 0 }) },
+    }));
+
+    await expect(communityCampaignsService.approveExtension("admin-1", "ext-3")).rejects.toMatchObject({ statusCode: 409 });
+    expect(notificationsService.enqueue).not.toHaveBeenCalled();
   });
 
   /** NAV-08 regression guard: rescue_opened fires to organiser + every participant under the same event name. */
@@ -385,7 +411,8 @@ describe("communityCampaignsService rescue-window organiser actions", () => {
   it("notifies each participant exactly once and never schedules a CAMPAIGN_REFUND_UPDATE automation", async () => {
     m.organiserProfile.findUnique.mockResolvedValue({ id: "org-1", userId: "organiser-user-1" } as never);
     m.communityCampaign.findUnique.mockResolvedValue({ id: "camp-6b", organiserId: "org-1", status: "RESCUE_WINDOW", title: "Ending" } as never);
-    m.communityCampaign.update.mockResolvedValue({ id: "camp-6b", status: "FAILED" } as never);
+    m.communityCampaign.updateMany.mockResolvedValue({ count: 1 } as never);
+    m.communityCampaign.findUniqueOrThrow.mockResolvedValue({ id: "camp-6b", status: "FAILED" } as never);
     m.campaignContribution.findMany.mockResolvedValue([] as never);
     m.campaignParticipant.findMany.mockResolvedValue([{ userId: "participant-1" }, { userId: "participant-2" }] as never);
 
@@ -407,7 +434,8 @@ describe("communityCampaignsService rescue-window organiser actions", () => {
   it("tags the organiser's own 'cancelled' notification with audience:organiser", async () => {
     m.organiserProfile.findUnique.mockResolvedValue({ id: "org-1", userId: "organiser-user-1" } as never);
     m.communityCampaign.findUnique.mockResolvedValue({ id: "camp-6c", organiserId: "org-1", status: "RESCUE_WINDOW", title: "Ending" } as never);
-    m.communityCampaign.update.mockResolvedValue({ id: "camp-6c", status: "FAILED" } as never);
+    m.communityCampaign.updateMany.mockResolvedValue({ count: 1 } as never);
+    m.communityCampaign.findUniqueOrThrow.mockResolvedValue({ id: "camp-6c", status: "FAILED" } as never);
     m.campaignContribution.findMany.mockResolvedValue([] as never);
     m.campaignParticipant.findMany.mockResolvedValue([] as never);
 
@@ -465,7 +493,8 @@ describe("campaignFulfilmentService.markDispatched — NAV-08: fulfilment_update
 describe("communityCampaignsService.pause/resume — CBA-09: organiser notification", () => {
   it("pause() notifies the organiser, tagged audience:organiser", async () => {
     m.communityCampaign.findUnique.mockResolvedValue({ id: "camp-p1", status: "LIVE", title: "Rice Bulk Buy", organiser: { userId: "organiser-user-1" } } as never);
-    m.communityCampaign.update.mockResolvedValue({ id: "camp-p1", status: "PAUSED" } as never);
+    m.communityCampaign.updateMany.mockResolvedValue({ count: 1 } as never);
+    m.communityCampaign.findUniqueOrThrow.mockResolvedValue({ id: "camp-p1", status: "PAUSED" } as never);
 
     const result = await communityCampaignsService.pause("admin-1", "camp-p1");
 
@@ -478,6 +507,14 @@ describe("communityCampaignsService.pause/resume — CBA-09: organiser notificat
   it("pause() rejects a campaign that isn't LIVE, and sends no notification", async () => {
     m.communityCampaign.findUnique.mockResolvedValue({ id: "camp-p2", status: "PAUSED", organiser: { userId: "organiser-user-1" } } as never);
     await expect(communityCampaignsService.pause("admin-1", "camp-p2")).rejects.toMatchObject({ statusCode: 409 });
+    expect(notificationsService.enqueue).not.toHaveBeenCalled();
+  });
+
+  it("Phase 8 — pause() loses the race when the success sweep already moved this campaign off LIVE, and sends no notification", async () => {
+    m.communityCampaign.findUnique.mockResolvedValue({ id: "camp-p3", status: "LIVE", organiser: { userId: "organiser-user-1" } } as never);
+    // Read saw LIVE, but closeDueCampaigns() already won the write.
+    m.communityCampaign.updateMany.mockResolvedValue({ count: 0 } as never);
+    await expect(communityCampaignsService.pause("admin-1", "camp-p3")).rejects.toMatchObject({ statusCode: 409 });
     expect(notificationsService.enqueue).not.toHaveBeenCalled();
   });
 
@@ -1263,6 +1300,38 @@ describe("campaignContributionsService.releaseSupplierPayment — owner settleme
   });
 });
 
+describe("campaignContributionsService.holdSupplierPayment — Phase 8: race-safe against a concurrent release", () => {
+  it("holds a NOT_RELEASED payment", async () => {
+    m.campaignSupplierPayment.findUnique.mockResolvedValueOnce({ campaignId: "camp-hold-1", status: "NOT_RELEASED" } as never);
+    m.campaignSupplierPayment.updateMany.mockResolvedValueOnce({ count: 1 } as never);
+    m.campaignSupplierPayment.findUniqueOrThrow.mockResolvedValueOnce({ campaignId: "camp-hold-1", status: "ON_HOLD" } as never);
+
+    const result = await campaignContributionsService.holdSupplierPayment("admin-1", "camp-hold-1", "dispute");
+
+    expect(result.status).toBe("ON_HOLD");
+    expect(m.campaignSupplierPayment.updateMany).toHaveBeenCalledWith({
+      where: { campaignId: "camp-hold-1", status: { in: ["NOT_RELEASED", "ON_HOLD"] } },
+      data: { status: "ON_HOLD", holdReason: "dispute" },
+    });
+  });
+
+  it("rejects an already-PAID payment", async () => {
+    m.campaignSupplierPayment.findUnique.mockResolvedValueOnce({ campaignId: "camp-hold-2", status: "PAID" } as never);
+    await expect(campaignContributionsService.holdSupplierPayment("admin-1", "camp-hold-2", "dispute")).rejects.toMatchObject({ statusCode: 409 });
+    expect(m.campaignSupplierPayment.updateMany).not.toHaveBeenCalled();
+  });
+
+  it("Phase 8 — loses the race when releaseSupplierPayment() already claimed PROCESSING between the read and this write, never clobbering an in-flight transfer back to ON_HOLD", async () => {
+    m.campaignSupplierPayment.findUnique.mockResolvedValueOnce({ campaignId: "camp-hold-3", status: "NOT_RELEASED" } as never);
+    // The read saw NOT_RELEASED, but releaseSupplierPayment()'s own guarded
+    // claim already won and moved it to PROCESSING — this hold's WHERE
+    // (status IN NOT_RELEASED/ON_HOLD) no longer matches.
+    m.campaignSupplierPayment.updateMany.mockResolvedValueOnce({ count: 0 } as never);
+
+    await expect(campaignContributionsService.holdSupplierPayment("admin-1", "camp-hold-3", "dispute")).rejects.toMatchObject({ statusCode: 409 });
+  });
+});
+
 // WS4 fix: the legacy-Vendor branch used to check only stripePayoutsEnabled,
 // weaker than the SupplierAccount branch (payoutsEnabled && chargesEnabled)
 // and weaker than the existing, already-tested vendor withdrawal check
@@ -1636,11 +1705,12 @@ describe("communityCampaignsService.requestChanges — Final Client Decision 1",
 
   it("allows changes-requested on UNDER_REVIEW (pre-existing path, unchanged)", async () => {
     m.communityCampaign.findUnique.mockResolvedValue({ ...baseCampaign, status: "UNDER_REVIEW", termsLockedAt: null } as never);
-    m.communityCampaign.update.mockResolvedValue({ id: "camp-1", status: "CHANGES_REQUIRED" } as never);
+    m.communityCampaign.updateMany.mockResolvedValue({ count: 1 } as never);
+    m.communityCampaign.findUniqueOrThrow.mockResolvedValue({ id: "camp-1", status: "CHANGES_REQUIRED" } as never);
 
     await communityCampaignsService.requestChanges("admin-1", "camp-1", "Fix the description");
 
-    expect(m.communityCampaign.update).toHaveBeenCalledWith(
+    expect(m.communityCampaign.updateMany).toHaveBeenCalledWith(
       expect.objectContaining({ data: expect.objectContaining({ status: "CHANGES_REQUIRED" }) }),
     );
     expect(notificationsService.enqueue).toHaveBeenCalledWith(
@@ -1650,22 +1720,24 @@ describe("communityCampaignsService.requestChanges — Final Client Decision 1",
 
   it("allows changes-requested on APPROVED (new — Decision 1 extension)", async () => {
     m.communityCampaign.findUnique.mockResolvedValue({ ...baseCampaign, status: "APPROVED", termsLockedAt: null } as never);
-    m.communityCampaign.update.mockResolvedValue({ id: "camp-1", status: "CHANGES_REQUIRED" } as never);
+    m.communityCampaign.updateMany.mockResolvedValue({ count: 1 } as never);
+    m.communityCampaign.findUniqueOrThrow.mockResolvedValue({ id: "camp-1", status: "CHANGES_REQUIRED" } as never);
 
     await communityCampaignsService.requestChanges("admin-1", "camp-1", "Supplier changed, needs reassignment");
 
-    expect(m.communityCampaign.update).toHaveBeenCalledWith(
+    expect(m.communityCampaign.updateMany).toHaveBeenCalledWith(
       expect.objectContaining({ data: expect.objectContaining({ status: "CHANGES_REQUIRED" }) }),
     );
   });
 
   it("allows changes-requested on LIVE, pauses pledging via status, and does NOT reset termsLockedAt — confirmed contributions stay immutable", async () => {
     m.communityCampaign.findUnique.mockResolvedValue({ ...baseCampaign, status: "LIVE" } as never);
-    m.communityCampaign.update.mockResolvedValue({ id: "camp-1", status: "CHANGES_REQUIRED" } as never);
+    m.communityCampaign.updateMany.mockResolvedValue({ count: 1 } as never);
+    m.communityCampaign.findUniqueOrThrow.mockResolvedValue({ id: "camp-1", status: "CHANGES_REQUIRED" } as never);
 
     await communityCampaignsService.requestChanges("admin-1", "camp-1", "Price discrepancy found");
 
-    const call = m.communityCampaign.update.mock.calls[0]![0] as any;
+    const call = m.communityCampaign.updateMany.mock.calls[0]![0] as any;
     expect(call.data.status).toBe("CHANGES_REQUIRED");
     expect(call.data.termsLockedAt).toBeUndefined();
     expect(notificationsService.enqueue).toHaveBeenCalledWith(
@@ -1680,14 +1752,22 @@ describe("communityCampaignsService.requestChanges — Final Client Decision 1",
     m.communityCampaign.findUnique.mockResolvedValue({ ...baseCampaign, status: "DRAFT" } as never);
 
     await expect(communityCampaignsService.requestChanges("admin-1", "camp-1", "notes")).rejects.toMatchObject({ statusCode: 409 });
-    expect(m.communityCampaign.update).not.toHaveBeenCalled();
+    expect(m.communityCampaign.updateMany).not.toHaveBeenCalled();
   });
 
   it("rejects requestChanges on a campaign already in a terminal state (COMPLETED)", async () => {
     m.communityCampaign.findUnique.mockResolvedValue({ ...baseCampaign, status: "COMPLETED" } as never);
 
     await expect(communityCampaignsService.requestChanges("admin-1", "camp-1", "notes")).rejects.toMatchObject({ statusCode: 409 });
-    expect(m.communityCampaign.update).not.toHaveBeenCalled();
+    expect(m.communityCampaign.updateMany).not.toHaveBeenCalled();
+  });
+
+  it("Phase 8 — loses the race when the success sweep already moved a LIVE campaign past the state this read expected", async () => {
+    m.communityCampaign.findUnique.mockResolvedValue({ ...baseCampaign, status: "LIVE" } as never);
+    m.communityCampaign.updateMany.mockResolvedValue({ count: 0 } as never);
+
+    await expect(communityCampaignsService.requestChanges("admin-1", "camp-1", "notes")).rejects.toMatchObject({ statusCode: 409 });
+    expect(notificationsService.enqueue).not.toHaveBeenCalled();
   });
 
   it("rejects requestChanges on a non-existent campaign (unauthorized/invalid target, not a 500)", async () => {

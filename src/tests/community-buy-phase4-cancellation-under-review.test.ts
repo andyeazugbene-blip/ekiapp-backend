@@ -16,8 +16,8 @@ vi.mock("../lib/prisma", () => ({
     campaignContribution: { count: vi.fn(), findMany: vi.fn(), update: vi.fn(), updateMany: vi.fn() },
     campaignParticipant: { findMany: vi.fn() },
     campaignRefund: { create: vi.fn() },
-    campaignSupplierPayment: { findUnique: vi.fn(), update: vi.fn() },
-    communityBuyOrganiserPayout: { findUnique: vi.fn(), update: vi.fn() },
+    campaignSupplierPayment: { findUnique: vi.fn(), update: vi.fn(), updateMany: vi.fn(), findUniqueOrThrow: vi.fn() },
+    communityBuyOrganiserPayout: { findUnique: vi.fn(), update: vi.fn(), updateMany: vi.fn(), findUniqueOrThrow: vi.fn() },
     auditLog: { create: vi.fn() },
     $transaction: vi.fn(),
   },
@@ -34,10 +34,12 @@ const m = vi.mocked(prisma, true) as any;
 
 beforeEach(() => {
   vi.clearAllMocks();
-  // Array-form $transaction (used by the no-financial-activity branch) —
-  // resolves each already-invoked operation's mocked return value, same
-  // shape real Prisma's array-transaction API returns.
-  m.$transaction.mockImplementation(async (ops: unknown) => (Array.isArray(ops) ? Promise.all(ops) : ops));
+  // Supports both $transaction forms: array-form resolves each
+  // already-invoked operation's mocked return value; interactive
+  // (callback) form — used by the no-financial-activity branch's guarded
+  // claim (Phase 8) — invokes the callback with the same mocked prisma
+  // client as `tx`, since every method it calls already exists on `m`.
+  m.$transaction.mockImplementation(async (ops: unknown) => (Array.isArray(ops) ? Promise.all(ops) : typeof ops === "function" ? ops(m) : ops));
   m.organiserProfile.findUnique.mockResolvedValue({ id: "org-1", userId: "u1" });
 });
 
@@ -78,7 +80,8 @@ describe("requestCancellation() — routing decision (pre-payment vs already-cap
     m.communityCampaign.findUnique.mockResolvedValue(baseCampaign);
     m.campaignCancellationRequest.findFirst.mockResolvedValue(null);
     m.campaignContribution.count.mockResolvedValue(0);
-    m.communityCampaign.update.mockResolvedValue({ ...baseCampaign, status: "CANCELLED" });
+    m.communityCampaign.updateMany.mockResolvedValue({ count: 1 });
+    m.communityCampaign.findUniqueOrThrow.mockResolvedValue({ ...baseCampaign, status: "CANCELLED" });
     m.campaignCancellationRequest.create.mockResolvedValue({ id: "req-1", status: "APPROVED", hadFinancialActivity: false });
     m.campaignParticipant.findMany.mockResolvedValue([{ userId: "buyer-1" }]);
 
@@ -86,11 +89,23 @@ describe("requestCancellation() — routing decision (pre-payment vs already-cap
 
     expect(result.requiresReview).toBe(false);
     expect(result.campaign.status).toBe("CANCELLED");
-    expect(m.communityCampaign.update).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ status: "CANCELLED" }) }));
+    expect(m.communityCampaign.updateMany).toHaveBeenCalledWith(expect.objectContaining({ where: { id: "camp-1", status: "LIVE" }, data: expect.objectContaining({ status: "CANCELLED" }) }));
     expect(m.campaignCancellationRequest.create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ hadFinancialActivity: false, status: "APPROVED" }) }));
     expect(m.campaignContribution.updateMany).toHaveBeenCalledWith({ where: { campaignId: "camp-1", status: "PLEDGED" }, data: { status: "CANCELLED" } });
-    // Never routes through CANCELLATION_UNDER_REVIEW for this case.
-    expect(m.communityCampaign.updateMany).not.toHaveBeenCalled();
+  });
+
+  it("Phase 8 — loses the race when the campaign's status changed between the paidCount read and the guarded claim, and never falls through to void pledges or notify anyone", async () => {
+    m.communityCampaign.findUnique.mockResolvedValue(baseCampaign);
+    m.campaignCancellationRequest.findFirst.mockResolvedValue(null);
+    m.campaignContribution.count.mockResolvedValue(0);
+    // The claim's WHERE no longer matches — e.g. the success sweep already
+    // moved this campaign off LIVE by the time the guarded write runs.
+    m.communityCampaign.updateMany.mockResolvedValue({ count: 0 });
+
+    await expect(communityCampaignsService.requestCancellation("u1", "camp-1", "changed my mind")).rejects.toMatchObject({ statusCode: 409 });
+
+    expect(m.campaignCancellationRequest.create).not.toHaveBeenCalled();
+    expect(notificationsService.enqueue).not.toHaveBeenCalled();
   });
 
   it("at least one PAID contribution — routes to CANCELLATION_UNDER_REVIEW and creates a PENDING request", async () => {
@@ -166,8 +181,10 @@ describe("approveCancellation() — refund/reversal without double-processing", 
     m.campaignContribution.findMany.mockResolvedValueOnce([{ id: "contrib-1", amount: 1000, buyerServiceFeeAmount: 50, deliveryFeeAmountMinor: 0, currency: "GBP" }]);
     m.campaignRefund.create.mockResolvedValue({});
     m.campaignContribution.update.mockResolvedValue({});
-    m.campaignSupplierPayment.update.mockResolvedValue({});
-    m.communityBuyOrganiserPayout.update.mockResolvedValue({});
+    m.campaignSupplierPayment.updateMany.mockResolvedValue({ count: 1 });
+    m.campaignSupplierPayment.findUniqueOrThrow.mockResolvedValue({ status: "ON_HOLD" });
+    m.communityBuyOrganiserPayout.updateMany.mockResolvedValue({ count: 1 });
+    m.communityBuyOrganiserPayout.findUniqueOrThrow.mockResolvedValue({ status: "ON_HOLD" });
     m.campaignCancellationRequest.findUniqueOrThrow.mockResolvedValue({ id: "req-2", status: "APPROVED" });
 
     const result = await communityCampaignsService.approveCancellation("admin-1", "req-2");
@@ -178,8 +195,8 @@ describe("approveCancellation() — refund/reversal without double-processing", 
     // Refund creation reused verbatim — one CampaignRefund row per PAID contribution.
     expect(m.campaignRefund.create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ contributionId: "contrib-1", amount: 1050, status: "REFUND_PENDING" }) }));
     // Both payout records placed on hold rather than left releasable.
-    expect(m.campaignSupplierPayment.update).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ status: "ON_HOLD" }) }));
-    expect(m.communityBuyOrganiserPayout.update).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ status: "ON_HOLD" }) }));
+    expect(m.campaignSupplierPayment.updateMany).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ status: "ON_HOLD" }) }));
+    expect(m.communityBuyOrganiserPayout.updateMany).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ status: "ON_HOLD" }) }));
     expect(notificationsService.enqueue).toHaveBeenCalledWith(expect.objectContaining({ userId: "organiser-user-1" }));
     expect(notificationsService.enqueue).toHaveBeenCalledWith(expect.objectContaining({ userId: "buyer-1" }));
     expect(notificationsService.enqueue).toHaveBeenCalledWith(expect.objectContaining({ userId: "buyer-2" }));

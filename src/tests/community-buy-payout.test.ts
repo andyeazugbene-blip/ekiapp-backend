@@ -261,9 +261,21 @@ describe("markReady()/hold() — governance only, never move money", () => {
   it("hold() records a reason code and never moves money", async () => {
     const { campaignPayoutService } = await import("../modules/community-buy/campaign-payout.service");
     m.communityBuyPayout.findUnique.mockResolvedValue(basePayout({ status: "READY", holdReasonCodes: [] }) as any);
-    m.communityBuyPayout.update.mockResolvedValue(basePayout({ status: "HELD", holdReasonCodes: ["dispute"] }) as any);
+    m.communityBuyPayout.updateMany.mockResolvedValue({ count: 1 } as any);
+    m.communityBuyPayout.findUniqueOrThrow.mockResolvedValue(basePayout({ status: "HELD", holdReasonCodes: ["dispute"] }) as any);
     const result = await campaignPayoutService.hold("admin-1", CAMPAIGN_ID, "dispute");
     expect(result.status).toBe("HELD");
+    expect(s.payouts.create).not.toHaveBeenCalled();
+  });
+
+  it("Phase 8 — hold() loses the race when triggerManualPayout() already claimed PENDING/IN_TRANSIT between the read and this write", async () => {
+    const { campaignPayoutService } = await import("../modules/community-buy/campaign-payout.service");
+    m.communityBuyPayout.findUnique.mockResolvedValue(basePayout({ status: "READY", holdReasonCodes: [] }) as any);
+    // Read saw READY, but triggerManualPayout()'s own guarded claim already
+    // won and moved it to PENDING/IN_TRANSIT — this hold's WHERE
+    // (status NOT IN PAID/PENDING/IN_TRANSIT) no longer matches.
+    m.communityBuyPayout.updateMany.mockResolvedValue({ count: 0 } as any);
+    await expect(campaignPayoutService.hold("admin-1", CAMPAIGN_ID, "dispute")).rejects.toMatchObject({ statusCode: 409 });
     expect(s.payouts.create).not.toHaveBeenCalled();
   });
 });
@@ -392,9 +404,10 @@ describe("M6 — escalateToManualReview() / holdForSystemReason()", () => {
   it("holdForSystemReason() applies the hold via the same hold() path when a payout row exists", async () => {
     const { campaignPayoutService } = await import("../modules/community-buy/campaign-payout.service");
     m.communityBuyPayout.findUnique.mockResolvedValue(basePayout({ status: "READY", holdReasonCodes: [] }) as any);
-    m.communityBuyPayout.update.mockResolvedValue(basePayout({ status: "HELD", holdReasonCodes: ["dispute_open"] }) as any);
+    m.communityBuyPayout.updateMany.mockResolvedValue({ count: 1 } as any);
+    m.communityBuyPayout.findUniqueOrThrow.mockResolvedValue(basePayout({ status: "HELD", holdReasonCodes: ["dispute_open"] }) as any);
     await campaignPayoutService.holdForSystemReason(CAMPAIGN_ID, "dispute_open");
-    expect(m.communityBuyPayout.update).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ holdReasonCodes: ["dispute_open"] }) }));
+    expect(m.communityBuyPayout.updateMany).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ holdReasonCodes: ["dispute_open"] }) }));
   });
 });
 
