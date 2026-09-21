@@ -306,7 +306,11 @@ adminRouter.post("/community-campaigns/:id/issue-notes", asyncHandler(requireAdm
 // since cancel is only ever reachable pre-charge (see the service method's
 // own comment) — no money moves, so it sits in the same tier as those,
 // not the 2FA-gated tier reserved for refund/transfer actions.
-adminRouter.post("/community-campaigns/:id/cancel", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(adminCancelCampaign));
+// Phase 8 — can trigger a real refund (AT-25: a PAYMENT_CAPTURE-status
+// campaign may already have PAID contributions), matching every other
+// refund/release-adjacent Community Buy admin action in this file, which
+// all already require 2FA.
+adminRouter.post("/community-campaigns/:id/cancel", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(require2fa), asyncHandler(adminCancelCampaign));
 adminRouter.get("/community-campaigns/:id/contributions", asyncHandler(requireAdminPermission("community_buy.read")), asyncHandler(adminListCampaignContributions));
 adminRouter.get("/community-buy/organisers/pending", asyncHandler(requireAdminPermission("community_buy.read")), asyncHandler(adminListPendingOrganisers));
 adminRouter.post("/community-buy/organisers/:id/verify", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(adminVerifyOrganiser));

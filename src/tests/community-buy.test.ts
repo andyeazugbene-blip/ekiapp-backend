@@ -2985,13 +2985,18 @@ describe("Phase 9 — admin cancel/end campaign", () => {
     "cancels a %s campaign, voids pledges, and notifies the organiser and every participant",
     async (status) => {
       m.communityCampaign.findUnique.mockResolvedValue({ ...baseCampaign, status } as never);
-      m.communityCampaign.update.mockResolvedValue({ id: "camp-1", status: "CANCELLED" } as never);
+      m.communityCampaign.updateMany.mockResolvedValue({ count: 1 } as never);
+      m.communityCampaign.findUniqueOrThrow.mockResolvedValue({ id: "camp-1", status: "CANCELLED" } as never);
 
       const result = await communityCampaignsService.cancel("admin-1", "camp-1", "Duplicate of another campaign");
 
       expect(result.status).toBe("CANCELLED");
-      expect(m.communityCampaign.update).toHaveBeenCalledWith({
-        where: { id: "camp-1" },
+      // Phase 8 — guarded updateMany (not a plain update), same
+      // atomic-claim pattern every sibling status transition in this file
+      // uses, so a concurrent success-sweep transition can never be
+      // unconditionally overwritten back to CANCELLED after losing the race.
+      expect(m.communityCampaign.updateMany).toHaveBeenCalledWith({
+        where: { id: "camp-1", status: { in: expect.arrayContaining([status]) } },
         data: { status: "CANCELLED", closedAt: expect.any(Date), reviewNotes: "Duplicate of another campaign" },
       });
       // Nothing was ever charged pre-success (PLEDGE_THEN_CHARGE) — cancel
@@ -3028,7 +3033,8 @@ describe("Phase 9 — admin cancel/end campaign", () => {
 
   it("revokes any DeliveryReference rows for the cancelled campaign — Individual Delivery correctness", async () => {
     m.communityCampaign.findUnique.mockResolvedValue({ ...baseCampaign, status: "LIVE" } as never);
-    m.communityCampaign.update.mockResolvedValue({ id: "camp-1", status: "CANCELLED" } as never);
+    m.communityCampaign.updateMany.mockResolvedValue({ count: 1 } as never);
+    m.communityCampaign.findUniqueOrThrow.mockResolvedValue({ id: "camp-1", status: "CANCELLED" } as never);
 
     await communityCampaignsService.cancel("admin-1", "camp-1", "test");
 
@@ -3038,6 +3044,21 @@ describe("Phase 9 — admin cancel/end campaign", () => {
     }));
   });
 
+  it("Phase 8 — loses the race when a concurrent transition (e.g. the success sweep) claims the campaign first, and never overwrites it back to CANCELLED", async () => {
+    m.communityCampaign.findUnique.mockResolvedValue({ ...baseCampaign, status: "LIVE" } as never);
+    // The read above still sees LIVE, but by write time another process
+    // (closeDueCampaigns()) already won and moved it to FULFILLING — the
+    // guarded updateMany's WHERE no longer matches, so count is 0.
+    m.communityCampaign.updateMany.mockResolvedValue({ count: 0 } as never);
+
+    await expect(communityCampaignsService.cancel("admin-1", "camp-1", "test")).rejects.toMatchObject({ statusCode: 409 });
+
+    // Must not fall through to void pledges, revoke delivery references, or
+    // notify anyone — the campaign was never actually claimed by this call.
+    expect(m.campaignContribution.updateMany).not.toHaveBeenCalled();
+    expect(notificationsService.enqueue).not.toHaveBeenCalled();
+  });
+
   it.each(["SUCCEEDED", "FULFILLING", "COMPLETED", "FINANCIALLY_CLOSED", "FAILED", "REJECTED", "CANCELLED", "REFUNDING"])(
     "refuses to cancel a %s campaign (already past the point money could have moved) and sends no notification",
     async (status) => {
@@ -3045,7 +3066,7 @@ describe("Phase 9 — admin cancel/end campaign", () => {
 
       await expect(communityCampaignsService.cancel("admin-1", "camp-1", "test")).rejects.toMatchObject({ statusCode: 409 });
 
-      expect(m.communityCampaign.update).not.toHaveBeenCalled();
+      expect(m.communityCampaign.updateMany).not.toHaveBeenCalled();
       expect(notificationsService.enqueue).not.toHaveBeenCalled();
     },
   );
@@ -3058,7 +3079,8 @@ describe("Phase 9 — admin cancel/end campaign", () => {
 
   it("a notification failure during cancel does not roll back the cancelled state", async () => {
     m.communityCampaign.findUnique.mockResolvedValue({ ...baseCampaign, status: "LIVE" } as never);
-    m.communityCampaign.update.mockResolvedValue({ id: "camp-1", status: "CANCELLED" } as never);
+    m.communityCampaign.updateMany.mockResolvedValue({ count: 1 } as never);
+      m.communityCampaign.findUniqueOrThrow.mockResolvedValue({ id: "camp-1", status: "CANCELLED" } as never);
     vi.mocked(notificationsService.enqueue).mockRejectedValueOnce(new Error("push provider down"));
 
     const result = await communityCampaignsService.cancel("admin-1", "camp-1", "test");
@@ -3072,7 +3094,8 @@ describe("Phase 9 — admin cancel/end campaign", () => {
   // charged, and told every participant "you were not charged" regardless.
   it("AT-25: cancelling an AUTHORISE_THEN_CAPTURE campaign with an already-captured contribution creates a refund record and tells that participant the truth", async () => {
     m.communityCampaign.findUnique.mockResolvedValue({ ...baseCampaign, status: "PAYMENT_CAPTURE", paymentMode: "AUTHORISE_THEN_CAPTURE" } as never);
-    m.communityCampaign.update.mockResolvedValue({ id: "camp-1", status: "CANCELLED" } as never);
+    m.communityCampaign.updateMany.mockResolvedValue({ count: 1 } as never);
+      m.communityCampaign.findUniqueOrThrow.mockResolvedValue({ id: "camp-1", status: "CANCELLED" } as never);
     m.communityBuyPaymentAuthorisation.findMany.mockResolvedValue([] as never); // no open holds left to release in this scenario
     // createRefundRecordsForFailedCampaign() queries PAID contributions first...
     m.campaignContribution.findMany.mockImplementationOnce(async () => [
@@ -3104,7 +3127,8 @@ describe("Phase 9 — admin cancel/end campaign", () => {
 
   it("AT-25: an AUTHORISE_THEN_CAPTURE cancel with nothing captured yet still releases open holds and sends the plain 'never charged' message to everyone", async () => {
     m.communityCampaign.findUnique.mockResolvedValue({ ...baseCampaign, status: "HOLD_WINDOW", paymentMode: "AUTHORISE_THEN_CAPTURE" } as never);
-    m.communityCampaign.update.mockResolvedValue({ id: "camp-1", status: "CANCELLED" } as never);
+    m.communityCampaign.updateMany.mockResolvedValue({ count: 1 } as never);
+      m.communityCampaign.findUniqueOrThrow.mockResolvedValue({ id: "camp-1", status: "CANCELLED" } as never);
     m.campaignContribution.findMany.mockResolvedValue([] as never); // nothing PAID
     m.communityBuyPaymentAuthorisation.findMany.mockResolvedValue([] as never);
 
@@ -3142,7 +3166,8 @@ describe("Phase 9 — admin cancel/end campaign", () => {
     "cancels an AUTHORISE_THEN_CAPTURE campaign in %s by releasing holds, not the old-mode refund path",
     async (status) => {
       m.communityCampaign.findUnique.mockResolvedValue({ ...baseCampaign, status, paymentMode: "AUTHORISE_THEN_CAPTURE" } as never);
-      m.communityCampaign.update.mockResolvedValue({ id: "camp-1", status: "CANCELLED" } as never);
+      m.communityCampaign.updateMany.mockResolvedValue({ count: 1 } as never);
+      m.communityCampaign.findUniqueOrThrow.mockResolvedValue({ id: "camp-1", status: "CANCELLED" } as never);
       m.communityBuyPaymentAuthorisation.findMany.mockResolvedValue([] as never);
 
       const result = await communityCampaignsService.cancel("admin-1", "camp-1", "Organiser requested cancellation");

@@ -1239,10 +1239,22 @@ export const communityCampaignsService = {
     if (!cancellable.includes(campaign.status)) {
       throw new AppError("This campaign can no longer be cancelled — it has already succeeded, failed, or ended", 409);
     }
-    const updated = await prisma.communityCampaign.update({
-      where: { id: campaignId },
+    // Phase 8 — atomic claim, same guarded-transition pattern every sibling
+    // admin decision in this file uses (approveCancellation/rejectCancellation
+    // above, evaluateRescueExpiry()/closeDueCampaigns() in this same
+    // service). Without this, a concurrent success-sweep transition (e.g.
+    // closeDueCampaigns() moving LIVE -> FULFILLING and starting real
+    // captures) could still be unconditionally overwritten back to CANCELLED
+    // by this call after losing the race, leaving PAID contributions on a
+    // campaign marked CANCELLED.
+    const claim = await prisma.communityCampaign.updateMany({
+      where: { id: campaignId, status: { in: cancellable as (typeof campaign)["status"][] } },
       data: { status: "CANCELLED", closedAt: new Date(), reviewNotes: reason },
     });
+    if (claim.count !== 1) {
+      throw new AppError("This campaign can no longer be cancelled — it has already succeeded, failed, or ended", 409);
+    }
+    const updated = await prisma.communityCampaign.findUniqueOrThrow({ where: { id: campaignId } });
     // AT-25 — captured contributions get a real refund record regardless of
     // payment mode; releaseAllHoldsForCampaign() (M2 only) never touches
     // those (captureStatus-filtered, see its own doc comment) so the two
