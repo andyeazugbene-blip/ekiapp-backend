@@ -1,4 +1,4 @@
-import { NotificationType, PaymentStatus, Prisma, SubscriptionPlan, SubscriptionStatus } from "@prisma/client";
+import { NotificationType, OrderStatus, PaymentStatus, Prisma, SubscriptionPlan, SubscriptionStatus } from "@prisma/client";
 import type Stripe from "stripe";
 
 import { env } from "../../config/env";
@@ -62,6 +62,15 @@ class StripeWebhookService {
 
     if (event.type === "charge.dispute.created") {
       return this.handleDisputeCreated(event);
+    }
+
+    // Phase 4.1 — the dispute's actual outcome (won/lost/warning_closed),
+    // decided by Stripe/the card network after evidence review. Previously
+    // nothing handled this at all: a dispute row was created and an order
+    // frozen (see handleDisputeCreated below) but NOTHING ever unfroze it
+    // or reflected the real financial outcome once Stripe resolved it.
+    if (event.type === "charge.dispute.closed") {
+      return this.handleDisputeClosed(event);
     }
 
     if (event.type === "charge.refunded" || event.type === "charge.refund.updated") {
@@ -1553,11 +1562,15 @@ class StripeWebhookService {
           return { received: true, duplicate: true, eventId: event.id, type: event.type };
         }
 
-        // Find related checkout via payment intent
+        // Find related checkout via payment intent — now also its orders,
+        // so this dispute can actually freeze them (Phase 4.1: previously
+        // nothing ever changed Order.status for a bank-initiated
+        // chargeback, unlike the buyer-app-initiated dispute flow, which
+        // has always frozen the order to DISPUTED).
         const checkout = paymentIntentId
           ? await tx.checkout.findUnique({
               where: { stripePaymentIntentId: paymentIntentId },
-              select: { id: true, buyerId: true },
+              select: { id: true, buyerId: true, orders: { select: { id: true, status: true } } },
             })
           : null;
 
@@ -1606,11 +1619,37 @@ class StripeWebhookService {
           });
         }
 
+        // Freeze every affected order to DISPUTED — same status the
+        // buyer-app-initiated dispute flow (dispute.service.ts) has always
+        // used, now applied consistently for a bank-initiated chargeback
+        // too. A guarded per-order updateMany (rather than an unconditional
+        // updateMany over all ids) both prevents clobbering a status that
+        // changed concurrently AND tells us exactly which orders were
+        // actually frozen, so the pre-dispute snapshot only ever records
+        // real transitions this event caused.
+        const NOT_FREEZABLE = new Set(["CANCELLED", "REFUNDED", "FAILED", "DISPUTED"]);
+        const freezableOrders = (checkout?.orders ?? []).filter((o) => !NOT_FREEZABLE.has(o.status));
+        const affectedOrderIds: string[] = [];
+        const preDisputeStatuses: Record<string, string> = {};
+        for (const order of freezableOrders) {
+          const claim = await tx.order.updateMany({
+            where: { id: order.id, status: order.status },
+            data: { status: "DISPUTED", disputedAt: new Date() },
+          });
+          if (claim.count === 1) {
+            affectedOrderIds.push(order.id);
+            preDisputeStatuses[order.id] = order.status;
+          }
+        }
+
         // Real DB row (architecture doc §15.3 "Chargebacks" queue) — the
         // log line + email above are easy to miss; this is what actually
         // lets an admin open a queue and work the dispute. Upsert on the
         // unique Stripe dispute id so a retried/duplicate delivery of this
         // event can never create a second row for the same chargeback.
+        // affectedOrderIds/preDisputeStatuses are set only on create — a
+        // retried .created delivery must never re-freeze orders a second
+        // time or overwrite the original pre-dispute snapshot.
         await tx.stripeDispute.upsert({
           where: { stripeDisputeId: dispute.id },
           update: { status: dispute.status },
@@ -1623,6 +1662,8 @@ class StripeWebhookService {
             currency: dispute.currency,
             reason: dispute.reason,
             status: dispute.status,
+            affectedOrderIds,
+            preDisputeStatuses,
           },
         });
 
@@ -1652,6 +1693,162 @@ class StripeWebhookService {
         return { received: true, duplicate: true, eventId: event.id, type: event.type };
       }
       logger.error("Webhook failed: charge.dispute.created", { eventId: event.id, ...serializeError(error) });
+      throw error;
+    }
+  }
+
+  /**
+   * charge.dispute.closed — Stripe/the card network's real, final outcome
+   * (won/lost/warning_closed). Previously nothing handled this at all: a
+   * dispute froze an order (handleDisputeCreated) and NOTHING ever
+   * unfroze it or reflected the real financial result once Stripe resolved
+   * it — the order just stayed DISPUTED forever regardless of outcome.
+   */
+  private async handleDisputeClosed(event: Stripe.Event): Promise<StripeWebhookResult> {
+    const dispute = event.data.object as Stripe.Dispute;
+    const paymentIntentId = typeof dispute.payment_intent === "string" ? dispute.payment_intent : dispute.payment_intent?.id;
+
+    try {
+      const result = await prisma.$transaction(async (
+        tx,
+      ): Promise<StripeWebhookResult & { alreadyResolved?: boolean; earningsAlreadyReleasedOrderIds?: string[]; communityBuyCampaignId?: string }> => {
+        if (await this.isDuplicate(tx, event.id, event.type, {})) {
+          return { received: true, duplicate: true, eventId: event.id, type: event.type };
+        }
+
+        let record = await tx.stripeDispute.findUnique({ where: { stripeDisputeId: dispute.id } });
+
+        // Out-of-order delivery: .closed arrived before .created was ever
+        // processed. Create the row directly from this event's own data
+        // rather than dropping the dispute on the floor — affectedOrderIds
+        // stays empty here (no pre-dispute snapshot was ever taken), so no
+        // order transition happens for this rare case, but the dispute
+        // itself is still real and visible to admin.
+        if (!record) {
+          const checkout = paymentIntentId
+            ? await tx.checkout.findUnique({ where: { stripePaymentIntentId: paymentIntentId }, select: { id: true, buyerId: true } })
+            : null;
+          record = await tx.stripeDispute.create({
+            data: {
+              stripeDisputeId: dispute.id,
+              paymentIntentId: paymentIntentId ?? null,
+              checkoutId: checkout?.id ?? null,
+              buyerId: checkout?.buyerId ?? null,
+              amount: dispute.amount,
+              currency: dispute.currency,
+              reason: dispute.reason,
+              status: dispute.status,
+            },
+          });
+        }
+
+        // Idempotent — a retried/duplicate .closed for an already-resolved
+        // dispute must never re-run order transitions or re-alert ops.
+        if (record.resolvedAt) {
+          await tx.webhookEvent.update({ where: { stripeEventId: event.id }, data: { status: "PROCESSED", processedAt: new Date() } });
+          return { received: true, eventId: event.id, type: event.type, alreadyResolved: true };
+        }
+
+        const lost = dispute.status === "lost";
+        const affectedOrderIds = record.affectedOrderIds ?? [];
+        const preDisputeStatuses = (record.preDisputeStatuses as Record<string, string> | null) ?? {};
+        const earningsAlreadyReleasedOrderIds: string[] = [];
+
+        for (const orderId of affectedOrderIds) {
+          if (lost) {
+            // The card network permanently took the funds — this order
+            // will never be paid for. REFUNDED is the closest existing,
+            // accurate label (money did not end up with the platform),
+            // rather than inventing a new terminal status.
+            await tx.order.updateMany({ where: { id: orderId, status: "DISPUTED" }, data: { status: "REFUNDED" } });
+
+            // Real financial-exposure check, not a guess: if the vendor's
+            // earnings for this order were already released to their
+            // available balance (i.e. the order was already dispatched
+            // before the dispute), the platform is now out that money with
+            // no vendor-side clawback happening automatically. Whether Eki
+            // claws back from the vendor or absorbs the loss is a real,
+            // unanswered business/legal decision (the identical question
+            // is already documented as open for Community Buy) — never
+            // guessed here. This only makes the exposure loud instead of
+            // silent.
+            const alreadyReleased = await tx.walletTransaction.findFirst({
+              where: { orderId, type: "PENDING_TO_AVAILABLE" },
+              select: { id: true },
+            });
+            if (alreadyReleased) earningsAlreadyReleasedOrderIds.push(orderId);
+          } else {
+            // won / warning_closed / any other non-"lost" closure — the
+            // charge was never actually taken from the platform. Restore
+            // exactly the status the order had immediately before the
+            // dispute froze it; never guess a "better" state than the one
+            // that was actually interrupted.
+            const restoreTo = preDisputeStatuses[orderId];
+            if (restoreTo) {
+              await tx.order.updateMany({ where: { id: orderId, status: "DISPUTED" }, data: { status: restoreTo as OrderStatus } });
+            }
+          }
+        }
+
+        await tx.stripeDispute.update({
+          where: { id: record.id },
+          data: { status: dispute.status, resolvedAt: new Date() },
+        });
+
+        // Community Buy Direct Charge hold — same lookup handleDisputeCreated
+        // uses. The hold campaignPayoutService.holdForSystemReason() placed
+        // is NOT auto-released here: every hold reason in this codebase
+        // already requires an admin to manually review and release via the
+        // existing release endpoint, regardless of cause — staying
+        // consistent with that rather than inventing a new auto-release
+        // path for this one reason.
+        const communityBuyHold = !record.checkoutId && paymentIntentId
+          ? await tx.communityBuyPaymentAuthorisation.findUnique({ where: { paymentIntentId }, select: { campaignId: true } })
+          : null;
+
+        await tx.webhookEvent.update({ where: { stripeEventId: event.id }, data: { status: "PROCESSED", processedAt: new Date() } });
+
+        logger.info("Webhook processed: charge.dispute.closed", {
+          eventId: event.id, disputeId: dispute.id, outcome: dispute.status, affectedOrderIds, earningsAlreadyReleasedOrderIds,
+        });
+
+        return {
+          received: true, eventId: event.id, type: event.type,
+          earningsAlreadyReleasedOrderIds, communityBuyCampaignId: communityBuyHold?.campaignId,
+        };
+      }, { isolationLevel: "Serializable" });
+
+      if (result.communityBuyCampaignId) {
+        logger.info("Community Buy dispute closed — hold remains until an admin manually reviews and releases it", {
+          eventId: event.id, campaignId: result.communityBuyCampaignId, outcome: dispute.status,
+        });
+      }
+
+      if (result.earningsAlreadyReleasedOrderIds && result.earningsAlreadyReleasedOrderIds.length > 0) {
+        logger.error("Stripe dispute LOST after vendor earnings already released — manual clawback decision required", {
+          eventId: event.id, disputeId: dispute.id, orderIds: result.earningsAlreadyReleasedOrderIds,
+        });
+        const opsAlertEmail = process.env.OPS_ALERT_EMAIL;
+        if (opsAlertEmail) {
+          await enqueueEmail({
+            to: opsAlertEmail,
+            subject: "🚨 Dispute lost — vendor already paid (manual decision required)",
+            html: `
+              <h2>Dispute Lost After Payout</h2>
+              <p>Order(s) ${result.earningsAlreadyReleasedOrderIds.join(", ")} lost their Stripe dispute — funds were permanently returned to the cardholder's bank — but the vendor's earnings for these orders were already released to their available balance before the dispute resolved.</p>
+              <p>No automatic clawback has been performed. This requires a manual decision on whether to debit the vendor's wallet or absorb the loss.</p>
+              <p>Dispute ID: ${dispute.id}</p>
+            `,
+          }).catch(() => {});
+        }
+      }
+
+      return result;
+    } catch (error) {
+      if (this.isUniqueConstraintError(error)) {
+        return { received: true, duplicate: true, eventId: event.id, type: event.type };
+      }
+      logger.error("Webhook failed: charge.dispute.closed", { eventId: event.id, ...serializeError(error) });
       throw error;
     }
   }

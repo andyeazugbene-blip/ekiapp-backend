@@ -1553,6 +1553,14 @@ model StripeDispute {
   status          String
   note            String?
   resolvedAt      DateTime?
+  // Phase 4.1 (chargeback → Order linkage): which Order rows this dispute
+  // froze (set to DISPUTED) at creation time, and a snapshot of their
+  // status immediately before freezing — used to restore them correctly if
+  // Stripe/the card network later rules the dispute WON. Never mutated
+  // after creation; a real "what did this affect and what was it before"
+  // record, not a live pointer.
+  affectedOrderIds   String[] @default([])
+  preDisputeStatuses Json?
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
 

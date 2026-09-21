@@ -198,7 +198,11 @@ export const disputeService = {
       // provider-specific refund logic here.
       const amount = input.resolution === "buyer" ? undefined : input.refundAmount;
       try {
-        await executeOrderRefund(dispute.orderId, adminId, amount, `dispute_resolution:${disputeId}:${input.resolution}`);
+        // allowDisputedOrder: true — this order is DISPUTED precisely
+        // because dispute.service.ts's own openDispute() set it that way;
+        // resolving that same dispute is the one legitimate case allowed
+        // to refund a DISPUTED order (see executeOrderRefund's guard).
+        await executeOrderRefund(dispute.orderId, adminId, amount, `dispute_resolution:${disputeId}:${input.resolution}`, "REFUNDED", true);
         logger.info("Dispute refund issued", { disputeId, orderId: dispute.orderId, amount });
       } catch (err) {
         const message = err instanceof AppError ? err.message : String(err);

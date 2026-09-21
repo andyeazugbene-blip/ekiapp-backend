@@ -91,6 +91,15 @@ describe("executeOrderRefund — double-refund guard now also blocks an already-
     expect(stripeRefundCreate).not.toHaveBeenCalled();
   });
 
+  it("Phase 4.1: throws 409 and never calls Stripe when the order has an open Stripe dispute", async () => {
+    m.order.findUnique.mockResolvedValue(paidOrder({ status: "DISPUTED" }));
+
+    await expect(executeOrderRefund("order-1", "admin-1", undefined, "requested_by_customer"))
+      .rejects.toMatchObject({ statusCode: 409 });
+
+    expect(stripeRefundCreate).not.toHaveBeenCalled();
+  });
+
   it("still throws 409 for an already-REFUNDED order (regression check)", async () => {
     m.order.findUnique.mockResolvedValue(paidOrder({ status: "REFUNDED" }));
 

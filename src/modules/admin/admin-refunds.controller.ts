@@ -36,6 +36,17 @@ export async function executeOrderRefund(
   // money movement is identical either way, only the resulting order label
   // differs to match what actually initiated it.
   finalStatus: "REFUNDED" | "CANCELLED" = "REFUNDED",
+  // Phase 4.1: Order.status "DISPUTED" is set by TWO independent
+  // mechanisms that both reuse the same status value — a buyer-app dispute
+  // (dispute.service.ts's Dispute model) and a Stripe/bank-initiated
+  // chargeback (stripe.service.ts's StripeDispute model, handleDisputeCreated).
+  // The guard below exists to stop a Stripe chargeback's outcome being
+  // double-processed by a manual admin refund on top of it. It must NOT
+  // stop dispute.service.ts's own resolveDispute() from calling this
+  // function to actually RESOLVE the buyer-app dispute that put the order
+  // into DISPUTED in the first place — that's the one legitimate caller
+  // allowed to refund a DISPUTED order, so it explicitly opts in here.
+  allowDisputedOrder = false,
 ): Promise<OrderRefundResult> {
   const order = await prisma.order.findUnique({
     where: { id: orderId },
@@ -50,6 +61,14 @@ export async function executeOrderRefund(
   // being) returned — refunding a second time would double-refund.
   if (order.status === "REFUNDED" || order.status === "CANCELLED") {
     throw new AppError("Order already refunded or cancelled", 409);
+  }
+  // A disputed order's outcome is decided by Stripe/the card network, not
+  // by an ad-hoc admin refund — issuing one on top of an open chargeback
+  // would double-process the same money movement. Wait for
+  // charge.dispute.closed to resolve the order first. (dispute.service.ts's
+  // own resolution flow is exempt — see allowDisputedOrder above.)
+  if (order.status === "DISPUTED" && !allowDisputedOrder) {
+    throw new AppError("This order has an open Stripe dispute — resolve the dispute first, refunds are blocked while it's open", 409);
   }
 
   // The admin always enters an amount in the ORDER's OWN native currency —
