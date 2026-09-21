@@ -1,9 +1,9 @@
 import { prisma } from "../../lib/prisma";
-import { paystack } from "../../lib/paystack";
 import { logger } from "../../lib/logger";
 import { AppError } from "../../shared/errors/app-error";
 import { releaseVendorEarnings } from "../../shared/utils/wallet-release";
 import { notificationsService } from "../notifications/notifications.service";
+import { executeOrderRefund } from "../admin/admin-refunds.controller";
 
 export interface ResolveDisputeInput {
   resolution: "vendor" | "buyer" | "partial";
@@ -165,7 +165,6 @@ export const disputeService = {
             vendorEarnings: true,
             currency: true,
             orderNumber: true,
-            paystackTransaction: { select: { reference: true } },
           },
         },
       },
@@ -187,17 +186,25 @@ export const disputeService = {
     // side-effect first, only commit the terminal state on success.
     const needsRefund = input.resolution === "buyer" || (input.resolution === "partial" && !!input.refundAmount);
     if (needsRefund) {
-      const refundRef = dispute.order.paystackTransaction?.reference;
-      if (!refundRef) {
-        throw new AppError("Cannot resolve in the buyer's favour: no payment reference found for this order to refund", 409);
-      }
+      // Acceptance audit fix (Defect E): this used to call
+      // paystack.refundTransaction() directly against the order's
+      // PaystackTransaction reference — a Stripe-paid order has none, so
+      // resolving any dispute in the buyer's favour was structurally
+      // impossible for a Stripe order (always hit the "no payment
+      // reference found" guard below). executeOrderRefund() already
+      // branches on the order's actual payment provider (Stripe or
+      // Paystack via the same idempotency-keyed, audited call the admin
+      // refund flow uses) — reuse it instead of duplicating
+      // provider-specific refund logic here.
       const amount = input.resolution === "buyer" ? undefined : input.refundAmount;
       try {
-        await paystack.refundTransaction(refundRef, amount);
-        logger.info("Dispute refund issued", { disputeId, refundRef, amount });
+        await executeOrderRefund(dispute.orderId, adminId, amount, `dispute_resolution:${disputeId}:${input.resolution}`);
+        logger.info("Dispute refund issued", { disputeId, orderId: dispute.orderId, amount });
       } catch (err) {
-        logger.error("Dispute refund failed — dispute left OPEN for retry", { disputeId, error: String(err) });
-        throw new AppError("Refund failed with the payment provider. The dispute was not resolved — you can retry.", 502);
+        const message = err instanceof AppError ? err.message : String(err);
+        const statusCode = err instanceof AppError ? err.statusCode : 502;
+        logger.error("Dispute refund failed — dispute left OPEN for retry", { disputeId, error: message });
+        throw new AppError(`Refund failed: ${message} The dispute was not resolved — you can retry.`, statusCode);
       }
     }
 
