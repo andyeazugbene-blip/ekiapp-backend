@@ -16,11 +16,12 @@ vi.mock("../lib/prisma", () => ({
   prisma: {
     user: { findUniqueOrThrow: vi.fn(), update: vi.fn() },
     auditLog: { create: vi.fn() },
+    notification: { count: vi.fn() },
   },
 }));
 
 import { prisma } from "../lib/prisma";
-import { getNotificationPreferences, updateNotificationPreferences } from "../modules/notifications/notifications.controller";
+import { getNotificationPreferences, getUnreadNotificationCount, updateNotificationPreferences } from "../modules/notifications/notifications.controller";
 
 const m = vi.mocked(prisma, true);
 
@@ -118,5 +119,29 @@ describe("PATCH /notifications/preferences — marketingConsent", () => {
       data: expect.not.objectContaining({ marketingConsentAt: expect.anything() }),
     }));
     expect(m.auditLog.create).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * Phase 3 fix — no primitive existed for a real unread badge count (only
+ * list({unreadOnly: true}), which returns paginated rows, not a cheap
+ * total). This is the new GET /notifications/unread-count.
+ */
+describe("GET /notifications/unread-count", () => {
+  it("returns the real count of this user's unread notifications", async () => {
+    m.notification.count.mockResolvedValue(4 as never);
+    const res = createMockRes();
+    await getUnreadNotificationCount(createMockReq(), res as unknown as Response);
+
+    expect(m.notification.count).toHaveBeenCalledWith({ where: { userId: "buyer-1", readAt: null } });
+    expect(res.data).toEqual({ count: 4 });
+  });
+
+  it("returns zero, not an error, when everything is read", async () => {
+    m.notification.count.mockResolvedValue(0 as never);
+    const res = createMockRes();
+    await getUnreadNotificationCount(createMockReq(), res as unknown as Response);
+
+    expect(res.data).toEqual({ count: 0 });
   });
 });

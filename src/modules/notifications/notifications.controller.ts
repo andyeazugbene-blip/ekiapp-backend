@@ -44,6 +44,11 @@ export async function markAllNotificationsRead(
   response.status(200).json(result);
 }
 
+export async function getUnreadNotificationCount(request: Request, response: Response): Promise<void> {
+  const result = await notificationsService.getUnreadCount(requireUserId(request));
+  response.status(200).json(result);
+}
+
 export async function getNotificationPreferences(request: Request, response: Response): Promise<void> {
   const preferences = await notificationsService.getPreferences(requireUserId(request));
   response.status(200).json({

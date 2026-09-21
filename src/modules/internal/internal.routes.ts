@@ -17,8 +17,6 @@ import { escrowHealthService } from "../paystack/escrow-health.service";
 import { reconciliationService } from "../ledger/reconciliation.service";
 import { paymentAnomalyService } from "../ledger/payment-anomaly.service";
 import { fulfilmentDelayService } from "../community-buy/fulfilment-delay.service";
-import { sendEmail } from "../../lib/email";
-import { emailTemplates } from "../../lib/email-templates";
 import { enqueueEmail } from "../../lib/email-queue";
 import { checkPushReceipts } from "../../lib/expo-push";
 
@@ -252,33 +250,6 @@ async function runCartCleanup() {
   return { staleOrdersFound: staleOrders.length, ordersRestored: restored };
 }
 
-// Low-stock vendor email nudges — same dead-worker gap (src/workers/stock-alerts.worker.ts
-// only ran under startWorkers(), never invoked on Vercel).
-const LOW_STOCK_THRESHOLD = 5;
-async function runStockAlerts() {
-  const lowStockProducts = await prisma.product.findMany({
-    where: { isActive: true, stock: { lte: LOW_STOCK_THRESHOLD } },
-    select: {
-      title: true,
-      stock: true,
-      vendorId: true,
-      vendor: { select: { storeName: true, contactEmail: true, user: { select: { email: true } } } },
-    },
-  });
-  const vendorMap = new Map<string, { storeName: string; email: string; products: { title: string; stock: number }[] }>();
-  for (const product of lowStockProducts) {
-    const email = product.vendor.contactEmail ?? product.vendor.user.email;
-    const existing = vendorMap.get(product.vendorId);
-    if (existing) existing.products.push({ title: product.title, stock: product.stock });
-    else vendorMap.set(product.vendorId, { storeName: product.vendor.storeName, email, products: [{ title: product.title, stock: product.stock }] });
-  }
-  let sent = 0;
-  for (const data of vendorMap.values()) {
-    const template = emailTemplates.lowStockAlert({ storeName: data.storeName, products: data.products });
-    if (await sendEmail({ to: data.email, subject: template.subject, html: template.html })) sent++;
-  }
-  return { vendorsNotified: sent, lowStockProducts: lowStockProducts.length };
-}
 
 // Daily Stripe reconciliation — the architecture doc requires this to run
 // on a real schedule, not admin-triggered-only. Covers the previous full
@@ -364,7 +335,14 @@ const jobs: [string, string, () => Promise<Record<string, unknown>>][] = [
   ["escrow-sweep", "escrow timeout/auto-release sweep", runEscrowSweep],
   ["escrow-balance-check", "escrow balance check", runEscrowBalanceCheck],
   ["cart-cleanup", "cart cleanup", runCartCleanup],
-  ["stock-alerts", "low-stock vendor alerts", runStockAlerts],
+  // "stock-alerts" retired (Phase 3 automation fix): it duplicated
+  // detectLowStockAlert() inside "automation-sweep" below — every low-stock
+  // product fired both a raw, un-dedup'd, non-toggleable email here AND a
+  // real, dedup'd, vendor-toggleable AutomationRun via the automation
+  // engine, every single day. The automation engine's version is the
+  // correct one (real per-day dedupe key, respects the vendor's Low-Stock
+  // Alerts toggle, multi-channel). See also src/workers/stock-alerts.worker.ts,
+  // removed for the same reason.
   ["reconciliation-sweep", "daily Stripe reconciliation", runReconciliationSweep],
   ["payment-anomaly-scan", "duplicate-payment / financial-inconsistency scan", runPaymentAnomalyScan],
   ["fulfilment-delay-scan", "supplier-fulfilment delay scan", runFulfilmentDelayScan],

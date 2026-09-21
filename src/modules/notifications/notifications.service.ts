@@ -188,6 +188,17 @@ export const notificationsService = {
     return { count: result.count };
   },
 
+  /**
+   * Phase 3 fix: no primitive existed for a real unread badge count — only
+   * list({unreadOnly: true}), which returns paginated rows, not a cheap
+   * total. A UI showing "3 unread" anywhere outside the notification list
+   * itself (a bell icon, a tab badge) had nothing real to call.
+   */
+  async getUnreadCount(userId: string): Promise<{ count: number }> {
+    const count = await prisma.notification.count({ where: { userId, readAt: null } });
+    return { count };
+  },
+
   async getPreferences(userId: string) {
     return prisma.user.findUniqueOrThrow({
       where: { id: userId },

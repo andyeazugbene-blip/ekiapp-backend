@@ -1,7 +1,7 @@
 import { logger } from "../../lib/logger";
 import { prisma } from "../../lib/prisma";
 import { AppError } from "../../shared/errors/app-error";
-import { adminCommunicationsService, AdminBroadcastInput } from "../admin/admin-communications.service";
+import { adminCommunicationsService } from "../admin/admin-communications.service";
 
 export interface CreateScheduledInput {
   audience: string;
@@ -107,12 +107,17 @@ export const scheduledCommunicationService = {
       if (claimed.count === 0) continue; // already claimed by another runner
 
       try {
-        const broadcastInput: AdminBroadcastInput = {
-          audience: item.audience as AdminBroadcastInput["audience"],
-          channel: item.channel as AdminBroadcastInput["channel"],
+        // Routed through normalizeInput() — same single source of truth
+        // used by every other broadcast caller — rather than hand-building
+        // AdminBroadcastInput, so the wantsInApp/wantsPush/wantsSms/wantsEmail
+        // flags are always derived consistently from the stored legacy
+        // combo-string channel.
+        const broadcastInput = adminCommunicationsService.normalizeInput({
+          audience: item.audience,
+          channel: item.channel,
           subject: item.subject,
           body: item.body,
-        };
+        });
 
         await adminCommunicationsService.broadcast(item.createdBy, broadcastInput);
 

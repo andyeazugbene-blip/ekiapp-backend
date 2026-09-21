@@ -126,7 +126,7 @@ import {
   listWalletTransactions, getPayment, getWalletTransaction,
   rejectVendor,
 } from "./admin-listings.controller";
-import { sendAdminBroadcast } from "./admin-communications.controller";
+import { previewAdminBroadcastAudience, sendAdminBroadcast, testSendAdminBroadcast } from "./admin-communications.controller";
 import {
   getCommunicationStats, listCommunicationLogs, listCommunicationTemplates,
   seedCommunicationTemplates, updateCommunicationTemplate,
@@ -472,6 +472,8 @@ adminRouter.get("/wallet-transactions", asyncHandler(requireAdminPermission("ord
 
 // Communications
 adminRouter.post("/broadcasts", asyncHandler(requireAdminPermission("communications.send")), asyncHandler(sendAdminBroadcast));
+adminRouter.get("/broadcasts/audience-count", asyncHandler(requireAdminPermission("communications.send")), asyncHandler(previewAdminBroadcastAudience));
+adminRouter.post("/broadcasts/test-send", asyncHandler(requireAdminPermission("communications.send")), asyncHandler(testSendAdminBroadcast));
 adminRouter.get("/communications/stats", asyncHandler(requireAdminPermission("communications.send")), asyncHandler(getCommunicationStats));
 adminRouter.get("/communications", asyncHandler(requireAdminPermission("communications.send")), asyncHandler(listCommunicationLogs));
 adminRouter.get("/communications/templates", asyncHandler(requireAdminPermission("communications.send")), asyncHandler(listCommunicationTemplates));

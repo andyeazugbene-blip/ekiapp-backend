@@ -7,6 +7,15 @@ function formatAmount(cents: number, currency: string): string {
   return `${symbol}${(cents / 100).toFixed(2)}`;
 }
 
+function escapeHtml(text: string): string {
+  return text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
 function baseLayout(content: string): string {
   return `
 <!DOCTYPE html>
@@ -32,6 +41,19 @@ export function formatAmountDisplay(cents: number, currency: string): string {
 }
 
 export const emailTemplates = {
+  // Phase 3 fix: admin broadcast previously had no email channel at all
+  // (in_app/push/sms only) — this is the missing template, subject/body are
+  // free-text admin input so both are escaped before interpolation.
+  adminBroadcast(params: { subject: string; body: string }): { subject: string; html: string } {
+    return {
+      subject: params.subject,
+      html: baseLayout(`
+        <h2 style="color: #111827; margin: 0 0 16px;">${escapeHtml(params.subject)}</h2>
+        <p style="color: #374151; white-space: pre-wrap;">${escapeHtml(params.body)}</p>
+      `),
+    };
+  },
+
   passwordReset(params: { name: string; resetUrl: string }): { subject: string; html: string } {
     return {
       subject: "Reset your password",

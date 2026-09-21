@@ -8,7 +8,6 @@ import { startEscrowAutoReleaseWorker } from "./escrow-auto-release.worker";
 import { startEscrowBalanceCheckWorker } from "./escrow-balance-check.worker";
 import { startEscrowTimeoutWorker } from "./escrow-timeout.worker";
 import { startNotificationsWorker } from "./notifications.worker";
-import { startStockAlertsWorker } from "./stock-alerts.worker";
 
 const activeWorkers: Worker[] = [];
 
@@ -30,8 +29,13 @@ export function startWorkers(): void {
   const email = startEmailsWorker();
   if (email) activeWorkers.push(email);
 
-  const stockResult = startStockAlertsWorker();
-  if (stockResult) activeWorkers.push(stockResult.worker);
+  // Legacy stock-alerts worker removed (Phase 3 automation fix) — it
+  // duplicated the automation engine's own dedup'd, vendor-toggleable
+  // LOW_STOCK_ALERT (detectLowStockAlert(), run via the daily cron sweep).
+  // This BullMQ worker also never actually ran on Vercel's serverless
+  // runtime in the first place (no long-lived worker process there) — it
+  // only fired for any deployment target that DOES run startWorkers()
+  // continuously, which is exactly where the duplicate alerts came from.
 
   const cartResult = startCartCleanupWorker();
   if (cartResult) activeWorkers.push(cartResult.worker);
