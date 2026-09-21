@@ -333,6 +333,81 @@ export const ordersService = {
     return updated;
   },
 
+  /**
+   * Acceptance audit fix (Defect F): buyer-initiated order cancellation was
+   * entirely missing — a buyer had no way to back out of an order before the
+   * vendor started fulfilling it. Only allowed from PENDING/PAID (the same
+   * pre-CONFIRMED boundary VENDOR_STATUS_TRANSITIONS already enforces for
+   * vendor-initiated cancellation — once a vendor has confirmed, neither
+   * side can cancel via a simple status flip). If the order was already
+   * paid, reuses the exact same real refund + reversal machinery Defect C
+   * wired up for vendor-cancelled orders. If it was never paid, stock —
+   * already reserved at checkout time — is restored, mirroring exactly what
+   * a failed/cancelled PaymentIntent webhook already does
+   * (stripe.service.ts's failSingleOrder).
+   */
+  async cancelBuyerOrder(buyerId: string, orderId: string): Promise<Order> {
+    const order = await prisma.order.findUnique({
+      where: { id: orderId },
+      select: {
+        id: true,
+        buyerId: true,
+        vendorId: true,
+        status: true,
+        orderNumber: true,
+        payment: { select: { id: true, status: true } },
+        items: { select: { productId: true, quantity: true } },
+      },
+    });
+
+    if (!order) {
+      throw new AppError("Order not found", 404);
+    }
+    if (order.buyerId !== buyerId) {
+      throw new AppError("Forbidden", 403);
+    }
+
+    const allowedTransitions = BUYER_STATUS_TRANSITIONS[order.status] ?? [];
+    if (!allowedTransitions.includes("CANCELLED")) {
+      throw new AppError(`This order can no longer be cancelled (current status: ${order.status})`, 409);
+    }
+
+    if (order.payment?.status === "SUCCEEDED") {
+      await executeOrderRefund(orderId, buyerId, undefined, "buyer_cancelled_paid_order", "CANCELLED");
+    } else {
+      await prisma.$transaction(async (tx) => {
+        // Guarded write — a concurrent duplicate cancel request claims 0
+        // rows and no-ops rather than double-restoring stock.
+        const claim = await tx.order.updateMany({ where: { id: orderId, status: "PENDING" }, data: { status: "CANCELLED" } });
+        if (claim.count === 0) return;
+
+        if (order.payment) {
+          await tx.payment.updateMany({ where: { id: order.payment.id, status: "PENDING" }, data: { status: "FAILED", processedAt: new Date() } });
+        }
+        for (const item of order.items) {
+          await tx.product.update({ where: { id: item.productId }, data: { stock: { increment: item.quantity } } });
+        }
+      });
+    }
+
+    const updated = await prisma.order.findUniqueOrThrow({ where: { id: orderId }, include: orderInclude });
+
+    if (order.vendorId) {
+      const vendor = await prisma.vendor.findUnique({ where: { id: order.vendorId }, select: { userId: true } });
+      if (vendor) {
+        notificationsService.enqueue({
+          userId: vendor.userId,
+          type: "ORDER_PAID",
+          title: "Order cancelled",
+          body: `Order ${order.orderNumber} was cancelled by the buyer.`,
+          data: { type: "order_status", orderId: order.id, orderNumber: order.orderNumber, status: "CANCELLED" },
+        }).catch((err) => logger.warn("Buyer-cancel vendor notification failed", { orderId, error: String(err) }));
+      }
+    }
+
+    return updated;
+  },
+
   async updateDeliveryAddress(buyerId: string, orderId: string, deliveryAddress: string): Promise<Order> {
     const order = await prisma.order.findUnique({
       where: { id: orderId },

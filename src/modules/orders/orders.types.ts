@@ -37,9 +37,13 @@ export const VENDOR_STATUS_TRANSITIONS: Record<string, OrderStatus[]> = {
 };
 
 // Allowed buyer transitions: DELIVERED → COMPLETED (mark as received)
+// PENDING/PAID → CANCELLED (Defect F: buyer-initiated cancellation) — the
+// same pre-fulfilment boundary VENDOR_STATUS_TRANSITIONS already uses for
+// vendor-initiated cancellation above: once a vendor has CONFIRMED an
+// order, neither side can cancel it via a simple status flip anymore.
 export const BUYER_STATUS_TRANSITIONS: Record<string, OrderStatus[]> = {
-  PENDING: [],
-  PAID: [],
+  PENDING: ["CANCELLED"],
+  PAID: ["CANCELLED"],
   CONFIRMED: [],
   PROCESSING: [],
   DISPATCHED: [],

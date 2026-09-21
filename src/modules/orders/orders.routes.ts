@@ -3,6 +3,7 @@ import { Router } from "express";
 import { authenticate } from "../../middlewares/authenticate";
 import { asyncHandler } from "../../shared/utils/async-handler";
 import {
+  cancelBuyerOrder,
   completeBuyerOrder,
   getBuyerOrder,
   getVendorOrder,
@@ -24,6 +25,9 @@ ordersRouter.get("/:id", asyncHandler(getBuyerOrder));
 
 // Buyer: mark delivered order as completed (received)
 ordersRouter.post("/:id/complete", asyncHandler(completeBuyerOrder));
+
+// Buyer: cancel own order before the vendor has confirmed it (Defect F)
+ordersRouter.post("/:id/cancel", asyncHandler(cancelBuyerOrder));
 
 // Buyer: update delivery address on an existing order (before dispatch)
 ordersRouter.patch("/:id/delivery-address", asyncHandler(updateDeliveryAddress));

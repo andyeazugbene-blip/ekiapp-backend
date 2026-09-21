@@ -64,6 +64,11 @@ export async function completeBuyerOrder(request: Request, response: Response): 
   response.status(200).json({ order });
 }
 
+export async function cancelBuyerOrder(request: Request, response: Response): Promise<void> {
+  const order = await ordersService.cancelBuyerOrder(requireUserId(request), requireIdParam(request));
+  response.status(200).json({ order });
+}
+
 export async function updateDeliveryAddress(request: Request, response: Response): Promise<void> {
   const { deliveryAddress } = request.body as { deliveryAddress?: string };
   if (!deliveryAddress || typeof deliveryAddress !== "string" || deliveryAddress.trim().length === 0) {
