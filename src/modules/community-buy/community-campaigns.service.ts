@@ -1575,15 +1575,21 @@ export const communityCampaignsService = {
         // Workstream 3: display name for a no-Vendor supplier — legacy
         // campaigns have no supplierAccountId, so this is always null there.
         supplierAccount: { include: { user: { select: { name: true } } } },
-        organiser: { select: { firstNameOnlyDisplay: true, user: { select: { name: true } } } },
+        organiser: { select: { firstNameOnlyDisplay: true, isVerified: true, user: { select: { name: true } } } },
       },
       orderBy: { deadline: "asc" },
     });
     // Phase 2 (organiser identity display preference) — same rule as get():
     // organiser is dropped from each item entirely, not merely the raw name.
+    // organiserVerified: Figma B02/B03 "Organised by [Name] · Verified" — a
+    // real OrganiserProfile.isVerified flag, not inferred from anything else.
     return campaigns.map((c) => {
       const { organiser, ...rest } = c;
-      return { ...rest, organiserDisplayName: resolveOrganiserDisplayName(organiser.user.name, organiser.firstNameOnlyDisplay) };
+      return {
+        ...rest,
+        organiserDisplayName: resolveOrganiserDisplayName(organiser.user.name, organiser.firstNameOnlyDisplay),
+        organiserVerified: organiser.isVerified,
+      };
     });
   },
 
@@ -1636,7 +1642,7 @@ export const communityCampaignsService = {
       include: {
         supplier: { include: { vendor: { select: { storeName: true } } } },
         supplierAccount: { include: { user: { select: { name: true } } } },
-        organiser: { select: { firstNameOnlyDisplay: true, user: { select: { name: true } } } },
+        organiser: { select: { firstNameOnlyDisplay: true, isVerified: true, user: { select: { name: true } } } },
         contributions: { where: { status: "PAID" }, select: { amount: true, quantity: true } },
         _count: { select: { participants: true } },
       },
@@ -1646,6 +1652,8 @@ export const communityCampaignsService = {
     // server-side, so a raw last name is never sent to a buyer-facing
     // client at all when the preference is on, not merely hidden by the UI.
     const organiserDisplayName = resolveOrganiserDisplayName(campaign.organiser.user.name, campaign.organiser.firstNameOnlyDisplay);
+    // Figma B03 "Organised by [Name] · Verified organiser" — real flag.
+    const organiserVerified = campaign.organiser.isVerified;
     const paidTotal = campaign.contributions.reduce((sum, c) => sum + c.amount, 0);
     // confirmedShares is the authoritative, atomically-maintained count
     // (see campaign-contributions.service.ts) — this is only a display
@@ -1677,7 +1685,7 @@ export const communityCampaignsService = {
     // endpoint is public/buyer-facing, and organiserDisplayName is the only
     // organiser-identity field any caller should read from it.
     const { organiser: _organiser, ...campaignWithoutRawOrganiser } = campaign;
-    return { ...campaignWithoutRawOrganiser, paidTotal, progressPct, participantCount: campaign._count.participants, perShareFeeEstimate, organiserDisplayName };
+    return { ...campaignWithoutRawOrganiser, paidTotal, progressPct, participantCount: campaign._count.participants, perShareFeeEstimate, organiserDisplayName, organiserVerified };
   },
 
   // ─── Closing workflow — doc §7 Deadline Evaluation ─────────────────────

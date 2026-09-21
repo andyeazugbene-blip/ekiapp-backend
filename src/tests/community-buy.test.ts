@@ -1963,6 +1963,30 @@ describe("campaignContributionsService.listMyContributions — 'My Community Buy
     const result = await campaignContributionsService.listMyContributions("user-1");
     expect(result[0].refundStatus).toBe("REFUND_FAILED");
   });
+
+  // Figma B15/B17 — "Refund ref: RF-xxx" needs a real, stable id to quote to support, not just a bare status string.
+  it("surfaces the id of whichever refund's status is shown, so the app can render a real reference", async () => {
+    m.campaignParticipant.findMany.mockResolvedValue([
+      {
+        campaign: { id: "camp-1" },
+        contributions: [
+          { status: "PAID", quantity: 1, amount: 1000, createdAt: new Date(), refund: { id: "refund-abc", status: "REFUNDED" } },
+        ],
+      },
+    ] as never);
+
+    const result = await campaignContributionsService.listMyContributions("user-1");
+    expect(result[0].refundId).toBe("refund-abc");
+  });
+
+  it("refundId is null when there is no refund at all", async () => {
+    m.campaignParticipant.findMany.mockResolvedValue([
+      { campaign: { id: "camp-1" }, contributions: [{ status: "PAID", quantity: 1, amount: 1000, createdAt: new Date(), refund: null }] },
+    ] as never);
+
+    const result = await campaignContributionsService.listMyContributions("user-1");
+    expect(result[0].refundId).toBeNull();
+  });
 });
 
 describe("communityCampaignsService.listMyCampaignUpdates — 'Campaign Updates'", () => {
@@ -2659,6 +2683,20 @@ describe("Client correction — supplier is optional, never a publication gate",
         ],
       },
     }));
+  });
+
+  // 8c. Figma B02 "Organised by [Name] · Verified" — a real OrganiserProfile.isVerified flag, both for the list and for a single campaign's detail.
+  it("8c. listLive() and get() both surface organiserVerified from the real OrganiserProfile.isVerified flag", async () => {
+    m.communityCampaign.findMany.mockResolvedValue([{ id: "camp-8c", status: "LIVE", organiser: { firstNameOnlyDisplay: true, isVerified: true, user: { name: "Organiser Eight" } } }] as never);
+    const live = await communityCampaignsService.listLive();
+    expect(live[0].organiserVerified).toBe(true);
+
+    m.communityCampaign.findUnique.mockResolvedValue({
+      id: "camp-8c", country: "GB", pricePerShareMinor: null, contributions: [], _count: { participants: 0 },
+      organiser: { firstNameOnlyDisplay: true, isVerified: false, user: { name: "Organiser Eight" } },
+    } as never);
+    const detail = await communityCampaignsService.get("camp-8c");
+    expect(detail.organiserVerified).toBe(false);
   });
 
   // 9. unauthorized supplier assignment still rejected (unverified supplier at create time)

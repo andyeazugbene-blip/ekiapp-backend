@@ -108,7 +108,7 @@ describe("toAuthUser — capability derivation", () => {
 // denied, vendor allowed, admin denied on VENDOR-only routes; buyer
 // denied, vendor allowed, admin allowed on VENDOR-or-ADMIN routes. ────────
 
-import { requireApprovedSupplier, requireVendorProfile, requireVendorProfileOrAdmin } from "../middlewares/require-capability";
+import { requireApprovedSupplier, requireApprovedSupplierForOwnCampaign, requireVendorProfile, requireVendorProfileOrAdmin } from "../middlewares/require-capability";
 import { prisma } from "../lib/prisma";
 
 const p = vi.mocked(prisma, true) as any;
@@ -201,6 +201,82 @@ describe("requireApprovedSupplier — protected supplier actions only", () => {
     const { request, response, next } = mockReqResNext({ id: "user-1", role: "BUYER" });
     await requireApprovedSupplier()(request, response, next);
     expect(next).toHaveBeenCalledWith();
+  });
+});
+
+// Figma S31/S32 correction — pausing/restricting must not cut a supplier off
+// from a campaign they already accepted; only taking on NEW work stays
+// strictly APPROVED-only. requireApprovedSupplier() itself is unchanged
+// (still strict) — this is the separate, narrower gate for continuation
+// routes only.
+describe("requireApprovedSupplierForOwnCampaign — existing obligations survive pause/restriction", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    p.supplierAccount = { findUnique: vi.fn() };
+    p.communityCampaign = { findUnique: vi.fn() };
+  });
+
+  function mockReqWithParams(user: { id: string; role: "BUYER" | "VENDOR" | "ADMIN" }, params: Record<string, string> = {}) {
+    const request: any = { user, params };
+    const response: any = {};
+    const next = vi.fn();
+    return { request, response, next };
+  }
+
+  it("no SupplierAccount at all -> denied", async () => {
+    p.supplierAccount.findUnique.mockResolvedValue(null);
+    const { request, response, next } = mockReqWithParams({ id: "user-1", role: "BUYER" }, { id: "camp-1" });
+    await requireApprovedSupplierForOwnCampaign()(request, response, next);
+    expect(next).toHaveBeenCalledWith(expect.objectContaining({ statusCode: 403 }));
+    expect(p.communityCampaign.findUnique).not.toHaveBeenCalled();
+  });
+
+  it("SUSPENDED -> denied even for their own campaign (suspension genuinely cuts a supplier off)", async () => {
+    p.supplierAccount.findUnique.mockResolvedValue({ id: "acct-1", supplierState: "SUSPENDED" });
+    const { request, response, next } = mockReqWithParams({ id: "user-1", role: "BUYER" }, { id: "camp-1" });
+    await requireApprovedSupplierForOwnCampaign()(request, response, next);
+    expect(next).toHaveBeenCalledWith(expect.objectContaining({ statusCode: 403 }));
+    expect(p.communityCampaign.findUnique).not.toHaveBeenCalled();
+  });
+
+  it("APPROVED -> allowed without a campaign-ownership lookup (the strict, common case)", async () => {
+    p.supplierAccount.findUnique.mockResolvedValue({ id: "acct-1", supplierState: "APPROVED" });
+    const { request, response, next } = mockReqWithParams({ id: "user-1", role: "BUYER" }, { id: "camp-1" });
+    await requireApprovedSupplierForOwnCampaign()(request, response, next);
+    expect(next).toHaveBeenCalledWith();
+    expect(p.communityCampaign.findUnique).not.toHaveBeenCalled();
+  });
+
+  it("PAUSED + campaign genuinely assigned to this account -> allowed (the exact bug fixed)", async () => {
+    p.supplierAccount.findUnique.mockResolvedValue({ id: "acct-1", supplierState: "PAUSED" });
+    p.communityCampaign.findUnique.mockResolvedValue({ supplierAccountId: "acct-1" });
+    const { request, response, next } = mockReqWithParams({ id: "user-1", role: "BUYER" }, { id: "camp-1" });
+    await requireApprovedSupplierForOwnCampaign()(request, response, next);
+    expect(next).toHaveBeenCalledWith();
+  });
+
+  it("RESTRICTED + campaign genuinely assigned to this account -> allowed", async () => {
+    p.supplierAccount.findUnique.mockResolvedValue({ id: "acct-1", supplierState: "RESTRICTED" });
+    p.communityCampaign.findUnique.mockResolvedValue({ supplierAccountId: "acct-1" });
+    const { request, response, next } = mockReqWithParams({ id: "user-1", role: "BUYER" }, { id: "camp-1" });
+    await requireApprovedSupplierForOwnCampaign()(request, response, next);
+    expect(next).toHaveBeenCalledWith();
+  });
+
+  it("PAUSED + a DIFFERENT campaign not assigned to this account -> denied (never a blanket bypass)", async () => {
+    p.supplierAccount.findUnique.mockResolvedValue({ id: "acct-1", supplierState: "PAUSED" });
+    p.communityCampaign.findUnique.mockResolvedValue({ supplierAccountId: "some-other-account" });
+    const { request, response, next } = mockReqWithParams({ id: "user-1", role: "BUYER" }, { id: "camp-99" });
+    await requireApprovedSupplierForOwnCampaign()(request, response, next);
+    expect(next).toHaveBeenCalledWith(expect.objectContaining({ statusCode: 403 }));
+  });
+
+  it("PAUSED + no :id param (a self-scoped list route) -> allowed without a campaign lookup", async () => {
+    p.supplierAccount.findUnique.mockResolvedValue({ id: "acct-1", supplierState: "PAUSED" });
+    const { request, response, next } = mockReqWithParams({ id: "user-1", role: "BUYER" }, {});
+    await requireApprovedSupplierForOwnCampaign()(request, response, next);
+    expect(next).toHaveBeenCalledWith();
+    expect(p.communityCampaign.findUnique).not.toHaveBeenCalled();
   });
 });
 

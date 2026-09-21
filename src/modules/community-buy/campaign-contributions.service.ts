@@ -748,16 +748,21 @@ export const campaignContributionsService = {
         const paid = p.contributions.filter((c) => c.status === "PAID");
         const pledged = p.contributions.filter((c) => c.status === "PLEDGED" || c.status === "PAYMENT_PROCESSING" || c.status === "CHARGE_FAILED");
         const refunds = p.contributions.map((c) => c.refund).filter((r): r is NonNullable<typeof r> => r != null);
+        // Figma B15/B17 — "Refund ref: RF-xxx" needs a real, stable
+        // identifier the buyer can quote to support; the same refund row
+        // (found via the priority order below) supplies both fields.
+        const shownRefund = refunds.find((r) => r.status === "REFUND_FAILED")
+          ?? refunds.find((r) => r.status === "REFUND_PENDING" || r.status === "REFUND_PROCESSING")
+          ?? refunds.find((r) => r.status === "REFUNDED")
+          ?? null;
         return {
           campaign: p.campaign,
           totalQuantity: paid.reduce((sum, c) => sum + c.quantity, 0),
           totalPaid: paid.reduce((sum, c) => sum + c.amount, 0),
           totalPledged: pledged.reduce((sum, c) => sum + c.amount, 0),
           latestContribution: p.contributions[0],
-          refundStatus: refunds.find((r) => r.status === "REFUND_FAILED")?.status
-            ?? refunds.find((r) => r.status === "REFUND_PENDING" || r.status === "REFUND_PROCESSING")?.status
-            ?? refunds.find((r) => r.status === "REFUNDED")?.status
-            ?? null,
+          refundStatus: shownRefund?.status ?? null,
+          refundId: shownRefund?.id ?? null,
         };
       });
   },

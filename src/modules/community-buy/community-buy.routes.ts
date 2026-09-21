@@ -1,7 +1,7 @@
 import { Router } from "express";
 
 import { authenticate } from "../../middlewares/authenticate";
-import { requireApprovedSupplier } from "../../middlewares/require-capability";
+import { requireApprovedSupplier, requireApprovedSupplierForOwnCampaign } from "../../middlewares/require-capability";
 import { asyncHandler } from "../../shared/utils/async-handler";
 import {
   acceptSupplierInvitation,
@@ -239,32 +239,35 @@ supplierRouter.post("/resume", asyncHandler(resumeSupplierAccount));
 supplierRouter.post("/stripe-connect/onboard", asyncHandler(onboardSupplierStripeConnect));
 supplierRouter.get("/stripe-connect/status", asyncHandler(getSupplierStripeConnectStatus));
 supplierRouter.post("/stripe-connect/refresh", asyncHandler(refreshSupplierStripeConnect));
-supplierRouter.get("/campaigns", requireApprovedSupplier(), asyncHandler(listMySupplierCampaigns));
+// Figma S31/S32 correction — listing/continuing OWN campaigns must survive
+// pause/restriction ("existing campaigns stay unaffected"); only taking on
+// NEW work (commitment/decline/proposals) stays gated to strictly APPROVED.
+supplierRouter.get("/campaigns", requireApprovedSupplierForOwnCampaign(), asyncHandler(listMySupplierCampaigns));
 supplierRouter.post("/campaigns/:id/supplier-commitment", requireApprovedSupplier(), asyncHandler(confirmSupplierCommitment));
 supplierRouter.post("/campaigns/:id/decline", requireApprovedSupplier(), asyncHandler(declineSupplierCommitment));
 // Phase 5 (organiser<->supplier negotiation) — separate from the binary
 // commitment/decline above: an iterative proposal to change price/slots/
 // ready-by date, gated through Eki review before the organiser ever sees it.
 supplierRouter.post("/campaigns/:id/proposals", requireApprovedSupplier(), asyncHandler(submitSupplierProposal));
-supplierRouter.get("/campaigns/:id/proposals", requireApprovedSupplier(), asyncHandler(listMySupplierProposals));
+supplierRouter.get("/campaigns/:id/proposals", requireApprovedSupplierForOwnCampaign(), asyncHandler(listMySupplierProposals));
 supplierRouter.post("/campaigns/:id/proposals/:proposalId/resubmit", requireApprovedSupplier(), asyncHandler(resubmitSupplierProposal));
-supplierRouter.post("/campaigns/:id/proposals/:proposalId/withdraw", requireApprovedSupplier(), asyncHandler(withdrawSupplierProposal));
-supplierRouter.get("/campaigns/:id/fulfilment", requireApprovedSupplier(), asyncHandler(getSupplierFulfilment));
-supplierRouter.post("/campaigns/:id/fulfilment/confirm-inventory", requireApprovedSupplier(), asyncHandler(confirmFulfilmentInventory));
-supplierRouter.post("/campaigns/:id/fulfilment/plan", requireApprovedSupplier(), asyncHandler(setFulfilmentPlan));
-supplierRouter.post("/campaigns/:id/fulfilment/start-packing", requireApprovedSupplier(), asyncHandler(startFulfilmentPacking));
-supplierRouter.post("/campaigns/:id/fulfilment/ready", requireApprovedSupplier(), asyncHandler(markFulfilmentReady));
-supplierRouter.post("/campaigns/:id/fulfilment/dispatch", requireApprovedSupplier(), asyncHandler(markFulfilmentDispatched));
-supplierRouter.post("/campaigns/:id/fulfilment/collect", requireApprovedSupplier(), asyncHandler(markFulfilmentCollected));
+supplierRouter.post("/campaigns/:id/proposals/:proposalId/withdraw", requireApprovedSupplierForOwnCampaign(), asyncHandler(withdrawSupplierProposal));
+supplierRouter.get("/campaigns/:id/fulfilment", requireApprovedSupplierForOwnCampaign(), asyncHandler(getSupplierFulfilment));
+supplierRouter.post("/campaigns/:id/fulfilment/confirm-inventory", requireApprovedSupplierForOwnCampaign(), asyncHandler(confirmFulfilmentInventory));
+supplierRouter.post("/campaigns/:id/fulfilment/plan", requireApprovedSupplierForOwnCampaign(), asyncHandler(setFulfilmentPlan));
+supplierRouter.post("/campaigns/:id/fulfilment/start-packing", requireApprovedSupplierForOwnCampaign(), asyncHandler(startFulfilmentPacking));
+supplierRouter.post("/campaigns/:id/fulfilment/ready", requireApprovedSupplierForOwnCampaign(), asyncHandler(markFulfilmentReady));
+supplierRouter.post("/campaigns/:id/fulfilment/dispatch", requireApprovedSupplierForOwnCampaign(), asyncHandler(markFulfilmentDispatched));
+supplierRouter.post("/campaigns/:id/fulfilment/collect", requireApprovedSupplierForOwnCampaign(), asyncHandler(markFulfilmentCollected));
 // Phase 6 — campaign + code alone, no contributionId needed at the counter.
-supplierRouter.post("/campaigns/:id/fulfilment/collection/verify", requireApprovedSupplier(), asyncHandler(verifySupplierCollectionCode));
+supplierRouter.post("/campaigns/:id/fulfilment/collection/verify", requireApprovedSupplierForOwnCampaign(), asyncHandler(verifySupplierCollectionCode));
 // M5 — same gate as every other supplier fulfilment action above.
-supplierRouter.post("/campaigns/:id/fulfilment/exception", requireApprovedSupplier(), asyncHandler(reportFulfilmentException));
-supplierRouter.get("/campaigns/:id/payment", requireApprovedSupplier(), asyncHandler(getMySupplierPayment));
+supplierRouter.post("/campaigns/:id/fulfilment/exception", requireApprovedSupplierForOwnCampaign(), asyncHandler(reportFulfilmentException));
+supplierRouter.get("/campaigns/:id/payment", requireApprovedSupplierForOwnCampaign(), asyncHandler(getMySupplierPayment));
 // M2 — spec §16 "POST /community-buys/:id/reconfirm" and the
 // AUTHORISE_THEN_CAPTURE-mode twin of the payment route above.
-supplierRouter.post("/campaigns/:id/reconfirm", requireApprovedSupplier(), asyncHandler(reconfirmCampaign));
-supplierRouter.get("/campaigns/:id/payout", requireApprovedSupplier(), asyncHandler(getMyCampaignPayout));
+supplierRouter.post("/campaigns/:id/reconfirm", requireApprovedSupplierForOwnCampaign(), asyncHandler(reconfirmCampaign));
+supplierRouter.get("/campaigns/:id/payout", requireApprovedSupplierForOwnCampaign(), asyncHandler(getMyCampaignPayout));
 
 // M4 (spec §14.3, AT-39/40/41/44) — deliberately NOT gated by
 // requireApprovedSupplier() (that gate is a blunt supplierState==="APPROVED"
