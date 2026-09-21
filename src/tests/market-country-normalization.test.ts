@@ -20,7 +20,7 @@ import {
  * API before fixing (Nigeria correctly rejected; "United Kingdom" also
  * incorrectly rejected for a market that was genuinely enabled).
  */
-describe("resolveMarketCode — the 10 approved launch markets, every real spelling", () => {
+describe("resolveMarketCode — every approved launch market (GB/US/CA + every European market), every real spelling", () => {
   const cases: [string, string][] = [
     ["United Kingdom", "GB"], ["UK", "GB"], ["gb", "GB"], ["England", "GB"], ["Scotland", "GB"], ["Wales", "GB"],
     ["United States", "US"], ["USA", "US"], ["United States of America", "US"], ["us", "US"],
@@ -32,6 +32,39 @@ describe("resolveMarketCode — the 10 approved launch markets, every real spell
     ["Belgium", "BE"], ["be", "BE"],
     ["Italy", "IT"], ["it", "IT"],
     ["Croatia", "HR"], ["hr", "HR"],
+    ["Germany", "DE"], ["de", "DE"],
+    ["Netherlands", "NL"], ["The Netherlands", "NL"], ["Holland", "NL"],
+    ["Austria", "AT"],
+    ["Ireland", "IE"],
+    ["Luxembourg", "LU"],
+    ["Greece", "GR"],
+    ["Cyprus", "CY"],
+    ["Malta", "MT"],
+    ["Slovenia", "SI"],
+    ["Slovakia", "SK"],
+    ["Estonia", "EE"],
+    ["Latvia", "LV"],
+    ["Lithuania", "LT"],
+    ["Finland", "FI"],
+    ["Poland", "PL"],
+    ["Czechia", "CZ"], ["Czech Republic", "CZ"],
+    ["Hungary", "HU"],
+    ["Romania", "RO"],
+    ["Bulgaria", "BG"],
+    ["Denmark", "DK"],
+    ["Sweden", "SE"],
+    ["Norway", "NO"],
+    ["Iceland", "IS"],
+    ["Liechtenstein", "LI"],
+    ["Monaco", "MC"],
+    ["Andorra", "AD"],
+    ["San Marino", "SM"],
+    ["Bosnia and Herzegovina", "BA"], ["Bosnia", "BA"],
+    ["Serbia", "RS"],
+    ["Montenegro", "ME"],
+    ["North Macedonia", "MK"], ["Macedonia", "MK"],
+    ["Albania", "AL"],
+    ["Moldova", "MD"],
   ];
 
   it.each(cases)("resolves %s to market code %s", (raw, expectedCode) => {
@@ -41,13 +74,21 @@ describe("resolveMarketCode — the 10 approved launch markets, every real spell
   it("is case-insensitive and trims whitespace", () => {
     expect(resolveMarketCode("  united kingdom  ")).toBe("GB");
     expect(resolveMarketCode("SWITZERLAND")).toBe("CH");
+    expect(resolveMarketCode("germany")).toBe("DE");
   });
 
-  it("returns null for a country that is not one of the 10 approved launch markets — never weakens gating by guessing", () => {
+  it("returns null for a country that is not an approved launch market — never weakens gating by guessing", () => {
     expect(resolveMarketCode("Nigeria")).toBeNull();
     expect(resolveMarketCode("Ghana")).toBeNull();
-    expect(resolveMarketCode("Germany")).toBeNull();
     expect(resolveMarketCode("Some Made Up Place")).toBeNull();
+  });
+
+  it("returns null for Russia/Belarus/Ukraine/Kosovo/Vatican — deliberately excluded even though geographically in Europe", () => {
+    expect(resolveMarketCode("Russia")).toBeNull();
+    expect(resolveMarketCode("Belarus")).toBeNull();
+    expect(resolveMarketCode("Ukraine")).toBeNull();
+    expect(resolveMarketCode("Kosovo")).toBeNull();
+    expect(resolveMarketCode("Vatican City")).toBeNull();
   });
 
   it("returns null for empty/missing input", () => {
@@ -56,9 +97,18 @@ describe("resolveMarketCode — the 10 approved launch markets, every real spell
     expect(resolveMarketCode(undefined)).toBeNull();
   });
 
-  it("LAUNCH_MARKET_COUNTRIES exposes exactly the 10 approved markets, one canonical name each", () => {
+  it("LAUNCH_MARKET_COUNTRIES exposes exactly the 43 approved markets, one canonical name each", () => {
     const codes = LAUNCH_MARKET_COUNTRIES.map((m) => m.code).sort();
-    expect(codes).toEqual(["BE", "CA", "CH", "ES", "FR", "GB", "HR", "IT", "PT", "US"]);
+    expect(codes).toEqual(
+      [
+        "GB", "US", "CA",
+        "FR", "ES", "PT", "CH", "BE", "IT", "HR",
+        "DE", "NL", "AT", "IE", "LU", "GR", "CY", "MT", "SI", "SK",
+        "EE", "LV", "LT", "FI", "PL", "CZ", "HU", "RO", "BG", "DK",
+        "SE", "NO", "IS", "LI", "MC", "AD", "SM", "BA", "RS", "ME", "MK", "AL", "MD",
+      ].sort(),
+    );
+    expect(codes).toHaveLength(43);
   });
 
   it("round-trips with countryNamesForMarketCode for every launch market", () => {
@@ -84,7 +134,7 @@ describe("marketCodeToCountryName — the display-name resolver (never a raw cod
     expect(marketCodeToCountryName("ch")).toBe("Switzerland");
   });
 
-  it("returns null for a code outside the 10 launch markets — never fabricates a name for Africa or anywhere else", () => {
+  it("returns null for a code outside the launch markets — never fabricates a name for Africa or anywhere else", () => {
     expect(marketCodeToCountryName("NG")).toBeNull();
     expect(marketCodeToCountryName("GH")).toBeNull();
     expect(marketCodeToCountryName("XX")).toBeNull();
@@ -92,7 +142,7 @@ describe("marketCodeToCountryName — the display-name resolver (never a raw cod
 });
 
 describe("isApprovedLaunchMarketCode — Africa (and everything else) must be false", () => {
-  it("is true for exactly the 10 approved launch market codes", () => {
+  it("is true for exactly the 43 approved launch market codes", () => {
     for (const { code } of LAUNCH_MARKET_COUNTRIES) {
       expect(isApprovedLaunchMarketCode(code)).toBe(true);
       expect(isApprovedLaunchMarketCode(code.toLowerCase())).toBe(true);

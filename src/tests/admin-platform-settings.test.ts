@@ -1,20 +1,23 @@
 /**
- * Client decision (2026-09-22, "FINAL CLIENT DECISIONS — APPLY NOW") — the
- * three operational thresholds (PRICE_APPROVAL_TIMEOUT_HOURS/
- * FULFILMENT_STALE_THRESHOLD_HOURS/PAYOUT_STUCK_THRESHOLD_HOURS) are now
- * real, admin-editable settings backed by AdminPlatformSetting, not .env
- * values. Covers: real validation (numeric, finite, > 0 — rejects
- * negative/zero/NaN/Infinity/non-numeric strings), rejection of an
- * unlisted key, a real audit entry with before/after value on every
- * update, "not configured" returning null rather than a guessed default,
- * and the update taking effect on the very next read (no caching layer
- * exists in this codebase to invalidate).
+ * Client decision (2026-09-22, "FINAL CLIENT DECISIONS — APPLY NOW", then
+ * "EKI — FINAL PRODUCTION CLOSURE" item 2) — the three operational
+ * thresholds (PRICE_APPROVAL_TIMEOUT_HOURS/FULFILMENT_STALE_THRESHOLD_HOURS/
+ * PAYOUT_STUCK_THRESHOLD_HOURS) are real, admin-editable settings backed by
+ * AdminPlatformSetting, not .env values, and now default to 1 (seeded via
+ * ensureDefaults(), the same DB-layer pattern marketConfigurationService
+ * already uses — never an application-code fallback). Covers: real
+ * validation (numeric, finite, > 0 — rejects negative/zero/NaN/Infinity/
+ * non-numeric strings), rejection of an unlisted key, a real audit entry
+ * with before/after value on every update, the default-to-1 seed only
+ * firing when a key genuinely has no row yet, an already-configured value
+ * never being overwritten by the seed, and the update taking effect on the
+ * very next read (no caching layer exists in this codebase to invalidate).
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 vi.mock("../lib/prisma", () => ({
   prisma: {
-    adminPlatformSetting: { findUnique: vi.fn(), findMany: vi.fn(), upsert: vi.fn() },
+    adminPlatformSetting: { findUnique: vi.fn(), findMany: vi.fn(), upsert: vi.fn(), count: vi.fn() },
     auditLog: { create: vi.fn() },
   },
 }));
@@ -24,26 +27,86 @@ import { adminPlatformSettingsService, OPERATIONAL_THRESHOLD_KEYS } from "../mod
 
 const m = vi.mocked(prisma, true) as any;
 
-beforeEach(() => vi.clearAllMocks());
+beforeEach(() => {
+  vi.clearAllMocks();
+  // Default: table already fully seeded (all 3 keys have a row) — skips the
+  // ensureDefaults() upsert loop so most tests below exercise getValue()/
+  // list()/setValue() in isolation. Tests that specifically need the seed
+  // path override this per-test.
+  m.adminPlatformSetting.count.mockResolvedValue(OPERATIONAL_THRESHOLD_KEYS.length);
+});
 
-describe("adminPlatformSettingsService.getValue — missing configuration is handled safely", () => {
-  it("returns null (never a guessed default) when a setting has never been configured", async () => {
-    m.adminPlatformSetting.findUnique.mockResolvedValue(null);
-    const value = await adminPlatformSettingsService.getValue("PRICE_APPROVAL_TIMEOUT_HOURS");
-    expect(value).toBeNull();
+describe("ensureDefaults() — seeds 1 for any threshold with no row yet, called via getValue()/list()", () => {
+  it("seeds all three keys to 1 when the table has none of them configured", async () => {
+    m.adminPlatformSetting.count.mockResolvedValue(0);
+    m.adminPlatformSetting.upsert.mockResolvedValue({});
+    m.adminPlatformSetting.findMany.mockResolvedValue([]);
+
+    await adminPlatformSettingsService.list();
+
+    expect(m.adminPlatformSetting.upsert).toHaveBeenCalledTimes(3);
+    for (const call of m.adminPlatformSetting.upsert.mock.calls) {
+      expect(call[0].update).toEqual({});
+      expect(call[0].create.value).toBe(1);
+    }
+    const seededKeys = m.adminPlatformSetting.upsert.mock.calls.map((c: any) => c[0].create.key).sort();
+    expect(seededKeys).toEqual([...OPERATIONAL_THRESHOLD_KEYS].sort());
   });
 
-  it("returns the real configured value once set", async () => {
+  it("never re-seeds (and never overwrites) once all three keys already have a row — an admin's real configured value survives", async () => {
+    m.adminPlatformSetting.count.mockResolvedValue(3);
+    m.adminPlatformSetting.findUnique.mockResolvedValue({ key: "PRICE_APPROVAL_TIMEOUT_HOURS", value: 48 });
+
+    const value = await adminPlatformSettingsService.getValue("PRICE_APPROVAL_TIMEOUT_HOURS");
+
+    expect(m.adminPlatformSetting.upsert).not.toHaveBeenCalled();
+    expect(value).toBe(48);
+  });
+
+  it("seeds only the missing keys when some (not all) already have a row — uses update:{} so it can never clobber an existing value even under a race", async () => {
+    m.adminPlatformSetting.count.mockResolvedValue(1); // only 1 of 3 configured
+    m.adminPlatformSetting.upsert.mockResolvedValue({});
+    m.adminPlatformSetting.findUnique.mockResolvedValue({ key: "PRICE_APPROVAL_TIMEOUT_HOURS", value: 1 });
+
+    await adminPlatformSettingsService.getValue("PRICE_APPROVAL_TIMEOUT_HOURS");
+
+    // update:{} on every upsert call means an already-existing row (e.g. one
+    // a concurrent request just created) is left completely untouched.
+    for (const call of m.adminPlatformSetting.upsert.mock.calls) {
+      expect(call[0].update).toEqual({});
+    }
+  });
+});
+
+describe("adminPlatformSettingsService.getValue — defaults to 1, never invents any other number", () => {
+  it("returns 1 once ensureDefaults() has seeded an unconfigured setting", async () => {
+    m.adminPlatformSetting.count.mockResolvedValue(0);
+    m.adminPlatformSetting.upsert.mockResolvedValue({});
+    m.adminPlatformSetting.findUnique.mockResolvedValue({ key: "FULFILMENT_STALE_THRESHOLD_HOURS", value: 1 });
+
+    const value = await adminPlatformSettingsService.getValue("FULFILMENT_STALE_THRESHOLD_HOURS");
+    expect(value).toBe(1);
+  });
+
+  it("returns the real configured value once explicitly set by an admin, not the 1 default", async () => {
     m.adminPlatformSetting.findUnique.mockResolvedValue({ key: "PRICE_APPROVAL_TIMEOUT_HOURS", value: 48 });
     const value = await adminPlatformSettingsService.getValue("PRICE_APPROVAL_TIMEOUT_HOURS");
     expect(value).toBe(48);
   });
+
+  it("still returns null (never a guessed default) in the narrow case where a row genuinely does not exist despite the seed count looking satisfied", async () => {
+    m.adminPlatformSetting.findUnique.mockResolvedValue(null);
+    const value = await adminPlatformSettingsService.getValue("PRICE_APPROVAL_TIMEOUT_HOURS");
+    expect(value).toBeNull();
+  });
 });
 
 describe("adminPlatformSettingsService.list — admin-web settings page", () => {
-  it("returns all three keys in order, with null for any never configured", async () => {
+  it("returns all three keys in order, defaulting to 1 for any never explicitly configured", async () => {
     m.adminPlatformSetting.findMany.mockResolvedValue([
       { key: "PRICE_APPROVAL_TIMEOUT_HOURS", value: 48, updatedById: "admin-1", updatedAt: new Date("2026-09-20") },
+      { key: "FULFILMENT_STALE_THRESHOLD_HOURS", value: 1, updatedById: null, updatedAt: new Date("2026-09-22") },
+      { key: "PAYOUT_STUCK_THRESHOLD_HOURS", value: 1, updatedById: null, updatedAt: new Date("2026-09-22") },
     ]);
 
     const result = await adminPlatformSettingsService.list();
@@ -53,9 +116,9 @@ describe("adminPlatformSettingsService.list — admin-web settings page", () => 
     const configured = result.find((r) => r.key === "PRICE_APPROVAL_TIMEOUT_HOURS");
     expect(configured?.value).toBe(48);
     expect(configured?.updatedById).toBe("admin-1");
-    const unconfigured = result.find((r) => r.key === "FULFILMENT_STALE_THRESHOLD_HOURS");
-    expect(unconfigured?.value).toBeNull();
-    expect(unconfigured?.updatedById).toBeNull();
+    const defaulted = result.find((r) => r.key === "FULFILMENT_STALE_THRESHOLD_HOURS");
+    expect(defaulted?.value).toBe(1);
+    expect(defaulted?.updatedById).toBeNull();
   });
 });
 

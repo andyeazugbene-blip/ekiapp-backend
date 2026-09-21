@@ -1,13 +1,14 @@
 /**
- * Client decision (2026-09-22, "FINAL CLIENT DECISIONS — APPLY NOW") — real
- * regression coverage for which countries Community Buy can actually accept
- * money in. market-configuration.service.ts had zero dedicated test
- * coverage despite gating exactly this. Proves: the ten approved markets
- * (GB/US/CA + 7 European) seed enabled with PLEDGE_THEN_CHARGE on a fresh
- * database, no African market is ever seeded or enabled, an unconfigured/
- * unknown country is safely treated as payments-disabled (never a silent
- * default-allow), and a new campaign always snapshots PLEDGE_THEN_CHARGE
- * unless a market is explicitly configured otherwise.
+ * Client decision (2026-09-22, "FINAL CLIENT DECISIONS — APPLY NOW", then
+ * expanded by "EKI — FINAL PRODUCTION CLOSURE" item 1) — real regression
+ * coverage for which countries Community Buy can actually accept money in.
+ * market-configuration.service.ts had zero dedicated test coverage despite
+ * gating exactly this. Proves: every approved market (GB/US/CA + every
+ * country classified as Europe) seeds enabled with PLEDGE_THEN_CHARGE on a
+ * fresh database, no African market is ever seeded or enabled, an
+ * unconfigured/unknown country is safely treated as payments-disabled
+ * (never a silent default-allow), and a new campaign always snapshots
+ * PLEDGE_THEN_CHARGE unless a market is explicitly configured otherwise.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
@@ -25,17 +26,25 @@ import { marketConfigurationService, INITIAL_MARKETS } from "../modules/communit
 
 const m = vi.mocked(prisma, true) as any;
 
-const APPROVED_COUNTRY_CODES = ["GB", "US", "CA", "FR", "ES", "PT", "CH", "BE", "IT", "HR"];
+const APPROVED_COUNTRY_CODES = [
+  "GB", "US", "CA",
+  "FR", "ES", "PT", "CH", "BE", "IT", "HR",
+  "DE", "NL", "AT", "IE", "LU", "GR", "CY", "MT", "SI", "SK",
+  "EE", "LV", "LT", "FI", "PL", "CZ", "HU", "RO", "BG", "DK",
+  "SE", "NO", "IS", "LI", "MC", "AD", "SM", "BA", "RS", "ME", "MK", "AL", "MD",
+];
 const AFRICAN_COUNTRY_CODES = ["NG", "GH", "KE", "ZA", "EG"];
+const EXCLUDED_NON_STRIPE_OR_NON_ISO_EUROPEAN_CODES = ["RU", "BY", "UA", "XK", "VA"];
 
 beforeEach(() => {
   vi.clearAllMocks();
 });
 
 describe("INITIAL_MARKETS — the approved launch-market list itself", () => {
-  it("contains exactly the ten client-approved markets, no more, no fewer", () => {
+  it("contains exactly the client-approved markets (GB/US/CA + every European market), no more, no fewer", () => {
     const codes = INITIAL_MARKETS.map((m) => m.countryCode).sort();
     expect(codes).toEqual([...APPROVED_COUNTRY_CODES].sort());
+    expect(codes).toHaveLength(43);
   });
 
   it("never contains an African market — omission here is what keeps Africa unavailable", () => {
@@ -44,16 +53,23 @@ describe("INITIAL_MARKETS — the approved launch-market list itself", () => {
       expect(codes).not.toContain(africanCode);
     }
   });
+
+  it("never contains a sanctioned/non-Stripe-currency/non-standard-ISO European country", () => {
+    const codes = INITIAL_MARKETS.map((m) => m.countryCode);
+    for (const excluded of EXCLUDED_NON_STRIPE_OR_NON_ISO_EUROPEAN_CODES) {
+      expect(codes).not.toContain(excluded);
+    }
+  });
 });
 
 describe("ensureDefaults() — a fresh database seeds every approved market already enabled", () => {
-  it("upserts all ten markets with communityBuyEnabled/organiser/supplier applications/payments all true, and PLEDGE_THEN_CHARGE, when the table is empty", async () => {
+  it("upserts every approved market with communityBuyEnabled/organiser/supplier applications/payments all true, and PLEDGE_THEN_CHARGE, when the table is empty", async () => {
     m.marketConfiguration.count.mockResolvedValue(0);
     m.marketConfiguration.upsert.mockResolvedValue({});
 
     await marketConfigurationService.list(); // triggers ensureDefaults() internally
 
-    expect(m.marketConfiguration.upsert).toHaveBeenCalledTimes(10);
+    expect(m.marketConfiguration.upsert).toHaveBeenCalledTimes(43);
     for (const call of m.marketConfiguration.upsert.mock.calls) {
       const created = call[0].create;
       expect(created.communityBuyEnabled).toBe(true);

@@ -19,7 +19,7 @@ import { marketConfigurationService } from "../community-buy/market-configuratio
 async function resolveCurrencyForMarketCode(marketCode: string): Promise<string> {
   const config = await marketConfigurationService.get(marketCode);
   if (config?.currency) return config.currency;
-  // Defensive only — every one of the 10 launch markets is seeded with a
+  // Defensive only — every one of the approved launch markets is seeded with a
   // MarketConfiguration row by marketConfigurationService.ensureDefaults().
   return currencyFromCountry(marketCodeToCountryName(marketCode) ?? marketCode);
 }

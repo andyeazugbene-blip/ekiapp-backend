@@ -70,9 +70,29 @@ export function isSupportedCurrency(currency: string): currency is SupportedCurr
  * ("United Kingdom") — the two were never translatable into each other,
  * which let a market's regularDeliveriesEnabled/organiserApplicationsEnabled
  * flags silently fail to apply to the vendor rows they were meant to gate.
- * Covers exactly the 10 approved launch markets (see market-configuration
- * .service.ts INITIAL_MARKETS) plus common name variants already used
- * elsewhere in Vendor.country data.
+ * Covers every approved launch market (see market-configuration.service.ts
+ * INITIAL_MARKETS) plus common name variants already used elsewhere in
+ * Vendor.country data.
+ *
+ * Client decision (2026-09-22, "EKI — FINAL PRODUCTION CLOSURE", item 1):
+ * Community Buy launch scope expanded from the original 7 European markets
+ * to every country classified as Europe, plus GB/US/CA (unchanged). No
+ * broader "Europe" registry existed anywhere else in this codebase at the
+ * time of this change (checked shipping/delivery-zone config, currency
+ * resolution, vendor/organiser market-assignment code — this table was the
+ * only country/market registry that existed) — so this list was built as a
+ * standard, defensible European-sovereign-state set (UN M49 "Europe"
+ * region), restricted to countries with a real ISO 3166-1 alpha-2 code and
+ * a currency Stripe actually processes (see STRIPE_SUPPORTED_CURRENCIES
+ * below). Russia, Belarus and Ukraine are deliberately excluded: none of
+ * RUB/BYN/UAH appears in STRIPE_SUPPORTED_CURRENCIES, so Stripe cannot
+ * process payments in any of the three regardless of this list, and Russia
+ * and Belarus are additionally under active international sanctions.
+ * Kosovo is excluded for lacking a standard, universally-assigned ISO
+ * 3166-1 alpha-2 code. Vatican City is excluded as having no realistic
+ * resident/commercial population to serve. Every other sovereign European
+ * state is included. Africa remains completely absent from this table, as
+ * required.
  */
 const MARKET_CODE_COUNTRY_NAMES: Record<string, string[]> = {
   gb: ["United Kingdom", "UK", "England", "Scotland", "Wales"],
@@ -85,6 +105,39 @@ const MARKET_CODE_COUNTRY_NAMES: Record<string, string[]> = {
   be: ["Belgium"],
   it: ["Italy"],
   hr: ["Croatia"],
+  de: ["Germany"],
+  nl: ["Netherlands", "The Netherlands", "Holland"],
+  at: ["Austria"],
+  ie: ["Ireland"],
+  lu: ["Luxembourg"],
+  gr: ["Greece"],
+  cy: ["Cyprus"],
+  mt: ["Malta"],
+  si: ["Slovenia"],
+  sk: ["Slovakia"],
+  ee: ["Estonia"],
+  lv: ["Latvia"],
+  lt: ["Lithuania"],
+  fi: ["Finland"],
+  pl: ["Poland"],
+  cz: ["Czechia", "Czech Republic"],
+  hu: ["Hungary"],
+  ro: ["Romania"],
+  bg: ["Bulgaria"],
+  dk: ["Denmark"],
+  se: ["Sweden"],
+  no: ["Norway"],
+  is: ["Iceland"],
+  li: ["Liechtenstein"],
+  mc: ["Monaco"],
+  ad: ["Andorra"],
+  sm: ["San Marino"],
+  ba: ["Bosnia and Herzegovina", "Bosnia"],
+  rs: ["Serbia"],
+  me: ["Montenegro"],
+  mk: ["North Macedonia", "Macedonia"],
+  al: ["Albania"],
+  md: ["Moldova"],
 };
 
 /**
@@ -104,7 +157,7 @@ export function countryNamesForMarketCode(countryCode: string): string[] {
  * country, SupplierProfile.country, CommunityCampaign.country, Vendor.
  * country, ...) — the reverse of countryNamesForMarketCode. Built once from
  * the same MARKET_CODE_COUNTRY_NAMES table so there is exactly one place
- * that defines "which countries are the 10 launch markets."
+ * that defines "which countries are the approved launch markets."
  */
 const COUNTRY_NAME_TO_MARKET_CODE: Record<string, string> = Object.entries(MARKET_CODE_COUNTRY_NAMES)
   .reduce<Record<string, string>>((acc, [code, names]) => {
@@ -117,7 +170,7 @@ const COUNTRY_NAME_TO_MARKET_CODE: Record<string, string> = Object.entries(MARKE
  * Resolve ANY raw country representation (a full name like "United Kingdom",
  * a common alias like "UK", or an ISO code like "gb") to its
  * MarketConfiguration.countryCode. Returns null for a country that isn't
- * one of the 10 approved launch markets — callers must treat that as "not
+ * one of the approved launch markets — callers must treat that as "not
  * a recognized market" (fail closed), not silently pass the raw string
  * through to a countryCode-keyed lookup that will just never match.
  */
@@ -136,7 +189,7 @@ const MARKET_CODE_TO_COUNTRY_NAME: Record<string, string> = Object.fromEntries(
 );
 
 /**
- * Canonical display name for one of the 10 approved launch markets' ISO
+ * Canonical display name for one of the approved launch markets' ISO
  * codes (e.g. "GB" -> "United Kingdom"). Returns null for anything outside
  * the launch set — callers must not fall back to displaying the raw code,
  * since that's exactly the "US"/"CA"/"GB" leak this exists to prevent.
@@ -145,7 +198,7 @@ export function marketCodeToCountryName(marketCode: string): string | null {
   return MARKET_CODE_TO_COUNTRY_NAME[marketCode.trim().toUpperCase()] ?? null;
 }
 
-/** True only for one of the 10 approved launch markets' ISO codes — never Africa or any other market. */
+/** True only for one of the approved launch markets' ISO codes — never Africa or any other market. */
 export function isApprovedLaunchMarketCode(marketCode: string | null | undefined): boolean {
   if (!marketCode) return false;
   return marketCode.trim().toUpperCase() in MARKET_CODE_TO_COUNTRY_NAME;

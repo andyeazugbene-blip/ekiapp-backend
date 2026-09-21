@@ -5,24 +5,35 @@ import { resolveMarketCode } from "../../shared/currency";
 import { isIndividualDeliveryEnabled } from "./community-buy-privacy.service";
 
 /**
- * Every market approved for the current launch scope (client mandate
- * 2026-09, section 5: "GB, US, CA and the approved European markets such
- * as France, Spain, Portugal, Switzerland, Belgium, Italy and Croatia" —
- * explicit, not silently added or removed). Africa is deliberately absent:
- * the client requires it built-but-not-launched, and this list controls
- * exactly what a fresh/QA database seeds — omission here, not a code gate,
- * is what keeps Africa unavailable (see market-controls admin UI).
+ * Every market approved for the current launch scope. Africa is
+ * deliberately absent: the client requires it built-but-not-launched, and
+ * this list controls exactly what a fresh/QA database seeds — omission
+ * here, not a code gate, is what keeps Africa unavailable (see
+ * market-controls admin UI).
  *
- * Client decision (2026-09-22, "FINAL CLIENT DECISIONS — APPLY NOW"):
- * Community Buy is now approved to launch in exactly these ten markets —
+ * Client decision (2026-09-22, "EKI — FINAL PRODUCTION CLOSURE", item 1):
+ * launch scope expanded from GB/US/CA + 7 European markets to GB/US/CA +
+ * EVERY country classified as Europe. No broader "Europe" registry existed
+ * anywhere else in this codebase (shipping/delivery-zone config, currency
+ * resolution, vendor/organiser market-assignment code were all checked) —
+ * this list is the same one built for shared/currency.ts's
+ * MARKET_CODE_COUNTRY_NAMES (see that table's doc comment for the exact
+ * methodology and exclusions: Russia/Belarus/Ukraine lack Stripe-supported
+ * currencies and are under active sanctions/conflict; Kosovo lacks a
+ * standard ISO 3166-1 alpha-2 code; Vatican City has no realistic
+ * commercial population). Every other sovereign European state is
+ * included — this is now the single canonical Community Buy market list;
+ * shared/currency.ts's table must be kept in sync with this one.
+ *
  * communityBuyEnabled/organiserApplicationsEnabled/
  * supplierApplicationsEnabled/communityBuyPaymentsEnabled all default true
  * for a market in this list. communityBuyPaymentMode is pinned to
  * PLEDGE_THEN_CHARGE, the only client-approved mode. paymentProvider/
  * paymentMode/identityProvider reflect production reality (Stripe live,
  * stripeIdentityService is the one real verification provider) — see
- * migrations/20260921230255_community_buy_launch_markets_enable for the
- * matching data migration that brings an already-existing (pre-decision)
+ * migrations/20260921230255_community_buy_launch_markets_enable and
+ * migrations/20260922010000_community_buy_europe_expansion for the
+ * matching data migrations that bring an already-existing (pre-decision)
  * database to this same state. regularDeliveriesEnabled (the ordinary,
  * non-Community-Buy marketplace's own flag) is untouched by this decision
  * — it was scoped to Community Buy launch availability only — and keeps
@@ -39,6 +50,39 @@ const INITIAL_MARKETS: { countryCode: string; currency: string }[] = [
   { countryCode: "BE", currency: "EUR" },
   { countryCode: "IT", currency: "EUR" },
   { countryCode: "HR", currency: "EUR" },
+  { countryCode: "DE", currency: "EUR" },
+  { countryCode: "NL", currency: "EUR" },
+  { countryCode: "AT", currency: "EUR" },
+  { countryCode: "IE", currency: "EUR" },
+  { countryCode: "LU", currency: "EUR" },
+  { countryCode: "GR", currency: "EUR" },
+  { countryCode: "CY", currency: "EUR" },
+  { countryCode: "MT", currency: "EUR" },
+  { countryCode: "SI", currency: "EUR" },
+  { countryCode: "SK", currency: "EUR" },
+  { countryCode: "EE", currency: "EUR" },
+  { countryCode: "LV", currency: "EUR" },
+  { countryCode: "LT", currency: "EUR" },
+  { countryCode: "FI", currency: "EUR" },
+  { countryCode: "PL", currency: "PLN" },
+  { countryCode: "CZ", currency: "CZK" },
+  { countryCode: "HU", currency: "HUF" },
+  { countryCode: "RO", currency: "RON" },
+  { countryCode: "BG", currency: "BGN" },
+  { countryCode: "DK", currency: "DKK" },
+  { countryCode: "SE", currency: "SEK" },
+  { countryCode: "NO", currency: "NOK" },
+  { countryCode: "IS", currency: "ISK" },
+  { countryCode: "LI", currency: "CHF" },
+  { countryCode: "MC", currency: "EUR" },
+  { countryCode: "AD", currency: "EUR" },
+  { countryCode: "SM", currency: "EUR" },
+  { countryCode: "BA", currency: "BAM" },
+  { countryCode: "RS", currency: "RSD" },
+  { countryCode: "ME", currency: "EUR" },
+  { countryCode: "MK", currency: "MKD" },
+  { countryCode: "AL", currency: "ALL" },
+  { countryCode: "MD", currency: "MDL" },
 ];
 
 const APPROVED_LAUNCH_MARKET_DEFAULTS = {

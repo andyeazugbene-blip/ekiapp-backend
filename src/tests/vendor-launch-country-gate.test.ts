@@ -19,12 +19,12 @@ beforeEach(() => vi.clearAllMocks());
  * is how the mobile app's onboarding screen could default new vendors to
  * "Nigeria" and offer countries never approved for launch with zero
  * server-side backstop. createVendor/updateOwnVendor now reject a country
- * that doesn't resolve to one of the 10 approved launch markets, so even a
+ * that doesn't resolve to one of the approved launch markets, so even a
  * direct API call bypassing the (now-restricted) mobile picker can't create
  * a vendor in an unsupported market.
  */
 describe("vendorsService.createVendor — launch-country gate", () => {
-  it("rejects a country outside the 10 approved launch markets before touching the database", async () => {
+  it("rejects a country outside the approved launch markets before touching the database", async () => {
     await expect(
       vendorsService.createVendor("user-1", { storeName: "Test Store", country: "Nigeria" }),
     ).rejects.toThrow(/approved launch markets/i);

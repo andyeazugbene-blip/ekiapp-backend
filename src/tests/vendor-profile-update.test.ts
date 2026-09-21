@@ -3,7 +3,7 @@
  * business/store profile editing (updateOwnVendor in vendors.service.ts)
  * was real, working, and wired to a real mobile screen, but had zero
  * dedicated test coverage. Exercises the real correctness properties:
- * country changes are gated to the 10 approved launch markets (but an
+ * country changes are gated to the approved launch markets (but an
  * unchanged country is always allowed, even if it predates the gate — no
  * existing account gets locked out), store-name-availability is checked
  * only when the name actually changes (case-insensitively), and a

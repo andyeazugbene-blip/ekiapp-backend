@@ -63,7 +63,7 @@ describe("resolveCurrencyForMarket — per-market currency, not the coarser lega
 });
 
 describe("vendorMarketsService.addMarket", () => {
-  it("rejects a market outside the 10 approved launch markets", async () => {
+  it("rejects a market outside the approved launch markets", async () => {
     await expect(
       vendorMarketsService.addMarket({ vendorId: "v1", actorId: "a1", rawMarket: "Nigeria" }),
     ).rejects.toThrow(/approved launch markets/i);

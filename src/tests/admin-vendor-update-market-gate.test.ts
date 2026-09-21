@@ -25,7 +25,7 @@ beforeEach(() => vi.clearAllMocks());
 describe("adminListingsService.updateVendor — launch-market gate on the primary country", () => {
   const existingVendor = { id: "vendor-1", country: "United Kingdom", currency: "GBP", storeName: "Test Store" };
 
-  it("rejects setting the vendor's country to a market outside the 10 approved launch markets", async () => {
+  it("rejects setting the vendor's country to a market outside the approved launch markets", async () => {
     m.vendor.findUnique.mockResolvedValue(existingVendor as never);
 
     await expect(

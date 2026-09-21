@@ -166,7 +166,7 @@ export const adminListingsService = {
     // This edits the vendor's PRIMARY market (Vendor.country) — same
     // launch-market gate as vendor self-service onboarding/profile edits, so
     // an admin can't set a vendor's primary country to somewhere outside the
-    // 10 approved launch markets either (unchanged values stay grandfathered,
+    // approved launch markets either (unchanged values stay grandfathered,
     // same as the vendor-facing gate). Additional markets are managed
     // separately via VendorMarketAssignment (admin-vendors.controller.ts).
     if (data.country !== undefined) {

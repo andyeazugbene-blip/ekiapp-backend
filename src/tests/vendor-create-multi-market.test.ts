@@ -46,7 +46,7 @@ beforeEach(() => {
 });
 
 describe("vendorsService.createVendor — markets[] multi-select onboarding", () => {
-  it("rejects the whole request if ANY selected market is outside the 10 approved launch markets", async () => {
+  it("rejects the whole request if ANY selected market is outside the approved launch markets", async () => {
     await expect(
       vendorsService.createVendor("user-1", { storeName: "Test Store", markets: ["United Kingdom", "Nigeria"] }),
     ).rejects.toThrow(/approved launch markets/i);
