@@ -12,6 +12,9 @@ vi.mock("../lib/prisma", () => ({
     user: {
       findUnique: vi.fn(),
     },
+    auditLog: {
+      create: vi.fn().mockResolvedValue({}),
+    },
   },
 }));
 
@@ -103,6 +106,10 @@ describe("Admin 2FA Controller", () => {
       expect(res.statusCode).toBe(200);
       expect((res.data as Record<string, unknown>).backupCodes).toHaveLength(10);
       expect((res.data as Record<string, unknown>).message).toContain("enabled");
+      // Acceptance audit fix: an admin's own 2FA state changes had zero audit trail.
+      expect(mockedPrisma.auditLog.create).toHaveBeenCalledWith(expect.objectContaining({
+        data: expect.objectContaining({ actorId: "admin-1", action: "admin.2fa.enabled" }),
+      }));
     });
 
     it("should reject invalid TOTP code", async () => {
@@ -151,6 +158,9 @@ describe("Admin 2FA Controller", () => {
 
       expect(res.statusCode).toBe(200);
       expect((res.data as Record<string, unknown>).message).toContain("disabled");
+      expect(mockedPrisma.auditLog.create).toHaveBeenCalledWith(expect.objectContaining({
+        data: expect.objectContaining({ actorId: "admin-1", action: "admin.2fa.disabled" }),
+      }));
     });
 
     it("should reject if 2FA is not enabled", async () => {

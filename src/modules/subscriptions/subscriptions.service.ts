@@ -257,6 +257,18 @@ async function ensureDefaultPlanConfigs(): Promise<void> {
 
 async function getStarterPlan(): Promise<SellerPlanWithTiers> {
   await ensureDefaultPlanConfigs();
+
+  // Test environments that mock a partial Prisma client (no sellerPlan
+  // delegate) — reuse findSellerPlan's own in-memory-default fallback
+  // rather than duplicating it. getPlanForSubscription() started calling
+  // this path for an inactive subscription (Section C.7 entitlement fix),
+  // which existing partial-mock tests hadn't exercised before.
+  if (!prisma.sellerPlan || typeof (prisma.sellerPlan as any).findFirst !== "function") {
+    const fallback = await findSellerPlan("starter", true);
+    if (fallback) return fallback;
+    throw new AppError("Default seller plan is not configured", 503);
+  }
+
   const defaultPlan = await prisma.sellerPlan.findFirst({
     where: { isDefault: true, deletedAt: null, isActive: true },
     include: { commissionTiers: true },
@@ -391,7 +403,21 @@ async function findSellerPlan(identifier: string, includeInactive = false): Prom
 }
 
 async function getPlanForSubscription(subscription: VendorSubscription | null): Promise<SellerPlanWithTiers> {
-  if (subscription?.sellerPlanId) {
+  // Acceptance audit fix: VendorSubscription.status is correctly synced
+  // from real Stripe billing events (checkout, invoice.payment_failed,
+  // customer.subscription.updated/deleted — Defect D), but nothing ever
+  // read it here. A vendor's sellerPlanId stayed pointed at Growth forever
+  // — through trial expiry, a failed renewal payment, or the subscription
+  // actually ending — because entitlement was resolved purely from
+  // sellerPlanId/plan, never from whether that subscription is still live.
+  // PAST_DUE/CANCELLED/EXPIRED all fall back to Starter; sellerPlanId
+  // itself is left untouched (it's the record of what they subscribed to,
+  // not a live entitlement flag) so access is restored automatically the
+  // moment status returns to ACTIVE (e.g. a recovered payment) with no
+  // separate "re-upgrade" step needed anywhere.
+  const isEntitled = subscription?.status === "ACTIVE";
+
+  if (isEntitled && subscription.sellerPlanId) {
     const sellerPlan = await prisma.sellerPlan.findUnique({
       where: { id: subscription.sellerPlanId },
       include: { commissionTiers: true },
@@ -399,7 +425,7 @@ async function getPlanForSubscription(subscription: VendorSubscription | null): 
     if (sellerPlan && !sellerPlan.deletedAt) return sellerPlan;
   }
 
-  if (subscription?.plan) {
+  if (isEntitled && subscription.plan) {
     const legacy = await findSellerPlan(subscription.plan, true);
     if (legacy) return legacy;
   }
@@ -880,10 +906,28 @@ export const subscriptionsService = {
       throw new AppError("Vendor services already cancelled", 409);
     }
 
+    // Acceptance audit fix: this used to flip status to CANCELLED the
+    // instant a vendor requested cancellation — but cancel_at_period_end
+    // means Stripe keeps the subscription (and the access it paid for)
+    // live until the current period actually ends. Flipping status early
+    // fed straight into getPlanForSubscription()'s new expiry check below
+    // and would have downgraded a vendor mid-period they'd already paid
+    // for. Only mark cancelledAt here (a "cancellation requested at"
+    // timestamp, unrelated to entitlement); the real status transition to
+    // CANCELLED happens for real via the customer.subscription.deleted
+    // webhook (stripe.service.ts handleVendorSubscriptionDeleted) at the
+    // actual period end. A vendor with no live Stripe subscription at all
+    // has no period to wait out, so cancels immediately.
     if (subscription.stripeSubscriptionId) {
       await stripe.subscriptions.update(subscription.stripeSubscriptionId, {
         cancel_at_period_end: true,
       });
+      const updated = await prisma.vendorSubscription.update({
+        where: { id: subscription.id },
+        data: { cancelledAt: new Date() },
+        include: { sellerPlan: { include: { commissionTiers: true } } },
+      });
+      return formatSubscriptionResponse(updated);
     }
 
     const updated = await prisma.vendorSubscription.update({

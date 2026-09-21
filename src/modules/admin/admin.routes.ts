@@ -463,7 +463,6 @@ adminRouter.post("/vendors/invite", asyncHandler(requireAdminPermission("vendors
 adminRouter.get("/products", asyncHandler(requireAdminPermission("products.read")), asyncHandler(listProducts));
 adminRouter.get("/products/:id", asyncHandler(requireAdminPermission("products.read")), asyncHandler(getProduct));
 adminRouter.get("/orders", asyncHandler(requireAdminPermission("orders.read")), asyncHandler(listOrders));
-adminRouter.post("/orders/force-process/:id", asyncHandler(requireAdminPermission("orders.mutate")), asyncHandler(processStuckOrder));
 adminRouter.get("/orders/:id", asyncHandler(requireAdminPermission("orders.read")), asyncHandler(getOrder));
 adminRouter.get("/payments", asyncHandler(requireAdminPermission("orders.read")), asyncHandler(listPayments));
 adminRouter.get("/payments/:id", asyncHandler(requireAdminPermission("orders.read")), asyncHandler(getPayment));
@@ -503,8 +502,11 @@ adminRouter.patch("/products/:id/approve", asyncHandler(requireAdminPermission("
 adminRouter.patch("/products/:id/disable", asyncHandler(requireAdminPermission("products.mutate")), asyncHandler(disableProduct));
 
 // Order management
-adminRouter.post("/orders/:id/force-process", asyncHandler(requireAdminPermission("orders.mutate")), asyncHandler(processStuckOrder));
-adminRouter.patch("/orders/:id/complete", asyncHandler(requireAdminPermission("orders.mutate")), asyncHandler(completeOrder));
+// 2FA-gated (acceptance audit fix): both mutate payment/order state and
+// credit or release real vendor wallet funds — the same class of action as
+// /orders/:id/refund below, which already required it.
+adminRouter.post("/orders/:id/force-process", asyncHandler(requireAdminPermission("orders.mutate")), asyncHandler(require2fa), asyncHandler(processStuckOrder));
+adminRouter.patch("/orders/:id/complete", asyncHandler(requireAdminPermission("orders.mutate")), asyncHandler(require2fa), asyncHandler(completeOrder));
 
 // Payout management
 adminRouter.get("/payout-requests/:id", asyncHandler(requireAdminPermission("payouts.read")), asyncHandler(adminGetPayoutRequest));

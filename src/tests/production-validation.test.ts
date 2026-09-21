@@ -106,7 +106,7 @@ describe("POST /api/subscriptions/activate", () => {
 
 describe("Product limit blocks Free plan", () => {
   it("enforceProductLimit throws when Free plan at max (10)", async () => {
-    subscriptionFindUnique.mockResolvedValue({ plan: "FREE" });
+    subscriptionFindUnique.mockResolvedValue({ plan: "FREE", status: "ACTIVE" });
     productCount.mockResolvedValue(10);
 
     await expect(
@@ -115,7 +115,7 @@ describe("Product limit blocks Free plan", () => {
   });
 
   it("enforceProductLimit allows when under limit", async () => {
-    subscriptionFindUnique.mockResolvedValue({ plan: "FREE" });
+    subscriptionFindUnique.mockResolvedValue({ plan: "FREE", status: "ACTIVE" });
     productCount.mockResolvedValue(5);
 
     await expect(
@@ -124,12 +124,21 @@ describe("Product limit blocks Free plan", () => {
   });
 
   it("enforceProductLimit allows unlimited for PRO plan", async () => {
-    subscriptionFindUnique.mockResolvedValue({ plan: "PRO" });
+    subscriptionFindUnique.mockResolvedValue({ plan: "PRO", status: "ACTIVE" });
     productCount.mockResolvedValue(999);
 
     await expect(
       subscriptionsService.enforceProductLimit("vendor-1"),
     ).resolves.toBeUndefined();
+  });
+
+  it("acceptance audit fix: a PRO vendor whose subscription is PAST_DUE falls back to Starter's product limit (25), not PRO's unlimited", async () => {
+    subscriptionFindUnique.mockResolvedValue({ plan: "PRO", status: "PAST_DUE" });
+    productCount.mockResolvedValue(25);
+
+    await expect(
+      subscriptionsService.enforceProductLimit("vendor-1"),
+    ).rejects.toMatchObject({ statusCode: 403 });
   });
 });
 
@@ -137,13 +146,13 @@ describe("Product limit blocks Free plan", () => {
 
 describe("Growth/Pro unlock marketing tools", () => {
   it("FREE plan does not have flashSales, bundles", async () => {
-    subscriptionFindUnique.mockResolvedValue({ plan: "FREE" });
+    subscriptionFindUnique.mockResolvedValue({ plan: "FREE", status: "ACTIVE" });
     expect(await subscriptionsService.checkFeatureAccess("v1", "flashSales")).toBe(false);
     expect(await subscriptionsService.checkFeatureAccess("v1", "bundles")).toBe(false);
   });
 
   it("GROWTH plan has flashSales, bundles, discounts, analytics", async () => {
-    subscriptionFindUnique.mockResolvedValue({ plan: "GROWTH" });
+    subscriptionFindUnique.mockResolvedValue({ plan: "GROWTH", status: "ACTIVE" });
     expect(await subscriptionsService.checkFeatureAccess("v1", "flashSales")).toBe(true);
     expect(await subscriptionsService.checkFeatureAccess("v1", "bundles")).toBe(true);
     expect(await subscriptionsService.checkFeatureAccess("v1", "discounts")).toBe(true);
@@ -151,9 +160,25 @@ describe("Growth/Pro unlock marketing tools", () => {
   });
 
   it("PRO plan has all features", async () => {
-    subscriptionFindUnique.mockResolvedValue({ plan: "PRO" });
+    subscriptionFindUnique.mockResolvedValue({ plan: "PRO", status: "ACTIVE" });
     expect(await subscriptionsService.checkFeatureAccess("v1", "flashSales")).toBe(true);
     expect(await subscriptionsService.checkFeatureAccess("v1", "analytics")).toBe(true);
+  });
+
+  it("acceptance audit fix (Section C.7): a GROWTH plan whose subscription has EXPIRED loses Growth features, falls back to Starter", async () => {
+    subscriptionFindUnique.mockResolvedValue({ plan: "GROWTH", status: "EXPIRED" });
+    expect(await subscriptionsService.checkFeatureAccess("v1", "flashSales")).toBe(false);
+    expect(await subscriptionsService.checkFeatureAccess("v1", "analytics")).toBe(false);
+  });
+
+  it("acceptance audit fix: a CANCELLED subscription (real end, via customer.subscription.deleted) loses Growth features", async () => {
+    subscriptionFindUnique.mockResolvedValue({ plan: "GROWTH", status: "CANCELLED" });
+    expect(await subscriptionsService.checkFeatureAccess("v1", "flashSales")).toBe(false);
+  });
+
+  it("a vendor with no VendorSubscription row at all still resolves to Starter defaults (unaffected by this fix)", async () => {
+    subscriptionFindUnique.mockResolvedValue(null);
+    expect(await subscriptionsService.checkFeatureAccess("v1", "flashSales")).toBe(false);
   });
 });
 

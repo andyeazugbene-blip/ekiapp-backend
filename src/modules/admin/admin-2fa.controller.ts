@@ -6,6 +6,7 @@ import { authenticator } from "otplib";
 
 import { prisma } from "../../lib/prisma";
 import { AppError } from "../../shared/errors/app-error";
+import { recordAudit } from "../../shared/utils/audit";
 
 const BACKUP_CODE_COUNT = 10;
 const BCRYPT_ROUNDS = Math.max(
@@ -80,6 +81,19 @@ export async function verify2fa(request: Request, response: Response): Promise<v
     data: { enabled: true, backupCodes: hashedCodes },
   });
 
+  // Acceptance audit fix: an admin's own 2FA state changes had zero audit
+  // trail — never log the secret or the codes themselves, only the fact
+  // that this security state changed.
+  await recordAudit({
+    actorId: userId,
+    action: "admin.2fa.enabled",
+    entityType: "AdminTwoFactor",
+    entityId: userId,
+    beforeState: { enabled: false },
+    afterState: { enabled: true },
+    request,
+  });
+
   response.status(200).json({
     message: "2FA enabled successfully",
     backupCodes: rawBackupCodes,
@@ -120,6 +134,20 @@ export async function disable2fa(request: Request, response: Response): Promise<
     data: { enabled: false, secret: "", backupCodes: [] },
   });
 
+  // Acceptance audit fix: disabling 2FA weakens this admin's own future
+  // actions and had zero audit trail — the highest-risk of the three 2FA
+  // state changes here.
+  await recordAudit({
+    actorId: userId,
+    action: "admin.2fa.disabled",
+    entityType: "AdminTwoFactor",
+    entityId: userId,
+    beforeState: { enabled: true },
+    afterState: { enabled: false },
+    reason: totpValid ? "verified_via_totp" : "verified_via_backup_code",
+    request,
+  });
+
   response.status(200).json({ message: "2FA disabled successfully" });
 }
 
@@ -156,6 +184,14 @@ export async function regenerateBackupCodes(request: Request, response: Response
   await prisma.adminTwoFactor.update({
     where: { userId },
     data: { backupCodes: hashedCodes },
+  });
+
+  await recordAudit({
+    actorId: userId,
+    action: "admin.2fa.backup_codes_regenerated",
+    entityType: "AdminTwoFactor",
+    entityId: userId,
+    request,
   });
 
   response.status(200).json({
