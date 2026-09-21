@@ -1,6 +1,5 @@
 import type Stripe from "stripe";
 
-import { env } from "../../config/env";
 import { prisma } from "../../lib/prisma";
 import { stripe } from "../../lib/stripe";
 import { logger } from "../../lib/logger";
@@ -12,6 +11,7 @@ import { notificationsService } from "../notifications/notifications.service";
 import { automationService } from "../automation/automation.service";
 import { recordAudit } from "../../shared/utils/audit";
 import { nextCycleDate } from "./buyer-subscriptions.service";
+import { adminPlatformSettingsService } from "../admin/admin-platform-settings.service";
 
 // Regular Deliveries had zero AuditLog coverage for anything beyond buyer-
 // initiated actions (those go to SubscriptionActionHistory instead, see
@@ -672,15 +672,17 @@ export const renewalsService = {
    * AWAITING_PRICE_APPROVAL forever would block that cycle indefinitely.
    * The architecture doc defines the EXPIRED renewal status for exactly
    * this and requires it be tested, but names no duration a buyer has to
-   * respond — see getPriceApprovalTimeoutHours() in config/env.ts. Until
-   * PRICE_APPROVAL_TIMEOUT_HOURS is set, this is a genuine no-op: it never
-   * expires a renewal on an invented default.
+   * respond — see the PRICE_APPROVAL_TIMEOUT_HOURS admin operational
+   * setting (Settings -> Operational Thresholds in admin-web). Until an
+   * admin sets it, this is a genuine no-op: it never expires a renewal on
+   * an invented default.
    */
   async expirePriceApprovalTimeouts(): Promise<{ configured: boolean; expired: number }> {
-    if (env.priceApprovalTimeoutHours == null) {
+    const priceApprovalTimeoutHours = await adminPlatformSettingsService.getValue("PRICE_APPROVAL_TIMEOUT_HOURS");
+    if (priceApprovalTimeoutHours == null) {
       return { configured: false, expired: 0 };
     }
-    const cutoff = new Date(Date.now() - env.priceApprovalTimeoutHours * 60 * 60 * 1000);
+    const cutoff = new Date(Date.now() - priceApprovalTimeoutHours * 60 * 60 * 1000);
     const stale = await prisma.renewal.findMany({
       where: { status: "AWAITING_PRICE_APPROVAL", priceChangeRequest: { createdAt: { lte: cutoff } } },
       include: { subscription: true },
@@ -705,7 +707,7 @@ export const renewalsService = {
         action: "renewal.price_approval_expired",
         entityType: "Renewal",
         entityId: renewal.id,
-        metadata: { subscriptionId: renewal.subscriptionId, timeoutHours: env.priceApprovalTimeoutHours },
+        metadata: { subscriptionId: renewal.subscriptionId, timeoutHours: priceApprovalTimeoutHours },
       });
       await notifySubscriptionEvent(renewal.subscription.buyerId, "price_approval_expired", renewal.id, renewal.subscriptionId);
     }

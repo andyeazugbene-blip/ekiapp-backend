@@ -1,9 +1,9 @@
 import { Prisma } from "@prisma/client";
 
-import { env } from "../../config/env";
 import { prisma } from "../../lib/prisma";
 import { AppError } from "../../shared/errors/app-error";
 import { notificationsService } from "../notifications/notifications.service";
+import { adminPlatformSettingsService } from "../admin/admin-platform-settings.service";
 
 /**
  * Admin supplier-fulfilment delay queue (architecture doc §15.3
@@ -12,10 +12,11 @@ import { notificationsService } from "../notifications/notifications.service";
  *  - PAST_ESTIMATED_READY_DATE: the supplier's own estimatedReadyAt has
  *    passed and prep still isn't ready — a real business date, not an
  *    invented deadline.
- *  - STALE_NO_PROGRESS: only checked when FULFILMENT_STALE_THRESHOLD_HOURS
- *    is configured (see config/env.ts) — with no estimatedReadyAt at all,
- *    there is no client-approved "too long with no progress" duration to
- *    invent, so this half of the scan is a genuine no-op until set.
+ *  - STALE_NO_PROGRESS: only checked when the FULFILMENT_STALE_THRESHOLD_HOURS
+ *    admin operational setting is configured (Settings -> Operational
+ *    Thresholds in admin-web) — with no estimatedReadyAt at all, there is
+ *    no client-approved "too long with no progress" duration to invent, so
+ *    this half of the scan is a genuine no-op until an admin sets one.
  */
 const NOT_YET_READY_STATUSES = ["AWAITING_INVENTORY_CONFIRMATION", "INVENTORY_CONFIRMED", "PACKING"] as const;
 
@@ -29,6 +30,7 @@ interface Finding {
 export const fulfilmentDelayService = {
   async scan(): Promise<{ found: number; staleCheckConfigured: boolean }> {
     const now = new Date();
+    const fulfilmentStaleThresholdHours = await adminPlatformSettingsService.getValue("FULFILMENT_STALE_THRESHOLD_HOURS");
     const active = await prisma.campaignFulfilment.findMany({
       where: { status: { in: [...NOT_YET_READY_STATUSES] } },
       select: { campaignId: true, status: true, estimatedReadyAt: true, updatedAt: true, createdAt: true },
@@ -43,14 +45,14 @@ export const fulfilmentDelayService = {
           campaignId: f.campaignId,
           evidence: { status: f.status, estimatedReadyAt: f.estimatedReadyAt.toISOString(), hoursOverdue: Math.round((now.getTime() - f.estimatedReadyAt.getTime()) / (60 * 60 * 1000)) },
         });
-      } else if (!f.estimatedReadyAt && env.fulfilmentStaleThresholdHours != null) {
-        const staleSince = new Date(now.getTime() - env.fulfilmentStaleThresholdHours * 60 * 60 * 1000);
+      } else if (!f.estimatedReadyAt && fulfilmentStaleThresholdHours != null) {
+        const staleSince = new Date(now.getTime() - fulfilmentStaleThresholdHours * 60 * 60 * 1000);
         if (f.updatedAt < staleSince) {
           findings.push({
             reason: "STALE_NO_PROGRESS",
             dedupeKey: `STALE_NO_PROGRESS:${f.campaignId}`,
             campaignId: f.campaignId,
-            evidence: { status: f.status, lastUpdatedAt: f.updatedAt.toISOString(), staleThresholdHours: env.fulfilmentStaleThresholdHours },
+            evidence: { status: f.status, lastUpdatedAt: f.updatedAt.toISOString(), staleThresholdHours: fulfilmentStaleThresholdHours },
           });
         }
       }
@@ -69,7 +71,7 @@ export const fulfilmentDelayService = {
       });
     }
 
-    return { found: findings.length, staleCheckConfigured: env.fulfilmentStaleThresholdHours != null };
+    return { found: findings.length, staleCheckConfigured: fulfilmentStaleThresholdHours != null };
   },
 
   async list(status?: string) {

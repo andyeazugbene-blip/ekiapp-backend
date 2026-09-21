@@ -3640,6 +3640,26 @@ enum ReconciliationDifferenceStatus {
   RESOLVED
 }
 
+// ─── Admin-managed operational settings ────────────────────────────────────
+// Client decision (2026-09-22): PRICE_APPROVAL_TIMEOUT_HOURS/
+// FULFILMENT_STALE_THRESHOLD_HOURS/PAYOUT_STUCK_THRESHOLD_HOURS are real,
+// admin-editable product settings now — not .env values an admin would need
+// file/redeploy access to change. Generic key/value on purpose: reused for
+// any future admin-editable numeric operational setting without another
+// migration, not just these three specific keys (the application layer
+// still whitelists which keys are actually settable via the admin API).
+// Change history lives in the existing AuditLog (recordAudit()), same as
+// every other admin-editable value in this codebase — updatedById/
+// updatedAt here are only the "current" pointer, not the full history.
+model AdminPlatformSetting {
+  id          String   @id @default(cuid())
+  key         String   @unique
+  value       Float
+  updatedById String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
 // ─── Admin four-eyes approval (architecture doc §7) ───────────────────────
 // Generic second-admin-approval record for any high-risk admin action.
 // The monetary/severity threshold that decides whether an action REQUIRES

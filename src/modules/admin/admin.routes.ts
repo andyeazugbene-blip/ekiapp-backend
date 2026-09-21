@@ -74,6 +74,7 @@ import {
 } from "../stripe/stripe-disputes.controller";
 import { adminAdjustTrustScore } from "../paystack/trust-score.controller";
 import { getEscrowHealth, updateEscrowProvider } from "../paystack/escrow-health.controller";
+import { listOperationalThresholds, updateOperationalThreshold } from "./admin-platform-settings.controller";
 import {
   adminApproveVerificationReview,
   adminDeleteVerificationFiles,
@@ -575,6 +576,14 @@ adminRouter.delete("/users/:id", asyncHandler(requireAdminPermission("users.muta
 // Escrow health monitoring
 adminRouter.get("/escrow/health", asyncHandler(requireAdminPermission("escrow.read")), asyncHandler(getEscrowHealth));
 adminRouter.patch("/escrow/providers/:id", asyncHandler(requireAdminPermission("settings.mutate")), asyncHandler(updateEscrowProvider));
+
+// Admin-managed operational thresholds (client decision 2026-09-22) — real
+// persisted settings, not .env values. Reversible, non-financial-custody
+// operational config, matching the same permission tier as the escrow
+// provider settings above — no 2FA per the client's explicit "do not add
+// unnecessary 2FA" instruction.
+adminRouter.get("/settings/operational-thresholds", asyncHandler(requireAdminPermission("settings.read")), asyncHandler(listOperationalThresholds));
+adminRouter.patch("/settings/operational-thresholds/:key", asyncHandler(requireAdminPermission("settings.mutate")), asyncHandler(updateOperationalThreshold));
 
 // Rewards / Gifts management
 adminRouter.use("/rewards", adminRewardsRouter);

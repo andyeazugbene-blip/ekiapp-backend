@@ -52,50 +52,14 @@ function getPlatformFeeBps(): number {
   return platformFeeBps;
 }
 
-function getPriceApprovalTimeoutHours(): number | null {
-  // spec §18.11 "Buyer does not approve price" — the architecture doc
-  // requires this be handled but never states how long a buyer has to
-  // respond. That's a genuine product decision, not something to invent
-  // here — absent entirely, expirePriceApprovalTimeouts() stays a real
-  // no-op (CLIENT CONFIGURATION REQUIRED) rather than silently applying a
-  // made-up business value.
-  const raw = process.env.PRICE_APPROVAL_TIMEOUT_HOURS;
-  if (!raw) return null;
-  const hours = Number(raw);
-  if (!Number.isFinite(hours) || hours <= 0) {
-    throw new Error("PRICE_APPROVAL_TIMEOUT_HOURS must be a positive number of hours");
-  }
-  return hours;
-}
-
-function getFulfilmentStaleThresholdHours(): number | null {
-  // Fallback-only signal for a CampaignFulfilment with no
-  // estimatedReadyAt set at all — the primary delay check compares
-  // against that real business date instead. No client-approved
-  // "how long is too long with no progress" value exists, so this stays
-  // a genuine no-op (CLIENT CONFIGURATION REQUIRED) until set.
-  const raw = process.env.FULFILMENT_STALE_THRESHOLD_HOURS;
-  if (!raw) return null;
-  const hours = Number(raw);
-  if (!Number.isFinite(hours) || hours <= 0) {
-    throw new Error("FULFILMENT_STALE_THRESHOLD_HOURS must be a positive number of hours");
-  }
-  return hours;
-}
-
-function getPayoutStuckThresholdHours(): number | null {
-  // M8 — "stuck payout state" observability. Same no-invented-deadline
-  // rationale as getFulfilmentStaleThresholdHours() above: no client-
-  // approved "how long is too long stuck in PENDING/IN_TRANSIT" value
-  // exists, so this stays a genuine no-op until an operator sets one.
-  const raw = process.env.PAYOUT_STUCK_THRESHOLD_HOURS;
-  if (!raw) return null;
-  const hours = Number(raw);
-  if (!Number.isFinite(hours) || hours <= 0) {
-    throw new Error("PAYOUT_STUCK_THRESHOLD_HOURS must be a positive number of hours");
-  }
-  return hours;
-}
+// PRICE_APPROVAL_TIMEOUT_HOURS / FULFILMENT_STALE_THRESHOLD_HOURS /
+// PAYOUT_STUCK_THRESHOLD_HOURS used to live here as env-var reads. Client
+// decision (2026-09-22): these are now real, admin-editable settings
+// (AdminPlatformSetting, via admin-platform-settings.service.ts) instead —
+// an admin changes them from admin-web without file/redeploy access. This
+// is the one and only place they were ever read from process.env; that
+// path no longer exists, so there is exactly one authoritative source
+// left (the DB), not two that could drift out of sync.
 
 export const env = {
   nodeEnv: process.env.NODE_ENV ?? "development",
@@ -121,7 +85,4 @@ export const env = {
     process.env.GOOGLE_WEB_CLIENT_ID,
   ].filter((v): v is string => Boolean(v && v.trim())),
   appleBundleId: process.env.APPLE_BUNDLE_ID ?? "",
-  priceApprovalTimeoutHours: getPriceApprovalTimeoutHours(),
-  fulfilmentStaleThresholdHours: getFulfilmentStaleThresholdHours(),
-  payoutStuckThresholdHours: getPayoutStuckThresholdHours(),
 } as const;

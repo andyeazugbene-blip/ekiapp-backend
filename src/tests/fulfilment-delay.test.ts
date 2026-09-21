@@ -3,9 +3,9 @@
  * findings derived from actual CampaignFulfilment rows — the primary
  * check uses the supplier's own real estimatedReadyAt date; the
  * no-progress fallback only ever fires when an admin has explicitly
- * configured FULFILMENT_STALE_THRESHOLD_HOURS.
+ * configured the FULFILMENT_STALE_THRESHOLD_HOURS operational setting.
  */
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../lib/prisma", () => ({
   prisma: {
@@ -14,17 +14,17 @@ vi.mock("../lib/prisma", () => ({
   },
 }));
 
-vi.mock("../config/env", () => ({
-  env: { fulfilmentStaleThresholdHours: null as number | null },
-}));
-
 vi.mock("../modules/notifications/notifications.service", () => ({
   notificationsService: { enqueue: vi.fn().mockResolvedValue(undefined) },
 }));
 
+vi.mock("../modules/admin/admin-platform-settings.service", () => ({
+  adminPlatformSettingsService: { getValue: vi.fn().mockResolvedValue(null) },
+}));
+
 import { prisma } from "../lib/prisma";
-import { env } from "../config/env";
 import { notificationsService } from "../modules/notifications/notifications.service";
+import { adminPlatformSettingsService } from "../modules/admin/admin-platform-settings.service";
 import { fulfilmentDelayService } from "../modules/community-buy/fulfilment-delay.service";
 
 const m = vi.mocked(prisma, true);
@@ -32,10 +32,7 @@ const m = vi.mocked(prisma, true);
 beforeEach(() => {
   vi.clearAllMocks();
   m.campaignFulfilment.findMany.mockResolvedValue([] as never);
-});
-
-afterEach(() => {
-  (env as unknown as { fulfilmentStaleThresholdHours: number | null }).fulfilmentStaleThresholdHours = null;
+  vi.mocked(adminPlatformSettingsService.getValue).mockResolvedValue(null);
 });
 
 describe("fulfilmentDelayService.scan — PAST_ESTIMATED_READY_DATE (real business date)", () => {
@@ -80,7 +77,7 @@ describe("fulfilmentDelayService.scan — STALE_NO_PROGRESS (configurable, no in
   });
 
   it("flags real staleness once an admin configures the threshold", async () => {
-    (env as unknown as { fulfilmentStaleThresholdHours: number | null }).fulfilmentStaleThresholdHours = 48;
+    vi.mocked(adminPlatformSettingsService.getValue).mockResolvedValue(48);
     m.campaignFulfilment.findMany.mockResolvedValue([
       { campaignId: "camp-4", status: "AWAITING_INVENTORY_CONFIRMATION", estimatedReadyAt: null, updatedAt: new Date(Date.now() - 72 * 60 * 60 * 1000), createdAt: new Date() },
     ] as never);
@@ -94,7 +91,7 @@ describe("fulfilmentDelayService.scan — STALE_NO_PROGRESS (configurable, no in
   });
 
   it("does not flag a fulfilment updated recently, even with the threshold configured", async () => {
-    (env as unknown as { fulfilmentStaleThresholdHours: number | null }).fulfilmentStaleThresholdHours = 48;
+    vi.mocked(adminPlatformSettingsService.getValue).mockResolvedValue(48);
     m.campaignFulfilment.findMany.mockResolvedValue([
       { campaignId: "camp-5", status: "PACKING", estimatedReadyAt: null, updatedAt: new Date(), createdAt: new Date() },
     ] as never);

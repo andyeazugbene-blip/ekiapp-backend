@@ -9,6 +9,7 @@ import { recordAudit } from "../../shared/utils/audit";
 import { notificationsService } from "../notifications/notifications.service";
 import { env } from "../../config/env";
 import { alertOps } from "./ops-alert.service";
+import { adminPlatformSettingsService } from "../admin/admin-platform-settings.service";
 
 const SYSTEM_WEBHOOK_ACTOR = "system:stripe_webhook";
 
@@ -113,17 +114,18 @@ export const campaignPayoutService = {
   },
 
   /**
-   * M8 — "stuck payout state" observability. Only activates once an
-   * operator sets PAYOUT_STUCK_THRESHOLD_HOURS — no client-approved "how
-   * long is too long stuck in PENDING/IN_TRANSIT" duration exists to
-   * invent, same rationale as fulfilment-delay.service.ts's own stale
-   * check. Computed live on each call rather than persisted, since this
-   * is a smaller, newer surface than the fulfilment-delay queue and
-   * doesn't yet warrant its own contacted/resolved tracking table.
+   * M8 — "stuck payout state" observability. Only activates once an admin
+   * sets the PAYOUT_STUCK_THRESHOLD_HOURS operational setting (Settings ->
+   * Operational Thresholds in admin-web) — no default duration is invented
+   * when it's unset; getValue() returns null and this stays a safe no-op.
+   * Computed live on each call rather than persisted, since this is a
+   * smaller, newer surface than the fulfilment-delay queue and doesn't yet
+   * warrant its own contacted/resolved tracking table.
    */
   async scanStuckPayouts(): Promise<{ configured: boolean; findings: Array<{ campaignId: string; status: string; hoursStuck: number }> }> {
-    if (env.payoutStuckThresholdHours == null) return { configured: false, findings: [] };
-    const staleSince = new Date(Date.now() - env.payoutStuckThresholdHours * 60 * 60 * 1000);
+    const thresholdHours = await adminPlatformSettingsService.getValue("PAYOUT_STUCK_THRESHOLD_HOURS");
+    if (thresholdHours == null) return { configured: false, findings: [] };
+    const staleSince = new Date(Date.now() - thresholdHours * 60 * 60 * 1000);
     const stuck = await prisma.communityBuyPayout.findMany({
       where: { status: { in: ["PENDING", "IN_TRANSIT"] }, updatedAt: { lt: staleSince } },
       select: { campaignId: true, status: true, updatedAt: true },
@@ -135,7 +137,7 @@ export const campaignPayoutService = {
     }));
     if (findings.length > 0) {
       await alertOps(
-        `⚠️ ${findings.length} Community Buy payout(s) stuck beyond ${env.payoutStuckThresholdHours}h`,
+        `⚠️ ${findings.length} Community Buy payout(s) stuck beyond ${thresholdHours}h`,
         `<h2>Stuck Community Buy Payouts</h2><ul>${findings.map((f) => `<li>Campaign ${f.campaignId} — ${f.status} for ${f.hoursStuck}h</li>`).join("")}</ul>`,
       );
     }

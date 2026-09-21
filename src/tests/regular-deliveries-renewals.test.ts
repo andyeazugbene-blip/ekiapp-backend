@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../lib/prisma", () => ({
   prisma: {
@@ -21,8 +21,8 @@ vi.mock("../lib/stripe", () => ({
   stripe: { paymentIntents: { create: vi.fn() } },
 }));
 
-vi.mock("../config/env", () => ({
-  env: { priceApprovalTimeoutHours: null as number | null },
+vi.mock("../modules/admin/admin-platform-settings.service", () => ({
+  adminPlatformSettingsService: { getValue: vi.fn().mockResolvedValue(null) },
 }));
 
 vi.mock("../modules/notifications/notifications.service", () => ({
@@ -35,7 +35,7 @@ vi.mock("../modules/automation/automation.service", () => ({
 
 import { prisma } from "../lib/prisma";
 import { stripe } from "../lib/stripe";
-import { env } from "../config/env";
+import { adminPlatformSettingsService } from "../modules/admin/admin-platform-settings.service";
 import { automationService } from "../modules/automation/automation.service";
 import { notificationsService } from "../modules/notifications/notifications.service";
 import { renewalsService } from "../modules/regular-deliveries/renewals.service";
@@ -903,10 +903,6 @@ describe("renewalsService.confirmStock — reliability scenario #10", () => {
 // ─── Reliability scenario #11 (architecture doc §18): "buyer does not approve price" ──
 
 describe("renewalsService.expirePriceApprovalTimeouts — reliability scenario #11", () => {
-  afterEach(() => {
-    (env as unknown as { priceApprovalTimeoutHours: number | null }).priceApprovalTimeoutHours = null;
-  });
-
   it("is a genuine no-op when no timeout duration is configured — CLIENT CONFIGURATION REQUIRED, never an invented default", async () => {
     const result = await renewalsService.expirePriceApprovalTimeouts();
 
@@ -915,7 +911,7 @@ describe("renewalsService.expirePriceApprovalTimeouts — reliability scenario #
   });
 
   it("expires a renewal whose price-change request is older than the configured timeout and advances the subscription to its next cycle", async () => {
-    (env as unknown as { priceApprovalTimeoutHours: number | null }).priceApprovalTimeoutHours = 48;
+    vi.mocked(adminPlatformSettingsService.getValue).mockResolvedValueOnce(48);
     m.renewal.findMany.mockResolvedValue([
       { id: "renewal-11", subscriptionId: "sub-11", cycleDate: new Date("2026-06-01"), subscription: { buyerId: "buyer-11", frequency: "WEEKLY" } },
     ] as never);
@@ -942,7 +938,7 @@ describe("renewalsService.expirePriceApprovalTimeouts — reliability scenario #
   });
 
   it("does not expire a renewal that loses the atomic claim to a concurrent sweep", async () => {
-    (env as unknown as { priceApprovalTimeoutHours: number | null }).priceApprovalTimeoutHours = 48;
+    vi.mocked(adminPlatformSettingsService.getValue).mockResolvedValueOnce(48);
     m.renewal.findMany.mockResolvedValue([
       { id: "renewal-11b", subscriptionId: "sub-11b", cycleDate: new Date("2026-06-01"), subscription: { buyerId: "buyer-11b", frequency: "WEEKLY" } },
     ] as never);

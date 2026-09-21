@@ -18,7 +18,9 @@ vi.mock("../lib/prisma", () => ({
 }));
 
 vi.mock("../lib/stripe", () => ({ stripe: { paymentIntents: { create: vi.fn() } } }));
-vi.mock("../config/env", () => ({ env: { priceApprovalTimeoutHours: 48 as number | null } }));
+vi.mock("../modules/admin/admin-platform-settings.service", () => ({
+  adminPlatformSettingsService: { getValue: vi.fn().mockResolvedValue(48) },
+}));
 vi.mock("../modules/notifications/notifications.service", () => ({ notificationsService: { enqueue: vi.fn() } }));
 vi.mock("../modules/automation/automation.service", () => ({ automationService: { scheduleAutomation: vi.fn() } }));
 

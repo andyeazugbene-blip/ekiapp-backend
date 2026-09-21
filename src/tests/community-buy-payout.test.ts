@@ -34,10 +34,15 @@ vi.mock("../lib/email-queue", () => ({
   enqueueEmail: vi.fn().mockResolvedValue(undefined),
 }));
 
+vi.mock("../modules/admin/admin-platform-settings.service", () => ({
+  adminPlatformSettingsService: { getValue: vi.fn().mockResolvedValue(null) },
+}));
+
 import { prisma } from "../lib/prisma";
 import { stripe } from "../lib/stripe";
 import { notificationsService } from "../modules/notifications/notifications.service";
 import { enqueueEmail } from "../lib/email-queue";
+import { adminPlatformSettingsService } from "../modules/admin/admin-platform-settings.service";
 
 const m = vi.mocked(prisma, true);
 const s = vi.mocked(stripe, true);
@@ -520,16 +525,16 @@ describe("M8 — supplier notifications (spec Appendix B: payout_held/ready/init
     expect(mailer).not.toHaveBeenCalled();
   });
 
-  it("scanStuckPayouts() is a configured no-op until PAYOUT_STUCK_THRESHOLD_HOURS is set — never invents a default threshold", async () => {
-    delete process.env.PAYOUT_STUCK_THRESHOLD_HOURS;
+  it("scanStuckPayouts() is a configured no-op until an admin sets PAYOUT_STUCK_THRESHOLD_HOURS — never invents a default threshold", async () => {
+    vi.mocked(adminPlatformSettingsService.getValue).mockResolvedValueOnce(null);
     const { campaignPayoutService } = await import("../modules/community-buy/campaign-payout.service");
     const result = await campaignPayoutService.scanStuckPayouts();
     expect(result).toEqual({ configured: false, findings: [] });
     expect(m.communityBuyPayout.findMany).not.toHaveBeenCalled();
   });
 
-  it("scanStuckPayouts() finds payouts stuck past the configured threshold and alerts ops", async () => {
-    process.env.PAYOUT_STUCK_THRESHOLD_HOURS = "24";
+  it("scanStuckPayouts() finds payouts stuck past the admin-configured threshold and alerts ops", async () => {
+    vi.mocked(adminPlatformSettingsService.getValue).mockResolvedValueOnce(24);
     process.env.OPS_ALERT_EMAIL = "ops@example.com";
     const { campaignPayoutService } = await import("../modules/community-buy/campaign-payout.service");
     m.communityBuyPayout.findMany.mockResolvedValue([
@@ -542,12 +547,11 @@ describe("M8 — supplier notifications (spec Appendix B: payout_held/ready/init
     expect(result.findings).toHaveLength(1);
     expect(result.findings[0].campaignId).toBe("camp-stuck-1");
     expect(mailer).toHaveBeenCalledWith(expect.objectContaining({ to: "ops@example.com" }));
-    delete process.env.PAYOUT_STUCK_THRESHOLD_HOURS;
     delete process.env.OPS_ALERT_EMAIL;
   });
 
   it("scanStuckPayouts() never alerts when nothing is actually stuck", async () => {
-    process.env.PAYOUT_STUCK_THRESHOLD_HOURS = "24";
+    vi.mocked(adminPlatformSettingsService.getValue).mockResolvedValueOnce(24);
     process.env.OPS_ALERT_EMAIL = "ops@example.com";
     const { campaignPayoutService } = await import("../modules/community-buy/campaign-payout.service");
     m.communityBuyPayout.findMany.mockResolvedValue([] as any);
@@ -555,7 +559,6 @@ describe("M8 — supplier notifications (spec Appendix B: payout_held/ready/init
     const result = await campaignPayoutService.scanStuckPayouts();
     expect(result).toEqual({ configured: true, findings: [] });
     expect(mailer).not.toHaveBeenCalled();
-    delete process.env.PAYOUT_STUCK_THRESHOLD_HOURS;
     delete process.env.OPS_ALERT_EMAIL;
   });
 
