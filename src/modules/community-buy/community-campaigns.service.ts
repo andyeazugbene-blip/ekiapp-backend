@@ -551,7 +551,7 @@ export const communityCampaignsService = {
   },
 
   async update(userId: string, campaignId: string, input: Partial<CreateCampaignInput>) {
-    const campaign = await this.requireOwnedByOrganiser(userId, campaignId);
+    const campaign = await this.requireOwnedByOrganiserForWrite(userId, campaignId);
 
     const financialFieldsTouched = input.minimumShares !== undefined || input.goalShares !== undefined
       || input.maximumShares !== undefined || input.pricePerShareMinor !== undefined || input.deadline !== undefined
@@ -670,7 +670,7 @@ export const communityCampaignsService = {
    * resets the commitment/decline state so the new supplier starts clean.
    */
   async reassignSupplier(userId: string, campaignId: string, newSupplierId?: string | null, newSupplierAccountId?: string | null) {
-    const campaign = await this.requireOwnedByOrganiser(userId, campaignId);
+    const campaign = await this.requireOwnedByOrganiserForWrite(userId, campaignId);
     if (campaign.fulfilmentOwner !== "SUPPLIER") {
       throw new AppError("This campaign is self-fulfilled and has no supplier to reassign", 409);
     }
@@ -883,7 +883,7 @@ export const communityCampaignsService = {
   // fails this never gets deleted or invalidated — it stays exactly as
   // saved, editable, with the caller told precisely what's missing.
   async submit(userId: string, campaignId: string) {
-    const campaign = await this.requireOwnedByOrganiser(userId, campaignId);
+    const campaign = await this.requireOwnedByOrganiserForWrite(userId, campaignId);
     if (campaign.status !== "DRAFT" && campaign.status !== "CHANGES_REQUIRED") {
       throw new AppError("Only a draft campaign can be submitted for review", 409);
     }
@@ -1056,11 +1056,34 @@ export const communityCampaignsService = {
     return { total, completed, pending, failed };
   },
 
+  // Permissive on purpose — also used by listParticipantsForOrganiser()
+  // and getRefundProgressForOrganiser() (a restricted organiser must still
+  // be able to see their own campaign's participants/refund progress).
+  // Every mutating action uses requireOwnedByOrganiserForWrite() instead.
   async requireOwnedByOrganiser(userId: string, campaignId: string) {
     const organiser = await prisma.organiserProfile.findUnique({ where: { userId } });
     const campaign = await prisma.communityCampaign.findUnique({ where: { id: campaignId } });
     if (!campaign || !organiser || campaign.organiserId !== organiser.id) {
       throw new AppError("Campaign not found", 404);
+    }
+    return campaign;
+  },
+
+  // Acceptance audit fix — a restricted organiser could still edit,
+  // publish, pause/resume, reassign a supplier on, cancel (triggering
+  // refunds on), submit, extend, or end-and-refund a campaign they already
+  // own, because requireOwnedByOrganiser() never checked isRestricted.
+  // Existing obligations stay visible (the permissive read helper above is
+  // unaffected) — only mutations are blocked, matching create()/submit()'s
+  // own pre-existing isRestricted gate for a brand-new campaign.
+  async requireOwnedByOrganiserForWrite(userId: string, campaignId: string) {
+    const organiser = await prisma.organiserProfile.findUnique({ where: { userId } });
+    const campaign = await prisma.communityCampaign.findUnique({ where: { id: campaignId } });
+    if (!campaign || !organiser || campaign.organiserId !== organiser.id) {
+      throw new AppError("Campaign not found", 404);
+    }
+    if (organiser.isRestricted) {
+      throw new AppError("Your organiser account is restricted and cannot make changes to campaigns right now.", 403, undefined, "ORGANISER_RESTRICTED");
     }
     return campaign;
   },
@@ -1281,7 +1304,7 @@ export const communityCampaignsService = {
    */
   async requestCancellation(userId: string, campaignId: string, reason: string) {
     if (!reason?.trim()) throw new AppError("A reason is required", 400);
-    const campaign = await this.requireOwnedByOrganiser(userId, campaignId);
+    const campaign = await this.requireOwnedByOrganiserForWrite(userId, campaignId);
     const requestable = ["LIVE", "PAUSED", "RESCUE_WINDOW", "FULFILLING", "SUCCEEDED"];
     if (!requestable.includes(campaign.status)) {
       throw new AppError("Cancellation can't be requested from this campaign's current status", 409);
@@ -1450,7 +1473,7 @@ export const communityCampaignsService = {
   // ─── Publishing & discovery ────────────────────────────────────────────
 
   async publish(userId: string, campaignId: string) {
-    const campaign = await this.requireOwnedByOrganiser(userId, campaignId);
+    const campaign = await this.requireOwnedByOrganiserForWrite(userId, campaignId);
     if (campaign.status !== "APPROVED") throw new AppError("Campaign must be approved before it can be published", 409);
     // Non-null: reaching APPROVED requires having passed submit()'s full
     // requirement check, which never lets country stay unset.
@@ -1512,7 +1535,7 @@ export const communityCampaignsService = {
    * the actor here.
    */
   async pauseByOrganiser(userId: string, campaignId: string) {
-    const campaign = await this.requireOwnedByOrganiser(userId, campaignId);
+    const campaign = await this.requireOwnedByOrganiserForWrite(userId, campaignId);
     if (campaign.status !== "LIVE") throw new AppError("Only a live campaign can be paused", 409);
     const updated = await prisma.communityCampaign.update({ where: { id: campaignId }, data: { status: "PAUSED" } });
     const participants = await prisma.campaignParticipant.findMany({ where: { campaignId } });
@@ -1530,7 +1553,7 @@ export const communityCampaignsService = {
   },
 
   async resumeByOrganiser(userId: string, campaignId: string) {
-    const campaign = await this.requireOwnedByOrganiser(userId, campaignId);
+    const campaign = await this.requireOwnedByOrganiserForWrite(userId, campaignId);
     if (campaign.status !== "PAUSED") throw new AppError("Only a paused campaign can be resumed", 409);
     const updated = await prisma.communityCampaign.update({ where: { id: campaignId }, data: { status: "LIVE" } });
     const participants = await prisma.campaignParticipant.findMany({ where: { campaignId } });
@@ -1969,7 +1992,7 @@ export const communityCampaignsService = {
 
   /** Organiser ends the campaign during its rescue window instead of waiting it out — doc Screen 105. */
   async endRescueAndRefund(userId: string, campaignId: string) {
-    const campaign = await this.requireOwnedByOrganiser(userId, campaignId);
+    const campaign = await this.requireOwnedByOrganiserForWrite(userId, campaignId);
     if (campaign.status !== "RESCUE_WINDOW") {
       throw new AppError("Only a campaign in its rescue window can be ended this way", 409);
     }
@@ -2009,7 +2032,7 @@ export const communityCampaignsService = {
     campaignId: string,
     input: { requestedDeadline: string; reason: string; supplierReconfirmed: boolean; priceUnchangedConfirmed: boolean; participantTermsUnchanged: boolean },
   ) {
-    const campaign = await this.requireOwnedByOrganiser(userId, campaignId);
+    const campaign = await this.requireOwnedByOrganiserForWrite(userId, campaignId);
     if (campaign.status !== "RESCUE_WINDOW") {
       throw new AppError("An extension can only be requested while a campaign is in its rescue window", 409);
     }

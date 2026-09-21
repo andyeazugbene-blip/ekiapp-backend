@@ -11,18 +11,27 @@ import type {
   UpdateProductInput,
 } from "./products.types";
 
+// Acceptance audit fix: a suspended vendor must not be able to write
+// anything (matches the existing, established convention in
+// promos.service.ts/bundles.service.ts/flash-sales.service.ts — a
+// suspended vendor's own write attempts get the same 404 an unauthorized
+// caller would, not a message revealing suspension state).
 async function getVendorWithVerification(userId: string): Promise<{ id: string; currency: string; isVerified: boolean }> {
   const vendor = await prisma.vendor.findUnique({
     where: { userId },
-    select: { id: true, verificationStatus: true, currency: true, country: true },
+    select: { id: true, verificationStatus: true, currency: true, country: true, isSuspended: true },
   });
-  if (!vendor) {
-    throw new AppError("Vendor profile required", 403);
+  if (!vendor || vendor.isSuspended) {
+    throw new AppError("Vendor profile not found", 404);
   }
   const currency = vendor.currency || currencyFromCountry(vendor.country);
   return { id: vendor.id, currency, isVerified: vendor.verificationStatus === "VERIFIED" };
 }
 
+// Permissive on purpose — used by read paths (listMyProducts,
+// getMyProductById) too, and a suspended vendor must still be able to see
+// their own dashboard/listings. Write paths that could reactivate/expose a
+// product (updateProduct) use getVendorIdForWrite below instead.
 async function getVendorIdForUser(userId: string): Promise<string> {
   const vendor = await prisma.vendor.findUnique({
     where: { userId },
@@ -30,6 +39,19 @@ async function getVendorIdForUser(userId: string): Promise<string> {
   });
   if (!vendor) {
     throw new AppError("Vendor profile required", 403);
+  }
+  return vendor.id;
+}
+
+// Acceptance audit fix: a suspended vendor must not be able to write —
+// same 404-as-not-found convention as promos/bundles/flash-sales.service.ts.
+async function getVendorIdForWrite(userId: string): Promise<string> {
+  const vendor = await prisma.vendor.findUnique({
+    where: { userId },
+    select: { id: true, isSuspended: true },
+  });
+  if (!vendor || vendor.isSuspended) {
+    throw new AppError("Vendor profile not found", 404);
   }
   return vendor.id;
 }
@@ -86,7 +108,7 @@ export const productsService = {
     productId: string,
     input: UpdateProductInput,
   ): Promise<Product> {
-    const vendorId = await getVendorIdForUser(userId);
+    const vendorId = await getVendorIdForWrite(userId);
     const product = await prisma.product.findUnique({ where: { id: productId } });
     if (!product) {
       throw new AppError("Product not found", 404);

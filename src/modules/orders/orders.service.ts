@@ -187,12 +187,18 @@ export const ordersService = {
     orderId: string,
     newStatus: OrderStatus,
   ): Promise<Order> {
+    // Acceptance audit fix: a suspended vendor must not be able to advance
+    // an order's status — same 404-as-not-found convention used elsewhere
+    // for a suspended vendor's own write attempts.
     const vendor = await prisma.vendor.findUnique({
       where: { userId },
-      select: { id: true },
+      select: { id: true, isSuspended: true },
     });
     if (!vendor) {
       throw new AppError("Vendor profile required", 403);
+    }
+    if (vendor.isSuspended) {
+      throw new AppError("Order not found", 404);
     }
 
     const order = await prisma.order.findUnique({

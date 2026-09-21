@@ -3390,3 +3390,79 @@ describe("campaignContributionsService.processPendingRefunds() — AT-25", () =>
     expect(m.campaignContribution.update).not.toHaveBeenCalledWith(expect.objectContaining({ data: { status: "REFUNDED" } }));
   });
 });
+
+// Acceptance audit fix — a restricted organiser could still edit, publish,
+// pause/resume, reassign a supplier on, and cancel (refund-triggering) a
+// campaign they already own, because requireOwnedByOrganiser() never
+// checked isRestricted. Existing obligations must remain visible — reads
+// (listParticipantsForOrganiser/getRefundProgressForOrganiser) stay
+// permissive; only mutations are blocked.
+describe("Acceptance audit — restricted organiser cannot mutate an owned campaign", () => {
+  const restrictedOrganiser = { id: "org-1", userId: "organiser-user-1", isRestricted: true };
+  const ownedCampaign = { id: "camp-1", organiserId: "org-1", status: "LIVE" };
+
+  it("update() 403s for a restricted organiser, never reaches communityCampaign.update", async () => {
+    m.organiserProfile.findUnique.mockResolvedValue(restrictedOrganiser as never);
+    m.communityCampaign.findUnique.mockResolvedValue(ownedCampaign as never);
+
+    await expect(communityCampaignsService.update("organiser-user-1", "camp-1", { title: "New title" })).rejects.toMatchObject({ statusCode: 403, code: "ORGANISER_RESTRICTED" });
+    expect(m.communityCampaign.update).not.toHaveBeenCalled();
+  });
+
+  it("publish() 403s for a restricted organiser", async () => {
+    m.organiserProfile.findUnique.mockResolvedValue(restrictedOrganiser as never);
+    m.communityCampaign.findUnique.mockResolvedValue({ ...ownedCampaign, status: "APPROVED" } as never);
+
+    await expect(communityCampaignsService.publish("organiser-user-1", "camp-1")).rejects.toMatchObject({ statusCode: 403, code: "ORGANISER_RESTRICTED" });
+    expect(m.communityCampaign.update).not.toHaveBeenCalled();
+  });
+
+  it("pauseByOrganiser() 403s for a restricted organiser", async () => {
+    m.organiserProfile.findUnique.mockResolvedValue(restrictedOrganiser as never);
+    m.communityCampaign.findUnique.mockResolvedValue(ownedCampaign as never);
+
+    await expect(communityCampaignsService.pauseByOrganiser("organiser-user-1", "camp-1")).rejects.toMatchObject({ statusCode: 403, code: "ORGANISER_RESTRICTED" });
+    expect(m.communityCampaign.update).not.toHaveBeenCalled();
+  });
+
+  it("requestCancellation() 403s for a restricted organiser — the refund-triggering path", async () => {
+    m.organiserProfile.findUnique.mockResolvedValue(restrictedOrganiser as never);
+    m.communityCampaign.findUnique.mockResolvedValue(ownedCampaign as never);
+
+    await expect(communityCampaignsService.requestCancellation("organiser-user-1", "camp-1", "test reason")).rejects.toMatchObject({ statusCode: 403, code: "ORGANISER_RESTRICTED" });
+    expect(m.communityCampaign.update).not.toHaveBeenCalled();
+  });
+
+  it("reassignSupplier() 403s for a restricted organiser", async () => {
+    m.organiserProfile.findUnique.mockResolvedValue(restrictedOrganiser as never);
+    m.communityCampaign.findUnique.mockResolvedValue({ ...ownedCampaign, supplierDeclinedAt: new Date() } as never);
+
+    await expect(communityCampaignsService.reassignSupplier("organiser-user-1", "camp-1", "sup-2")).rejects.toMatchObject({ statusCode: 403, code: "ORGANISER_RESTRICTED" });
+    expect(m.communityCampaign.update).not.toHaveBeenCalled();
+  });
+
+  it("a non-restricted organiser is unaffected — update() still works", async () => {
+    m.organiserProfile.findUnique.mockResolvedValue({ id: "org-1", userId: "organiser-user-1", isRestricted: false } as never);
+    m.communityCampaign.findUnique.mockResolvedValue(ownedCampaign as never);
+    m.communityCampaign.update.mockResolvedValue({ id: "camp-1", title: "New title" } as never);
+
+    const result = await communityCampaignsService.update("organiser-user-1", "camp-1", { title: "New title" });
+    expect(result.title).toBe("New title");
+  });
+
+  it("listParticipantsForOrganiser() stays permissive for a restricted organiser — existing obligations remain visible", async () => {
+    m.organiserProfile.findUnique.mockResolvedValue(restrictedOrganiser as never);
+    m.communityCampaign.findUnique.mockResolvedValue({ ...ownedCampaign, deliveryPreference: "COLLECTION", fulfilmentOwner: "SUPPLIER" } as never);
+    m.campaignParticipant.findMany.mockResolvedValue([] as never);
+
+    await expect(communityCampaignsService.listParticipantsForOrganiser("organiser-user-1", "camp-1")).resolves.toEqual([]);
+  });
+
+  it("getRefundProgressForOrganiser() stays permissive for a restricted organiser", async () => {
+    m.organiserProfile.findUnique.mockResolvedValue(restrictedOrganiser as never);
+    m.communityCampaign.findUnique.mockResolvedValue(ownedCampaign as never);
+    m.campaignRefund.findMany.mockResolvedValue([] as never);
+
+    await expect(communityCampaignsService.getRefundProgressForOrganiser("organiser-user-1", "camp-1")).resolves.toEqual({ total: 0, completed: 0, pending: 0, failed: 0 });
+  });
+});

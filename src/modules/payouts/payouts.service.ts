@@ -22,9 +22,21 @@ import type {
   RejectPayoutRequestInput,
 } from "./payouts.types";
 
+// Permissive on purpose — also used by listOwn/listOwnWithDetails (a
+// suspended vendor must still be able to see their own payout history).
+// createRequest uses getVendorForWrite below instead.
 async function getVendorForUser(userId: string): Promise<{ id: string }> {
   const vendor = await prisma.vendor.findUnique({ where: { userId }, select: { id: true } });
   if (!vendor) throw new AppError("Vendor profile required", 403);
+  return vendor;
+}
+
+// Acceptance audit fix: a suspended vendor must not be able to request a
+// new payout — same 404-as-not-found convention used elsewhere for a
+// suspended vendor's own write attempts.
+async function getVendorForWrite(userId: string): Promise<{ id: string }> {
+  const vendor = await prisma.vendor.findUnique({ where: { userId }, select: { id: true, isSuspended: true } });
+  if (!vendor || vendor.isSuspended) throw new AppError("Vendor profile not found", 404);
   return vendor;
 }
 
@@ -83,7 +95,7 @@ export const payoutsService = {
    * Uses a transaction to prevent concurrent requests from overdrawing.
    */
   async createRequest(userId: string, input: CreatePayoutRequestInput): Promise<PayoutRequest> {
-    const vendor = await getVendorForUser(userId);
+    const vendor = await getVendorForWrite(userId);
 
     const payoutMethod = await prisma.payoutMethod.findUnique({ where: { id: input.payoutMethodId } });
     if (!payoutMethod || payoutMethod.vendorId !== vendor.id) {
