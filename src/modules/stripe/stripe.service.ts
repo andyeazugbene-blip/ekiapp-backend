@@ -1,4 +1,4 @@
-import { NotificationType, PaymentStatus, Prisma, SubscriptionPlan } from "@prisma/client";
+import { NotificationType, PaymentStatus, Prisma, SubscriptionPlan, SubscriptionStatus } from "@prisma/client";
 import type Stripe from "stripe";
 
 import { env } from "../../config/env";
@@ -98,6 +98,24 @@ class StripeWebhookService {
 
     if (event.type === "checkout.session.completed") {
       return this.handleCheckoutSessionCompleted(event);
+    }
+
+    // Acceptance audit fix (Defect D): checkout.session.completed only ever
+    // fires once, at first successful checkout — it upserts VendorSubscription
+    // to ACTIVE but nothing ever updated it again. A later failed renewal
+    // invoice or an out-of-band cancellation left status permanently stale
+    // at ACTIVE forever. These three events are Stripe's own source of truth
+    // for a subscription's ongoing billing state.
+    if (event.type === "invoice.payment_failed") {
+      return this.handleVendorSubscriptionPaymentFailed(event);
+    }
+
+    if (event.type === "customer.subscription.updated") {
+      return this.handleVendorSubscriptionUpdated(event);
+    }
+
+    if (event.type === "customer.subscription.deleted") {
+      return this.handleVendorSubscriptionDeleted(event);
     }
 
     if (
@@ -615,6 +633,225 @@ class StripeWebhookService {
         return { received: true, duplicate: true, eventId: event.id, type: event.type };
       }
       logger.error("Webhook failed: account.updated resolution", { eventId: event.id, ...serializeError(error) });
+      throw error;
+    }
+  }
+
+  // ─── Vendor subscription billing lifecycle (Defect D) ──────────────────
+
+  private vendorSubscriptionNotificationCopy(status: SubscriptionStatus): { title: string; body: string } {
+    switch (status) {
+      case "ACTIVE":
+        return { title: "Vendor services active", body: "Your payment was received and your paid vendor services are active again." };
+      case "PAST_DUE":
+        return { title: "Vendor services payment past due", body: "Your last vendor services payment didn't go through. Update your payment method to avoid losing paid features." };
+      case "CANCELLED":
+        return { title: "Vendor services cancelled", body: "Your paid vendor services subscription has ended. You're now on the Free plan." };
+      case "EXPIRED":
+        return { title: "Vendor services checkout expired", body: "Your vendor services checkout wasn't completed in time and has expired." };
+    }
+  }
+
+  /** Maps Stripe's subscription.status onto our 4-state enum. Returns null
+   * for "incomplete" (still inside its first ~23h payment window) and
+   * "paused" (pause_collection) — neither has a safe 1:1 mapping, so the
+   * existing stored status is left untouched rather than guessed. */
+  private mapStripeSubscriptionStatus(status: Stripe.Subscription.Status): SubscriptionStatus | null {
+    switch (status) {
+      case "active":
+      case "trialing":
+        return "ACTIVE";
+      case "past_due":
+      case "unpaid":
+        return "PAST_DUE";
+      case "canceled":
+        return "CANCELLED";
+      case "incomplete_expired":
+        return "EXPIRED";
+      default:
+        return null;
+    }
+  }
+
+  private async claimWebhookEventOrSkip(event: Stripe.Event): Promise<boolean> {
+    return prisma.$transaction(async (tx) => {
+      if (await this.isDuplicate(tx, event.id, event.type, {})) return true;
+      await tx.webhookEvent.update({ where: { stripeEventId: event.id }, data: { status: "PROCESSED", processedAt: new Date() } });
+      return false;
+    }, { isolationLevel: "Serializable" });
+  }
+
+  private async handleVendorSubscriptionPaymentFailed(event: Stripe.Event): Promise<StripeWebhookResult> {
+    const invoice = event.data.object as Stripe.Invoice;
+    // As of the "basil" API version, an invoice's subscription lives under
+    // parent.subscription_details, not a top-level `subscription` field.
+    const invoiceSubscription = invoice.parent?.subscription_details?.subscription;
+    const stripeSubscriptionId = typeof invoiceSubscription === "string" ? invoiceSubscription : invoiceSubscription?.id;
+
+    if (!stripeSubscriptionId) {
+      return { received: true, ignored: true, eventId: event.id, type: event.type };
+    }
+
+    try {
+      if (await this.claimWebhookEventOrSkip(event)) {
+        return { received: true, duplicate: true, eventId: event.id, type: event.type };
+      }
+
+      const subscription = await prisma.vendorSubscription.findUnique({
+        where: { stripeSubscriptionId },
+        select: { id: true, vendorId: true },
+      });
+      if (!subscription) {
+        logger.warn("invoice.payment_failed for unknown vendor subscription", { eventId: event.id, stripeSubscriptionId });
+        return { received: true, ignored: true, eventId: event.id, type: event.type };
+      }
+
+      await prisma.vendorSubscription.update({ where: { id: subscription.id }, data: { status: "PAST_DUE" } });
+
+      const vendor = await prisma.vendor.findUnique({ where: { id: subscription.vendorId }, select: { userId: true } });
+      if (vendor) {
+        const copy = this.vendorSubscriptionNotificationCopy("PAST_DUE");
+        notificationsService.enqueue({
+          userId: vendor.userId,
+          type: "SUBSCRIPTION_UPDATE",
+          title: copy.title,
+          body: copy.body,
+          data: { type: "subscription_update", event: "vendor_subscription_payment_failed", vendorSubscriptionId: subscription.id },
+        }).catch((err) => logger.warn("Vendor subscription payment-failed notification failed", { eventId: event.id, error: String(err) }));
+      }
+
+      logger.info("Webhook processed: invoice.payment_failed (vendor subscription)", {
+        eventId: event.id, stripeSubscriptionId, vendorId: subscription.vendorId,
+      });
+      return { received: true, eventId: event.id, type: event.type };
+    } catch (error) {
+      if (this.isUniqueConstraintError(error)) {
+        return { received: true, duplicate: true, eventId: event.id, type: event.type };
+      }
+      logger.error("Webhook failed: invoice.payment_failed", { eventId: event.id, ...serializeError(error) });
+      throw error;
+    }
+  }
+
+  private async handleVendorSubscriptionUpdated(event: Stripe.Event): Promise<StripeWebhookResult> {
+    const stripeSubscription = event.data.object as Stripe.Subscription;
+    const mappedStatus = this.mapStripeSubscriptionStatus(stripeSubscription.status);
+
+    try {
+      if (await this.claimWebhookEventOrSkip(event)) {
+        return { received: true, duplicate: true, eventId: event.id, type: event.type };
+      }
+
+      const subscription = await prisma.vendorSubscription.findUnique({
+        where: { stripeSubscriptionId: stripeSubscription.id },
+        select: { id: true, vendorId: true, status: true },
+      });
+      if (!subscription) {
+        logger.warn("customer.subscription.updated for unknown vendor subscription", {
+          eventId: event.id, stripeSubscriptionId: stripeSubscription.id,
+        });
+        return { received: true, ignored: true, eventId: event.id, type: event.type };
+      }
+
+      if (mappedStatus === null) {
+        logger.info("customer.subscription.updated with unmapped Stripe status — left unchanged", {
+          eventId: event.id, stripeStatus: stripeSubscription.status, vendorSubscriptionId: subscription.id,
+        });
+        return { received: true, eventId: event.id, type: event.type };
+      }
+
+      // Billing-period dates live on the subscription item, not the
+      // subscription itself, as of the "basil" API version (same as the
+      // checkout.session.completed handler above).
+      const item = stripeSubscription.items.data[0];
+      const periodStart = item?.current_period_start ? new Date(item.current_period_start * 1000) : undefined;
+      const periodEnd = item?.current_period_end ? new Date(item.current_period_end * 1000) : undefined;
+
+      await prisma.vendorSubscription.update({
+        where: { id: subscription.id },
+        data: {
+          status: mappedStatus,
+          ...(periodStart ? { currentPeriodStart: periodStart } : {}),
+          ...(periodEnd ? { currentPeriodEnd: periodEnd } : {}),
+          ...(mappedStatus === "CANCELLED" ? { cancelledAt: new Date() } : {}),
+        },
+      });
+
+      if (mappedStatus !== subscription.status) {
+        const vendor = await prisma.vendor.findUnique({ where: { id: subscription.vendorId }, select: { userId: true } });
+        if (vendor) {
+          const copy = this.vendorSubscriptionNotificationCopy(mappedStatus);
+          notificationsService.enqueue({
+            userId: vendor.userId,
+            type: "SUBSCRIPTION_UPDATE",
+            title: copy.title,
+            body: copy.body,
+            data: { type: "subscription_update", event: `vendor_subscription_${mappedStatus.toLowerCase()}`, vendorSubscriptionId: subscription.id },
+          }).catch((err) => logger.warn("Vendor subscription status notification failed", { eventId: event.id, error: String(err) }));
+        }
+      }
+
+      logger.info("Webhook processed: customer.subscription.updated (vendor subscription)", {
+        eventId: event.id, stripeSubscriptionId: stripeSubscription.id, vendorId: subscription.vendorId,
+        priorStatus: subscription.status, newStatus: mappedStatus,
+      });
+      return { received: true, eventId: event.id, type: event.type };
+    } catch (error) {
+      if (this.isUniqueConstraintError(error)) {
+        return { received: true, duplicate: true, eventId: event.id, type: event.type };
+      }
+      logger.error("Webhook failed: customer.subscription.updated", { eventId: event.id, ...serializeError(error) });
+      throw error;
+    }
+  }
+
+  private async handleVendorSubscriptionDeleted(event: Stripe.Event): Promise<StripeWebhookResult> {
+    const stripeSubscription = event.data.object as Stripe.Subscription;
+
+    try {
+      if (await this.claimWebhookEventOrSkip(event)) {
+        return { received: true, duplicate: true, eventId: event.id, type: event.type };
+      }
+
+      const subscription = await prisma.vendorSubscription.findUnique({
+        where: { stripeSubscriptionId: stripeSubscription.id },
+        select: { id: true, vendorId: true, status: true },
+      });
+      if (!subscription) {
+        logger.warn("customer.subscription.deleted for unknown vendor subscription", {
+          eventId: event.id, stripeSubscriptionId: stripeSubscription.id,
+        });
+        return { received: true, ignored: true, eventId: event.id, type: event.type };
+      }
+
+      if (subscription.status !== "CANCELLED") {
+        await prisma.vendorSubscription.update({
+          where: { id: subscription.id },
+          data: { status: "CANCELLED", cancelledAt: new Date() },
+        });
+
+        const vendor = await prisma.vendor.findUnique({ where: { id: subscription.vendorId }, select: { userId: true } });
+        if (vendor) {
+          const copy = this.vendorSubscriptionNotificationCopy("CANCELLED");
+          notificationsService.enqueue({
+            userId: vendor.userId,
+            type: "SUBSCRIPTION_UPDATE",
+            title: copy.title,
+            body: copy.body,
+            data: { type: "subscription_update", event: "vendor_subscription_cancelled", vendorSubscriptionId: subscription.id },
+          }).catch((err) => logger.warn("Vendor subscription cancelled notification failed", { eventId: event.id, error: String(err) }));
+        }
+      }
+
+      logger.info("Webhook processed: customer.subscription.deleted (vendor subscription)", {
+        eventId: event.id, stripeSubscriptionId: stripeSubscription.id, vendorId: subscription.vendorId,
+      });
+      return { received: true, eventId: event.id, type: event.type };
+    } catch (error) {
+      if (this.isUniqueConstraintError(error)) {
+        return { received: true, duplicate: true, eventId: event.id, type: event.type };
+      }
+      logger.error("Webhook failed: customer.subscription.deleted", { eventId: event.id, ...serializeError(error) });
       throw error;
     }
   }
