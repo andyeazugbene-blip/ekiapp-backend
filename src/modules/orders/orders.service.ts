@@ -7,6 +7,7 @@ import { AppError } from "../../shared/errors/app-error";
 import { releaseVendorEarnings } from "../../shared/utils/wallet-release";
 import { notificationsService } from "../notifications/notifications.service";
 import { communicationService } from "../communications/communication.service";
+import { executeOrderRefund } from "../admin/admin-refunds.controller";
 import type { ListBuyerOrdersQuery, ListVendorOrdersQuery } from "./orders.types";
 import { VENDOR_STATUS_TRANSITIONS, BUYER_STATUS_TRANSITIONS } from "./orders.types";
 
@@ -203,7 +204,10 @@ export const ordersService = {
 
     const order = await prisma.order.findUnique({
       where: { id: orderId, vendorId: vendor.id },
-      include: { items: { select: { vendorId: true } } },
+      include: {
+        items: { select: { vendorId: true } },
+        payment: { select: { status: true } },
+      },
     });
 
     if (!order) {
@@ -223,14 +227,31 @@ export const ordersService = {
       );
     }
 
-    const updated = await prisma.order.update({
-      where: { id: orderId },
-      data: {
-        status: newStatus,
-        ...(newStatus === "DELIVERED" ? { deliveredAt: new Date() } : {}),
-      },
-      include: orderInclude,
-    });
+    let updated: Order;
+    if (newStatus === "CANCELLED" && order.payment?.status === "SUCCEEDED") {
+      // Acceptance audit fix (Defect C): a vendor cancelling an order the
+      // buyer already paid for previously just flipped the status — the
+      // buyer's money was never returned. This reuses the exact same
+      // provider-refund call the admin refund flow uses (Stripe/Paystack,
+      // full amount, idempotency-keyed). The vendor's pending wallet credit
+      // and its double-entry ledger legs are then reversed automatically by
+      // the existing charge.refunded webhook handler (handleChargeRefunded)
+      // the moment Stripe confirms the refund — the same reversal machinery
+      // that already backs every other refund in this codebase, unchanged
+      // here. If the refund fails, this throws and the order is NOT marked
+      // cancelled — never a silent "cancelled" with no money moved.
+      await executeOrderRefund(orderId, userId, undefined, "vendor_cancelled_paid_order", "CANCELLED");
+      updated = await prisma.order.findUniqueOrThrow({ where: { id: orderId }, include: orderInclude });
+    } else {
+      updated = await prisma.order.update({
+        where: { id: orderId },
+        data: {
+          status: newStatus,
+          ...(newStatus === "DELIVERED" ? { deliveredAt: new Date() } : {}),
+        },
+        include: orderInclude,
+      });
+    }
 
     // Notify buyer about status change — awaited so Vercel serverless doesn't
     // terminate the function before the Expo push fetch completes.

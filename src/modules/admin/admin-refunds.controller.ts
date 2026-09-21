@@ -25,7 +25,18 @@ interface OrderRefundResult {
  * path and the four-eyes approval-decide path (admin-approvals.controller.ts)
  * call the exact same code, never two parallel implementations.
  */
-export async function executeOrderRefund(orderId: string, adminId: string, amount: number | undefined, reason: unknown): Promise<OrderRefundResult> {
+export async function executeOrderRefund(
+  orderId: string,
+  adminId: string,
+  amount: number | undefined,
+  reason: unknown,
+  // Defaults to REFUNDED for the admin-initiated path (unchanged behavior).
+  // A vendor cancelling their own paid order (orders.service.ts
+  // updateVendorOrderStatus, Defect C) passes "CANCELLED" instead — the
+  // money movement is identical either way, only the resulting order label
+  // differs to match what actually initiated it.
+  finalStatus: "REFUNDED" | "CANCELLED" = "REFUNDED",
+): Promise<OrderRefundResult> {
   const order = await prisma.order.findUnique({
     where: { id: orderId },
     include: {
@@ -35,7 +46,11 @@ export async function executeOrderRefund(orderId: string, adminId: string, amoun
   });
 
   if (!order) throw new AppError("Order not found", 404);
-  if (order.status === "REFUNDED") throw new AppError("Order already refunded", 409);
+  // Both terminal states mean the money has already been (or is already
+  // being) returned — refunding a second time would double-refund.
+  if (order.status === "REFUNDED" || order.status === "CANCELLED") {
+    throw new AppError("Order already refunded or cancelled", 409);
+  }
 
   // The admin always enters an amount in the ORDER's OWN native currency —
   // order.currency, order.totalAmount — the same currency every other
@@ -96,7 +111,7 @@ export async function executeOrderRefund(orderId: string, adminId: string, amoun
       );
 
       logger.info("Admin Stripe refund issued", { orderId, refundId: refund.id, nativeAmount: nativeRefundAmount, nativeCurrency: order.currency, stripeAmount: refund.amount, stripeCurrency: refund.currency });
-      await prisma.order.update({ where: { id: orderId }, data: { status: "REFUNDED" } });
+      await prisma.order.update({ where: { id: orderId }, data: { status: finalStatus } });
       await createAuditLog(adminId, orderId, refund.id, nativeRefundAmount, reason);
       return { refundId: refund.id, amount: nativeRefundAmount, currency: order.currency, status: refund.status ?? "unknown", provider: "stripe" };
     } catch (error) {
@@ -119,7 +134,7 @@ export async function executeOrderRefund(orderId: string, adminId: string, amoun
       logger.info("Admin Paystack refund issued", { orderId, reference: order.paystackTransaction.reference });
 
       await prisma.$transaction(async (tx) => {
-        await tx.order.update({ where: { id: orderId }, data: { status: "REFUNDED" } });
+        await tx.order.update({ where: { id: orderId }, data: { status: finalStatus } });
         await tx.paystackTransaction.update({
           where: { reference: order.paystackTransaction!.reference },
           data: { status: "REVERSED" },
