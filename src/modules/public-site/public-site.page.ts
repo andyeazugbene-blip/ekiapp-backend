@@ -556,7 +556,7 @@ function renderHomeLayout(page: PageDefinition): string {
         <h1>Your favourite foodstuff vendors. One trusted app.</h1>
         <p class="hero-intro">All in one place for Africans, Caribbeans, and people who love authentic foodstuff. Buy, sell, and receive your favourites in one app.</p>
         <div class="hero-actions">
-          <a class="btn-app" href="https://apps.apple.com/app/id" aria-label="Download on App Store">
+          <a class="btn-app" href="https://apps.apple.com/app/id6776307497" aria-label="Download on App Store">
             <span class="btn-app-icon">&#xF8FF;</span>
             <span class="btn-app-text">
               <span class="btn-small">Download on the</span>

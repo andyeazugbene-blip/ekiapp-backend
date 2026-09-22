@@ -1924,7 +1924,7 @@ function renderTrackPage(store: PublicStore, order: PublicStoreTrackedOrder): st
         <h3>Get live updates</h3>
         <p>Download the Eki app to track your order, save vendors and reorder in seconds.</p>
         <div class="download-buttons">
-          <a class="dl-btn" href="https://apps.apple.com/app/id">
+          <a class="dl-btn" href="https://apps.apple.com/app/id6776307497">
             <span>Download on the</span>
             <span>App Store</span>
           </a>
