@@ -17,6 +17,8 @@ vi.mock("../lib/prisma", () => ({
     buyerPaymentMethod: { findUnique: vi.fn() },
     communityBuySupportCase: { create: vi.fn() },
     marketConfiguration: { findUnique: vi.fn(), count: vi.fn().mockResolvedValue(1) },
+    // Buyer-country eligibility gate (join()/pledge() — buyer-country.service.ts).
+    user: { findUnique: vi.fn() },
     auditLog: { create: vi.fn() },
     $transaction: vi.fn(),
   },
@@ -35,6 +37,9 @@ const m = vi.mocked(prisma, true) as any;
 beforeEach(() => {
   vi.clearAllMocks();
   m.marketConfiguration.count.mockResolvedValue(1);
+  // baseCampaign below is country: "GB" — default buyer matches it so
+  // existing tests here don't need to know about the eligibility gate.
+  m.user.findUnique.mockResolvedValue({ country: "United Kingdom" } as never);
 });
 
 const baseCampaign = {

@@ -22,6 +22,7 @@ import { attributionReviewService } from "./campaign-participant-attribution.ser
 import { communityBuyManifestService } from "./community-buy-manifest.service";
 import { campaignSupplierProposalService, type ProposalInput } from "./campaign-supplier-proposal.service";
 import { searchDataAccessLog, revokeDeliveryReferencesForSupplierAccount, isIndividualDeliveryEnabled, FULFILMENT_ACCESS_PRESERVED_SCOPE } from "./community-buy-privacy.service";
+import { buyerCountryService } from "./buyer-country.service";
 
 // ─── Public market availability (used by the mobile app to decide whether
 // to show Regular Deliveries / Community Buy entry points at all — the
@@ -100,14 +101,24 @@ async function resolveActingSupplier(userId: string): Promise<ActingSupplier> {
 
 // ─── Discovery (public) ────────────────────────────────────────────────
 
+/**
+ * Client decision (2026-09-22, buyer-country acceptance fix): the buyer's
+ * market comes ONLY from their authenticated User.country (via
+ * buyerCountryService, a real DB read) — request.query.country is never
+ * read here at all anymore, so there is nothing left for a client to
+ * override no matter what it sends on the query string.
+ */
 export async function listCampaigns(request: Request, response: Response): Promise<void> {
-  const country = typeof request.query.country === "string" ? request.query.country : undefined;
+  const userId = requireUserId(request);
+  const marketCode = await buyerCountryService.requireMarketCode(userId);
   const q = typeof request.query.q === "string" ? request.query.q : undefined;
-  response.json({ items: await communityCampaignsService.listLive(country, q) });
+  response.json({ items: await communityCampaignsService.listLive(marketCode, q) });
 }
 
+/** Country-gated for an unrelated caller; the campaign's own organiser/supplier/an admin always get through — see getForRequester()'s doc comment. */
 export async function getCampaign(request: Request, response: Response): Promise<void> {
-  response.json({ campaign: await communityCampaignsService.get(requireIdParam(request)) });
+  const userId = requireUserId(request);
+  response.json({ campaign: await communityCampaignsService.getForRequester(userId, requireIdParam(request)) });
 }
 
 // Public/participant fulfilment read — null (not 404) when no plan exists

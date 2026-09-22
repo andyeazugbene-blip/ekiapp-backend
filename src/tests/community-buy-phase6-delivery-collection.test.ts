@@ -27,6 +27,8 @@ vi.mock("../lib/prisma", () => ({
     campaignFulfilmentEvent: { create: vi.fn(), findFirst: vi.fn() },
     campaignChargeAttempt: { count: vi.fn(), create: vi.fn(), update: vi.fn() },
     campaignRefund: { create: vi.fn() },
+    // Buyer-country eligibility gate (join()/pledge() — buyer-country.service.ts).
+    user: { findUnique: vi.fn().mockResolvedValue({ country: "United Kingdom" }) },
     $transaction: vi.fn(),
   },
 }));

@@ -103,6 +103,12 @@ beforeEach(() => {
   m.campaignParticipant.findFirst.mockResolvedValue(null as never);
   m.campaignParticipant.create.mockResolvedValue({ id: "part-1" } as never);
   m.organiserProfile.findUnique.mockResolvedValue({ id: "org-default", userId: "organiser-default" } as never);
+  // Buyer-country eligibility gate (join()/pledge()/commit() — buyer-
+  // country.service.ts) now reads prisma.user.findUnique on every call.
+  // Default to a real, GB-resolvable buyer so the ~150 existing tests below
+  // that never cared about this dependency keep passing; tests that DO
+  // care about country eligibility override this per-test.
+  m.user.findUnique.mockResolvedValue({ country: "United Kingdom" } as never);
 });
 
 describe("communityCampaignsService.closeDueCampaigns — doc §7 deadline evaluation", () => {
@@ -652,8 +658,14 @@ describe("campaignContributionsService.pledge — PLEDGE_THEN_CHARGE (client man
   });
 
   it("rejects a pledge in a currency Stripe doesn't support, instead of silently charging EUR for the same numeric amount", async () => {
+    // country: "GB" (not the unsupported currency's real market, "GH" —
+    // Ghana isn't and never was a launched Community Buy market) so this
+    // test's default buyer (see beforeEach) clears the buyer-country
+    // eligibility gate and reaches the currency check this test is actually
+    // about; market-configuration/currency mocks below are unaffected by
+    // this, since they return canned data regardless of the country passed.
     m.communityCampaign.findUnique.mockResolvedValue({
-      id: "camp-11", status: "LIVE", deadline: new Date(Date.now() + 100000), country: "GH", currency: "GHS", pricePerShareMinor: 1000, maximumShares: 6, confirmedShares: 0,
+      id: "camp-11", status: "LIVE", deadline: new Date(Date.now() + 100000), country: "GB", currency: "GHS", pricePerShareMinor: 1000, maximumShares: 6, confirmedShares: 0,
     } as never);
     m.marketConfiguration.findUnique.mockResolvedValue({
       countryCode: "GH", communityBuyEnabled: true, communityBuyPaymentsEnabled: true, communityBuyPaymentMode: "PLEDGE_THEN_CHARGE",
@@ -2754,7 +2766,7 @@ describe("Client correction — supplier is optional, never a publication gate",
 
   // 8. participant can discover/join a LIVE campaign while supplier pending
   it("8. join() and listLive() never look at supplierCommitted — a participant can join while the supplier hasn't responded", async () => {
-    m.communityCampaign.findUnique.mockResolvedValue({ id: "camp-8", status: "LIVE", supplierId: "sup-1", supplierCommitted: false } as never);
+    m.communityCampaign.findUnique.mockResolvedValue({ id: "camp-8", status: "LIVE", country: "GB", supplierId: "sup-1", supplierCommitted: false } as never);
     // A different, earlier test in this file sets a standing (non-once)
     // mockResolvedValue on campaignParticipant.findUnique for its own
     // purpose — vi.clearAllMocks() doesn't reset mock implementations, only

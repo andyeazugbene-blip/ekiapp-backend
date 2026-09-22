@@ -16,6 +16,7 @@ import { organiserFeeService } from "./organiser-fee.service";
 import { resolveCampaignConnectedAccountId, resolveCampaignSupplierLedgerOwnerId } from "./campaign-supplier-resolution.service";
 import { upsertParticipantWithAttribution } from "./campaign-participant-attribution.service";
 import { alertOps } from "./ops-alert.service";
+import { assertBuyerCountryEligible } from "./campaign-contributions.service";
 
 const SYSTEM_CRON_ACTOR = "system:cron";
 const CONSENT_WORDING_VERSION = "cb-authorise-v1";
@@ -156,6 +157,10 @@ export const campaignAuthorisationService = {
     }
     isAuthoriseCampaign(campaign);
     if (new Date() >= campaign.deadline) throw new AppError("This campaign is no longer accepting contributions", 409);
+    // Same buyer-country eligibility gate as pledge() (campaign-contributions
+    // .service.ts) — this is the M2 AUTHORISE_THEN_CAPTURE participant
+    // commitment endpoint, the equivalent entry point for that mode.
+    await assertBuyerCountryEligible(userId, campaign.country);
 
     const paymentsEnabled = await marketConfigurationService.isCommunityBuyPaymentsEnabled(campaign.country);
     if (!paymentsEnabled) {

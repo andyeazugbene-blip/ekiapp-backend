@@ -21,6 +21,8 @@ vi.mock("../lib/prisma", () => ({
     // ensureDefaults() seeding check — mocked >0 so it never tries to
     // reach the (unmocked) create() seeding path in these unit tests.
     marketConfiguration: { findUnique: vi.fn(), count: vi.fn().mockResolvedValue(1) },
+    // Buyer-country eligibility gate (join()/pledge() — buyer-country.service.ts).
+    user: { findUnique: vi.fn().mockResolvedValue({ country: "United Kingdom" }) },
     $transaction: vi.fn(),
   },
 }));

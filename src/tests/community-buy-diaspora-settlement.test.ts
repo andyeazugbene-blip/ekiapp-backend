@@ -35,6 +35,8 @@ vi.mock("../lib/prisma", () => ({
     ledgerAccount: { findUnique: vi.fn(), create: vi.fn() },
     ledgerEntry: { create: vi.fn() },
     auditLog: { create: vi.fn() },
+    // Buyer-country eligibility gate (join()/pledge() — buyer-country.service.ts).
+    user: { findUnique: vi.fn().mockResolvedValue({ country: "United Kingdom" }) },
     $transaction: vi.fn(),
   },
 }));
@@ -134,8 +136,12 @@ describe("createPledge() — buyer service fee computed and stored separately fr
   });
 
   it("charges 0 fee when the market has no configuration at all — never guesses a rate", async () => {
+    // country: "GB" (not "ZZ" — "ZZ" would also fail the buyer-country
+    // eligibility gate before ever reaching the missing-market-config check
+    // this test is actually about) so the default buyer clears that gate;
+    // marketConfiguration.findUnique below still returns null regardless.
     m.communityCampaign.findUnique.mockResolvedValue({
-      id: "camp-fee-2", status: "LIVE", country: "ZZ", currency: "GBP", deadline: new Date(Date.now() + 100000), pricePerShareMinor: 1000, maximumShares: 6, confirmedShares: 0,
+      id: "camp-fee-2", status: "LIVE", country: "GB", currency: "GBP", deadline: new Date(Date.now() + 100000), pricePerShareMinor: 1000, maximumShares: 6, confirmedShares: 0,
     } as never);
     m.marketConfiguration.count.mockResolvedValue(1 as never);
     m.marketConfiguration.findUnique.mockResolvedValue(null as never);

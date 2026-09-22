@@ -10,6 +10,7 @@ import { campaignAuthorisationService } from "./campaign-authorisation.service";
 import { organiserPayoutService } from "./organiser-payout.service";
 import { recordAudit } from "../../shared/utils/audit";
 import { isIndividualDeliveryEnabled, revokeDeliveryReferencesForCampaign, recordDataAccess } from "./community-buy-privacy.service";
+import { buyerCountryService } from "./buyer-country.service";
 
 // Community Buy Workstream 2: only `title` and `country` are hard
 // requirements to start a draft (spec §7 — "any authenticated user can
@@ -1641,17 +1642,23 @@ export const communityCampaignsService = {
   // single combined field must match product/title text AND a real
   // location (the organiser's own collection city), not just title/
   // description — no invented category field (none exists on the model).
-  // `country` stays a real, separate param for internal/business-rule
-  // scoping (e.g. Buyer Home's own-country preview) — it is deliberately
-  // no longer exposed as a user-facing browse-by-country control on the
-  // Discover screen itself (client correction: country must not be a
-  // clickable browse category).
-  async listLive(country?: string, q?: string) {
+  //
+  // Client decision (2026-09-22, buyer-country acceptance fix): discovery
+  // is now scoped to the caller's own eligible market — `country` is a
+  // REQUIRED, already-resolved market code (see buyerCountryService),
+  // never an optional pass-through of a raw client-supplied value. The
+  // controller resolves it server-side from the authenticated buyer's own
+  // User.country before ever reaching here; this function has no idea
+  // whether the caller typed something into a query string, and that is
+  // exactly the point. There is still no clickable "browse by country" UI
+  // (that part of the original client correction is unchanged) — this is
+  // an eligibility filter, not a category control.
+  async listLive(country: string, q?: string) {
     const search = q?.trim();
     const campaigns = await prisma.communityCampaign.findMany({
       where: {
         status: "LIVE",
-        ...(country && { country }),
+        country,
         ...(search && {
           OR: [
             { title: { contains: search, mode: "insensitive" } },
@@ -1776,6 +1783,57 @@ export const communityCampaignsService = {
     // organiser-identity field any caller should read from it.
     const { organiser: _organiser, ...campaignWithoutRawOrganiser } = campaign;
     return { ...campaignWithoutRawOrganiser, paidTotal, progressPct, participantCount: campaign._count.participants, perShareFeeEstimate, organiserDisplayName, organiserVerified };
+  },
+
+  /**
+   * Client decision (2026-09-22, buyer-country acceptance fix) — GET
+   * /community-buy/campaigns/:id must enforce the same country eligibility
+   * as discovery, but this endpoint is also the one real single-campaign
+   * fetch organiser/supplier screens already reuse (community-buy-
+   * organiser-campaign.tsx, community-buy-supplier-fulfilment.tsx,
+   * community-buy-supplier-proposal.tsx) — a blind country gate here would
+   * lock an organiser or supplier out of their own campaign the moment its
+   * market differs from their own registered one. So: the campaign's own
+   * organiser, its assigned supplier (either resolution path — see
+   * resolveActingSupplier() in the controller for the same dual-path
+   * precedent), and any admin always get through unconditionally; only an
+   * unrelated caller (an ordinary buyer, or anyone else) is subject to the
+   * country match. 404 (not 403) on a mismatch or on missing country data,
+   * same as "doesn't exist" — never reveals that a campaign exists in a
+   * market the caller can't see.
+   */
+  async getForRequester(userId: string, campaignId: string) {
+    const gate = await prisma.communityCampaign.findUnique({
+      where: { id: campaignId },
+      select: { country: true, organiserId: true, supplierId: true, supplierAccountId: true },
+    });
+    if (!gate) throw new AppError("Campaign not found", 404);
+
+    const [user, organiser] = await Promise.all([
+      prisma.user.findUnique({ where: { id: userId }, select: { role: true } }),
+      prisma.organiserProfile.findUnique({ where: { userId }, select: { id: true } }),
+    ]);
+    let involved = user?.role === "ADMIN" || organiser?.id === gate.organiserId;
+    if (!involved && gate.supplierAccountId) {
+      const account = await prisma.supplierAccount.findUnique({ where: { userId }, select: { id: true } });
+      involved = account?.id === gate.supplierAccountId;
+    }
+    if (!involved && gate.supplierId) {
+      const vendor = await prisma.vendor.findUnique({ where: { userId }, select: { id: true } });
+      if (vendor) {
+        const supplierProfile = await prisma.supplierProfile.findUnique({ where: { vendorId: vendor.id }, select: { id: true } });
+        involved = supplierProfile?.id === gate.supplierId;
+      }
+    }
+
+    if (!involved) {
+      const buyerMarketCode = await buyerCountryService.requireMarketCode(userId);
+      if (!buyerCountryService.isEligible(buyerMarketCode, gate.country)) {
+        throw new AppError("Campaign not found", 404);
+      }
+    }
+
+    return this.get(campaignId);
   },
 
   // ─── Closing workflow — doc §7 Deadline Evaluation ─────────────────────

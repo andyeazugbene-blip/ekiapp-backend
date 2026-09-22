@@ -16,6 +16,29 @@ import { stripeConnectService as vendorStripeConnectService } from "../vendors/s
 import { createDeliveryReferenceForContribution } from "./community-buy-privacy.service";
 import { organiserFeeService } from "./organiser-fee.service";
 import { upsertParticipantWithAttribution } from "./campaign-participant-attribution.service";
+import { buyerCountryService } from "./buyer-country.service";
+
+/**
+ * Client decision (2026-09-22, buyer-country acceptance fix) — a buyer may
+ * only join/pledge into a campaign whose market matches their own
+ * authenticated country. 404 ("Campaign not found"), same wording and
+ * status the existing not-live/missing checks already use right above each
+ * call site — never reveals that a campaign exists in a market the buyer
+ * isn't eligible for. This intentionally does NOT apply to
+ * pledgeOrganiserTopUp() (already scoped to the organiser's own campaign
+ * via the campaign.organiserId === organiser.id check above it) or to
+ * attemptCharge() (operates on an already-validated PLEDGED contribution
+ * created by a join()/pledge() call that already passed this check — this
+ * is a check at the moment of new commitment, not something to
+ * re-evaluate every time a charge is attempted against a buyer's possibly-
+ * since-changed profile).
+ */
+export async function assertBuyerCountryEligible(userId: string, campaignCountry: string | null): Promise<void> {
+  const buyerMarketCode = await buyerCountryService.requireMarketCode(userId);
+  if (!buyerCountryService.isEligible(buyerMarketCode, campaignCountry)) {
+    throw new AppError("Campaign not found", 404);
+  }
+}
 
 const SYSTEM_CRON_ACTOR = "system:cron";
 
@@ -284,6 +307,7 @@ export const campaignContributionsService = {
   async join(userId: string, campaignId: string) {
     const campaign = await prisma.communityCampaign.findUnique({ where: { id: campaignId } });
     if (!campaign || campaign.status !== "LIVE") throw new AppError("Campaign not found or not live", 404);
+    await assertBuyerCountryEligible(userId, campaign.country);
 
     return upsertParticipantWithAttribution(campaign, userId);
   },
@@ -300,6 +324,7 @@ export const campaignContributionsService = {
       throw new AppError("Campaign not found or not live", 404);
     }
     if (new Date() >= campaign.deadline) throw new AppError("This campaign is no longer accepting contributions", 409);
+    await assertBuyerCountryEligible(userId, campaign.country);
 
     const paymentsEnabled = await marketConfigurationService.isCommunityBuyPaymentsEnabled(campaign.country);
     if (!paymentsEnabled) {

@@ -135,7 +135,7 @@ vi.mock("../modules/community-buy/community-campaigns.service", () => ({
     listMyCampaignUpdates: (...a: unknown[]) => mockListMyCampaignUpdates(...a),
     listParticipantsForOrganiser: (...a: unknown[]) => mockListParticipantsForOrganiser(...a),
     getRefundProgressForOrganiser: (...a: unknown[]) => mockGetRefundProgressForOrganiser(...a),
-    get: (...a: unknown[]) => mockGetCampaign(...a),
+    getForRequester: (...a: unknown[]) => mockGetCampaign(...a),
     create: (...a: unknown[]) => mockCreateCampaign(...a),
     update: (...a: unknown[]) => mockUpdateCampaign(...a),
     requireOwnedByOrganiser: (...a: unknown[]) => mockRequireOwnedByOrganiser(...a),
@@ -289,6 +289,11 @@ const mockSupplierProfileFindUnique = vi.fn();
 const mockCampaignSupplierPaymentFindUnique = vi.fn().mockResolvedValue({ amount: 50000 });
 // adminRequestEmergencyDisclosure (M4) looks the contribution up directly.
 const mockCampaignContributionFindUnique = vi.fn();
+// Buyer-country eligibility gate (buyer-country.service.ts) looks up the
+// authenticated caller's own User.country on every discovery/get/join/
+// pledge request now — default to a real, GB-resolvable buyer so this
+// file's existing tests (which never cared about country) keep working.
+const mockUserFindUnique = vi.fn().mockResolvedValue({ country: "United Kingdom" });
 // With requiresApproval defaulting to false, release proceeds exactly as
 // this file's pre-existing tests expect.
 const mockRequiresApproval = vi.fn().mockResolvedValue(false);
@@ -310,6 +315,7 @@ vi.mock("../lib/prisma", async () => {
         if (prop === "supplierAccount") return { findUnique: (...a: unknown[]) => mockSupplierAccountFindUnique(...a) };
         if (prop === "campaignSupplierPayment") return { findUnique: (...a: unknown[]) => mockCampaignSupplierPaymentFindUnique(...a) };
         if (prop === "campaignContribution") return { findUnique: (...a: unknown[]) => mockCampaignContributionFindUnique(...a) };
+        if (prop === "user") return { findUnique: (...a: unknown[]) => mockUserFindUnique(...a) };
         // require2fa (gates the two supplier-payment routes below) looks
         // this up for every request — without a mock it falls through to
         // a real DB call, which this test environment can't make. No admin
@@ -431,9 +437,18 @@ const adminToken = () => generateTestToken({ id: "admin-1", role: "ADMIN", email
 // supplier's account — nothing about becoming a supplier ever touches role).
 const accountSupplierToken = () => generateTestToken({ id: "account-supplier-1", role: "BUYER", email: "s@x.com" });
 
-describe("Public discovery routes", () => {
-  it("GET /api/community-buy/campaigns — public, no auth required", async () => {
-    const res = await request(app).get("/api/community-buy/campaigns?country=GB");
+describe("Discovery routes — authenticated, country comes from the buyer's own DB record", () => {
+  it("GET /api/community-buy/campaigns — requires authentication", async () => {
+    const res = await request(app).get("/api/community-buy/campaigns");
+    expect(res.status).toBe(401);
+    expect(mockListLive).not.toHaveBeenCalled();
+  });
+
+  it("GET /api/community-buy/campaigns — ignores a client-supplied ?country= entirely, uses the authenticated buyer's own DB country instead", async () => {
+    // mockUserFindUnique (default: country "United Kingdom") resolves to
+    // "GB" — the request below tries to override it to "CA" on the query
+    // string, which must have zero effect.
+    const res = await request(app).get("/api/community-buy/campaigns?country=CA").set("Authorization", `Bearer ${buyerToken()}`);
     expect(res.status).toBe(200);
     // Community Buy Workstream 2: listLive also takes an optional search
     // term now — undefined here since none was passed on the query string.
@@ -441,15 +456,21 @@ describe("Public discovery routes", () => {
   });
 
   it("GET /api/community-buy/campaigns?q= — passes the search term through", async () => {
-    const res = await request(app).get("/api/community-buy/campaigns?country=GB&q=rice");
+    const res = await request(app).get("/api/community-buy/campaigns?q=rice").set("Authorization", `Bearer ${buyerToken()}`);
     expect(res.status).toBe(200);
     expect(mockListLive).toHaveBeenCalledWith("GB", "rice");
   });
 
-  it("GET /api/community-buy/campaigns/:id — id parsed correctly, public", async () => {
+  it("GET /api/community-buy/campaigns/:id — requires authentication", async () => {
     const res = await request(app).get("/api/community-buy/campaigns/camp-99");
+    expect(res.status).toBe(401);
+    expect(mockGetCampaign).not.toHaveBeenCalled();
+  });
+
+  it("GET /api/community-buy/campaigns/:id — id parsed correctly, resolved for the authenticated buyer", async () => {
+    const res = await request(app).get("/api/community-buy/campaigns/camp-99").set("Authorization", `Bearer ${buyerToken()}`);
     expect(res.status).toBe(200);
-    expect(mockGetCampaign).toHaveBeenCalledWith("camp-99");
+    expect(mockGetCampaign).toHaveBeenCalledWith("buyer-1", "camp-99");
   });
 
   it("GET /api/community-buy/markets — public market list", async () => {

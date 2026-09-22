@@ -29,6 +29,9 @@ vi.mock("../lib/prisma", () => ({
     ledgerAccount: { findUnique: vi.fn(), create: vi.fn() },
     ledgerEntry: { create: vi.fn() },
     auditLog: { create: vi.fn() },
+    // Buyer-country eligibility gate (commit() now calls
+    // assertBuyerCountryEligible from campaign-contributions.service.ts).
+    user: { findUnique: vi.fn().mockResolvedValue({ country: "United Kingdom" }) },
     $transaction: vi.fn(),
   },
 }));

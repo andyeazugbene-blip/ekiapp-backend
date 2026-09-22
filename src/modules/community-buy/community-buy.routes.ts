@@ -105,11 +105,11 @@ import {
 export const communityBuyRouter = Router();
 communityBuyRouter.get("/markets", asyncHandler(listPublicMarketConfigs));
 communityBuyRouter.get("/markets/:country", asyncHandler(getPublicMarketConfig));
-communityBuyRouter.get("/campaigns", asyncHandler(listCampaigns));
+communityBuyRouter.get("/campaigns", authenticate, asyncHandler(listCampaigns));
 communityBuyRouter.get("/my-contributions", authenticate, asyncHandler(listMyContributions));
 communityBuyRouter.get("/support-cases", authenticate, asyncHandler(listMySupportCases));
 communityBuyRouter.get("/support-cases/:id", authenticate, asyncHandler(getMySupportCase));
-communityBuyRouter.get("/campaigns/:id", asyncHandler(getCampaign));
+communityBuyRouter.get("/campaigns/:id", authenticate, asyncHandler(getCampaign));
 communityBuyRouter.get("/campaigns/:id/fulfilment", asyncHandler(getParticipantFulfilment));
 // M5 — participant-authorized evidence actions (requires an owned PAID contribution; enforced in the service, not here).
 communityBuyRouter.post("/campaigns/:id/fulfilment/confirm-receipt", authenticate, asyncHandler(confirmFulfilmentReceipt));
