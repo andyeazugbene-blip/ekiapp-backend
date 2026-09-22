@@ -21,3 +21,12 @@ export interface ListMessagesQuery {
   limit: number;
   cursor?: string;
 }
+
+export interface StartSupportConversationInput {
+  message: string;
+}
+
+export interface ListSupportConversationsQuery {
+  limit: number;
+  cursor?: string;
+}

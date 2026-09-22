@@ -6,7 +6,9 @@ import {
   validateCreateConversationInput,
   validateListConversationsQuery,
   validateListMessagesQuery,
+  validateListSupportConversationsQuery,
   validateSendMessageInput,
+  validateStartSupportConversationInput,
 } from "./messages.validation";
 
 function requireUserId(request: Request): string {
@@ -59,4 +61,23 @@ export async function sendMessage(request: Request, response: Response): Promise
 export async function markConversationRead(request: Request, response: Response): Promise<void> {
   await messagesService.markConversationRead(requireUserId(request), requireIdParam(request));
   response.status(200).json({ success: true });
+}
+
+/** Buyer-facing (and any authenticated user's) "Contact us" entry point — see messages.service.ts's startSupportConversation() for why no admin id is ever supplied by the client. */
+export async function startSupportConversation(request: Request, response: Response): Promise<void> {
+  const input = validateStartSupportConversationInput(request.body);
+  const conversation = await messagesService.startSupportConversation(requireUserId(request), input.message);
+  response.status(201).json({ conversation });
+}
+
+/** Admin-only — see admin.routes.ts (requireAdminPermission("support.read")); this file, not admin's own controller, to stay next to the service functions it wraps. */
+export async function adminListSupportConversations(request: Request, response: Response): Promise<void> {
+  const query = validateListSupportConversationsQuery(request.query as Record<string, unknown>);
+  const result = await messagesService.listSupportConversationsForAdmin(query);
+  response.status(200).json(result);
+}
+
+export async function adminGetSupportConversation(request: Request, response: Response): Promise<void> {
+  const conversation = await messagesService.getSupportConversationForAdmin(requireIdParam(request));
+  response.status(200).json({ conversation });
 }

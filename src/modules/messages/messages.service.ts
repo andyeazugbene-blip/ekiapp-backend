@@ -3,10 +3,12 @@ import { pushNotifications } from "../../lib/push-notifications";
 import { isBlocked } from "../reports/reports.service";
 import { CURSOR_ORDER_BY } from "../../shared/constants";
 import { AppError } from "../../shared/errors/app-error";
+import { adminRolesService } from "../admin/admin-roles.service";
 import type {
   CreateConversationInput,
   ListConversationsQuery,
   ListMessagesQuery,
+  ListSupportConversationsQuery,
   SendMessageInput,
 } from "./messages.types";
 
@@ -19,6 +21,58 @@ type ParticipantRecord = {
 
 function sortParticipants(a: string, b: string): [string, string] {
   return a < b ? [a, b] : [b, a];
+}
+
+/**
+ * A literal participant always has access. For a SUPPORT conversation
+ * specifically, ANY admin holding the given permission also has access —
+ * the shared-inbox model a real support team needs: a buyer's thread must
+ * be answerable by whichever admin picks it up, not only whichever admin
+ * happened to be resolved as the fixed participantB at creation time (see
+ * resolveSupportAdminId()). Never loosened for any other conversation type
+ * — an admin has no special access to an ordinary BUYER_VENDOR/ADMIN_VENDOR/
+ * DISPUTE thread they weren't actually added to.
+ */
+async function assertConversationAccess(
+  userId: string,
+  conversation: { participantA: string; participantB: string; type: string },
+  permission: "support.read" | "support.mutate",
+): Promise<void> {
+  if (conversation.participantA === userId || conversation.participantB === userId) return;
+  if (conversation.type === "SUPPORT") {
+    await adminRolesService.assertPermission(userId, permission);
+    return;
+  }
+  throw new AppError("Forbidden", 403);
+}
+
+/** The real, findable "Eki Support" identity a buyer's support conversation is created against — the earliest-created ADMIN user, guaranteed to exist by the bootstrap-admin mechanism. Any admin with support.mutate can still reply (see assertConversationAccess) regardless of who this resolves to. */
+async function resolveSupportAdminId(): Promise<string> {
+  const admin = await prisma.user.findFirst({
+    where: { role: "ADMIN" },
+    orderBy: { createdAt: "asc" },
+    select: { id: true },
+  });
+  if (!admin) {
+    throw new AppError("Support is not available right now — please try again later", 503);
+  }
+  return admin.id;
+}
+
+/** The other side of a message, correctly resolved even when the sender isn't a literal participant (a different admin picking up a SUPPORT thread — see assertConversationAccess()). Falls back to role-based resolution (whichever participant is NOT an admin) only in that case. */
+async function resolveMessageRecipientId(
+  userId: string,
+  conversation: { participantA: string; participantB: string },
+): Promise<string> {
+  if (conversation.participantA === userId) return conversation.participantB;
+  if (conversation.participantB === userId) return conversation.participantA;
+  const [userA, userB] = await Promise.all([
+    prisma.user.findUnique({ where: { id: conversation.participantA }, select: { role: true } }),
+    prisma.user.findUnique({ where: { id: conversation.participantB }, select: { role: true } }),
+  ]);
+  if (userA?.role !== "ADMIN") return conversation.participantA;
+  if (userB?.role !== "ADMIN") return conversation.participantB;
+  return conversation.participantA;
 }
 
 async function assertConversationAllowed(
@@ -135,6 +189,52 @@ async function serializeConversationForUser(userId: string, conversationId: stri
     unreadCount,
     orderId: conversation.orderId || undefined,
     orderNumber: orderRecord?.orderNumber ?? undefined,
+    createdAt: conversation.createdAt,
+    updatedAt: conversation.updatedAt,
+  };
+}
+
+/**
+ * The admin-inbox equivalent of serializeConversationForUser() — takes no
+ * viewer userId (any permitted admin may view any SUPPORT conversation, so
+ * "the other participant" can't be resolved relative to who's asking).
+ * Identifies the buyer side by role (whichever participant is NOT an
+ * admin) rather than by matching a specific id, for the same reason
+ * resolveMessageRecipientId() does. unreadCount counts unread messages
+ * FROM the buyer — a shared value every admin sees the same way, since
+ * Message.readAt is one field, not per-admin.
+ */
+async function serializeSupportConversationForAdmin(conversationId: string) {
+  const conversation = await prisma.conversation.findUnique({
+    where: { id: conversationId },
+    include: { messages: { orderBy: { createdAt: "desc" }, take: 1 } },
+  });
+  if (!conversation) {
+    throw new AppError("Conversation not found", 404);
+  }
+
+  const [userA, userB] = await Promise.all([
+    prisma.user.findUnique({ where: { id: conversation.participantA }, select: { id: true, name: true, email: true, avatar: true, role: true } }),
+    prisma.user.findUnique({ where: { id: conversation.participantB }, select: { id: true, name: true, email: true, avatar: true, role: true } }),
+  ]);
+  const buyer = userA?.role !== "ADMIN" ? userA : userB;
+  if (!buyer) {
+    throw new AppError("Support conversation participant not found", 404);
+  }
+
+  const unreadCount = await prisma.message.count({
+    where: { conversationId: conversation.id, senderId: buyer.id, readAt: null },
+  });
+
+  return {
+    id: conversation.id,
+    buyerId: buyer.id,
+    buyerName: buyer.name,
+    buyerEmail: buyer.email,
+    buyerAvatar: buyer.avatar,
+    lastMessage: conversation.messages[0]?.text ?? "",
+    lastMessageAt: conversation.lastMessageAt ?? conversation.updatedAt ?? conversation.createdAt,
+    unreadCount,
     createdAt: conversation.createdAt,
     updatedAt: conversation.updatedAt,
   };
@@ -258,7 +358,7 @@ export const messagesService = {
       await prisma.notification.create({
         data: {
           userId: input.participantId,
-          type: "ADMIN_BROADCAST",
+          type: "NEW_MESSAGE",
           title: "New message",
           body: `${requester.vendor?.storeName ?? requester.name} sent you a message.`,
           data: { conversationId: conversation.id, messageId: message.id },
@@ -297,16 +397,14 @@ export const messagesService = {
     conversationId: string,
     query: ListMessagesQuery,
   ): Promise<{ items: any[]; nextCursor: string | null }> {
-    // Verify user is a participant
+    // Verify user is a participant (or, for a SUPPORT thread, a permitted admin)
     const conversation = await prisma.conversation.findUnique({
       where: { id: conversationId },
     });
     if (!conversation) {
       throw new AppError("Conversation not found", 404);
     }
-    if (conversation.participantA !== userId && conversation.participantB !== userId) {
-      throw new AppError("Forbidden", 403);
-    }
+    await assertConversationAccess(userId, conversation, "support.read");
 
     const items = await prisma.message.findMany({
       where: { conversationId },
@@ -336,11 +434,9 @@ export const messagesService = {
     if (!conversation) {
       throw new AppError("Conversation not found", 404);
     }
-    if (conversation.participantA !== userId && conversation.participantB !== userId) {
-      throw new AppError("Forbidden", 403);
-    }
+    await assertConversationAccess(userId, conversation, "support.mutate");
 
-    const recipientIdForBlockCheck = conversation.participantA === userId ? conversation.participantB : conversation.participantA;
+    const recipientIdForBlockCheck = await resolveMessageRecipientId(userId, conversation);
     if (await isBlocked(recipientIdForBlockCheck, userId)) {
       throw new AppError("You cannot send messages to this user", 403);
     }
@@ -363,7 +459,7 @@ export const messagesService = {
       }),
     ]);
 
-    const recipientId = conversation.participantA === userId ? conversation.participantB : conversation.participantA;
+    const recipientId = recipientIdForBlockCheck;
     const sender = await prisma.user.findUnique({
       where: { id: userId },
       include: { vendor: { select: { storeName: true } } },
@@ -383,11 +479,12 @@ export const messagesService = {
     if (!conversation) {
       throw new AppError("Conversation not found", 404);
     }
-    if (conversation.participantA !== userId && conversation.participantB !== userId) {
-      throw new AppError("Forbidden", 403);
-    }
+    await assertConversationAccess(userId, conversation, "support.mutate");
 
-    // Mark all unread messages from the OTHER participant as read
+    // Mark all unread messages from the OTHER participant as read (or, for a
+    // SUPPORT thread a different admin is picking up, everything not sent by
+    // this same requester — harmless over-marking of a teammate's own reply,
+    // never affects the buyer's own unread state).
     await prisma.message.updateMany({
       where: {
         conversationId,
@@ -396,6 +493,64 @@ export const messagesService = {
       },
       data: { readAt: new Date() },
     });
+  },
+
+  /**
+   * In-app support messaging (2026-09-22 client decision) — "contact us"
+   * inside the app instead of email. Reuses createConversation() exactly
+   * (same dedup-by-unique-pair, same initial-message/notification path);
+   * the only thing new here is resolving WHO the buyer is talking to
+   * without the client ever supplying or knowing an admin's user id.
+   * Calling this again after the first time reuses the same conversation
+   * (createConversation()'s existing "already exists" branch) rather than
+   * starting a new thread every time a buyer taps "Contact us".
+   */
+  async startSupportConversation(userId: string, message: string): Promise<any> {
+    const supportAdminId = await resolveSupportAdminId();
+    if (userId === supportAdminId) {
+      throw new AppError("You are the support account — nothing to contact", 400);
+    }
+    return this.createConversation(userId, {
+      participantId: supportAdminId,
+      type: "SUPPORT",
+      initialMessage: message,
+    });
+  },
+
+  /**
+   * The shared admin inbox listing — deliberately NOT scoped to
+   * participantA/B === the viewing admin (unlike listConversations()
+   * above), since any permitted admin must see every buyer's support
+   * thread, not only ones addressed to whichever admin was resolved as
+   * the fixed participantB at creation time. Permission-gated at the
+   * controller/route layer (support.read), not here.
+   */
+  async listSupportConversationsForAdmin(
+    query: ListSupportConversationsQuery,
+  ): Promise<{ items: any[]; nextCursor: string | null }> {
+    const items = await prisma.conversation.findMany({
+      where: { type: "SUPPORT" },
+      orderBy: { lastMessageAt: { sort: "desc", nulls: "last" } },
+      take: query.limit + 1,
+      ...(query.cursor ? { cursor: { id: query.cursor }, skip: 1 } : {}),
+    });
+
+    let nextCursor: string | null = null;
+    if (items.length > query.limit) {
+      const next = items.pop();
+      nextCursor = next?.id ?? null;
+    }
+
+    const enrichedItems = await Promise.all(items.map((item) => serializeSupportConversationForAdmin(item.id)));
+    return { items: enrichedItems, nextCursor };
+  },
+
+  async getSupportConversationForAdmin(conversationId: string): Promise<any> {
+    const conversation = await prisma.conversation.findUnique({ where: { id: conversationId } });
+    if (!conversation || conversation.type !== "SUPPORT") {
+      throw new AppError("Support conversation not found", 404);
+    }
+    return serializeSupportConversationForAdmin(conversationId);
   },
 };
 
@@ -409,7 +564,7 @@ async function notificationsServiceSafe(
     await prisma.notification.create({
       data: {
         userId,
-        type: "ADMIN_BROADCAST",
+        type: "NEW_MESSAGE",
         title: "New message",
         body: `${senderName} sent you a message.`,
         data: { conversationId, messageId },

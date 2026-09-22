@@ -233,6 +233,10 @@ import {
   adminHoldOrganiserPayout,
 } from "../community-buy/community-buy.controller";
 import {
+  adminGetSupportConversation,
+  adminListSupportConversations,
+} from "../messages/messages.controller";
+import {
   disable2fa,
   regenerateBackupCodes,
   setup2fa,
@@ -489,6 +493,15 @@ adminRouter.get("/communications/scheduled", asyncHandler(requireAdminPermission
 adminRouter.patch("/communications/scheduled/:id/cancel", asyncHandler(requireAdminPermission("communications.send")), asyncHandler(cancelScheduledCommunication));
 adminRouter.patch("/communications/scheduled/:id", asyncHandler(requireAdminPermission("communications.send")), asyncHandler(updateScheduledCommunication));
 adminRouter.post("/communications/run-scheduled", asyncHandler(requireAdminPermission("communications.send")), asyncHandler(runScheduledCommunications));
+
+// In-app support messaging — the shared inbox for buyer-initiated support
+// conversations (client decision 2026-09-22). Replying/reading a thread's
+// messages/marking read reuse the generic /api/conversations/:id/* routes
+// (messages.routes.ts) directly — the authorization change that permits any
+// support.mutate admin there, not a fixed participant, lives in
+// messages.service.ts's assertConversationAccess().
+adminRouter.get("/support/conversations", asyncHandler(requireAdminPermission("support.read")), asyncHandler(adminListSupportConversations));
+adminRouter.get("/support/conversations/:id", asyncHandler(requireAdminPermission("support.read")), asyncHandler(adminGetSupportConversation));
 
 // Admin role management
 adminRouter.get("/roles", asyncHandler(requireAdminPermission("roles.read")), asyncHandler(listAdminRoles));

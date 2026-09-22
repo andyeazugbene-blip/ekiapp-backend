@@ -142,6 +142,18 @@ enum NotificationType {
   // Diaspora Expansion — Community Buy. Sub-event is carried in
   // Notification.data.event (e.g. "milestone_reached", "refund_started").
   COMMUNITY_CAMPAIGN_UPDATE
+  // In-app support messaging (2026-09-22 client decision): a real,
+  // dedicated type for "you got a new conversation message" — messages
+  // .service.ts previously (mis)used ADMIN_BROADCAST for this, which the
+  // mobile client's normalizeNotificationType() (services/notificationService
+  // .ts) never matched to its "message" category (it checks for the
+  // substring "MESSAGE", which "ADMIN_BROADCAST" doesn't contain), so
+  // tapping a new-message notification silently did nothing. Fixed
+  // alongside this feature since support-reply notifications need to
+  // actually deep-link into Messages to satisfy "buyer receives replies
+  // inside the app" — same fix also repairs the pre-existing buyer<->
+  // vendor chat notification tap-through, which shared the same bug.
+  NEW_MESSAGE
 }
 
 enum ReviewStatus {
@@ -856,6 +868,14 @@ enum ConversationType {
   BUYER_VENDOR
   ADMIN_VENDOR
   DISPUTE
+  // In-app support messaging (2026-09-22 client decision): "contact us"
+  // inside the app instead of email, so a buyer's message reaches a real
+  // shared admin inbox and any admin's reply reaches the buyer in-app —
+  // see messages.service.ts's resolveSupportAdminId()/startSupportConversation()
+  // and the admin-side listSupportConversationsForAdmin(). Distinct from
+  // ADMIN_VENDOR (an admin talking to a specific vendor about their store)
+  // — reusing that type here would have mislabeled every support thread.
+  SUPPORT
 }
 
 model Conversation {

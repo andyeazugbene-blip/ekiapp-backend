@@ -5,7 +5,9 @@ import type {
   CreateConversationInput,
   ListConversationsQuery,
   ListMessagesQuery,
+  ListSupportConversationsQuery,
   SendMessageInput,
+  StartSupportConversationInput,
 } from "./messages.types";
 
 const CONVERSATION_TYPES = new Set<string>(Object.values(ConversationType));
@@ -89,6 +91,31 @@ export function validateListConversationsQuery(query: Record<string, unknown>): 
 }
 
 export function validateListMessagesQuery(query: Record<string, unknown>): ListMessagesQuery {
+  let limit = DEFAULT_LIMIT;
+  if (query.limit !== undefined) {
+    const parsed = Number(query.limit);
+    if (!Number.isInteger(parsed) || parsed <= 0 || parsed > MAX_LIMIT) {
+      throw new AppError(`Invalid limit (1-${MAX_LIMIT})`, 400);
+    }
+    limit = parsed;
+  }
+  const cursor =
+    typeof query.cursor === "string" && query.cursor.length > 0 ? query.cursor : undefined;
+  return { limit, cursor };
+}
+
+export function validateStartSupportConversationInput(input: unknown): StartSupportConversationInput {
+  if (!input || typeof input !== "object") {
+    throw new AppError("Invalid request body", 400);
+  }
+  const raw = input as Record<string, unknown>;
+  if (typeof raw.message !== "string" || raw.message.trim().length === 0) {
+    throw new AppError("A message is required", 400);
+  }
+  return { message: raw.message.trim() };
+}
+
+export function validateListSupportConversationsQuery(query: Record<string, unknown>): ListSupportConversationsQuery {
   let limit = DEFAULT_LIMIT;
   if (query.limit !== undefined) {
     const parsed = Number(query.limit);

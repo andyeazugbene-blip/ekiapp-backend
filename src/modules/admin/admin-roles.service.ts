@@ -47,6 +47,13 @@ export const ADMIN_PERMISSIONS = [
   "reports.mutate",
   "approvals.read",
   "approvals.decide",
+  // In-app support messaging (2026-09-22) — the shared admin inbox for
+  // buyer-initiated support conversations (messages.service.ts's
+  // listSupportConversationsForAdmin()); .mutate additionally gates
+  // replying/marking read via the reused generic /api/conversations/:id
+  // endpoints (see messages.service.ts's requireSupportReplyPermission()).
+  "support.read",
+  "support.mutate",
 ] as const;
 
 export type AdminPermission = (typeof ADMIN_PERMISSIONS)[number];
@@ -87,7 +94,7 @@ const DEFAULT_ROLES: { name: string; description: string; permissions: AdminPerm
   {
     name: "Customer Support",
     description: "Handles buyer/vendor support tickets and order-level questions.",
-    permissions: ["users.read", "orders.read", "orders.mutate", "reviews.read", "community_buy.read", "subscriptions.read", "communications.read", "communications.send"],
+    permissions: ["users.read", "orders.read", "orders.mutate", "reviews.read", "community_buy.read", "subscriptions.read", "communications.read", "communications.send", "support.read", "support.mutate"],
   },
   {
     name: "Vendor Operations",
