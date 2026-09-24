@@ -344,6 +344,12 @@ export async function updateOrganiserCampaign(request: Request, response: Respon
   response.json({ campaign });
 }
 
+/** Organiser discards their own draft (DRAFT / CHANGES_REQUIRED only) — see deleteDraft()'s doc comment. */
+export async function deleteOrganiserDraft(request: Request, response: Response): Promise<void> {
+  const userId = requireUserId(request);
+  response.json(await communityCampaignsService.deleteDraft(userId, requireIdParam(request)));
+}
+
 export async function listCampaignParticipants(request: Request, response: Response): Promise<void> {
   const userId = requireUserId(request);
   response.json({ items: await communityCampaignsService.listParticipantsForOrganiser(userId, requireIdParam(request)) });

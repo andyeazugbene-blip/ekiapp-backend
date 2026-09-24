@@ -103,6 +103,7 @@ const mockListLive = vi.fn();
 const mockGetCampaign = vi.fn();
 const mockCreateCampaign = vi.fn();
 const mockUpdateCampaign = vi.fn();
+const mockDeleteDraft = vi.fn();
 const mockSubmitCampaign = vi.fn();
 const mockPublishCampaign = vi.fn();
 const mockListForOrganiser = vi.fn();
@@ -138,6 +139,7 @@ vi.mock("../modules/community-buy/community-campaigns.service", () => ({
     getForRequester: (...a: unknown[]) => mockGetCampaign(...a),
     create: (...a: unknown[]) => mockCreateCampaign(...a),
     update: (...a: unknown[]) => mockUpdateCampaign(...a),
+    deleteDraft: (...a: unknown[]) => mockDeleteDraft(...a),
     requireOwnedByOrganiser: (...a: unknown[]) => mockRequireOwnedByOrganiser(...a),
     endRescueAndRefund: (...a: unknown[]) => mockEndRescueAndRefund(...a),
     requestExtension: (...a: unknown[]) => mockRequestExtension(...a),
@@ -398,6 +400,7 @@ beforeEach(() => {
   mockPledge.mockResolvedValue({ contributionId: "contrib-1", status: "PLEDGED" });
   mockCreateCampaign.mockResolvedValue({ id: "camp-2", status: "DRAFT" });
   mockUpdateCampaign.mockResolvedValue({ id: "camp-2", status: "DRAFT" });
+  mockDeleteDraft.mockResolvedValue({ deleted: true, id: "camp-77" });
   mockSubmitCampaign.mockResolvedValue({ id: "camp-2", status: "UNDER_REVIEW" });
   mockPublishCampaign.mockResolvedValue({ id: "camp-2", status: "LIVE" });
   mockEndRescueAndRefund.mockResolvedValue({ id: "camp-2", status: "FAILED" });
@@ -651,6 +654,23 @@ describe("Organiser routes — role/id handling", () => {
       .send({ title: "New title" });
     expect(res.status).toBe(200);
     expect(mockUpdateCampaign).toHaveBeenCalledWith("buyer-1", "camp-77", expect.objectContaining({ title: "New title" }));
+  });
+
+  it("DELETE /api/organiser/campaigns/:id — 401 without a token, id parsed correctly with one", async () => {
+    const unauth = await request(app).delete("/api/organiser/campaigns/camp-77");
+    expect(unauth.status).toBe(401);
+    expect(mockDeleteDraft).not.toHaveBeenCalled();
+
+    const res = await request(app).delete("/api/organiser/campaigns/camp-77").set("Authorization", `Bearer ${buyerToken()}`);
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ deleted: true, id: "camp-77" });
+    expect(mockDeleteDraft).toHaveBeenCalledWith("buyer-1", "camp-77");
+  });
+
+  it("DELETE /api/organiser/campaigns/:id — surfaces the service's 409 for a non-draft campaign", async () => {
+    mockDeleteDraft.mockRejectedValueOnce(new AppError("Only a draft campaign can be deleted", 409));
+    const res = await request(app).delete("/api/organiser/campaigns/camp-77").set("Authorization", `Bearer ${buyerToken()}`);
+    expect(res.status).toBe(409);
   });
 
   it("POST /api/organiser/campaigns/:id/submit and /publish — id parsed correctly for both", async () => {

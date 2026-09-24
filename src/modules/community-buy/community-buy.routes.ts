@@ -99,6 +99,7 @@ import {
   startFulfilmentPacking,
   submitOrganiserCampaign,
   updateOrganiserCampaign,
+  deleteOrganiserDraft,
 } from "./community-buy.controller";
 
 // Public discovery + participant actions — mounted at /community-buy.
@@ -161,6 +162,7 @@ organiserRouter.get("/suppliers", asyncHandler(listVerifiedSuppliers));
 organiserRouter.get("/campaigns", asyncHandler(listMyOrganiserCampaigns));
 organiserRouter.post("/campaigns", asyncHandler(createOrganiserCampaign));
 organiserRouter.patch("/campaigns/:id", asyncHandler(updateOrganiserCampaign));
+organiserRouter.delete("/campaigns/:id", asyncHandler(deleteOrganiserDraft));
 // Necessary companion to supplier decline — moves a still-draft campaign
 // to a different supplier so a decline is never a dead end.
 organiserRouter.post("/campaigns/:id/supplier", asyncHandler(reassignCampaignSupplier));

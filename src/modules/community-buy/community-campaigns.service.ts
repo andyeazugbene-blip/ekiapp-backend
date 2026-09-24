@@ -664,6 +664,54 @@ export const communityCampaignsService = {
   },
 
   /**
+   * Organiser discards their own draft. Hard delete, deliberately narrow: only
+   * DRAFT / CHANGES_REQUIRED, only the owning organiser. Those two statuses
+   * are never public (join()/pledge() require LIVE), so a draft has no
+   * participants, contributions, payments or refunds — deleting it is not a
+   * financial or eligibility action. Anything past them (UNDER_REVIEW and
+   * beyond) has other parties/records depending on it and goes through the
+   * cancellation flow instead, never here.
+   *
+   * The delete is status-guarded in the WHERE clause (not just pre-checked),
+   * so a concurrent transition (e.g. the organiser submitting from another
+   * device) can't be raced into deleting a campaign that has since left
+   * draft. A repeat request for an already-deleted draft is a plain 404.
+   */
+  async deleteDraft(userId: string, campaignId: string) {
+    const campaign = await this.requireOwnedByOrganiserForWrite(userId, campaignId);
+    if (campaign.status !== "DRAFT" && campaign.status !== "CHANGES_REQUIRED") {
+      throw new AppError("Only a draft campaign can be deleted", 409);
+    }
+
+    let deleted: { count: number };
+    try {
+      deleted = await prisma.communityCampaign.deleteMany({
+        where: { id: campaignId, status: { in: ["DRAFT", "CHANGES_REQUIRED"] } },
+      });
+    } catch (error) {
+      // A Restrict FK (e.g. a support case someone opened against this
+      // draft) means something real still references it — refuse rather than
+      // orphan or force it.
+      if (typeof error === "object" && error !== null && (error as { code?: string }).code === "P2003") {
+        throw new AppError("This draft has related records and can't be deleted. Contact support if you need it removed.", 409);
+      }
+      throw error;
+    }
+    if (deleted.count !== 1) {
+      throw new AppError("This campaign's status just changed — try again", 409);
+    }
+
+    await recordAudit({
+      actorId: userId,
+      action: "community_campaign.draft_deleted",
+      entityType: "CommunityCampaign",
+      entityId: campaignId,
+      metadata: { title: campaign.title, status: campaign.status },
+    });
+    return { deleted: true as const, id: campaignId };
+  },
+
+  /**
    * Necessary companion to declineSupplierCommitment() above — without
    * this, a decline would be a dead end, since the organiser would have no
    * way to move the campaign forward with a different supplier. Only
