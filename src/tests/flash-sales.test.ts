@@ -116,6 +116,18 @@ describe("flashSalesService.listPublic — only real, currently-active-by-date s
       }),
     );
   });
+
+  // A vendor unpublishing (drafting) the product must pull its flash sale
+  // off the public feed immediately — without anyone touching the sale row.
+  it("also requires the underlying product to still be published (isActive)", async () => {
+    m.flashSale.findMany.mockResolvedValue([]);
+    await flashSalesService.listPublic();
+    expect(m.flashSale.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ product: { isActive: true } }),
+      }),
+    );
+  });
 });
 
 describe("flashSalesService.remove", () => {

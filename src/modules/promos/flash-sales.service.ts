@@ -115,11 +115,16 @@ export const flashSalesService = {
     await prisma.flashSale.delete({ where: { id: flashSaleId } });
   },
 
-  /** Public storefront read — real ACTIVE-by-date flash sales only, from the real table, not a prefix scan. */
+  /**
+   * Public storefront read — real ACTIVE-by-date flash sales only, from the
+   * real table, not a prefix scan. `product.isActive` is checked too: a
+   * vendor unpublishing (drafting) the product must pull its flash sale off
+   * the live feed immediately, without anyone touching the sale itself.
+   */
   async listPublic() {
     const now = new Date();
     const flashSales = await prisma.flashSale.findMany({
-      where: { isActive: true, startsAt: { lte: now }, endsAt: { gte: now } },
+      where: { isActive: true, startsAt: { lte: now }, endsAt: { gte: now }, product: { isActive: true } },
       include: {
         vendor: { select: { storeName: true, storeSlug: true } },
         product: { select: { id: true, title: true, priceInCents: true, currency: true, images: true } },

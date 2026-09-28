@@ -151,6 +151,19 @@ describe("bundlesService.listMine — real prices returned, never 0", () => {
 });
 
 describe("bundlesService.listPublic — sold-out bundles never shown for sale", () => {
+  // A bundle can't be honoured once any one of its products is unpublished
+  // (drafted) — it must drop off the public feed the moment a vendor does
+  // that to any item, without anyone touching the bundle row itself.
+  it("also requires every item's product to still be published (isActive)", async () => {
+    m.bundle.findMany.mockResolvedValue([]);
+    await bundlesService.listPublic();
+    expect(m.bundle.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ items: { every: { product: { isActive: true } } } }),
+      }),
+    );
+  });
+
   it("excludes a bundle whose maxUses has been reached, includes one that hasn't", async () => {
     m.bundle.findMany.mockResolvedValue([
       {

@@ -376,17 +376,48 @@ export const promosService = {
       auditLogs.filter((l) => l.entityId).map((l) => [l.entityId!, parseVendorPromoMetadata(l.metadata)]),
     );
 
-    return {
-      bundles: promos.map((p) => ({
-        id: p.id,
-        vendorId: p.vendorId,
-        code: p.code,
-        value: p.value,
-        type: p.type,
-        storeName: p.vendor.storeName,
-        productIds: metaMap.get(p.id)?.productIds ?? [],
-      })),
-      flashSales: flashPromos.map((p) => ({
+    // The productIds here come from an audit-log snapshot taken when the
+    // deal was created, not a live join — so a vendor unpublishing (drafting)
+    // a product afterward would otherwise keep showing it in the public
+    // "Hot Deals" feed forever. Re-check every referenced product's current
+    // isActive state and drop it (and a flash sale for it) here.
+    const referencedProductIds = new Set<string>();
+    for (const p of [...promos, ...flashPromos]) {
+      for (const id of metaMap.get(p.id)?.productIds ?? []) referencedProductIds.add(id);
+    }
+    const activeProductIds = new Set(
+      referencedProductIds.size
+        ? (
+            await prisma.product.findMany({
+              where: { id: { in: [...referencedProductIds] }, isActive: true },
+              select: { id: true },
+            })
+          ).map((p) => p.id)
+        : [],
+    );
+
+    const bundles = promos
+      .map((p) => {
+        const rawProductIds = metaMap.get(p.id)?.productIds ?? [];
+        return {
+          id: p.id,
+          vendorId: p.vendorId,
+          code: p.code,
+          value: p.value,
+          type: p.type,
+          storeName: p.vendor.storeName,
+          productIds: rawProductIds.filter((id) => activeProductIds.has(id)),
+          hadProductIds: rawProductIds.length > 0,
+        };
+      })
+      // Only drop a deal that WAS tied to specific products and now has none
+      // left active — one with no product list at all (store-wide) is
+      // unaffected by any single product's draft state.
+      .filter((b) => !b.hadProductIds || b.productIds.length > 0)
+      .map(({ hadProductIds: _hadProductIds, ...rest }) => rest);
+
+    const flashSales = flashPromos
+      .map((p) => ({
         id: p.id,
         vendorId: p.vendorId,
         code: p.code,
@@ -395,8 +426,12 @@ export const promosService = {
         storeName: p.vendor.storeName,
         productId: (metaMap.get(p.id)?.productIds ?? [])[0] ?? "",
         endsAt: p.validUntil?.toISOString() ?? null,
-      })),
-    };
+      }))
+      // A flash sale is always tied to exactly one product — if it's been
+      // unpublished/drafted, the sale can no longer be honoured.
+      .filter((f) => f.productId !== "" && activeProductIds.has(f.productId));
+
+    return { bundles, flashSales };
   },
 
   async validatePromo(

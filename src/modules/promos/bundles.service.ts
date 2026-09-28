@@ -128,10 +128,16 @@ export const bundlesService = {
     await prisma.bundle.delete({ where: { id: bundleId } });
   },
 
-  /** Public storefront read — real active, not-sold-out bundles only, from the real table, not a prefix scan. */
+  /**
+   * Public storefront read — real active, not-sold-out bundles only, from
+   * the real table, not a prefix scan. `items.every(product.isActive)`:
+   * a bundle can't be honoured once any one of its products is unpublished
+   * (drafted), so it drops off the live feed the moment a vendor does that
+   * to any item — no need to touch the bundle itself.
+   */
   async listPublic() {
     const bundles = await prisma.bundle.findMany({
-      where: { isActive: true },
+      where: { isActive: true, items: { every: { product: { isActive: true } } } },
       include: {
         vendor: { select: { storeName: true, storeSlug: true } },
         items: { include: { product: { select: { id: true, title: true, priceInCents: true, currency: true, images: true } } } },
