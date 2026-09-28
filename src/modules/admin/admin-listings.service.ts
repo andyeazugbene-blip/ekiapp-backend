@@ -89,6 +89,19 @@ export const adminListingsService = {
     );
   },
 
+  /**
+   * The admin-web user detail screen's data source. A support agent
+   * investigating an account needs more than the bare profile row — the
+   * same kind of context getVendor() below already gives for a store
+   * (recent orders, related profiles) — so this joins in exactly that,
+   * read-only, no new mutation surface:
+   *  - vendor / organiser / supplier profile snapshots, if this account has
+   *    them (a user can hold more than one capability at once).
+   *  - their 10 most recent orders as a buyer, plus a total count.
+   *  - the id of their in-app support conversation, if they've ever started
+   *    one, so an agent can jump straight to it instead of searching the
+   *    shared inbox by name.
+   */
   async getUser(userId: string) {
     const user = await prisma.user.findUnique({
       where: { id: userId },
@@ -96,15 +109,49 @@ export const adminListingsService = {
         id: true,
         email: true,
         name: true,
+        phone: true,
+        country: true,
         role: true,
         isSuspended: true,
         suspendedReason: true,
+        trustScore: true,
+        emailVerifiedAt: true,
         createdAt: true,
         updatedAt: true,
+        vendor: {
+          select: { id: true, storeName: true, verificationStatus: true, isSuspended: true, country: true },
+        },
+        organiserProfile: {
+          select: { id: true, isVerified: true, isRestricted: true, country: true },
+        },
+        supplierAccount: {
+          select: { id: true, supplierState: true, chargesEnabled: true },
+        },
       },
     });
     if (!user) throw new AppError("User not found", 404);
-    return user;
+
+    const [recentOrders, orderCount, supportConversation] = await Promise.all([
+      prisma.order.findMany({
+        where: { buyerId: userId },
+        select: { id: true, orderNumber: true, status: true, totalAmount: true, currency: true, createdAt: true },
+        orderBy: { createdAt: "desc" },
+        take: 10,
+      }),
+      prisma.order.count({ where: { buyerId: userId } }),
+      prisma.conversation.findFirst({
+        where: { type: "SUPPORT", OR: [{ participantA: userId }, { participantB: userId }] },
+        select: { id: true },
+        orderBy: { lastMessageAt: { sort: "desc", nulls: "last" } },
+      }),
+    ]);
+
+    return {
+      ...user,
+      recentOrders,
+      orderCount,
+      supportConversationId: supportConversation?.id ?? null,
+    };
   },
 
   async getVendor(vendorId: string) {
