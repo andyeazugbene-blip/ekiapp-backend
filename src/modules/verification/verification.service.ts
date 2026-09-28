@@ -6,7 +6,7 @@ import { deleteStoredObject, generatePresignedRead } from "../../lib/storage";
 import { CURSOR_ORDER_BY } from "../../shared/constants";
 import { AppError } from "../../shared/errors/app-error";
 import { communicationService } from "../communications/communication.service";
-import type { ReviewVerificationInput, SubmitVerificationInput } from "./verification.types";
+import type { ReviewVerificationInput, SubmitVerificationInput, VerificationMethod } from "./verification.types";
 
 const APPROVED_RETENTION_DAYS = 3;
 const REJECTED_RETENTION_DAYS = 7;
@@ -54,6 +54,11 @@ function documentSummary(documents: VerificationDocument[]) {
 
 function docsAlreadyDeleted(documents: VerificationDocument[]): boolean {
   return documents.length > 0 && documents.every((doc) => Boolean(doc.deletedAt) || (!doc.frontUrl && !doc.backUrl));
+}
+
+function verificationMethod(hasDocuments: boolean, stripeVerificationSessionId: string | null): VerificationMethod {
+  if (hasDocuments && stripeVerificationSessionId) return "BOTH";
+  return stripeVerificationSessionId ? "STRIPE_IDENTITY" : "MANUAL_DOCUMENTS";
 }
 
 async function getStoredKey(value: string | null | undefined): Promise<string | null> {
@@ -336,6 +341,9 @@ export const verificationService = {
         contactPhone: true,
         verificationStatus: true,
         createdAt: true,
+        stripeVerificationSessionId: true,
+        verifiedAt: true,
+        verificationFailureReason: true,
         user: { select: { name: true, email: true, phone: true } },
       },
     });
@@ -358,20 +366,33 @@ export const verificationService = {
     const rows = vendors
       .map((vendor) => {
         const vendorDocs = docsByVendor.get(vendor.id) ?? [];
+        const hasDocuments = vendorDocs.length > 0;
+        const hasStripeAttempt = Boolean(vendor.stripeVerificationSessionId);
         return {
-          hasDocuments: vendorDocs.length > 0,
+          hasDocuments,
+          hasStripeAttempt,
           vendorId: vendor.id,
           storeName: vendor.storeName,
           vendorName: vendor.user.name,
           email: vendor.contactEmail ?? vendor.user.email,
           phone: vendor.contactPhone ?? vendor.user.phone,
           verificationStatus: vendor.verificationStatus,
-          latestSubmissionDate: vendorDocs[0]?.createdAt ?? vendor.createdAt,
+          verificationMethod: verificationMethod(hasDocuments, vendor.stripeVerificationSessionId),
+          // Stripe Identity only records completion time (verifiedAt), not
+          // when the session started — that's the best available signal
+          // for a Stripe-only vendor with no uploaded documents.
+          latestSubmissionDate: vendorDocs[0]?.createdAt ?? vendor.verifiedAt ?? vendor.createdAt,
           uploadedDocSummary: documentSummary(vendorDocs),
           docsAlreadyDeleted: docsAlreadyDeleted(vendorDocs),
         };
       })
-      .filter((row) => row.hasDocuments)
+      // A vendor belongs in this queue once they've actually attempted
+      // verification through EITHER path — not just the legacy document
+      // upload one. Before this fix, every vendor who verified through
+      // Stripe Identity (the only path the app has offered since it
+      // shipped) was invisible here: admin had no way to see, audit, or
+      // override a Stripe Identity outcome at all.
+      .filter((row) => row.hasDocuments || row.hasStripeAttempt)
       .sort((a, b) => b.latestSubmissionDate.getTime() - a.latestSubmissionDate.getTime());
 
     const total = rows.length;
@@ -402,6 +423,9 @@ export const verificationService = {
         city: true,
         verificationStatus: true,
         createdAt: true,
+        stripeVerificationSessionId: true,
+        verifiedAt: true,
+        verificationFailureReason: true,
         user: { select: { id: true, name: true, email: true, phone: true } },
       },
     });
@@ -414,6 +438,7 @@ export const verificationService = {
     const proofs = await Promise.all(documents.map(withSignedDocumentUrls));
     const latestReviewed = documents.find((doc) => doc.reviewedAt);
     const latestRejected = documents.find((doc) => doc.rejectionReason);
+    const hasDocuments = documents.length > 0;
 
     return {
       vendor: {
@@ -429,12 +454,20 @@ export const verificationService = {
         joinedAt: vendor.createdAt,
       },
       verificationStatus: vendor.verificationStatus,
+      verificationMethod: verificationMethod(hasDocuments, vendor.stripeVerificationSessionId),
+      stripeVerificationSessionId: vendor.stripeVerificationSessionId,
+      verifiedAt: vendor.verifiedAt,
       uploadedDocSummary: documentSummary(documents),
       docsAlreadyDeleted: docsAlreadyDeleted(documents),
-      latestSubmissionDate: documents[0]?.createdAt ?? null,
+      latestSubmissionDate: documents[0]?.createdAt ?? vendor.verifiedAt ?? null,
       reviewedAt: latestReviewed?.reviewedAt ?? null,
       reviewedBy: latestReviewed?.reviewedById ?? null,
-      rejectionReason: latestRejected?.rejectionReason ?? null,
+      // Falls back to the Stripe Identity failure reason when this vendor
+      // was rejected through that path instead of (or as well as) manual
+      // document review — previously only a document's own rejectionReason
+      // was ever checked, so a Stripe-rejected vendor showed no reason here
+      // at all.
+      rejectionReason: latestRejected?.rejectionReason ?? vendor.verificationFailureReason ?? null,
       proofs,
     };
   },
@@ -450,7 +483,11 @@ export const verificationService = {
     await prisma.$transaction([
       prisma.vendor.update({
         where: { id: vendorId },
-        data: { verificationStatus: VendorVerificationStatus.VERIFIED },
+        // Clears verificationFailureReason too — same as the Stripe Identity
+        // webhook does on a successful verification — so a vendor who was
+        // previously rejected and is now manually approved doesn't keep
+        // showing a stale failure reason anywhere that reads this field.
+        data: { verificationStatus: VendorVerificationStatus.VERIFIED, verificationFailureReason: null },
       }),
       prisma.verificationDocument.updateMany({
         where: { vendorId, deletedAt: null },
@@ -487,7 +524,13 @@ export const verificationService = {
     await prisma.$transaction([
       prisma.vendor.update({
         where: { id: vendorId },
-        data: { verificationStatus: VendorVerificationStatus.REJECTED },
+        // Also written to Vendor.verificationFailureReason (not just the
+        // per-document rejectionReason) — the same field Stripe Identity's
+        // webhook writes to, and the one the vendor-facing app actually
+        // reads (getStripeVerificationStatus) — so a manual rejection shows
+        // up to the vendor the same way a Stripe rejection does, including
+        // for a vendor with no uploaded documents at all.
+        data: { verificationStatus: VendorVerificationStatus.REJECTED, verificationFailureReason: reason },
       }),
       prisma.verificationDocument.updateMany({
         where: { vendorId, deletedAt: null },
