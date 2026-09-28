@@ -459,7 +459,7 @@ export const verificationService = {
       verifiedAt: vendor.verifiedAt,
       uploadedDocSummary: documentSummary(documents),
       docsAlreadyDeleted: docsAlreadyDeleted(documents),
-      latestSubmissionDate: documents[0]?.createdAt ?? vendor.verifiedAt ?? null,
+      latestSubmissionDate: documents[0]?.createdAt ?? vendor.verifiedAt ?? vendor.createdAt,
       reviewedAt: latestReviewed?.reviewedAt ?? null,
       reviewedBy: latestReviewed?.reviewedById ?? null,
       // Falls back to the Stripe Identity failure reason when this vendor
