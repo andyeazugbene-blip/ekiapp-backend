@@ -181,6 +181,17 @@ model User {
   lockedUntil              DateTime?
   isSuspended              Boolean                   @default(false)
   suspendedReason          String?
+  // Handbook 4.3 / 14.5: who/when/why for a suspension, plus the anonymised
+  // marker so a scrubbed account can never be shown Active or unsuspended.
+  suspendedAt              DateTime?
+  suspendedById            String?
+  suspendedUntil           DateTime?
+  suspensionEvidence       String?
+  anonymisedAt             DateTime?
+  lastActiveAt             DateTime?
+  // Handbook 2.1 L139: test records are labelled and excluded from
+  // production metrics by default.
+  isTest                   Boolean                   @default(false)
   emailVerifiedAt          DateTime?
   trustScore               Int                       @default(50)
   smsMarketingConsentAt    DateTime?
@@ -243,49 +254,74 @@ enum OAuthProvider {
 }
 
 model Vendor {
-  id                          String                    @id @default(cuid())
-  userId                      String                    @unique
-  storeName                   String                    @unique
-  storeSlug                   String                    @unique
-  description                 String?
-  contactEmail                String?
-  contactPhone                String?
-  country                     String?
-  city                        String?
-  businessType                String?
-  sellerRegion                String?
-  currency                    String                    @default("EUR")
-  avatar                      String?
-  coverImage                  String?
-  isSuspended                 Boolean                   @default(false)
-  suspendedReason             String?
-  stripeAccountId             String?                   @unique
-  stripeAccountStatus         String?
-  stripePayoutsEnabled        Boolean                   @default(false)
-  stripeChargesEnabled        Boolean                   @default(false)
-  stripeOnboardedAt           DateTime?
-  verificationStatus          VendorVerificationStatus  @default(PENDING)
-  stripeVerificationSessionId String?
-  verifiedAt                  DateTime?
-  verificationFailureReason   String?
-  user                        User                      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  wallet                      Wallet?
-  products                    Product[]
-  orderItems                  OrderItem[]
-  walletTransactions          WalletTransaction[]
-  payoutMethods               PayoutMethod[]
-  payoutRequests              PayoutRequest[]
-  bankAccounts                VendorBankAccount[]
-  promoCodes                  PromoCode[]
-  bundles                     Bundle[]
-  flashSales                  FlashSale[]
-  supplierProfile             SupplierProfile?
-  subscriptionOffers          SubscriptionOffer[]
-  automationSettings          VendorAutomationSetting[]
-  automationRuns              AutomationRun[]
-  marketAssignments           VendorMarketAssignment[]
-  createdAt                   DateTime                  @default(now())
-  updatedAt                   DateTime                  @updatedAt
+  id                              String                    @id @default(cuid())
+  userId                          String                    @unique
+  storeName                       String                    @unique
+  storeSlug                       String                    @unique
+  description                     String?
+  contactEmail                    String?
+  contactPhone                    String?
+  country                         String?
+  city                            String?
+  businessType                    String?
+  sellerRegion                    String?
+  currency                        String                    @default("EUR")
+  avatar                          String?
+  coverImage                      String?
+  isSuspended                     Boolean                   @default(false)
+  suspendedReason                 String?
+  suspendedAt                     DateTime?
+  suspendedById                   String?
+  suspendedUntil                  DateTime?
+  suspensionEvidence              String?
+  // Ids of products THIS suspension switched off, so an unsuspend re-enables
+  // exactly those and never a product the vendor had unpublished themselves.
+  suspensionDisabledProductIds    String[]                  @default([])
+  closedAt                        DateTime?
+  isTest                          Boolean                   @default(false)
+  stripeAccountId                 String?                   @unique
+  stripeAccountStatus             String?
+  stripePayoutsEnabled            Boolean                   @default(false)
+  stripeChargesEnabled            Boolean                   @default(false)
+  stripeOnboardedAt               DateTime?
+  // Handbook 5.1 / 14.7: provider-owned readiness detail, written only by
+  // the Connect account.updated webhook / status poll, never by an admin.
+  stripeRequirementsCurrentlyDue  String[]                  @default([])
+  stripeRequirementsPastDue       String[]                  @default([])
+  stripeRequirementsEventuallyDue String[]                  @default([])
+  stripeDisabledReason            String?
+  stripeRequirementsDeadline      DateTime?
+  stripeStatusFetchedAt           DateTime?
+  verificationStatus              VendorVerificationStatus  @default(PENDING)
+  stripeVerificationSessionId     String?
+  // Handbook 5.1 / 14.3: last Stripe Identity VerificationSession status
+  // (processing | verified | requires_input | canceled | redacted), written
+  // only by the identity webhook. Lets admin distinguish "vendor must act"
+  // (requires_input) from a terminal rejection without inventing REJECTED.
+  stripeIdentityStatus            String?
+  stripeIdentityUpdatedAt         DateTime?
+  // Last time an admin sent a secure Stripe onboarding reminder (rate limit).
+  stripeReminderSentAt            DateTime?
+  verifiedAt                      DateTime?
+  verificationFailureReason       String?
+  user                           User                      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  wallet                          Wallet?
+  products                        Product[]
+  orderItems                      OrderItem[]
+  walletTransactions              WalletTransaction[]
+  payoutMethods                   PayoutMethod[]
+  payoutRequests                  PayoutRequest[]
+  bankAccounts                    VendorBankAccount[]
+  promoCodes                      PromoCode[]
+  bundles                         Bundle[]
+  flashSales                      FlashSale[]
+  supplierProfile                 SupplierProfile?
+  subscriptionOffers              SubscriptionOffer[]
+  automationSettings              VendorAutomationSetting[]
+  automationRuns                  AutomationRun[]
+  marketAssignments               VendorMarketAssignment[]
+  createdAt                       DateTime                  @default(now())
+  updatedAt                       DateTime                  @updatedAt
 
   @@index([verificationStatus, createdAt])
   @@index([createdAt])
@@ -426,6 +462,7 @@ model CartItem {
 }
 
 model Order {
+  isTest                Boolean              @default(false)
   id                    String               @id @default(cuid())
   orderNumber           String               @unique @default(cuid())
   checkoutId            String?
@@ -560,6 +597,12 @@ model Payment {
   provider              String              @default("stripe")
   metadata              Json?
   processedAt           DateTime?
+  // Handbook 5.2 / 14.8: provider truth kept distinct from Eki's internal status.
+  providerStatus        String?
+  paymentMethodType     String?
+  failureCode           String?
+  failureMessage        String?
+  isTest                Boolean             @default(false)
   order                 Order               @relation(fields: [orderId], references: [id], onDelete: Restrict)
   sellerPlan            SellerPlan?         @relation(fields: [sellerPlanId], references: [id], onDelete: SetNull)
   commissionTier        CommissionTier?     @relation(fields: [commissionTierId], references: [id], onDelete: SetNull)
@@ -878,16 +921,28 @@ enum ConversationType {
   SUPPORT
 }
 
+enum ConversationStatus {
+  OPEN
+  CLOSED
+}
+
 model Conversation {
-  id            String           @id @default(cuid())
-  type          ConversationType @default(BUYER_VENDOR)
-  participantA  String
-  participantB  String
-  orderId       String?
-  lastMessageAt DateTime?
-  messages      Message[]
-  createdAt     DateTime         @default(now())
-  updatedAt     DateTime         @updatedAt
+  id             String             @id @default(cuid())
+  type           ConversationType   @default(BUYER_VENDOR)
+  participantA   String
+  participantB   String
+  orderId        String?
+  lastMessageAt  DateTime?
+  // Handbook 6.1 / 14.2: support threads have an explicit lifecycle.
+  status         ConversationStatus @default(OPEN)
+  closedAt       DateTime?
+  closedById     String?
+  escalatedAt    DateTime?
+  escalatedById  String?
+  escalationNote String?
+  messages       Message[]
+  createdAt      DateTime           @default(now())
+  updatedAt      DateTime           @updatedAt
 
   @@unique([participantA, participantB, orderId])
   @@index([participantA, lastMessageAt])
@@ -902,6 +957,9 @@ model Message {
   text           String
   attachments    String[]     @default([])
   readAt         DateTime?
+  // Admin-only internal note on a support thread: never shown to the
+  // participant, never pushed.
+  isInternal     Boolean      @default(false)
   conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
   createdAt      DateTime     @default(now())
 
@@ -1389,18 +1447,24 @@ model CommissionTier {
 }
 
 model UploadAsset {
-  id          String            @id @default(cuid())
-  ownerId     String
-  category    String
-  key         String            @unique
-  publicUrl   String?
-  contentType String
-  sizeBytes   Int?
-  status      UploadAssetStatus @default(REQUESTED)
-  completedAt DateTime?
-  createdAt   DateTime          @default(now())
-  updatedAt   DateTime          @updatedAt
+  id               String                 @id @default(cuid())
+  ownerId          String
+  category         String
+  key              String                 @unique
+  publicUrl        String?
+  contentType      String
+  sizeBytes        Int?
+  status           UploadAssetStatus      @default(REQUESTED)
+  completedAt      DateTime?
+  // Handbook 7: transfer status (above) is distinct from moderation status.
+  moderationStatus UploadModerationStatus @default(NOT_REVIEWED)
+  entityType       String?
+  entityId         String?
+  createdAt        DateTime               @default(now())
+  updatedAt        DateTime               @updatedAt
+  decisions        ContentDecision[]
 
+  @@index([moderationStatus, createdAt])
   @@index([ownerId, category, status])
   @@index([status, createdAt])
 }
@@ -1562,27 +1626,27 @@ model Dispute {
  * here.
  */
 model StripeDispute {
-  id              String    @id @default(cuid())
-  stripeDisputeId String    @unique
-  paymentIntentId String?
-  checkoutId      String?
-  buyerId         String?
-  amount          Int
-  currency        String
-  reason          String
-  status          String
-  note            String?
-  resolvedAt      DateTime?
+  id                 String    @id @default(cuid())
+  stripeDisputeId    String    @unique
+  paymentIntentId    String?
+  checkoutId         String?
+  buyerId            String?
+  amount             Int
+  currency           String
+  reason             String
+  status             String
+  note               String?
+  resolvedAt         DateTime?
   // Phase 4.1 (chargeback → Order linkage): which Order rows this dispute
   // froze (set to DISPUTED) at creation time, and a snapshot of their
   // status immediately before freezing — used to restore them correctly if
   // Stripe/the card network later rules the dispute WON. Never mutated
   // after creation; a real "what did this affect and what was it before"
   // record, not a live pointer.
-  affectedOrderIds   String[] @default([])
+  affectedOrderIds   String[]  @default([])
   preDisputeStatuses Json?
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
 
   @@index([status, createdAt])
   @@index([buyerId])
@@ -2254,35 +2318,35 @@ enum ContributionStatus {
 }
 
 model OrganiserProfile {
-  id                         String                        @id @default(cuid())
-  userId                     String                        @unique
-  isVerified                 Boolean                       @default(false)
-  verifiedAt                 DateTime?
+  id                              String                        @id @default(cuid())
+  userId                          String                        @unique
+  isVerified                      Boolean                       @default(false)
+  verifiedAt                      DateTime?
   // Admin risk control — doc §Risk Controls. Independent of isVerified: a
   // verified organiser can be temporarily restricted without revoking
   // verification (revocable, distinct from rejection).
-  isRestricted               Boolean                       @default(false)
-  restrictedReason           String?
-  country                    String
+  isRestricted                    Boolean                       @default(false)
+  restrictedReason                String?
+  country                         String
   // Diaspora escrow reconciliation (final V1 settlement doc §N) — mirrors
   // supplier-stripe-connect.service.ts's Express-account pattern exactly.
   // Organisers never received a payout of any kind before this: the
   // organiser is now the primary commercial recipient of released Community
   // Buy proceeds (net of Eki's organiser commission), so they need their own
   // Connect destination, same as a SupplierAccount/Vendor already has.
-  providerConnectedAccountId String?
-  chargesEnabled             Boolean                       @default(false)
-  payoutsEnabled             Boolean                       @default(false)
-  detailsSubmitted           Boolean                       @default(false)
+  providerConnectedAccountId      String?
+  chargesEnabled                  Boolean                       @default(false)
+  payoutsEnabled                  Boolean                       @default(false)
+  detailsSubmitted                Boolean                       @default(false)
   // Stripe Connect production hardening — field-name identifiers only
   // (e.g. "individual.dob.day", never an actual value), safe to surface to
   // admins. Synced by both the admin-triggered live refresh
   // (organiserStripeConnectService.getStatusForAdmin()) and the
   // account.updated webhook (handleAccountUpdated()) — same derivation
   // helper (deriveConnectAccountFields), so the two paths can never drift.
-  stripeRequirementsCurrentlyDue   String[]                 @default([])
-  stripeRequirementsEventuallyDue String[]                  @default([])
-  stripeRequirementsPastDue       String[]                  @default([])
+  stripeRequirementsCurrentlyDue  String[]                      @default([])
+  stripeRequirementsEventuallyDue String[]                      @default([])
+  stripeRequirementsPastDue       String[]                      @default([])
   stripeDisabledReason            String?
   // Set only by a genuinely fresh stripe.accounts.retrieve()/webhook
   // payload — never by a cached-fallback read. Lets a caller (e.g. the
@@ -2295,12 +2359,12 @@ model OrganiserProfile {
   // existing "only fulfilment-necessary data" principle) — an existing
   // organiser who never touches this setting is shown as first-name-only,
   // same as a brand-new one.
-  firstNameOnlyDisplay       Boolean                       @default(true)
-  user                       User                          @relation(fields: [userId], references: [id], onDelete: Cascade)
-  campaigns                  CommunityCampaign[]
-  organiserPayouts           CommunityBuyOrganiserPayout[]
-  createdAt                  DateTime                      @default(now())
-  updatedAt                  DateTime                      @updatedAt
+  firstNameOnlyDisplay            Boolean                       @default(true)
+  user                            User                          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  campaigns                       CommunityCampaign[]
+  organiserPayouts                CommunityBuyOrganiserPayout[]
+  createdAt                       DateTime                      @default(now())
+  updatedAt                       DateTime                      @updatedAt
 }
 
 model SupplierProfile {
@@ -2416,13 +2480,13 @@ model SupplierInvitation {
 // round — recordAudit() already gives a full before/after trail per
 // transition, so a single row stays simpler without losing auditability.
 enum SupplierProposalStatus {
-  SUBMITTED             // awaiting Eki admin review
-  ADMIN_CHANGES_NEEDED  // Eki sent it back to the supplier with notes
-  AWAITING_ORGANISER    // Eki approved; organiser must accept or reject
-  ORGANISER_ACCEPTED    // terminal — campaign fields updated
-  ORGANISER_REJECTED    // terminal — campaign unchanged; supplier may submit a new proposal later
-  WITHDRAWN             // terminal — supplier withdrew before a decision
-  EXPIRED               // terminal — respondByDeadline passed with no action
+  SUBMITTED // awaiting Eki admin review
+  ADMIN_CHANGES_NEEDED // Eki sent it back to the supplier with notes
+  AWAITING_ORGANISER // Eki approved; organiser must accept or reject
+  ORGANISER_ACCEPTED // terminal — campaign fields updated
+  ORGANISER_REJECTED // terminal — campaign unchanged; supplier may submit a new proposal later
+  WITHDRAWN // terminal — supplier withdrew before a decision
+  EXPIRED // terminal — respondByDeadline passed with no action
 }
 
 model CampaignSupplierProposal {
@@ -2736,26 +2800,26 @@ enum CancellationRequestStatus {
 // application logic (one PENDING at a time) is enforced, same pattern as
 // extension requests.
 model CampaignCancellationRequest {
-  id                     String                     @id @default(cuid())
-  campaignId             String
-  requestedByUserId      String
-  reason                 String
+  id                    String                    @id @default(cuid())
+  campaignId            String
+  requestedByUserId     String
+  reason                String
   // Snapshotted at request time — true means at least one PAID
   // contribution existed, which is exactly what routed this request
   // through CANCELLATION_UNDER_REVIEW instead of an immediate cancel.
-  hadFinancialActivity   Boolean
+  hadFinancialActivity  Boolean
   // Snapshotted so rejection can restore the exact prior operational
   // state (spec requirement 7) — only meaningful when
   // hadFinancialActivity is true (the only case that actually leaves
   // CANCELLATION_UNDER_REVIEW to restore from).
-  preCancellationStatus  CampaignStatus
-  status                 CancellationRequestStatus  @default(PENDING)
-  reviewedById           String?
-  reviewedAt             DateTime?
-  reviewNotes            String?
-  campaign               CommunityCampaign          @relation(fields: [campaignId], references: [id], onDelete: Cascade)
-  createdAt              DateTime                   @default(now())
-  updatedAt              DateTime                   @updatedAt
+  preCancellationStatus CampaignStatus
+  status                CancellationRequestStatus @default(PENDING)
+  reviewedById          String?
+  reviewedAt            DateTime?
+  reviewNotes           String?
+  campaign              CommunityCampaign         @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+  createdAt             DateTime                  @default(now())
+  updatedAt             DateTime                  @updatedAt
 
   @@index([campaignId, status])
 }
@@ -2985,12 +3049,12 @@ enum AttributionStatus {
 }
 
 model CampaignContribution {
-  id                    String                            @id @default(cuid())
-  campaignId            String
-  participantId         String
-  amount                Int
-  currency              String
-  quantity              Int                               @default(1)
+  id                     String                            @id @default(cuid())
+  campaignId             String
+  participantId          String
+  amount                 Int
+  currency               String
+  quantity               Int                               @default(1)
   // Diaspora escrow reconciliation (final V1 settlement doc §N) — Eki's 5%
   // buyer service fee (bounded £1.20-£5.00), charged ON TOP of `amount` at
   // the same off-session capture attemptCharge() already makes. Kept
@@ -2998,7 +3062,7 @@ model CampaignContribution {
   // only so capacity checks, campaign totals and supplier settlement math
   // (all keyed on quantity × pricePerShareMinor) are completely unaffected.
   // Defaults to 0 for every contribution created before this field existed.
-  buyerServiceFeeAmount Int                               @default(0)
+  buyerServiceFeeAmount  Int                               @default(0)
   // Phase 6 (delivery + collection/tracking) — snapshotted once from
   // CommunityCampaign.deliveryFeeAmountMinor at pledge time, exactly like
   // buyerServiceFeeAmount above. Flat per contribution (one delivery per
@@ -3007,9 +3071,9 @@ model CampaignContribution {
   // `amount` at the same off-session capture attemptCharge() already
   // makes; never a second payment.
   deliveryFeeAmountMinor Int                               @default(0)
-  isOrganiserTopUp      Boolean                           @default(false)
-  status                ContributionStatus                @default(INITIATED)
-  stripePaymentIntentId String?
+  isOrganiserTopUp       Boolean                           @default(false)
+  status                 ContributionStatus                @default(INITIATED)
+  stripePaymentIntentId  String?
   // Client mandate (2026-09): "Eki never takes the fund upfront... payment
   // go to the owner [only] at end of campaign" — PLEDGE_THEN_CHARGE model.
   // The participant's saved card (SetupIntent, collected via the existing
@@ -3017,7 +3081,7 @@ model CampaignContribution {
   // service.ts, originally built for Regular Deliveries) is attached at
   // pledge time; nothing is captured until the campaign succeeds and
   // chargeAllPledgesForCampaign() runs the actual off-session charge.
-  paymentMethodId       String?
+  paymentMethodId        String?
   // Phase 3 (address + privacy foundation) — the buyer's own delivery
   // address, entered at pledge time, required only when the campaign's
   // deliveryPreference is DELIVERY (assertDeliveryAddressWithinCoverage()
@@ -3027,34 +3091,34 @@ model CampaignContribution {
   // (community-buy-manifest.service.ts) — only the owning organiser can
   // read it, via listParticipantsForOrganiser(), and only for a PAID
   // contribution on a DELIVERY campaign.
-  deliveryRecipientName String?
-  deliveryAddressLine1  String?
-  deliveryAddressLine2  String?
-  deliveryCity          String?
-  deliveryPostcode      String?
+  deliveryRecipientName  String?
+  deliveryAddressLine1   String?
+  deliveryAddressLine2   String?
+  deliveryCity           String?
+  deliveryPostcode       String?
   // Figma S25 "Prepare Home Deliveries" — same privacy rule and same
   // pledge-time-only collection as the address fields above; phone/
   // instructions were never captured at all until now (Figma's read view
   // has always needed them, the buyer-side form just never asked).
-  deliveryPhone         String?
-  deliveryInstructions  String?
-  campaign              CommunityCampaign                 @relation(fields: [campaignId], references: [id], onDelete: Restrict)
-  participant           CampaignParticipant               @relation(fields: [participantId], references: [id], onDelete: Restrict)
-  paymentMethod         BuyerPaymentMethod?               @relation(fields: [paymentMethodId], references: [id], onDelete: SetNull)
-  refund                CampaignRefund?
-  chargeAttempts        CampaignChargeAttempt[]
+  deliveryPhone          String?
+  deliveryInstructions   String?
+  campaign               CommunityCampaign                 @relation(fields: [campaignId], references: [id], onDelete: Restrict)
+  participant            CampaignParticipant               @relation(fields: [participantId], references: [id], onDelete: Restrict)
+  paymentMethod          BuyerPaymentMethod?               @relation(fields: [paymentMethodId], references: [id], onDelete: SetNull)
+  refund                 CampaignRefund?
+  chargeAttempts         CampaignChargeAttempt[]
   // M2 — 1:1 sibling, only ever set for AUTHORISE_THEN_CAPTURE-mode
   // campaigns (see CommunityCampaign.paymentMode). This contribution row
   // stays the durable commitment/consent record either way (amount,
   // currency, quantity unchanged); the sibling row owns only the
   // Stripe-hold-mechanics fields — see CommunityBuyPaymentAuthorisation's
   // own doc comment for why this isn't a duplicate table.
-  paymentAuthorisation  CommunityBuyPaymentAuthorisation?
+  paymentAuthorisation   CommunityBuyPaymentAuthorisation?
   // M4 — 1:1, created only once this contribution is actually captured
   // (either payment mode); see DeliveryReference's own doc comment.
-  deliveryReference     DeliveryReference?
-  createdAt             DateTime                          @default(now())
-  updatedAt             DateTime                          @updatedAt
+  deliveryReference      DeliveryReference?
+  createdAt              DateTime                          @default(now())
+  updatedAt              DateTime                          @updatedAt
 
   @@index([campaignId, status])
   @@index([participantId])
@@ -3094,21 +3158,21 @@ model CampaignChargeAttempt {
 // token-vault integration exists — see that env gate's own doc comment for
 // why this repo deliberately does not invent one.
 model DeliveryReference {
-  id                    String                     @id @default(cuid())
-  campaignId            String
-  contributionId        String                     @unique
-  participantId         String
-  deliveryMethod        CampaignDeliveryPreference
-  status                DeliveryReferenceStatus    @default(NOT_REQUIRED)
+  id                             String                     @id @default(cuid())
+  campaignId                     String
+  contributionId                 String                     @unique
+  participantId                  String
+  deliveryMethod                 CampaignDeliveryPreference
+  status                         DeliveryReferenceStatus    @default(NOT_REQUIRED)
   // Coarse only (e.g. a postcode/area), never a full address — unused until
   // individual delivery is real; left null for every COLLECTION row.
-  deliveryArea          String?
-  labelReference        String?
-  externalDeliveryToken String?
-  courierProvider       String?
-  expiresAt             DateTime?
-  revokedAt             DateTime?
-  revocationReason      String?
+  deliveryArea                   String?
+  labelReference                 String?
+  externalDeliveryToken          String?
+  courierProvider                String?
+  expiresAt                      DateTime?
+  revokedAt                      DateTime?
+  revocationReason               String?
   // Phase 6 (delivery + collection/tracking) — a short, randomly generated
   // (never sequential/predictable) code shown only to the owning
   // participant, for physical handover at a COLLECTION-method campaign.
@@ -3116,21 +3180,21 @@ model DeliveryReference {
   // this field existed. Unique per campaign (not globally) so a supplier
   // can verify a buyer's code by campaign + code alone, no contributionId
   // needed at the point of handover.
-  collectionCode           String?
-  collectionCodeRedeemedAt DateTime?
+  collectionCode                 String?
+  collectionCodeRedeemedAt       DateTime?
   // The supplier/organiser user who verified the code at handover —
   // distinct from campaign.organiserId/supplierId (the campaign's owner),
   // since the actual person at the counter may be staff, not the account
   // owner. Never the buyer's own userId.
   collectionCodeRedeemedByUserId String?
-  campaign              CommunityCampaign          @relation(fields: [campaignId], references: [id], onDelete: Restrict)
-  contribution          CampaignContribution       @relation(fields: [contributionId], references: [id], onDelete: Restrict)
-  createdAt             DateTime                   @default(now())
-  updatedAt             DateTime                   @updatedAt
+  campaign                       CommunityCampaign          @relation(fields: [campaignId], references: [id], onDelete: Restrict)
+  contribution                   CampaignContribution       @relation(fields: [contributionId], references: [id], onDelete: Restrict)
+  createdAt                      DateTime                   @default(now())
+  updatedAt                      DateTime                   @updatedAt
 
+  @@unique([campaignId, collectionCode])
   @@index([campaignId, status])
   @@index([status, expiresAt])
-  @@unique([campaignId, collectionCode])
 }
 
 enum DeliveryReferenceStatus {
@@ -3720,4 +3784,41 @@ enum AdminApprovalStatus {
   APPROVED
   REJECTED
   CANCELLED
+}
+
+// ─── Handbook migration (admin acceptance) ──────────────────────────────────
+
+enum UploadModerationStatus {
+  NOT_REVIEWED
+  PENDING_REVIEW
+  APPROVED
+  REJECTED
+  REMOVED
+}
+
+// Append-only decision history for Content Review (handbook 7 L291).
+model ContentDecision {
+  id         String                 @id @default(cuid())
+  assetId    String
+  asset      UploadAsset            @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  reviewerId String
+  decision   UploadModerationStatus
+  reason     String
+  reportId   String?
+  createdAt  DateTime               @default(now())
+
+  @@index([assetId, createdAt])
+}
+
+// Internal staff notes on a user / vendor (handbook 4.2 L180). Never
+// exposed to the subject.
+model AdminNote {
+  id         String   @id @default(cuid())
+  entityType String
+  entityId   String
+  authorId   String
+  body       String
+  createdAt  DateTime @default(now())
+
+  @@index([entityType, entityId, createdAt])
 }

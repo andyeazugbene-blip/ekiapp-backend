@@ -54,6 +54,12 @@ export const ADMIN_PERMISSIONS = [
   // endpoints (see messages.service.ts's requireSupportReplyPermission()).
   "support.read",
   "support.mutate",
+  // Handbook admin RBAC (2026-10): used by routes but previously absent from
+  // the catalogue, which meant only admin.* could ever reach them.
+  "rewards.read",
+  "rewards.mutate",
+  "content.read",
+  "content.mutate",
 ] as const;
 
 export type AdminPermission = (typeof ADMIN_PERMISSIONS)[number];

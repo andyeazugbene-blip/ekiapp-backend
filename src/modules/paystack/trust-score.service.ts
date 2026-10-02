@@ -42,6 +42,7 @@ export const trustScoreService = {
     userId: string,
     adjustment: number,
     adminId: string,
+    reason?: string,
   ): Promise<{ trustScore: number }> {
     const user = await prisma.user.findUnique({ where: { id: userId }, select: { id: true, trustScore: true } });
     if (!user) throw new AppError("User not found", 404);
@@ -61,6 +62,9 @@ export const trustScoreService = {
         entityType: "User",
         entityId: userId,
         metadata: { previousScore: user.trustScore, newScore, adjustment },
+        reason: reason ?? null,
+        beforeState: { trustScore: user.trustScore },
+        afterState: { trustScore: newScore },
       },
     });
 

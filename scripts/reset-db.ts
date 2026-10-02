@@ -48,7 +48,7 @@ async function main() {
   await prisma.PurchasedGiftCard?.deleteMany();
   await prisma.GiftCard?.deleteMany();
   await prisma.webhookEvent.deleteMany();
-  await prisma.auditLog.deleteMany();
+  await prisma.$executeRawUnsafe(`TRUNCATE TABLE "AuditLog"`);
   await prisma.deliveryMethod.deleteMany();
   await prisma.deliveryZone.deleteMany();
   await prisma.buyerAddress.deleteMany();
