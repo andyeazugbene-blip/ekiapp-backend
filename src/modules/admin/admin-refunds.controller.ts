@@ -1,5 +1,5 @@
 import type { Request, Response } from "express";
-import { NotificationType } from "@prisma/client";
+import { NotificationType, RefundStatus } from "@prisma/client";
 
 import { prisma } from "../../lib/prisma";
 import { stripe } from "../../lib/stripe";
@@ -8,6 +8,7 @@ import { logger } from "../../lib/logger";
 import { AppError } from "../../shared/errors/app-error";
 import { adminApprovalsService } from "./admin-approvals.service";
 import { notificationsService } from "../notifications/notifications.service";
+import { recordAudit } from "../../shared/utils/audit";
 
 interface OrderRefundResult {
   refundId: string;
@@ -47,6 +48,10 @@ export async function executeOrderRefund(
   // into DISPUTED in the first place — that's the one legitimate caller
   // allowed to refund a DISPUTED order, so it explicitly opts in here.
   allowDisputedOrder = false,
+  // Handbook 5.2 L214: audit with IP/permission, and honour a client-supplied
+  // idempotency key so a double-click can never create two refunds.
+  request?: Request,
+  clientIdempotencyKey?: string,
 ): Promise<OrderRefundResult> {
   const order = await prisma.order.findUnique({
     where: { id: orderId },
@@ -80,9 +85,25 @@ export async function executeOrderRefund(
   if (amount !== undefined && (typeof amount !== "number" || !Number.isInteger(amount) || amount <= 0)) {
     throw new AppError("Refund amount must be a positive integer (minor units) in the order's own currency", 400);
   }
-  if (amount !== undefined && amount > order.totalAmount) {
-    throw new AppError("Refund amount cannot exceed the order's own total", 400);
+  // Cumulative cap (Handbook 14.8 / B4): earlier partial refunds count against
+  // the order total. Previously the cap compared only to the full total and a
+  // single partial refund closed the order to every later refund.
+  const [refundSum, refundCount] = await Promise.all([
+    prisma.refund.aggregate({
+      where: { orderId, status: { in: [RefundStatus.REQUESTED, RefundStatus.PROCESSING, RefundStatus.COMPLETED] } },
+      _sum: { amountMinor: true },
+    }),
+    prisma.refund.count({ where: { orderId } }),
+  ]);
+  const alreadyRefunded = refundSum._sum.amountMinor ?? 0;
+  const remaining = order.totalAmount - alreadyRefunded;
+  if (remaining <= 0) {
+    throw new AppError("This order has already been fully refunded", 409);
   }
+  if (amount !== undefined && amount > remaining) {
+    throw new AppError(`Refund amount cannot exceed the remaining refundable amount (${remaining} minor units)`, 400);
+  }
+  const refundReason = String(reason ?? "").trim();
 
   const provider = order.payment?.provider ?? (order.paystackTransaction ? "paystack" : "stripe");
 
@@ -90,7 +111,32 @@ export async function executeOrderRefund(
     if (!order.payment?.stripePaymentIntentId) throw new AppError("No Stripe payment found for this order", 400);
     if (order.payment.status !== "SUCCEEDED") throw new AppError("Can only refund succeeded payments", 400);
 
-    const nativeRefundAmount = amount ?? order.totalAmount;
+    const nativeRefundAmount = amount ?? remaining;
+    const idempotencyKey = clientIdempotencyKey?.trim() || `refund:${orderId}:${nativeRefundAmount}:${refundCount}`;
+
+    // Persist the request FIRST so a crash after the Stripe call can never
+    // leave money moved with no record, and so a replay is recognised.
+    let refundRow;
+    try {
+      refundRow = await prisma.refund.create({
+        data: {
+          orderId, amountMinor: nativeRefundAmount, currency: order.currency, status: RefundStatus.REQUESTED,
+          provider: "stripe", reason: refundReason || "No reason recorded", idempotencyKey, actorId: adminId,
+        },
+      });
+    } catch (error) {
+      if ((error as { code?: string } | null)?.code === "P2002") {
+        const existing = await prisma.refund.findUnique({ where: { idempotencyKey } });
+        if (existing && existing.status !== RefundStatus.FAILED) {
+          return {
+            refundId: existing.providerRefundId ?? existing.id, amount: existing.amountMinor, currency: existing.currency,
+            status: existing.status.toLowerCase(), provider: "stripe",
+          };
+        }
+        throw new AppError("This refund request was already made and failed. Start a new refund.", 409);
+      }
+      throw error;
+    }
 
     // The PaymentIntent this order's payment references may be SHARED
     // across every vendor's order in the same multi-vendor checkout (see
@@ -122,18 +168,45 @@ export async function executeOrderRefund(
             nativeAmount: String(nativeRefundAmount),
             nativeCurrency: order.currency,
           },
-          reason: (reason as string) === "duplicate" ? "duplicate"
-            : (reason as string) === "fraudulent" ? "fraudulent"
+          // Free-text reason (now mandatory) maps onto Stripe's fixed enum by keyword.
+          reason: /duplicate/i.test(refundReason) ? "duplicate"
+            : /fraud/i.test(refundReason) ? "fraudulent"
             : "requested_by_customer",
         },
-        { idempotencyKey: `refund:${orderId}:${nativeRefundAmount}` },
+        { idempotencyKey },
       );
 
       logger.info("Admin Stripe refund issued", { orderId, refundId: refund.id, nativeAmount: nativeRefundAmount, nativeCurrency: order.currency, stripeAmount: refund.amount, stripeCurrency: refund.currency });
-      await prisma.order.update({ where: { id: orderId }, data: { status: finalStatus } });
-      await createAuditLog(adminId, orderId, refund.id, nativeRefundAmount, reason);
+      const mapped: RefundStatus =
+        refund.status === "succeeded" ? RefundStatus.COMPLETED
+        : refund.status === "failed" || refund.status === "canceled" ? RefundStatus.FAILED
+        : RefundStatus.PROCESSING;
+      await prisma.refund.update({ where: { id: refundRow.id }, data: { providerRefundId: refund.id, status: mapped } });
+
+      // Only a refund that brings the cumulative total to the full order
+      // closes the order; a partial refund leaves it open for further ones.
+      const fullyRefunded = alreadyRefunded + nativeRefundAmount >= order.totalAmount && mapped !== RefundStatus.FAILED;
+      if (fullyRefunded) {
+        await prisma.order.update({ where: { id: orderId }, data: { status: finalStatus } });
+      }
+      await recordAudit({
+        actorId: adminId,
+        action: "ORDER_REFUNDED",
+        entityType: "Order",
+        entityId: orderId,
+        reason: refundReason || undefined,
+        beforeState: { orderStatus: order.status, refundedMinor: alreadyRefunded },
+        afterState: { orderStatus: fullyRefunded ? finalStatus : order.status, refundedMinor: alreadyRefunded + nativeRefundAmount, providerStatus: refund.status },
+        metadata: { refundId: refund.id, refundRowId: refundRow.id, amount: nativeRefundAmount, reason: refundReason },
+        request,
+        failClosed: true,
+      });
       return { refundId: refund.id, amount: nativeRefundAmount, currency: order.currency, status: refund.status ?? "unknown", provider: "stripe" };
     } catch (error) {
+      await prisma.refund.update({
+        where: { id: refundRow.id },
+        data: { status: RefundStatus.FAILED, failureReason: error instanceof Error ? error.message.slice(0, 300) : "Unknown error" },
+      }).catch(() => undefined);
       logger.error("Stripe refund failed", { orderId, error: error instanceof Error ? error.message : String(error) });
       throw new AppError("Stripe refund failed", 502);
     }
@@ -149,6 +222,13 @@ export async function executeOrderRefund(
       // model) — no normalized/native split applies here, so the amount is
       // already in the right currency/scale as-is.
       const finalAmount = amount ?? order.paystackTransaction.amount;
+      await prisma.refund.create({
+        data: {
+          orderId, amountMinor: finalAmount, currency: order.currency, status: RefundStatus.COMPLETED, provider: "paystack",
+          providerRefundId: order.paystackTransaction.reference, reason: refundReason || "No reason recorded",
+          idempotencyKey: clientIdempotencyKey?.trim() || `refund:${orderId}:${finalAmount}:${refundCount}`, actorId: adminId,
+        },
+      });
       await paystack.refundTransaction(order.paystackTransaction.reference, amount);
       logger.info("Admin Paystack refund issued", { orderId, reference: order.paystackTransaction.reference });
 
@@ -160,7 +240,13 @@ export async function executeOrderRefund(
         });
       });
 
-      await createAuditLog(adminId, orderId, order.paystackTransaction.reference, finalAmount, reason);
+      await recordAudit({
+        actorId: adminId, action: "ORDER_REFUNDED", entityType: "Order", entityId: orderId,
+        reason: refundReason || undefined,
+        beforeState: { orderStatus: order.status }, afterState: { orderStatus: finalStatus },
+        metadata: { refundId: order.paystackTransaction.reference, amount: finalAmount, reason: refundReason },
+        request, failClosed: true,
+      });
 
       // Paystack has no webhook-driven refund confirmation wired up here
       // (unlike Stripe's charge.refunded handler) — this synchronous success
@@ -196,8 +282,12 @@ export async function adminRefundOrder(request: Request, response: Response): Pr
   const orderId = String(request.params.id ?? "");
   if (!orderId) throw new AppError("Order ID required", 400);
 
-  const { amount, reason } = request.body as Record<string, unknown>;
+  const { amount, reason, idempotencyKey } = request.body as Record<string, unknown>;
   const refundAmount = typeof amount === "number" && amount > 0 ? amount : undefined;
+  // Handbook 5.2 L214: a refund needs a recorded reason - enforced here, not just in the UI.
+  if (typeof reason !== "string" || reason.trim().length < 10) {
+    throw new AppError("A refund reason of at least 10 characters is required", 400);
+  }
 
   const order = await prisma.order.findUnique({ where: { id: orderId }, select: { totalAmount: true } });
   const approvalAmount = refundAmount ?? order?.totalAmount ?? null;
@@ -216,7 +306,10 @@ export async function adminRefundOrder(request: Request, response: Response): Pr
     return;
   }
 
-  const result = await executeOrderRefund(orderId, request.user.id, refundAmount, reason);
+  const result = await executeOrderRefund(
+    orderId, request.user.id, refundAmount, reason, "REFUNDED", false, request,
+    typeof idempotencyKey === "string" ? idempotencyKey : request.header("idempotency-key") ?? undefined,
+  );
   response.status(202).json(result);
 }
 
@@ -230,7 +323,7 @@ interface AdminRefundListItem {
   amount: number | null;
   currency: string | null;
   reason: string | null;
-  status: "REQUESTED" | "REJECTED" | "COMPLETED";
+  status: "REQUESTED" | "PROCESSING" | "REJECTED" | "COMPLETED" | "FAILED";
   requestedBy: { id: string; name: string; email: string } | null;
   decidedBy: { id: string; name: string; email: string } | null;
   createdAt: Date;
@@ -254,7 +347,8 @@ interface AdminRefundListItem {
  *    again here would double-count the same refund.
  */
 export async function adminListOrderRefunds(_request: Request, response: Response): Promise<void> {
-  const [completedLogs, openApprovals] = await Promise.all([
+  const [refundRows, completedLogsAll, openApprovals] = await Promise.all([
+    prisma.refund.findMany({ orderBy: { createdAt: "desc" }, take: 200 }),
     prisma.auditLog.findMany({
       where: { action: "ORDER_REFUNDED" },
       orderBy: { createdAt: "desc" },
@@ -271,7 +365,14 @@ export async function adminListOrderRefunds(_request: Request, response: Respons
     }),
   ]);
 
-  const orderIds = [...new Set([...completedLogs.map((l) => l.entityId).filter((id): id is string => !!id), ...openApprovals.map((a) => a.businessRefId)])];
+  // Refunds made before the Refund table existed have only an audit row; rows
+  // that carry a refundRowId are already represented by the Refund table.
+  const completedLogs = completedLogsAll.filter((l) => !(l.metadata as { refundRowId?: string } | null)?.refundRowId);
+  const orderIds = [...new Set([
+    ...refundRows.map((r) => r.orderId),
+    ...completedLogs.map((l) => l.entityId).filter((id): id is string => !!id),
+    ...openApprovals.map((a) => a.businessRefId),
+  ])];
   const orders = await prisma.order.findMany({
     where: { id: { in: orderIds } },
     select: {
@@ -286,7 +387,32 @@ export async function adminListOrderRefunds(_request: Request, response: Respons
   const vendorNameById = new Map(vendors.map((v) => [v.id, v.storeName]));
   const orderById = new Map(orders.map((o) => [o.id, { ...o, vendorName: o.vendorId ? vendorNameById.get(o.vendorId) ?? null : null }]));
 
+  const actorIds = [...new Set(refundRows.map((r) => r.actorId))];
+  const actors = actorIds.length
+    ? await prisma.user.findMany({ where: { id: { in: actorIds } }, select: { id: true, name: true, email: true } })
+    : [];
+  const actorById = new Map(actors.map((a) => [a.id, a]));
+
   const items: AdminRefundListItem[] = [
+    ...refundRows.map((r): AdminRefundListItem => {
+      const order = orderById.get(r.orderId);
+      return {
+        id: r.id,
+        orderId: r.orderId,
+        orderNumber: order?.orderNumber ?? r.orderId,
+        buyerName: order?.buyer?.name ?? null,
+        buyerEmail: order?.buyer?.email ?? null,
+        vendorName: order?.vendorName ?? null,
+        amount: r.amountMinor,
+        currency: r.currency,
+        reason: r.reason,
+        status: r.status === "COMPLETED" ? "COMPLETED" : r.status === "FAILED" ? "FAILED" : r.status === "PROCESSING" ? "PROCESSING" : "REQUESTED",
+        requestedBy: actorById.get(r.actorId) ?? null,
+        decidedBy: null,
+        createdAt: r.createdAt,
+        decidedAt: r.status === "COMPLETED" || r.status === "FAILED" ? r.updatedAt : null,
+      };
+    }),
     ...completedLogs
       .filter((log) => log.entityId)
       .map((log): AdminRefundListItem => {
@@ -331,22 +457,12 @@ export async function adminListOrderRefunds(_request: Request, response: Respons
   ].sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
 
   const counts = {
+    processing: items.filter((i) => i.status === "PROCESSING").length,
+    failed: items.filter((i) => i.status === "FAILED").length,
     requested: items.filter((i) => i.status === "REQUESTED").length,
     rejected: items.filter((i) => i.status === "REJECTED").length,
     completed: items.filter((i) => i.status === "COMPLETED").length,
   };
 
   response.status(200).json({ items, counts });
-}
-
-async function createAuditLog(actorId: string, orderId: string, refundId: string, amount: number, reason: unknown): Promise<void> {
-  await prisma.auditLog.create({
-    data: {
-      actorId,
-      action: "ORDER_REFUNDED",
-      entityType: "Order",
-      entityId: orderId,
-      metadata: { refundId, amount, reason: String(reason ?? "") },
-    },
-  });
 }

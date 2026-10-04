@@ -7,6 +7,7 @@ import { releaseVendorEarnings } from "../../shared/utils/wallet-release";
 import { logger } from "../../lib/logger";
 import { notificationsService } from "../notifications/notifications.service";
 import { recordAudit } from "../../shared/utils/audit";
+import { stripe } from "../../lib/stripe";
 
 export const adminOrdersService = {
   /**
@@ -82,11 +83,11 @@ export const adminOrdersService = {
    * credit vendor wallet pendingBalance, create wallet transaction.
    * Safety net for orders that were created but webhook never fired.
    */
-  async processStuckOrder(orderId: string, adminId: string, request?: Request): Promise<{ orderId: string; status: string; amount: number; wallet?: { pending: number; available: number } }> {
+  async processStuckOrder(orderId: string, adminId: string, request?: Request, reason?: string): Promise<{ orderId: string; status: string; amount: number; wallet?: { pending: number; available: number } }> {
     const order = await prisma.order.findUnique({
       where: { id: orderId },
       include: {
-        payment: { select: { id: true, status: true, vendorEarningsAmount: true, currency: true } },
+        payment: { select: { id: true, status: true, vendorEarningsAmount: true, currency: true, provider: true, stripePaymentIntentId: true } },
         items: { select: { vendorId: true } },
         checkout: { select: { buyerId: true } },
       },
@@ -100,6 +101,23 @@ export const adminOrdersService = {
       throw new AppError("This order's payment has already been processed", 409);
     }
     const beforeStatus = order.status;
+
+    // Handbook 5.3 / 14.8 L586: provider webhooks - not an admin button - decide
+    // that money was collected. This repair path may only run when Stripe itself
+    // reports the PaymentIntent as succeeded (the webhook just never arrived).
+    if (!order.payment || order.payment.provider !== "stripe" || !order.payment.stripePaymentIntentId) {
+      throw new AppError("Only Stripe payments can be repaired here, and the order must have a Stripe PaymentIntent. Use the provider dashboard for anything else.", 409);
+    }
+    let providerStatus: string;
+    try {
+      providerStatus = (await stripe.paymentIntents.retrieve(order.payment.stripePaymentIntentId)).status;
+    } catch (error) {
+      logger.error("force-process: could not verify PaymentIntent with Stripe", { orderId, errorMessage: error instanceof Error ? error.message : String(error) });
+      throw new AppError("Could not verify this payment with Stripe right now. Nothing was changed.", 502);
+    }
+    if (providerStatus !== "succeeded") {
+      throw new AppError(`Stripe reports this payment as "${providerStatus}", not succeeded. Nothing was changed.`, 409);
+    }
 
     let result: { amount: number };
     try {
@@ -145,8 +163,10 @@ export const adminOrdersService = {
       entityType: "Order",
       entityId: orderId,
       beforeState: { status: beforeStatus, paymentStatus: order.payment?.status ?? null },
-      afterState: { status: "PAID", paymentStatus: "SUCCEEDED", walletCredited: result.amount },
+      afterState: { status: "PAID", paymentStatus: "SUCCEEDED", walletCredited: result.amount, stripeStatus: providerStatus },
+      reason,
       request,
+      failClosed: true,
     });
 
     // Notify (single send per recipient — enqueue() already sends the push)

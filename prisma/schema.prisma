@@ -304,7 +304,7 @@ model Vendor {
   stripeReminderSentAt            DateTime?
   verifiedAt                      DateTime?
   verificationFailureReason       String?
-  user                           User                      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user                            User                      @relation(fields: [userId], references: [id], onDelete: Cascade)
   wallet                          Wallet?
   products                        Product[]
   orderItems                      OrderItem[]
@@ -3821,4 +3821,36 @@ model AdminNote {
   createdAt  DateTime @default(now())
 
   @@index([entityType, entityId, createdAt])
+}
+
+// ─── Refunds (handbook 5.2 L214 / 14.8) ─────────────────────────────────────
+// One row per refund request so cumulative refunds, provider status and the
+// actor are queryable (the refund list used to be reconstructed from audit
+// metadata, and a partial refund wrongly closed the order to further refunds).
+
+enum RefundStatus {
+  REQUESTED
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+model Refund {
+  id               String       @id @default(cuid())
+  orderId          String
+  // Amount in the ORDER's own currency, minor units (what the admin entered).
+  amountMinor      Int
+  currency         String
+  status           RefundStatus @default(REQUESTED)
+  provider         String       @default("stripe")
+  providerRefundId String?      @unique
+  reason           String
+  idempotencyKey   String       @unique
+  actorId          String
+  failureReason    String?
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+
+  @@index([orderId, status])
+  @@index([status, createdAt])
 }

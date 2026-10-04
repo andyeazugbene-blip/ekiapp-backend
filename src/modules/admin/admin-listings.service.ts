@@ -62,6 +62,28 @@ async function paginate<TItem extends { id: string }>(
   return { items, nextCursor };
 }
 
+/**
+ * Handbook 14.8 L585: a payment that did not succeed collected no funds, so
+ * no Eki fee / vendor earnings exist. Never present the *estimated* split of a
+ * failed or pending payment as if it were money movement.
+ */
+function scrubUnpaidSplit<T extends { status?: string; platformFeeAmount?: number | null; vendorEarningsAmount?: number | null }>(payment: T | null | undefined): (T & { moneyCollected: boolean }) | null {
+  if (!payment) return null;
+  const collected = payment.status === "SUCCEEDED";
+  return {
+    ...payment,
+    platformFeeAmount: collected ? payment.platformFeeAmount ?? null : null,
+    vendorEarningsAmount: collected ? payment.vendorEarningsAmount ?? null : null,
+    moneyCollected: collected,
+  };
+}
+
+function scrubOrderSplit<T extends { platformFeeAmount?: number | null; vendorEarnings?: number | null; payment?: { status?: string } | null }>(order: T): T {
+  const collected = order.payment?.status === "SUCCEEDED";
+  if (collected) return order;
+  return { ...order, platformFeeAmount: null, vendorEarnings: null };
+}
+
 export const adminListingsService = {
   async listUsers(query: Record<string, unknown>) {
     const role = optionalEnum(query.role, UserRole, "role");
@@ -340,7 +362,30 @@ export const adminListingsService = {
     });
     if (!order) throw new AppError("Order not found", 404);
     let vInfo: Record<string, unknown> | null = null; if (order.vendorId) { vInfo = await prisma.vendor.findUnique({ where: { id: order.vendorId }, select: { storeName: true, contactEmail: true, country: true, city: true, verificationStatus: true } }); }
-    return { ...order, vendorName: vInfo?.storeName ?? null, vendorInfo: vInfo };
+    const [refunds, dispute, payoutRequests, webhookEvents] = await Promise.all([
+      prisma.refund.findMany({ where: { orderId }, orderBy: { createdAt: "desc" }, take: 20 }),
+      prisma.dispute.findUnique({ where: { orderId }, select: { id: true, status: true, reason: true, createdAt: true } }),
+      order.vendorId
+        ? prisma.payoutRequest.findMany({ where: { vendorId: order.vendorId }, orderBy: { createdAt: "desc" }, take: 5, select: { id: true, status: true, amount: true, currency: true, createdAt: true } })
+        : Promise.resolve([]),
+      prisma.webhookEvent.findMany({
+        where: { OR: [{ orderId: { in: [orderId, ...(order.checkoutId ? [order.checkoutId] : [])] } }, ...(order.payment ? [{ paymentId: order.payment.id }] : [])] },
+        orderBy: { createdAt: "desc" },
+        take: 20,
+        select: { id: true, stripeEventId: true, eventType: true, status: true, createdAt: true, processedAt: true },
+      }),
+    ]);
+    const scrubbed = scrubOrderSplit(order as never as { platformFeeAmount?: number | null; vendorEarnings?: number | null; payment?: { status?: string } | null }) as typeof order;
+    return {
+      ...scrubbed,
+      payment: scrubUnpaidSplit(order.payment),
+      vendorName: vInfo?.storeName ?? null,
+      vendorInfo: vInfo,
+      refunds,
+      dispute,
+      payoutRequests,
+      webhookEvents,
+    };
   },
 
   async listVendors(query: Record<string, unknown>) {
@@ -509,57 +554,117 @@ export const adminListingsService = {
   async listOrders(query: Record<string, unknown>) {
     const status = optionalEnum(query.status, OrderStatus, "status");
     const pagination = parsePagination(query);
+    const search = typeof query.q === "string" && query.q.trim().length > 0 ? query.q.trim() : undefined;
+    const where: Record<string, unknown> = {};
+    if (status) where.status = status;
+    if (typeof query.vendorId === "string" && query.vendorId) where.vendorId = query.vendorId;
+    if (typeof query.buyerId === "string" && query.buyerId) where.buyerId = query.buyerId;
+    if (query.includeTest !== "true") where.isTest = false;
+    if (search) {
+      where.OR = [
+        { orderNumber: { contains: search, mode: "insensitive" } },
+        { id: search },
+        { buyer: { email: { contains: search, mode: "insensitive" } } },
+        { buyer: { name: { contains: search, mode: "insensitive" } } },
+        { payment: { stripePaymentIntentId: { contains: search } } },
+      ];
+    }
 
-    return paginate(
-      ({ take, cursor, skip }) =>
-        prisma.order.findMany({
-          where: status ? { status } : {},
-          include: {
-            items: { select: { id: true, productTitle: true, quantity: true, unitAmount: true, totalAmount: true } },
-            payment: { select: { id: true, status: true, stripePaymentIntentId: true, provider: true, amount: true, platformFeeAmount: true, vendorEarningsAmount: true, currency: true } },
-            buyer: { select: { id: true, name: true, email: true } },
-          },
-          orderBy: CURSOR_ORDER_BY,
-          take,
-          cursor,
-          skip,
-        }),
-      pagination,
-    );
+    const [page, total] = await Promise.all([
+      paginate(
+        ({ take, cursor, skip }) =>
+          prisma.order.findMany({
+            where: where as never,
+            include: {
+              items: { select: { id: true, productTitle: true, quantity: true, unitAmount: true, totalAmount: true } },
+              payment: { select: { id: true, status: true, stripePaymentIntentId: true, provider: true, amount: true, platformFeeAmount: true, vendorEarningsAmount: true, currency: true, failureCode: true, failureMessage: true, providerStatus: true } },
+              buyer: { select: { id: true, name: true, email: true } },
+            },
+            orderBy: CURSOR_ORDER_BY,
+            take,
+            cursor,
+            skip,
+          }),
+        pagination,
+      ),
+      prisma.order.count({ where: where as never }),
+    ]);
+
+    const vids = [...new Set(page.items.map((o) => o.vendorId).filter((v): v is string => !!v))];
+    const vendors = vids.length ? await prisma.vendor.findMany({ where: { id: { in: vids } }, select: { id: true, storeName: true } }) : [];
+    const vendorName = new Map(vendors.map((v) => [v.id, v.storeName]));
+
+    return {
+      items: page.items.map((o) => ({
+        ...scrubOrderSplit(o as never as { platformFeeAmount?: number | null; vendorEarnings?: number | null; payment?: { status?: string } | null }),
+        payment: scrubUnpaidSplit(o.payment),
+        vendorName: o.vendorId ? vendorName.get(o.vendorId) ?? null : null,
+      })),
+      nextCursor: page.nextCursor,
+      total,
+    };
   },
 
   async listPayments(query: Record<string, unknown>) {
     const status = optionalEnum(query.status, PaymentStatus, "status");
     const pagination = parsePagination(query);
+    const search = typeof query.q === "string" && query.q.trim().length > 0 ? query.q.trim() : undefined;
+    const and: Record<string, unknown>[] = [];
+    const where: Record<string, unknown> = {};
+    if (status) where.status = status;
+    if (typeof query.provider === "string" && query.provider) where.provider = query.provider;
+    if (query.includeTest !== "true") where.isTest = false;
+    if (typeof query.vendorId === "string" && query.vendorId) and.push({ order: { vendorId: query.vendorId } });
+    const from = typeof query.from === "string" ? new Date(query.from) : null;
+    const to = typeof query.to === "string" ? new Date(query.to) : null;
+    if (from && !Number.isNaN(from.getTime())) and.push({ createdAt: { gte: from } });
+    if (to && !Number.isNaN(to.getTime())) and.push({ createdAt: { lte: to } });
+    if (search) {
+      and.push({ OR: [
+        { stripePaymentIntentId: { contains: search } },
+        { id: search },
+        { order: { orderNumber: { contains: search, mode: "insensitive" } } },
+        { order: { buyer: { email: { contains: search, mode: "insensitive" } } } },
+        { order: { buyer: { name: { contains: search, mode: "insensitive" } } } },
+      ] });
+    }
+    if (and.length) where.AND = and;
 
-    const { items, nextCursor } = await paginate(
-      ({ take, cursor, skip }) =>
-        prisma.payment.findMany({
-          where: status ? { status } : {},
-          include: {
-            order: {
-              select: {
-                id: true, orderNumber: true, status: true, totalAmount: true, currency: true,
-                vendorId: true, buyerId: true,
-                buyer: { select: { name: true, email: true } },
+    const [{ items, nextCursor }, total] = await Promise.all([
+      paginate(
+        ({ take, cursor, skip }) =>
+          prisma.payment.findMany({
+            where: where as never,
+            include: {
+              order: {
+                select: {
+                  id: true, orderNumber: true, status: true, totalAmount: true, currency: true,
+                  vendorId: true, buyerId: true,
+                  buyer: { select: { name: true, email: true } },
+                },
               },
             },
-          },
-          orderBy: CURSOR_ORDER_BY,
-          take, cursor, skip,
-        }),
-      pagination,
-    );
+            orderBy: CURSOR_ORDER_BY,
+            take, cursor, skip,
+          }),
+        pagination,
+      ),
+      prisma.payment.count({ where: where as never }),
+    ]);
 
     // Enrich with vendor store names (Order has vendorId as plain field, no relation)
-    const vids = [...new Set(items.map((p: any) => p.order?.vendorId).filter(Boolean))] as string[];
+    const vids = [...new Set(items.map((p) => p.order?.vendorId).filter(Boolean))] as string[];
+    const vm = new Map<string, string>();
     if (vids.length > 0) {
       const vendors = await prisma.vendor.findMany({ where: { id: { in: vids } }, select: { id: true, storeName: true } });
-      const vm = new Map(vendors.map((v) => [v.id, v.storeName]));
-      for (const p of items as any[]) { if (p.order?.vendorId) p.vendorName = vm.get(p.order.vendorId) ?? null; }
+      for (const v of vendors) vm.set(v.id, v.storeName);
     }
 
-    return { items, nextCursor };
+    return {
+      items: items.map((p) => ({ ...scrubUnpaidSplit(p), vendorName: p.order?.vendorId ? vm.get(p.order.vendorId) ?? null : null })),
+      nextCursor,
+      total,
+    };
   },
 
   async listWalletTransactions(query: Record<string, unknown>) {
@@ -680,7 +785,21 @@ export const adminListingsService = {
       const v = await prisma.vendor.findUnique({ where: { id: payment.order.vendorId }, select: { storeName: true } });
       vendorName = v?.storeName ?? null;
     }
-    return { ...payment, vendorName };
+    // Handbook 14.8 L584: webhook receipt + refunds so staff can reconcile
+    // without a database query. WebhookEvent.orderId holds the order id or
+    // (for checkout-level events) the checkout id.
+    const checkoutRow = await prisma.order.findUnique({ where: { id: payment.orderId }, select: { checkoutId: true } });
+    const refs = [payment.orderId, ...(checkoutRow?.checkoutId ? [checkoutRow.checkoutId] : [])];
+    const [webhookEvents, refunds] = await Promise.all([
+      prisma.webhookEvent.findMany({
+        where: { OR: [{ paymentId: payment.id }, { orderId: { in: refs } }] },
+        orderBy: { createdAt: "desc" },
+        take: 20,
+        select: { id: true, stripeEventId: true, eventType: true, status: true, createdAt: true, processedAt: true },
+      }),
+      prisma.refund.findMany({ where: { orderId: payment.orderId }, orderBy: { createdAt: "desc" }, take: 20 }),
+    ]);
+    return { ...scrubUnpaidSplit(payment), vendorName, webhookEvents, refunds };
   },
 
   async getWalletTransaction(txId: string) {

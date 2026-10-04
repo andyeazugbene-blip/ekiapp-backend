@@ -15,6 +15,8 @@ import type { Request, Response } from "express";
 vi.mock("../lib/prisma", () => ({
   prisma: {
     auditLog: { findMany: vi.fn() },
+    refund: { findMany: vi.fn().mockResolvedValue([]) },
+    user: { findMany: vi.fn().mockResolvedValue([]) },
     adminApproval: { findMany: vi.fn() },
     order: { findMany: vi.fn() },
     vendor: { findMany: vi.fn() },
@@ -67,7 +69,7 @@ describe("adminListOrderRefunds", () => {
     const requested = data.items.find((i) => i.orderId === "order-2");
     expect(requested).toMatchObject({ status: "REQUESTED", amount: 2000, vendorName: "Vendor Two" });
 
-    expect(data.counts).toEqual({ requested: 1, rejected: 0, completed: 1 });
+    expect(data.counts).toEqual({ processing: 0, failed: 0, requested: 1, rejected: 0, completed: 1 });
 
     // Only PENDING/REJECTED approvals are queried — an already-executed
     // APPROVED one must never be fetched here (it's covered by AuditLog).
@@ -87,7 +89,7 @@ describe("adminListOrderRefunds", () => {
 
     const data = res.data as { items: any[]; counts: Record<string, number> };
     expect(data.items).toEqual([]);
-    expect(data.counts).toEqual({ requested: 0, rejected: 0, completed: 0 });
+    expect(data.counts).toEqual({ processing: 0, failed: 0, requested: 0, rejected: 0, completed: 0 });
   });
 
   it("uses the actual refunded amount from AuditLog metadata, not the order's full total — correct for a partial refund", async () => {
