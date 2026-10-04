@@ -44,14 +44,22 @@ export async function adminListPayoutRequests(
   response.status(200).json({ payoutRequests });
 }
 
+function requirePayoutReason(request: Request): string {
+  const reason = typeof request.body?.reason === "string" ? request.body.reason.trim() : "";
+  if (reason.length < 5) throw new AppError("A reason of at least 5 characters is required", 400);
+  return reason;
+}
+
 export async function adminApprovePayoutRequest(
   request: Request,
   response: Response,
 ): Promise<void> {
   const adminId = requireUserId(request);
   const id = requireIdParam(request);
+  // Handbook 5.2 L214 / 14.12 L638: money actions carry a recorded reason.
+  const reason = requirePayoutReason(request);
   const payoutRequest = await payoutsService.adminApprove(adminId, id);
-  await recordAudit({ actorId: adminId, action: "payout_request.approve", entityType: "PayoutRequest", entityId: id, metadata: { amount: payoutRequest.amount, vendorId: payoutRequest.vendorId }, beforeState: { status: "PENDING" }, afterState: { status: payoutRequest.status }, request });
+  await recordAudit({ actorId: adminId, action: "payout_request.approve", entityType: "PayoutRequest", entityId: id, reason, metadata: { amount: payoutRequest.amount, vendorId: payoutRequest.vendorId }, beforeState: { status: "PENDING" }, afterState: { status: payoutRequest.status }, request, failClosed: true });
   response.status(200).json({ payoutRequest });
 }
 
@@ -75,13 +83,14 @@ export async function adminMarkPayoutRequestPaid(
   const transferProof = typeof body.transferProof === "string" ? body.transferProof.trim() : undefined;
   const adminId = requireUserId(request);
   const id = requireIdParam(request);
+  const reason = requirePayoutReason(request);
   // Real prior state, not assumed — this can now legitimately start from
   // APPROVED (first attempt) or ON_HOLD/PROCESSING (retry) since a Stripe
   // transfer attempt can fail/be interrupted without the payout ever
   // reaching PAID. See payoutsService.adminMarkPaid for the full flow.
   const before = await payoutsService.adminGet(id).catch(() => null);
   const payoutRequest = await payoutsService.adminMarkPaid(adminId, id, transferProof);
-  await recordAudit({ actorId: adminId, action: "payout_request.mark_paid", entityType: "PayoutRequest", entityId: id, metadata: { amount: payoutRequest.amount, vendorId: payoutRequest.vendorId, hasTransferProof: Boolean(transferProof) }, beforeState: before ? { status: before.status } : undefined, afterState: { status: payoutRequest.status, stripeTransferId: payoutRequest.stripeTransferId, holdReason: payoutRequest.holdReason }, request });
+  await recordAudit({ actorId: adminId, action: "payout_request.mark_paid", entityType: "PayoutRequest", entityId: id, metadata: { amount: payoutRequest.amount, vendorId: payoutRequest.vendorId, hasTransferProof: Boolean(transferProof) }, beforeState: before ? { status: before.status } : undefined, afterState: { status: payoutRequest.status, stripeTransferId: payoutRequest.stripeTransferId, holdReason: payoutRequest.holdReason }, reason, request, failClosed: true });
   response.status(200).json({ payoutRequest });
 }
 export async function adminGetPayoutRequest(

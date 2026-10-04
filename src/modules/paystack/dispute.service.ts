@@ -98,17 +98,29 @@ export const disputeService = {
   /**
    * Admin lists all disputes (with optional status filter).
    */
-  async listDisputes(query: { status?: string; limit: number; cursor?: string }) {
-    const where = query.status ? { status: query.status as any } : {};
-    const items = await prisma.dispute.findMany({
-      where,
-      orderBy: { createdAt: "desc" },
-      take: query.limit + 1,
-      ...(query.cursor ? { cursor: { id: query.cursor }, skip: 1 } : {}),
-      include: {
-        order: { select: { orderNumber: true, totalAmount: true, currency: true, vendorEarnings: true } },
-      },
-    });
+  async listDisputes(query: { status?: string; q?: string; vendorId?: string; limit: number; cursor?: string }) {
+    const where: Record<string, unknown> = {};
+    if (query.status) where.status = query.status;
+    if (query.vendorId) where.vendorId = query.vendorId;
+    if (query.q) {
+      where.OR = [
+        { reason: { contains: query.q, mode: "insensitive" } },
+        { order: { orderNumber: { contains: query.q, mode: "insensitive" } } },
+        { id: query.q },
+      ];
+    }
+    const [items, total] = await Promise.all([
+      prisma.dispute.findMany({
+        where: where as never,
+        orderBy: { createdAt: "desc" },
+        take: query.limit + 1,
+        ...(query.cursor ? { cursor: { id: query.cursor }, skip: 1 } : {}),
+        include: {
+          order: { select: { orderNumber: true, totalAmount: true, currency: true, vendorEarnings: true } },
+        },
+      }),
+      prisma.dispute.count({ where: where as never }),
+    ]);
 
     let nextCursor: string | null = null;
     if (items.length > query.limit) {
@@ -116,7 +128,26 @@ export const disputeService = {
       nextCursor = next?.id ?? null;
     }
 
-    return { items, nextCursor };
+    // Human names first (Handbook 2.1 L134): resolve buyer + store names in two batched lookups.
+    const buyerIds = [...new Set(items.map((d) => d.buyerId))];
+    const vendorIds = [...new Set(items.map((d) => d.vendorId))];
+    const [buyers, vendors] = await Promise.all([
+      prisma.user.findMany({ where: { id: { in: buyerIds } }, select: { id: true, name: true, email: true } }),
+      prisma.vendor.findMany({ where: { id: { in: vendorIds } }, select: { id: true, storeName: true } }),
+    ]);
+    const buyerById = new Map(buyers.map((u) => [u.id, u]));
+    const vendorById = new Map(vendors.map((v) => [v.id, v.storeName]));
+
+    return {
+      items: items.map((d) => ({
+        ...d,
+        buyerName: buyerById.get(d.buyerId)?.name ?? null,
+        buyerEmail: buyerById.get(d.buyerId)?.email ?? null,
+        vendorName: vendorById.get(d.vendorId) ?? null,
+      })),
+      nextCursor,
+      total,
+    };
   },
 
   /**
@@ -143,7 +174,11 @@ export const disputeService = {
       },
     });
     if (!dispute) throw new AppError("Dispute not found", 404);
-    return dispute;
+    const [buyer, vendor] = await Promise.all([
+      prisma.user.findUnique({ where: { id: dispute.buyerId }, select: { id: true, name: true, email: true } }),
+      prisma.vendor.findUnique({ where: { id: dispute.vendorId }, select: { id: true, storeName: true, userId: true } }),
+    ]);
+    return { ...dispute, buyer, vendor };
   },
 
   /**

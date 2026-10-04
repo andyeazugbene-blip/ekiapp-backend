@@ -31,7 +31,9 @@ export async function adminListDisputes(request: Request, response: Response): P
   const limit = Math.min(Math.max(Number(request.query.limit) || 20, 1), 100);
   const cursor = typeof request.query.cursor === "string" ? request.query.cursor : undefined;
 
-  const result = await disputeService.listDisputes({ status, limit, cursor });
+  const q = typeof request.query.q === "string" && request.query.q.trim() ? request.query.q.trim() : undefined;
+  const vendorId = typeof request.query.vendorId === "string" && request.query.vendorId ? request.query.vendorId : undefined;
+  const result = await disputeService.listDisputes({ status, q, vendorId, limit, cursor });
   response.status(200).json(result);
 }
 
