@@ -155,8 +155,14 @@ export function deriveVendorProviderReadiness(
 
   const wasOnboarded = Boolean(v.stripeOnboardedAt);
   const capabilityLost = hasAccount && wasOnboarded && (!v.stripeChargesEnabled || !v.stripePayoutsEnabled);
-  const restricted = hasAccount && (isRestrictingReason(v.stripeDisabledReason) || capabilityLost || v.stripeAccountStatus === "deauthorized");
   const requirementsDue = hasAccount && (currentlyDue.length > 0 || pastDue.length > 0);
+  // A lost capability with outstanding requirements is "requirements due"
+  // (the vendor can fix it), not an unexplained Stripe restriction.
+  const restricted = hasAccount && (
+    isRestrictingReason(v.stripeDisabledReason) ||
+    (capabilityLost && !requirementsDue) ||
+    v.stripeAccountStatus === "deauthorized"
+  );
   const inProviderReview = hasAccount && (
     (v.stripeDisabledReason != null && PROVIDER_REVIEW_REASONS.includes(v.stripeDisabledReason)) ||
     v.stripeAccountStatus === "pending_verification"

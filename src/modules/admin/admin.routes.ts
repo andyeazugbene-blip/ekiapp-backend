@@ -1,3 +1,6 @@
+import { accountTimeline, addNote, listNotes } from "./admin-notes.controller";
+import { checkVendorClose, closeVendor } from "./admin-vendor-close";
+import { getVendorStripeStatus, sendVendorStripeReminder } from "./admin-vendor-provider.controller";
 /**
  * Admin routes — convention:
  *
@@ -462,9 +465,18 @@ adminRouter.get("/users", asyncHandler(requireAdminPermission("users.read")), as
 adminRouter.get("/users/:id", asyncHandler(requireAdminPermission("users.read")), asyncHandler(getUser));
 adminRouter.get("/vendors/stats", asyncHandler(requireAdminPermission("vendors.read")), asyncHandler(getVendorStats));
 adminRouter.get("/vendors", asyncHandler(requireAdminPermission("vendors.read")), asyncHandler(listVendors));
+adminRouter.get("/vendors/:id/stripe-status", asyncHandler(requireAdminPermission("vendors.read")), asyncHandler(getVendorStripeStatus));
+adminRouter.post("/vendors/:id/stripe-reminder", asyncHandler(requireAdminPermission("verification.mutate")), asyncHandler(sendVendorStripeReminder));
 adminRouter.get("/vendors/:id", asyncHandler(requireAdminPermission("vendors.read")), asyncHandler(getVendor));
 adminRouter.patch("/vendors/:id", asyncHandler(requireAdminPermission("vendors.mutate")), asyncHandler(updateVendor));
-adminRouter.delete("/vendors/:id", asyncHandler(requireAdminPermission("vendors.mutate")), asyncHandler(require2fa), asyncHandler(deleteVendor));
+adminRouter.get("/users/:id/notes", asyncHandler(requireAdminPermission("users.read")), asyncHandler(listNotes("User")));
+adminRouter.post("/users/:id/notes", asyncHandler(requireAdminPermission("users.mutate")), asyncHandler(addNote("User")));
+adminRouter.get("/users/:id/timeline", asyncHandler(requireAdminPermission("users.read")), asyncHandler(accountTimeline("User")));
+adminRouter.get("/vendors/:id/notes", asyncHandler(requireAdminPermission("vendors.read")), asyncHandler(listNotes("Vendor")));
+adminRouter.post("/vendors/:id/notes", asyncHandler(requireAdminPermission("vendors.mutate")), asyncHandler(addNote("Vendor")));
+adminRouter.get("/vendors/:id/timeline", asyncHandler(requireAdminPermission("vendors.read")), asyncHandler(accountTimeline("Vendor")));
+adminRouter.get("/vendors/:id/close-check", asyncHandler(requireAdminPermission("vendors.read")), asyncHandler(checkVendorClose));
+adminRouter.post("/vendors/:id/close", asyncHandler(requireAdminPermission("vendors.mutate")), asyncHandler(require2fa), asyncHandler(closeVendor));
 adminRouter.post("/vendors/bulk-approve", asyncHandler(requireAdminPermission("vendors.mutate")), asyncHandler(bulkApproveVendors));
 adminRouter.post("/vendors/bulk-reject", asyncHandler(requireAdminPermission("vendors.mutate")), asyncHandler(bulkRejectVendors));
 adminRouter.post("/vendors/bulk-suspend", asyncHandler(requireAdminPermission("vendors.mutate")), asyncHandler(require2fa), asyncHandler(bulkSuspendVendors));
@@ -622,5 +634,5 @@ adminRouter.patch("/vendors/:id/unsuspend", asyncHandler(requireAdminPermission(
 adminRouter.get("/vendors/:id/markets", asyncHandler(requireAdminPermission("vendors.read")), asyncHandler(listVendorMarkets));
 adminRouter.post("/vendors/:id/markets", asyncHandler(requireAdminPermission("vendors.mutate")), asyncHandler(require2fa), asyncHandler(addVendorMarket));
 adminRouter.patch("/vendors/:id/markets/:marketCode", asyncHandler(requireAdminPermission("vendors.mutate")), asyncHandler(require2fa), asyncHandler(setVendorMarketEnabled));
-adminRouter.delete("/vendors/:id/markets/:marketCode", asyncHandler(requireAdminPermission("vendors.mutate")), asyncHandler(require2fa), asyncHandler(removeVendorMarket));
+// Handbook 14.7 L576: markets are disabled/enabled, never permanently removed (history is kept).
 adminRouter.patch("/payout-requests/:id/mark-paid", asyncHandler(requireAdminPermission("payouts.mutate")), asyncHandler(require2fa), asyncHandler(adminMarkPayoutRequestPaid));

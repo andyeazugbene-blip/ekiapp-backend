@@ -10,7 +10,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 vi.mock("../lib/prisma", () => ({
   prisma: {
-    webhookEvent: { create: vi.fn(), update: vi.fn(), updateMany: vi.fn() },
+    webhookEvent: { create: vi.fn(), update: vi.fn(), updateMany: vi.fn(), deleteMany: vi.fn().mockResolvedValue({ count: 0 }) },
     checkout: { findUnique: vi.fn() },
     payment: { findFirst: vi.fn() },
     order: { updateMany: vi.fn() },
@@ -45,12 +45,20 @@ vi.mock("../modules/community-buy/organiser-stripe-connect.service", () => ({
   organiserStripeConnectService: { handleAccountUpdated: vi.fn().mockResolvedValue({ handled: true }) },
 }));
 
+vi.mock("../modules/vendors/stripe-connect.service", () => ({
+  stripeConnectService: {
+    handleAccountUpdated: vi.fn().mockResolvedValue({ handled: false }),
+    handleAccountDeauthorized: vi.fn().mockResolvedValue({ handled: true }),
+  },
+}));
+
 import { prisma } from "../lib/prisma";
 import { stripe } from "../lib/stripe";
 import { stripeWebhookService } from "../modules/stripe/stripe.service";
 import { campaignPayoutService } from "../modules/community-buy/campaign-payout.service";
 import { campaignAuthorisationService } from "../modules/community-buy/campaign-authorisation.service";
 import { organiserStripeConnectService } from "../modules/community-buy/organiser-stripe-connect.service";
+import { stripeConnectService as vendorStripeConnect } from "../modules/vendors/stripe-connect.service";
 
 const m = vi.mocked(prisma, true);
 const constructEvent = vi.mocked(stripe.webhooks.constructEvent);
@@ -108,7 +116,36 @@ describe("account.updated — Stripe Connect production hardening", () => {
     expect(organiserStripeConnectService.handleAccountUpdated).toHaveBeenCalledWith(expect.objectContaining({ id: "acct_1" }));
   });
 
-  it("a connected account that belongs to no organiser (vendor/supplier, or unrelated) is a safe no-op — never throws", async () => {
+  it("an account that is not an organiser is resolved as a VENDOR account (Handbook 5.1) and the organiser handler runs first", async () => {
+    constructEvent.mockReturnValue({ id: "evt_acct_v", type: "account.updated", data: { object: { id: "acct_vendor_1", charges_enabled: true } } } as never);
+    mockDedupTransaction();
+    vi.mocked(organiserStripeConnectService.handleAccountUpdated).mockResolvedValueOnce({ handled: false });
+    vi.mocked(vendorStripeConnect.handleAccountUpdated).mockResolvedValueOnce({ handled: true });
+
+    const result = await stripeWebhookService.handleWebhook({ signature: "sig", rawBody: Buffer.from("x") });
+    expect(result.received).toBe(true);
+    expect(vendorStripeConnect.handleAccountUpdated).toHaveBeenCalledWith(expect.objectContaining({ id: "acct_vendor_1" }));
+  });
+
+  it("an organiser account is NOT also treated as a vendor", async () => {
+    constructEvent.mockReturnValue({ id: "evt_acct_o", type: "account.updated", data: { object: { id: "acct_org" } } } as never);
+    mockDedupTransaction();
+    vi.mocked(organiserStripeConnectService.handleAccountUpdated).mockResolvedValueOnce({ handled: true });
+    await stripeWebhookService.handleWebhook({ signature: "sig", rawBody: Buffer.from("x") });
+    expect(vendorStripeConnect.handleAccountUpdated).not.toHaveBeenCalled();
+  });
+
+  it("a failing vendor update is NOT swallowed: the claim is released and the error rethrown so Stripe retries", async () => {
+    constructEvent.mockReturnValue({ id: "evt_acct_fail", type: "account.updated", data: { object: { id: "acct_vendor_2" } } } as never);
+    mockDedupTransaction();
+    vi.mocked(organiserStripeConnectService.handleAccountUpdated).mockResolvedValueOnce({ handled: false });
+    vi.mocked(vendorStripeConnect.handleAccountUpdated).mockRejectedValueOnce(new Error("db down"));
+
+    await expect(stripeWebhookService.handleWebhook({ signature: "sig", rawBody: Buffer.from("x") })).rejects.toThrow("db down");
+    expect(m.webhookEvent.deleteMany).toHaveBeenCalledWith({ where: { stripeEventId: "evt_acct_fail", status: "PROCESSING" } });
+  });
+
+  it("a connected account that belongs to neither organiser nor vendor is a safe no-op - never throws", async () => {
     constructEvent.mockReturnValue({ id: "evt_acct_2", type: "account.updated", data: { object: { id: "acct_vendor_1" } } } as never);
     mockDedupTransaction();
     vi.mocked(organiserStripeConnectService.handleAccountUpdated).mockResolvedValueOnce({ handled: false });

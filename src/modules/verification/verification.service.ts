@@ -1,3 +1,4 @@
+import { assertManualVerificationAllowed, deriveVendorProviderReadiness, isProviderControlledVendor, VENDOR_PROVIDER_SELECT } from "../vendors/vendor-provider-readiness";
 import { VendorVerificationStatus, type Prisma, type VerificationDocument } from "@prisma/client";
 
 import { logger } from "../../lib/logger";
@@ -339,11 +340,8 @@ export const verificationService = {
         storeName: true,
         contactEmail: true,
         contactPhone: true,
-        verificationStatus: true,
         createdAt: true,
-        stripeVerificationSessionId: true,
-        verifiedAt: true,
-        verificationFailureReason: true,
+        ...VENDOR_PROVIDER_SELECT,
         user: { select: { name: true, email: true, phone: true } },
       },
     });
@@ -378,6 +376,10 @@ export const verificationService = {
           phone: vendor.contactPhone ?? vendor.user.phone,
           verificationStatus: vendor.verificationStatus,
           verificationMethod: verificationMethod(hasDocuments, vendor.stripeVerificationSessionId),
+          // Handbook 5.1/14.3: provider truth (identity vs charges vs payouts
+          // kept separate) and whether a manual review is even permitted.
+          provider: deriveVendorProviderReadiness(vendor, { hasLegacyDocuments: hasDocuments }),
+          manualReviewAllowed: !isProviderControlledVendor(vendor) && hasDocuments,
           // Stripe Identity only records completion time (verifiedAt), not
           // when the session started — that's the best available signal
           // for a Stripe-only vendor with no uploaded documents.
@@ -421,11 +423,8 @@ export const verificationService = {
         contactPhone: true,
         country: true,
         city: true,
-        verificationStatus: true,
         createdAt: true,
-        stripeVerificationSessionId: true,
-        verifiedAt: true,
-        verificationFailureReason: true,
+        ...VENDOR_PROVIDER_SELECT,
         user: { select: { id: true, name: true, email: true, phone: true } },
       },
     });
@@ -455,6 +454,8 @@ export const verificationService = {
       },
       verificationStatus: vendor.verificationStatus,
       verificationMethod: verificationMethod(hasDocuments, vendor.stripeVerificationSessionId),
+      provider: deriveVendorProviderReadiness(vendor, { hasLegacyDocuments: hasDocuments }),
+      manualReviewAllowed: !isProviderControlledVendor(vendor) && hasDocuments,
       stripeVerificationSessionId: vendor.stripeVerificationSessionId,
       verifiedAt: vendor.verifiedAt,
       uploadedDocSummary: documentSummary(documents),
@@ -476,9 +477,11 @@ export const verificationService = {
     const now = new Date();
     const vendor = await prisma.vendor.findUnique({
       where: { id: vendorId },
-      select: { id: true, userId: true, storeName: true, user: { select: { email: true } } },
+      select: { id: true, userId: true, storeName: true, stripeVerificationSessionId: true, stripeAccountId: true, user: { select: { email: true } } },
     });
     if (!vendor) throw new AppError("Vendor not found", 404);
+    // Handbook 14.3: no manual approval of provider-controlled verification.
+    assertManualVerificationAllowed(vendor, await prisma.verificationDocument.count({ where: { vendorId, deletedAt: null } }));
 
     await prisma.$transaction([
       prisma.vendor.update({
@@ -517,9 +520,10 @@ export const verificationService = {
     const now = new Date();
     const vendor = await prisma.vendor.findUnique({
       where: { id: vendorId },
-      select: { id: true, userId: true, storeName: true, user: { select: { email: true } } },
+      select: { id: true, userId: true, storeName: true, stripeVerificationSessionId: true, stripeAccountId: true, user: { select: { email: true } } },
     });
     if (!vendor) throw new AppError("Vendor not found", 404);
+    assertManualVerificationAllowed(vendor, await prisma.verificationDocument.count({ where: { vendorId, deletedAt: null } }));
 
     await prisma.$transaction([
       prisma.vendor.update({

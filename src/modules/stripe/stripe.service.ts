@@ -19,6 +19,7 @@ import { campaignAuthorisationService } from "../community-buy/campaign-authoris
 import { campaignPayoutService } from "../community-buy/campaign-payout.service";
 import { organiserFeeService } from "../community-buy/organiser-fee.service";
 import { organiserStripeConnectService } from "../community-buy/organiser-stripe-connect.service";
+import { stripeConnectService as vendorStripeConnect } from "../vendors/stripe-connect.service";
 import { LedgerAccountType, LedgerDirection, LedgerOwnerType } from "@prisma/client";
 import { AppError } from "../../shared/errors/app-error";
 import type { StripeWebhookInput, StripeWebhookResult } from "./stripe.types";
@@ -129,9 +130,21 @@ class StripeWebhookService {
 
     if (
       event.type === "identity.verification_session.verified" ||
-      event.type === "identity.verification_session.requires_input"
+      event.type === "identity.verification_session.requires_input" ||
+      event.type === "identity.verification_session.processing" ||
+      event.type === "identity.verification_session.canceled" ||
+      event.type === "identity.verification_session.redacted"
     ) {
       return this.handleIdentityVerification(event);
+    }
+
+    // Vendor disconnected their Stripe account from Eki: switch off
+    // charges/payouts (account id kept for history + webhook lookup).
+    if (event.type === "account.application.deauthorized") {
+      return this.runIdempotentWebhook(event, async () => {
+        const accountId = event.account ?? (event.data.object as { id?: string }).id;
+        if (accountId) await vendorStripeConnect.handleAccountDeauthorized(accountId);
+      });
     }
 
     if (event.type !== "payment_intent.succeeded") {
@@ -623,27 +636,20 @@ class StripeWebhookService {
   private async handleOrganiserConnectAccountUpdated(event: Stripe.Event): Promise<StripeWebhookResult> {
     const account = event.data.object as Stripe.Account;
 
-    try {
-      const isDup = await prisma.$transaction(async (tx) => {
-        if (await this.isDuplicate(tx, event.id, event.type, {})) return true;
-        await tx.webhookEvent.update({ where: { stripeEventId: event.id }, data: { status: "PROCESSED", processedAt: new Date() } });
-        return false;
-      }, { isolationLevel: "Serializable" });
-
-      if (isDup) {
-        return { received: true, duplicate: true, eventId: event.id, type: event.type };
+    // Every connected account shares this one event type: resolve organiser
+    // first, then vendor (Handbook 5.1 - vendor Connect state must follow
+    // Stripe automatically). Claimed only AFTER success so a failed update is
+    // retried by Stripe instead of being swallowed as a duplicate.
+    return this.runIdempotentWebhook(event, async () => {
+      const organiser = await organiserStripeConnectService.handleAccountUpdated(account);
+      let vendorHandled = false;
+      if (!organiser.handled) {
+        vendorHandled = (await vendorStripeConnect.handleAccountUpdated(account as never)).handled;
       }
-
-      const outcome = await organiserStripeConnectService.handleAccountUpdated(account);
-      logger.info("Webhook processed: account.updated", { eventId: event.id, accountId: account.id, handled: outcome.handled });
-      return { received: true, eventId: event.id, type: event.type };
-    } catch (error) {
-      if (this.isUniqueConstraintError(error)) {
-        return { received: true, duplicate: true, eventId: event.id, type: event.type };
-      }
-      logger.error("Webhook failed: account.updated resolution", { eventId: event.id, ...serializeError(error) });
-      throw error;
-    }
+      logger.info("Webhook processed: account.updated", {
+        eventId: event.id, accountId: account.id, organiserHandled: organiser.handled, vendorHandled,
+      });
+    });
   }
 
   // ─── Vendor subscription billing lifecycle (Defect D) ──────────────────
@@ -1176,21 +1182,42 @@ class StripeWebhookService {
   private async handleIdentityVerification(event: Stripe.Event): Promise<StripeWebhookResult> {
     const session = event.data.object as any;
 
-    try {
-      await stripeIdentityService.handleVerificationCompleted({
+    // Handbook 5.1 / 14.3: provider state changes must be applied exactly once
+    // and a failed update must surface as non-2xx so Stripe retries it (this
+    // handler used to swallow every error and always answer 200).
+    return this.runIdempotentWebhook(event, () =>
+      stripeIdentityService.handleVerificationCompleted({
         id: session.id,
         status: session.status,
         last_error: session.last_error ?? null,
         metadata: session.metadata ?? null,
-      });
-    } catch (error) {
-      logger.error("Stripe Identity webhook handler failed", {
-        eventId: event.id,
-        sessionId: session.id,
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
+      }),
+    );
+  }
 
+  /**
+   * Claim the event (WebhookEvent unique id), run `work`, then mark PROCESSED.
+   * If `work` throws the claim is released so Stripe's retry is not mistaken
+   * for a duplicate, and the error is rethrown (-> non-2xx -> retry).
+   */
+  private async runIdempotentWebhook(event: Stripe.Event, work: () => Promise<unknown>): Promise<StripeWebhookResult> {
+    const isDup = await prisma.$transaction(
+      async (tx) => this.isDuplicate(tx, event.id, event.type, {}),
+      { isolationLevel: "Serializable" },
+    ).catch((error) => {
+      if (this.isUniqueConstraintError(error)) return true;
+      throw error;
+    });
+    if (isDup) return { received: true, duplicate: true, eventId: event.id, type: event.type };
+
+    try {
+      await work();
+    } catch (error) {
+      logger.error("Webhook handler failed; releasing claim so Stripe can retry", { eventId: event.id, type: event.type, ...serializeError(error) });
+      await prisma.webhookEvent.deleteMany({ where: { stripeEventId: event.id, status: "PROCESSING" } }).catch(() => undefined);
+      throw error;
+    }
+    await prisma.webhookEvent.updateMany({ where: { stripeEventId: event.id }, data: { status: "PROCESSED", processedAt: new Date() } });
     return { received: true, eventId: event.id, type: event.type };
   }
 

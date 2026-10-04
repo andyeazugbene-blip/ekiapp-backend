@@ -1,3 +1,4 @@
+import { prisma } from "../lib/prisma";
 import type { NextFunction, Request, Response } from "express";
 import type { UserRole } from "@prisma/client";
 
@@ -19,6 +20,25 @@ declare global {
       usedPermission?: string;
     }
   }
+}
+
+// Handbook 14.5 L167: admin needs a real "last active". Written at most once
+// per 10 minutes per user per instance, fire-and-forget (never blocks or fails
+// a request).
+const LAST_ACTIVE_THROTTLE_MS = 10 * 60 * 1000;
+const lastActiveTouched = new Map<string, number>();
+function touchLastActive(userId: string): void {
+  const now = Date.now();
+  const prev = lastActiveTouched.get(userId) ?? 0;
+  if (now - prev < LAST_ACTIVE_THROTTLE_MS) return;
+  lastActiveTouched.set(userId, now);
+  if (lastActiveTouched.size > 5000) lastActiveTouched.clear();
+  void prisma.user
+    .updateMany({
+      where: { id: userId, OR: [{ lastActiveAt: null }, { lastActiveAt: { lt: new Date(now - LAST_ACTIVE_THROTTLE_MS) } }] },
+      data: { lastActiveAt: new Date(now) },
+    })
+    .catch(() => undefined);
 }
 
 export function authenticate(request: Request, _response: Response, next: NextFunction): void {
@@ -56,6 +76,7 @@ export function authenticate(request: Request, _response: Response, next: NextFu
       }
       // Use DB role (not JWT claim) so role changes take effect immediately
       request.user = { id: payload.sub, role: result.role ?? payload.role, email: payload.email };
+      touchLastActive(payload.sub);
       next();
     })
     .catch((error) => {

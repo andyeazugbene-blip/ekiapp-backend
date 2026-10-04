@@ -3,6 +3,7 @@ import type { Request, Response } from "express";
 import { AppError } from "../../shared/errors/app-error";
 import { recordAudit } from "../../shared/utils/audit";
 import { adminListingsService } from "./admin-listings.service";
+import { adminSuspensionService, parseSuspendInput, parseUnsuspendInput } from "./admin-suspension.service";
 
 function requireIdParam(request: Request): string {
   const id = request.params.id;
@@ -35,29 +36,24 @@ export async function getUser(request: Request, response: Response): Promise<voi
 
 export async function suspendUser(request: Request, response: Response): Promise<void> {
   const userId = requireIdParam(request);
-  const reason = typeof request.body?.reason === "string" ? request.body.reason.trim() : undefined;
-  const user = await adminListingsService.suspendUser(userId, reason);
-  await recordAudit({
-    actorId: requireUserId(request),
-    action: "user.suspend",
-    entityType: "User",
-    entityId: userId,
-    metadata: { reason: reason ?? null, role: user.role },
+  const result = await adminSuspensionService.suspendUser({
+    adminId: requireUserId(request),
+    userId,
+    input: parseSuspendInput(request.body),
+    request,
   });
-  response.status(200).json({ user });
+  response.status(200).json({ user: result.user, notified: result.notified });
 }
 
 export async function unsuspendUser(request: Request, response: Response): Promise<void> {
   const userId = requireIdParam(request);
-  const user = await adminListingsService.unsuspendUser(userId);
-  await recordAudit({
-    actorId: requireUserId(request),
-    action: "user.unsuspend",
-    entityType: "User",
-    entityId: userId,
-    metadata: { role: user.role },
+  const result = await adminSuspensionService.unsuspendUser({
+    adminId: requireUserId(request),
+    userId,
+    input: parseUnsuspendInput(request.body),
+    request,
   });
-  response.status(200).json({ user });
+  response.status(200).json({ user: result.user, notified: result.notified });
 }
 
 export async function deleteUser(request: Request, response: Response): Promise<void> {
@@ -259,13 +255,11 @@ export async function bulkRejectVendors(request: Request, response: Response): P
 export async function bulkSuspendVendors(request: Request, response: Response): Promise<void> {
   const ids = request.body?.vendorIds;
   if (!Array.isArray(ids) || ids.length === 0) throw new AppError("vendorIds array required", 400);
-  const reason = typeof request.body?.reason === "string" ? request.body.reason.trim() : undefined;
-  const result = await adminListingsService.bulkSuspendVendors(ids, reason);
-  await recordAudit({
-    actorId: requireUserId(request),
-    action: "vendor.bulk_suspend",
-    entityType: "Vendor",
-    metadata: { count: result.affected },
+  const result = await adminSuspensionService.bulkSuspendVendors({
+    adminId: requireUserId(request),
+    vendorIds: ids.map(String),
+    input: parseSuspendInput(request.body),
+    request,
   });
   response.status(200).json(result);
 }

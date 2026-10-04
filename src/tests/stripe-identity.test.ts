@@ -114,13 +114,34 @@ describe("stripeIdentityService.handleVerificationCompleted — webhook safety",
     }));
   });
 
-  it("never mutates the vendor for an unrecognized/in-progress session status — only logs", async () => {
+  it("never mutates the vendor for an unrecognized session status - only logs", async () => {
     m.vendor.findUnique.mockResolvedValue({ id: "vendor-1", verificationStatus: "PENDING", stripeVerificationSessionId: "vs_1" });
 
-    await stripeIdentityService.handleVerificationCompleted({ id: "vs_1", status: "processing", metadata: { vendorId: "vendor-1" } });
+    await stripeIdentityService.handleVerificationCompleted({ id: "vs_1", status: "some_future_status", metadata: { vendorId: "vendor-1" } });
 
     expect(m.vendor.update).not.toHaveBeenCalled();
     expect(communicationService.send).not.toHaveBeenCalled();
+  });
+
+  it("processing/canceled/redacted record the Stripe status but never change the Eki outcome or message the vendor", async () => {
+    m.vendor.findUnique.mockResolvedValue({ id: "vendor-1", verificationStatus: "VERIFIED", stripeVerificationSessionId: "vs_1" });
+
+    for (const status of ["processing", "canceled", "redacted"]) {
+      m.vendor.update.mockClear();
+      await stripeIdentityService.handleVerificationCompleted({ id: "vs_1", status, metadata: { vendorId: "vendor-1" } });
+      expect(m.vendor.update).toHaveBeenCalledTimes(1);
+      const data = (m.vendor.update.mock.calls[0][0] as { data: Record<string, unknown> }).data;
+      expect(data.stripeIdentityStatus).toBe(status);
+      expect(data).not.toHaveProperty("verificationStatus");
+    }
+    expect(communicationService.send).not.toHaveBeenCalled();
+  });
+
+  it("requires_input records the provider status so admin shows needs-input, not a final rejection", async () => {
+    m.vendor.findUnique.mockResolvedValue({ id: "vendor-1", verificationStatus: "PENDING", stripeVerificationSessionId: "vs_1" });
+    m.vendor.update.mockResolvedValue({ userId: "u", storeName: "S", user: { email: "a@b.com" } });
+    await stripeIdentityService.handleVerificationCompleted({ id: "vs_1", status: "requires_input", metadata: { vendorId: "vendor-1" }, last_error: { reason: "blurry" } });
+    expect(m.vendor.update).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ stripeIdentityStatus: "requires_input" }) }));
   });
 
   it("a failed verification-approved communication never throws out of the webhook handler — the DB state change already succeeded", async () => {

@@ -12,7 +12,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 vi.mock("../lib/prisma", () => ({
   prisma: {
     vendor: { findMany: vi.fn(), findUnique: vi.fn(), update: vi.fn() },
-    verificationDocument: { findMany: vi.fn(), updateMany: vi.fn() },
+    verificationDocument: { findMany: vi.fn(), updateMany: vi.fn(), count: vi.fn() },
     $transaction: vi.fn((ops: Promise<unknown>[]) => Promise.all(ops)),
   },
 }));
@@ -112,7 +112,9 @@ describe("adminGetReviewDetails — Stripe Identity rejection reason is visible"
 });
 
 describe("adminApproveVendorVerification / adminRejectVendorVerification — write the same field Stripe Identity does", () => {
-  const baseVendor = { id: "v1", userId: "u1", storeName: "Queen Foods", user: { email: "amara@example.com" } };
+  // Legacy (pre-Stripe) vendor: no Stripe session/account, at least one document.
+  const baseVendor = { id: "v1", userId: "u1", storeName: "Queen Foods", stripeVerificationSessionId: null, stripeAccountId: null, user: { email: "amara@example.com" } };
+  beforeEach(() => { m.verificationDocument.count.mockResolvedValue(1 as never); });
 
   it("approve clears verificationFailureReason, same as a successful Stripe Identity webhook", async () => {
     m.vendor.findUnique.mockResolvedValueOnce(baseVendor as never).mockResolvedValueOnce({
@@ -142,5 +144,27 @@ describe("adminApproveVendorVerification / adminRejectVendorVerification — wri
     expect(m.vendor.update).toHaveBeenCalledWith(
       expect.objectContaining({ data: expect.objectContaining({ verificationStatus: "REJECTED", verificationFailureReason: "Blurry ID photo" }) }),
     );
+  });
+});
+
+describe("manual approve/reject is refused for provider-controlled (Stripe) verification - Handbook 14.3", () => {
+  it("409s approve for a vendor with a Stripe Identity session", async () => {
+    m.vendor.findUnique.mockResolvedValueOnce({ id: "v1", userId: "u1", storeName: "Q", stripeVerificationSessionId: "vs_1", stripeAccountId: null, user: { email: "a@b.com" } } as never);
+    m.verificationDocument.count.mockResolvedValue(0 as never);
+    await expect(verificationService.adminApproveVendorVerification("admin-1", "v1")).rejects.toMatchObject({ statusCode: 409 });
+    expect(m.vendor.update).not.toHaveBeenCalled();
+  });
+
+  it("409s reject for a vendor with a Stripe Connect account", async () => {
+    m.vendor.findUnique.mockResolvedValueOnce({ id: "v1", userId: "u1", storeName: "Q", stripeVerificationSessionId: null, stripeAccountId: "acct_1", user: { email: "a@b.com" } } as never);
+    m.verificationDocument.count.mockResolvedValue(2 as never);
+    await expect(verificationService.adminRejectVendorVerification("admin-1", "v1", "nope reason")).rejects.toMatchObject({ statusCode: 409 });
+    expect(m.vendor.update).not.toHaveBeenCalled();
+  });
+
+  it("409s approve for a vendor that never submitted anything (must use Stripe)", async () => {
+    m.vendor.findUnique.mockResolvedValueOnce({ id: "v1", userId: "u1", storeName: "Q", stripeVerificationSessionId: null, stripeAccountId: null, user: { email: "a@b.com" } } as never);
+    m.verificationDocument.count.mockResolvedValue(0 as never);
+    await expect(verificationService.adminApproveVendorVerification("admin-1", "v1")).rejects.toMatchObject({ statusCode: 409 });
   });
 });

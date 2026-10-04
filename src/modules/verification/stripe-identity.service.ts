@@ -83,6 +83,8 @@ export const stripeIdentityService = {
         data: {
           verificationStatus: VendorVerificationStatus.VERIFIED,
           stripeVerificationSessionId: session.id,
+          stripeIdentityStatus: "verified",
+          stripeIdentityUpdatedAt: new Date(),
           verifiedAt: new Date(),
           verificationFailureReason: null,
         },
@@ -107,8 +109,15 @@ export const stripeIdentityService = {
       const updatedVendor = await prisma.vendor.update({
         where: { id: vendorId },
         data: {
+          // requires_input is "the vendor must retry/provide more input", NOT a
+          // final rejection by Stripe. The coarse Eki enum stays REJECTED only
+          // because the vendor app reads it to show the retry prompt; admin
+          // reads stripeIdentityStatus ("requires_input") and presents it as
+          // "Needs input" (vendor-provider-readiness.deriveIdentityState).
           verificationStatus: VendorVerificationStatus.REJECTED,
           stripeVerificationSessionId: session.id,
+          stripeIdentityStatus: "requires_input",
+          stripeIdentityUpdatedAt: new Date(),
           verificationFailureReason: reason,
         },
         select: { userId: true, storeName: true, user: { select: { email: true } } },
@@ -127,6 +136,17 @@ export const stripeIdentityService = {
         variables: { store_name: updatedVendor.storeName, reason },
       }).catch((err) => logger.warn("Stripe Identity rejected communication failed", { vendorId, error: String(err) }));
 
+      return;
+    }
+
+    if (session.status === "processing" || session.status === "canceled" || session.status === "redacted") {
+      // Non-terminal / housekeeping states: record Stripe's status for the
+      // admin readiness view without changing the Eki verification outcome
+      // (a redacted session must not un-verify a vendor).
+      await prisma.vendor.update({
+        where: { id: vendorId },
+        data: { stripeVerificationSessionId: session.id, stripeIdentityStatus: session.status, stripeIdentityUpdatedAt: new Date() },
+      });
       return;
     }
 

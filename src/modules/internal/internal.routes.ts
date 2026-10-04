@@ -1,3 +1,4 @@
+import { adminSuspensionService } from "../admin/admin-suspension.service";
 import { Router, type Request, type Response } from "express";
 
 import { logger } from "../../lib/logger";
@@ -347,6 +348,8 @@ const jobs: [string, string, () => Promise<Record<string, unknown>>][] = [
   ["payment-anomaly-scan", "duplicate-payment / financial-inconsistency scan", runPaymentAnomalyScan],
   ["fulfilment-delay-scan", "supplier-fulfilment delay scan", runFulfilmentDelayScan],
   ["push-receipt-check", "Expo push receipt check", runPushReceiptCheck],
+  // Timed suspensions (Handbook 4.3): lift those whose end date has passed.
+  ["suspension-expiry", "timed suspension expiry", () => adminSuspensionService.liftExpired()],
 ];
 
 for (const [path, name, run] of jobs) {
