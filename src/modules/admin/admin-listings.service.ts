@@ -385,6 +385,7 @@ export const adminListingsService = {
       dispute,
       payoutRequests,
       webhookEvents,
+      stripeLivemode: (process.env.STRIPE_SECRET_KEY ?? "").startsWith("sk_live_"),
     };
   },
 
@@ -799,7 +800,7 @@ export const adminListingsService = {
       }),
       prisma.refund.findMany({ where: { orderId: payment.orderId }, orderBy: { createdAt: "desc" }, take: 20 }),
     ]);
-    return { ...scrubUnpaidSplit(payment), vendorName, webhookEvents, refunds };
+    return { ...scrubUnpaidSplit(payment), vendorName, webhookEvents, refunds, stripeLivemode: (process.env.STRIPE_SECRET_KEY ?? "").startsWith("sk_live_") };
   },
 
   async getWalletTransaction(txId: string) {

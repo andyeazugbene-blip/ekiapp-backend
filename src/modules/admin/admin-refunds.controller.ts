@@ -406,7 +406,8 @@ export async function adminListOrderRefunds(_request: Request, response: Respons
         amount: r.amountMinor,
         currency: r.currency,
         reason: r.reason,
-        status: r.status === "COMPLETED" ? "COMPLETED" : r.status === "FAILED" ? "FAILED" : r.status === "PROCESSING" ? "PROCESSING" : "REQUESTED",
+        // "REQUESTED" in the list means awaiting a 2nd admin (an AdminApproval); a Refund row is already with Stripe.
+        status: r.status === "COMPLETED" ? "COMPLETED" : r.status === "FAILED" ? "FAILED" : "PROCESSING",
         requestedBy: actorById.get(r.actorId) ?? null,
         decidedBy: null,
         createdAt: r.createdAt,
