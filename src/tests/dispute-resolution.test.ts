@@ -242,3 +242,76 @@ describe("disputeService.resolveDispute — Stripe-paid orders (Defect E)", () =
     expect(m.$transaction).not.toHaveBeenCalled();
   });
 });
+
+// ─── Canonical events: dispute_opened / dispute_resolved / refund_* ─────────
+import { eventsService as resolutionEvents } from "../modules/events/events.service";
+
+describe("dispute + refund canonical events", () => {
+  const emit = vi.spyOn(resolutionEvents, "emit").mockImplementation(() => undefined);
+  const names = () => emit.mock.calls.map((c) => c[0].name);
+  beforeEach(() => emit.mockClear());
+
+  it("openDispute emits dispute_opened once after the dispute is created; a duplicate dispute emits nothing", async () => {
+    (m as any).deliveryOtp = { findUnique: vi.fn().mockResolvedValue(null) };
+    (m.dispute as any).create = vi.fn();
+    const txCreate = vi.fn().mockResolvedValue({ id: "dispute-9" });
+    m.$transaction.mockImplementationOnce(async (fn: any) => fn({ dispute: { create: txCreate }, order: { update: vi.fn() } }));
+    m.order.findUnique.mockResolvedValue({ id: "order-1", buyerId: "buyer-1", vendorId: "vendor-1", status: "DISPATCHED", escrowType: "DOMESTIC_AFRICA", orderNumber: "ORD-1" } as never);
+    m.dispute.findUnique.mockResolvedValue(null as never);
+    m.vendor.findUnique.mockResolvedValue({ userId: "vendor-user-1" } as never);
+    await disputeService.openDispute("buyer-1", "order-1", "Parcel never came", { type: "NOT_RECEIVED" });
+    expect(emit).toHaveBeenCalledTimes(1);
+    expect(emit.mock.calls[0][0]).toMatchObject({
+      name: "dispute_opened", entityType: "Dispute", entityId: "dispute-9", actorId: "buyer-1",
+      payload: { eventKey: "dispute_opened:dispute-9", type: "NOT_RECEIVED" },
+    });
+
+    emit.mockClear();
+    m.dispute.findUnique.mockResolvedValue({ id: "dispute-9" } as never);
+    await expect(disputeService.openDispute("buyer-1", "order-1", "Parcel never came")).rejects.toMatchObject({ statusCode: 409 });
+    expect(emit).not.toHaveBeenCalled();
+  });
+
+  it("vendor-favour resolution emits dispute_resolved and no refund events", async () => {
+    m.dispute.findUnique.mockResolvedValue(openDispute() as never);
+    await disputeService.resolveDispute("dispute-1", "admin-1", { resolution: "vendor", note: "delivery proven" });
+    expect(names()).toEqual(["dispute_resolved"]);
+    expect(emit.mock.calls[0][0]).toMatchObject({ actorType: "admin", actorId: "admin-1", entityId: "dispute-1", payload: { eventKey: "dispute_resolved:dispute-1", resolution: "vendor", resultStatus: "RESOLVED_VENDOR" } });
+  });
+
+  it("buyer-favour Stripe resolution emits refund_requested, refund_completed (provider says succeeded) and dispute_resolved", async () => {
+    m.dispute.findUnique.mockResolvedValue(openDispute() as never);
+    m.order.findUnique.mockResolvedValue(stripePaidOrderRow() as never);
+    stripeRefundCreate.mockResolvedValue({ id: "re_ev", amount: 5000, status: "succeeded" } as never);
+    await disputeService.resolveDispute("dispute-1", "admin-1", { resolution: "buyer", note: "refund the buyer" });
+    expect(names()).toEqual(["refund_requested", "refund_completed", "dispute_resolved"]);
+    const completed = emit.mock.calls[1][0];
+    expect(completed).toMatchObject({ entityType: "Refund", entityId: "re_ev", amountMinor: 5000, payload: { eventKey: "refund_completed:re_ev", provider: "stripe" } });
+  });
+
+  it("a Stripe refund still pending emits refund_requested only (completion arrives via the webhook)", async () => {
+    m.dispute.findUnique.mockResolvedValue(openDispute() as never);
+    m.order.findUnique.mockResolvedValue(stripePaidOrderRow() as never);
+    stripeRefundCreate.mockResolvedValue({ id: "re_pend", amount: 5000, status: "pending" } as never);
+    await disputeService.resolveDispute("dispute-1", "admin-1", { resolution: "buyer", note: "refund the buyer" });
+    expect(names()).toEqual(["refund_requested", "dispute_resolved"]);
+  });
+
+  it("a failed refund leaves the dispute unresolved: no dispute_resolved and no refund_completed", async () => {
+    m.dispute.findUnique.mockResolvedValue(openDispute() as never);
+    m.order.findUnique.mockResolvedValue(stripePaidOrderRow() as never);
+    stripeRefundCreate.mockRejectedValue(new Error("card issuer declined"));
+    await expect(disputeService.resolveDispute("dispute-1", "admin-1", { resolution: "buyer", note: "refund the buyer" })).rejects.toThrow(/refund failed/i);
+    expect(names()).not.toContain("dispute_resolved");
+    expect(names()).not.toContain("refund_completed");
+  });
+
+  it("Paystack refunds confirm synchronously: refund_requested + refund_completed share a deterministic key suffix", async () => {
+    m.dispute.findUnique.mockResolvedValue(openDispute() as never);
+    m.order.findUnique.mockResolvedValue(paystackPaidOrderRow() as never);
+    refundTransaction.mockResolvedValue(undefined as never);
+    await disputeService.resolveDispute("dispute-1", "admin-1", { resolution: "buyer", note: "refund the buyer" });
+    expect(names()).toEqual(["refund_requested", "refund_completed", "dispute_resolved"]);
+    expect(emit.mock.calls[1][0].payload).toMatchObject({ eventKey: "refund_completed:ref_123:5000", provider: "paystack" });
+  });
+});

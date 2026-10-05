@@ -9,6 +9,7 @@ import { commsPauseService, PAUSE_REASON } from "./comms-pause.service";
 import { AppError } from "../../shared/errors/app-error";
 import { recordAudit } from "../../shared/utils/audit";
 import type { Request } from "express";
+import { emitMessageEvent, type MessageOutcome } from "./message-events";
 
 // ─── Template definitions ───────────────────────────────────────────────────
 
@@ -138,9 +139,9 @@ async function logCommunication(params: {
   body: string;
   status?: string;
   metadata?: Record<string, unknown>;
-}): Promise<void> {
+}): Promise<string | undefined> {
   try {
-    await prisma.communicationLog.create({
+    const row = await prisma.communicationLog.create({
       data: {
         recipientId: params.recipientId,
         recipientType: params.recipientType,
@@ -152,13 +153,28 @@ async function logCommunication(params: {
         metadata: (params.metadata ?? undefined) as Prisma.InputJsonValue | undefined,
       },
     });
+    return row?.id;
   } catch (error) {
     logger.warn("Failed to log communication", {
       eventKey: params.eventKey,
       recipientId: params.recipientId,
       error: error instanceof Error ? error.message : String(error),
     });
+    return undefined;
   }
+}
+
+/** logCommunication + canonical message event for the real outcome of a send() channel attempt. */
+async function logSendOutcome(params: Parameters<typeof logCommunication>[0], outcome: MessageOutcome): Promise<void> {
+  const logId = await logCommunication(params);
+  emitMessageEvent(outcome, {
+    logId,
+    recipientId: params.recipientId,
+    channel: params.channel,
+    eventKey: params.eventKey,
+    detail: params.metadata?.error as string | undefined,
+    source: "communication_send",
+  });
 }
 
 // ─── Main send function ─────────────────────────────────────────────────────
@@ -284,7 +300,7 @@ export const communicationService = {
             const html = wrapEmailHtml(title, body);
             promises.push(
               enqueueEmail({ to: params.recipientEmail, subject: title, html })
-                .then(() => logCommunication({
+                .then(() => logSendOutcome({
                   recipientId: params.recipientId,
                   recipientType: template.recipientType,
                   eventKey: params.eventKey,
@@ -292,10 +308,10 @@ export const communicationService = {
                   title,
                   body,
                   status: "QUEUED",
-                }).then(() => true))
+                }, "queued").then(() => true))
                 .catch((err) => {
                   logger.warn("Communication email failed", { eventKey: params.eventKey, error: String(err) });
-                  return logCommunication({
+                  return logSendOutcome({
                     recipientId: params.recipientId,
                     recipientType: template.recipientType,
                     eventKey: params.eventKey,
@@ -304,7 +320,7 @@ export const communicationService = {
                     body,
                     status: "FAILED",
                     metadata: { error: String(err) },
-                  }).then(() => false);
+                  }, "failed").then(() => false);
                 }),
             );
           }
@@ -314,17 +330,17 @@ export const communicationService = {
           attemptedAnyChannel = true;
           promises.push(
             sendPushToUser(params.recipientId, { title, body, data: { type: params.eventKey, ...params.data } })
-              .then(() => logCommunication({
+              .then(() => logSendOutcome({
                 recipientId: params.recipientId,
                 recipientType: template.recipientType,
                 eventKey: params.eventKey,
                 channel: "push",
                 title,
                 body,
-              }).then(() => true))
+              }, "queued").then(() => true))
               .catch((err) => {
                 logger.warn("Communication push failed", { eventKey: params.eventKey, error: String(err) });
-                return logCommunication({
+                return logSendOutcome({
                   recipientId: params.recipientId,
                   recipientType: template.recipientType,
                   eventKey: params.eventKey,
@@ -332,7 +348,7 @@ export const communicationService = {
                   title,
                   body,
                   status: "FAILED",
-                }).then(() => false);
+                }, "failed").then(() => false);
               }),
           );
           break;
@@ -348,7 +364,7 @@ export const communicationService = {
               data: { eventKey: params.eventKey, ...params.data },
               dedupeKey: params.dedupeKey,
             })
-              .then((created) => logCommunication({
+              .then((created) => logSendOutcome({
                 recipientId: params.recipientId,
                 recipientType: template.recipientType,
                 eventKey: params.eventKey,
@@ -360,10 +376,10 @@ export const communicationService = {
                 // renewals.service.ts already created it directly) — the
                 // recipient IS notified, just not by this write, so this
                 // still counts as delivered, not failed.
-              }).then(() => true))
+              }, "delivered").then(() => true))
               .catch((err) => {
                 logger.warn("Communication in-app failed", { eventKey: params.eventKey, error: String(err) });
-                return logCommunication({
+                return logSendOutcome({
                   recipientId: params.recipientId,
                   recipientType: template.recipientType,
                   eventKey: params.eventKey,
@@ -371,7 +387,7 @@ export const communicationService = {
                   title,
                   body,
                   status: "FAILED",
-                }).then(() => false);
+                }, "failed").then(() => false);
               }),
           );
           break;

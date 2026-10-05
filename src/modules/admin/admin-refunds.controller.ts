@@ -1,4 +1,5 @@
 import type { Request, Response } from "express";
+import { eventsService, EVENT_NAMES } from "../events/events.service";
 import { NotificationType, RefundStatus } from "@prisma/client";
 
 import { prisma } from "../../lib/prisma";
@@ -138,6 +139,12 @@ export async function executeOrderRefund(
       throw error;
     }
 
+    eventsService.emit({
+      name: EVENT_NAMES.refund_requested, actorType: "admin", actorId: adminId, entityType: "Refund", entityId: refundRow.id,
+      secondaryEntities: { orderId }, source: "admin_refund", amountMinor: nativeRefundAmount, currency: order.currency,
+      payload: { eventKey: `refund_requested:${refundRow.id}`, provider: "stripe" },
+    });
+
     // The PaymentIntent this order's payment references may be SHARED
     // across every vendor's order in the same multi-vendor checkout (see
     // payments.service.ts createPaymentIntent — exactly one PaymentIntent
@@ -182,6 +189,14 @@ export async function executeOrderRefund(
         : refund.status === "failed" || refund.status === "canceled" ? RefundStatus.FAILED
         : RefundStatus.PROCESSING;
       await prisma.refund.update({ where: { id: refundRow.id }, data: { providerRefundId: refund.id, status: mapped } });
+      if (mapped === RefundStatus.COMPLETED) {
+        // Same entity + eventKey the charge.refund.updated webhook uses, so the two sources dedupe.
+        eventsService.emit({
+          name: EVENT_NAMES.refund_completed, actorType: "system", entityType: "Refund", entityId: refund.id,
+          secondaryEntities: { orderId, refundRowId: refundRow.id }, source: "stripe_refund_sync", amountMinor: nativeRefundAmount, currency: order.currency,
+          payload: { eventKey: `refund_completed:${refund.id}`, provider: "stripe", providerRefundId: refund.id },
+        });
+      }
 
       // Only a refund that brings the cumulative total to the full order
       // closes the order; a partial refund leaves it open for further ones.
@@ -231,6 +246,18 @@ export async function executeOrderRefund(
       });
       await paystack.refundTransaction(order.paystackTransaction.reference, amount);
       logger.info("Admin Paystack refund issued", { orderId, reference: order.paystackTransaction.reference });
+      // Paystack confirms synchronously (no refund webhook is wired), so request and completion are the same moment.
+      const paystackRefundKey = `${order.paystackTransaction.reference}:${finalAmount}`;
+      eventsService.emit({
+        name: EVENT_NAMES.refund_requested, actorType: "admin", actorId: adminId, entityType: "Refund", entityId: order.paystackTransaction.reference,
+        secondaryEntities: { orderId }, source: "admin_refund", amountMinor: finalAmount, currency: order.currency,
+        payload: { eventKey: `refund_requested:${paystackRefundKey}`, provider: "paystack" },
+      });
+      eventsService.emit({
+        name: EVENT_NAMES.refund_completed, actorType: "system", entityType: "Refund", entityId: order.paystackTransaction.reference,
+        secondaryEntities: { orderId }, source: "paystack_refund_sync", amountMinor: finalAmount, currency: order.currency,
+        payload: { eventKey: `refund_completed:${paystackRefundKey}`, provider: "paystack" },
+      });
 
       await prisma.$transaction(async (tx) => {
         await tx.order.update({ where: { id: orderId }, data: { status: finalStatus } });

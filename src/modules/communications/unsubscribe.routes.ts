@@ -5,6 +5,7 @@ import { logger } from "../../lib/logger";
 import { prisma } from "../../lib/prisma";
 import { asyncHandler } from "../../shared/utils/async-handler";
 import { verifyUnsubscribeToken } from "./comms-utils";
+import { eventsService, EVENT_NAMES } from "../events/events.service";
 
 export const unsubscribeRouter = Router();
 
@@ -27,7 +28,11 @@ export async function handleUnsubscribe(request: Request, response: Response): P
     response.status(400).type("html").send(page("Invalid link", "This unsubscribe link is not valid or has been altered."));
     return;
   }
-  await prisma.user.updateMany({ where: { id: userId, marketingConsentAt: { not: null } }, data: { marketingConsentAt: null } });
+  const cleared = await prisma.user.updateMany({ where: { id: userId, marketingConsentAt: { not: null } }, data: { marketingConsentAt: null } });
+  // Only the request that actually withdrew consent emits (count === 1); repeat clicks are no-ops.
+  if (cleared.count === 1) {
+    eventsService.emit({ name: EVENT_NAMES.message_opted_out, actorType: "user", actorId: userId, entityType: "User", entityId: userId, source: "unsubscribe_link", payload: { channel: "marketing" } });
+  }
   logger.info("Marketing consent cleared via unsubscribe link", { userId });
   response.status(200).type("html").send(page("You are unsubscribed", "You will no longer receive marketing messages from Eki. You will still receive important messages about your orders and account."));
 }

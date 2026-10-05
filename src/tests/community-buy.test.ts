@@ -3583,3 +3583,79 @@ describe("Acceptance audit — restricted organiser cannot mutate an owned campa
     await expect(communityCampaignsService.getRefundProgressForOrganiser("organiser-user-1", "camp-1")).resolves.toEqual({ total: 0, completed: 0, pending: 0, failed: 0 });
   });
 });
+
+// ─── Canonical lifecycle events (handbook 12) ───────────────────────────────
+import { eventsService as lifecycleEvents } from "../modules/events/events.service";
+
+describe("Community Buy canonical lifecycle events", () => {
+  const emit = vi.spyOn(lifecycleEvents, "emit").mockImplementation(() => undefined);
+  const names = () => emit.mock.calls.map((c) => c[0].name);
+  beforeEach(() => emit.mockClear());
+
+  const dueCampaign = (over: Record<string, unknown> = {}) => ({
+    id: "camp-ev", minimumShares: 3, goalShares: 6, maximumShares: 6, confirmedShares: 6, pricePerShareMinor: 1000, currency: "GBP", supplierId: "sup-1", title: "Ev", ...over,
+  });
+  const wire = () => {
+    m.communityCampaign.findUnique.mockResolvedValue({ id: "camp-ev", title: "Ev", organiser: { userId: "o1" }, participants: [] } as never);
+    m.campaignSupplierPayment.findUnique.mockResolvedValue(null);
+    m.supplierProfile.findUnique.mockResolvedValue({ vendor: { userId: "s1", stripeAccountId: "acct_1" } } as never);
+  };
+
+  it("closeDueCampaigns: target met emits community_buy_target_reached once, with fundingOutcome and a stable eventKey", async () => {
+    m.communityCampaign.findMany.mockResolvedValue([dueCampaign()] as never);
+    m.communityCampaign.updateMany.mockResolvedValue({ count: 1 } as never);
+    wire();
+    await communityCampaignsService.closeDueCampaigns();
+    expect(names()).toEqual(["community_buy_target_reached"]);
+    expect(emit.mock.calls[0][0]).toMatchObject({
+      entityType: "CommunityCampaign", entityId: "camp-ev", actorType: "system",
+      payload: { eventKey: "community_buy_target_reached:camp-ev", fundingOutcome: "GOAL_REACHED" },
+    });
+  });
+
+  it("closeDueCampaigns: a lost atomic claim (count 0) and a rescue-window opening emit nothing", async () => {
+    m.communityCampaign.findMany.mockResolvedValue([dueCampaign()] as never);
+    m.communityCampaign.updateMany.mockResolvedValue({ count: 0 } as never);
+    await communityCampaignsService.closeDueCampaigns();
+    m.communityCampaign.findMany.mockResolvedValue([dueCampaign({ confirmedShares: 1 })] as never);
+    m.communityCampaign.updateMany.mockResolvedValue({ count: 1 } as never);
+    wire();
+    await communityCampaignsService.closeDueCampaigns();
+    expect(emit).not.toHaveBeenCalled();
+  });
+
+  it("closeDueCampaigns does not fail when the event layer throws", async () => {
+    emit.mockImplementationOnce(() => { throw new Error("db down"); });
+    m.communityCampaign.findMany.mockResolvedValue([dueCampaign()] as never);
+    m.communityCampaign.updateMany.mockResolvedValue({ count: 1 } as never);
+    wire();
+    await expect(communityCampaignsService.closeDueCampaigns()).resolves.toMatchObject({ succeeded: 1 });
+  });
+
+  it("evaluateRescueExpiry: rescued -> target_reached; expired below minimum -> target_failed", async () => {
+    m.communityCampaign.findMany.mockResolvedValue([dueCampaign({ confirmedShares: 3 })] as never);
+    m.communityCampaign.updateMany.mockResolvedValue({ count: 1 } as never);
+    wire();
+    await communityCampaignsService.evaluateRescueExpiry();
+    expect(names()).toEqual(["community_buy_target_reached"]);
+    emit.mockClear();
+    m.communityCampaign.findMany.mockResolvedValue([dueCampaign({ confirmedShares: 1 })] as never);
+    m.campaignContribution.findMany.mockResolvedValue([] as never);
+    await communityCampaignsService.evaluateRescueExpiry();
+    expect(names()).toEqual(["community_buy_target_failed"]);
+    expect(emit.mock.calls[0][0].payload).toMatchObject({ eventKey: "community_buy_target_failed:camp-ev", fundingOutcome: "BELOW_MINIMUM" });
+  });
+
+  it("createRefundRecordsForFailedCampaign: emits community_buy_refund_started only when records were created, not for duplicates", async () => {
+    m.campaignContribution.findMany.mockResolvedValue([{ id: "c1", amount: 500, buyerServiceFeeAmount: 0, deliveryFeeAmountMinor: 0, currency: "GBP" }] as never);
+    m.campaignRefund.create.mockResolvedValue({ id: "r1" } as never);
+    m.campaignContribution.update.mockResolvedValue({} as never);
+    await communityCampaignsService.createRefundRecordsForFailedCampaign("camp-ev");
+    expect(names()).toEqual(["community_buy_refund_started"]);
+    expect(emit.mock.calls[0][0].payload).toMatchObject({ refundCount: 1, eventKey: "community_buy_refund_started:camp-ev" });
+    emit.mockClear();
+    m.campaignRefund.create.mockRejectedValue({ code: "P2002" });
+    await communityCampaignsService.createRefundRecordsForFailedCampaign("camp-ev");
+    expect(emit).not.toHaveBeenCalled();
+  });
+});

@@ -342,3 +342,32 @@ describe("testSend + mandatory test proof", () => {
     expect(() => adminCommunicationsService.assertTestPassed(ACTOR, i, undefined)).toThrow(/test/i);
   });
 });
+
+// ─── Canonical message events (broadcast path) ──────────────────────────────
+import { eventsService as bcEvents } from "../modules/events/events.service";
+
+describe("broadcast -> canonical message events", () => {
+  const emit = vi.spyOn(bcEvents, "emit").mockImplementation(() => undefined);
+  const evs = () => emit.mock.calls.map((c) => c[0]);
+
+  it("in-app stored -> delivered, push/email handed to provider -> queued (never delivered without a receipt)", async () => {
+    emit.mockClear();
+    m.user.findMany.mockResolvedValue([recipient({ id: "a" })]);
+    m.pushToken.findMany.mockResolvedValue([{ userId: "a" }]);
+    await adminCommunicationsService.broadcast(ACTOR, input(), { reason: "Spring promo", idempotencyKey: "ev1" });
+    const byChannel = Object.fromEntries(evs().map((e) => [(e.payload as any).channel, e.name]));
+    expect(byChannel.in_app).toBe("message_delivered");
+    expect(byChannel.push).toBe("message_queued");
+    expect(byChannel.email).toBe("message_queued");
+    expect(evs().every((e) => e.entityType === "CommunicationLog" && e.source === "admin_broadcast")).toBe(true);
+  });
+
+  it("a rejected push emits message_failed with the provider reason", async () => {
+    emit.mockClear();
+    push.mockResolvedValue({ tokens: 1, accepted: 0, rejected: 1, error: "InvalidCredentials", ticketIds: [] });
+    await adminCommunicationsService.broadcast(ACTOR, input(), { reason: "Spring promo" });
+    const failed = evs().filter((e) => e.name === "message_failed");
+    expect(failed).toHaveLength(1);
+    expect(failed[0].payload).toMatchObject({ channel: "push", reason: "InvalidCredentials" });
+  });
+});

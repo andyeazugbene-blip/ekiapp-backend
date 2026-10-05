@@ -81,6 +81,8 @@ describe("Community Buy payment enablement is Super Administrator only", () => {
   });
 });
 
+const whoHas = (perm: string): string[] => (Object.keys(USERS) as string[]).filter((u) => USERS[u].includes(perm) || USERS[u].includes("admin.*"));
+
 describe("role boundaries on money / settings / roles / audit export", () => {
   const cases: Array<{ name: string; method: "get" | "post" | "patch" | "put"; path: string; allowed: string[]; denyOnly?: boolean }> = [
     { name: "refund an order", method: "post", path: "/api/admin/orders/o1/refund", allowed: ["finance", "super"] },
@@ -99,6 +101,10 @@ describe("role boundaries on money / settings / roles / audit export", () => {
     { name: "subscription admin cancel", method: "post", path: "/api/admin/subscriptions/s1/force-cancel", allowed: ["ops", "super"] },
     { name: "unpublish a product", method: "post", path: "/api/admin/products/p1/unpublish", allowed: ["ops", "super"] },
     { name: "cancel a gift card", method: "post", path: "/api/admin/gift-cards/purchased/g1/cancel", allowed: ["ops", "super"] },
+    // Event audit trail (read-only, automation.read): allowed set derived from the real seeded roles.
+    { name: "read the canonical event log", method: "get", path: "/api/admin/events?name=dispute_opened&limit=5", allowed: whoHas("automation.read"), denyOnly: true },
+    { name: "resolve a dispute", method: "patch", path: "/api/admin/disputes/d1/resolve", allowed: whoHas("disputes.mutate"), denyOnly: true },
+    { name: "request dispute evidence", method: "post", path: "/api/admin/disputes/d1/request-evidence", allowed: whoHas("disputes.mutate"), denyOnly: true },
   ];
 
   for (const c of cases) {

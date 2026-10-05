@@ -7,6 +7,8 @@ import { isIndividualDeliveryEnabled } from "./community-buy-privacy.service";
 import { supportCaseService } from "./support-case.service";
 import { assertCampaignTransition } from "./campaign-transitions";
 import { notifyCampaignCompleted } from "./campaign-notifications";
+import { EVENT_NAMES } from "../events/events.service";
+import { emitCampaignLifecycleEvent } from "./community-buy-events";
 
 /**
  * Operational fulfilment tracking for a succeeded campaign — doc Phase 8.
@@ -331,6 +333,8 @@ export const campaignFulfilmentService = {
     });
     if (claim.count !== 1) throw new AppError("This campaign hasn't been dispatched or collected yet", 409);
     await recordFulfilmentEvent({ campaignId, actorUserId, actorRole: "ORGANISER", eventType: "COMPLETED" });
+    // The fulfilment record reached COMPLETED (goods confirmed received/collected); claim.count===1 above guarantees once.
+    emitCampaignLifecycleEvent(EVENT_NAMES.community_buy_fulfilled, campaignId, "organiser_confirm_completion", { fulfilmentStatus: "COMPLETED" });
     await markCampaignCompleted(campaignId);
     return prisma.campaignFulfilment.findUniqueOrThrow({ where: { campaignId } });
   },
@@ -676,7 +680,10 @@ async function markCampaignCompleted(campaignId: string): Promise<void> {
   try {
     assertCampaignTransition("FULFILLING", "COMPLETED");
     const claim = await prisma.communityCampaign.updateMany({ where: { id: campaignId, status: "FULFILLING" }, data: { status: "COMPLETED" } });
-    if (claim.count === 1) await notifyCampaignCompleted(campaignId);
+    if (claim.count === 1) {
+      emitCampaignLifecycleEvent(EVENT_NAMES.community_buy_completed, campaignId, "fulfilment_completed");
+      await notifyCampaignCompleted(campaignId);
+    }
   } catch (error) {
     logger.error("Could not mark campaign COMPLETED (non-blocking)", { campaignId, errorMessage: error instanceof Error ? error.message : String(error) });
   }

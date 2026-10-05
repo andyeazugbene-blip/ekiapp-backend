@@ -1,9 +1,9 @@
 import type { OrderEvidenceKind, OrderEvidenceRole } from "@prisma/client";
 
 import { prisma } from "../../lib/prisma";
-import { generatePresignedRead } from "../../lib/storage";
 import { AppError } from "../../shared/errors/app-error";
-import { attachUploadAsset } from "../disputes/dispute-v2.service";
+import { attachUploadAsset, signedReadFor } from "../disputes/dispute-v2.service";
+import { eventsService, EVENT_NAMES } from "../events/events.service";
 
 /** Handbook §11 L453: delivery or pickup evidence is attached to the order and access-controlled. */
 export const DELIVERY_PROOF_ORDER_STATUSES = ["DISPATCHED", "IN_TRANSIT", "DELIVERED"] as const;
@@ -12,13 +12,7 @@ const KINDS = ["DELIVERY_PHOTO", "PICKUP_CONFIRMATION", "SIGNATURE", "NOTE"] as 
 async function render(orderId: string) {
   const rows = await prisma.orderEvidence.findMany({ where: { orderId }, orderBy: { createdAt: "asc" } });
   return Promise.all(rows.map(async (r) => {
-    let url: string | null = null;
-    let contentType: string | null = null;
-    if (r.uploadAssetId) {
-      const asset = await prisma.uploadAsset.findUnique({ where: { id: r.uploadAssetId }, select: { key: true, contentType: true } });
-      if (asset) { url = await generatePresignedRead(asset.key, 300); contentType = asset.contentType; }
-    }
-    return { ...r, url, contentType };
+    return { ...r, ...(await signedReadFor(r.uploadAssetId)) };
   }));
 }
 
@@ -44,9 +38,15 @@ export const deliveryProofService = {
     } else if (!note) {
       throw new AppError("Provide a note or a file for the pickup confirmation", 400);
     }
-    return prisma.orderEvidence.create({
+    const created = await prisma.orderEvidence.create({
       data: { orderId, kind, uploadAssetId, note, submittedById: userId, submitterRole: "VENDOR" as OrderEvidenceRole },
     });
+    eventsService.emit({
+      name: EVENT_NAMES.delivery_proof_submitted, actorType: "vendor", actorId: userId, entityType: "Order", entityId: orderId,
+      secondaryEntities: { evidenceId: created.id, vendorId: vendor.id }, source: "api",
+      payload: { eventKey: `delivery_proof_submitted:${created.id}`, kind, hasFile: !!uploadAssetId },
+    });
+    return created;
   },
 
   async listForVendor(userId: string, orderId: string) {

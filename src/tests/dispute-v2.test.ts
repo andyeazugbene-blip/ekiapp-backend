@@ -237,3 +237,117 @@ describe("delivery proof access control", () => {
     expect(items[0].url).toContain("https://signed.example/delivery_proof/");
   });
 });
+
+// ─── Canonical events + storage-failure behaviour ───────────────────────────
+import { eventsService as disputeEvents } from "../modules/events/events.service";
+import { generatePresignedRead } from "../lib/storage";
+
+describe("dispute + delivery-proof canonical events", () => {
+  const emit = vi.spyOn(disputeEvents, "emit").mockImplementation(() => undefined);
+  const names = () => emit.mock.calls.map((c) => c[0].name);
+  beforeEach(() => emit.mockClear());
+
+  it("addEvidence emits dispute_evidence_submitted keyed by the evidence row; a closed dispute emits nothing", async () => {
+    m.disputeEvidence.create.mockResolvedValue({ id: "e7" });
+    await disputeV2Service.addEvidence(BUYER, "d1", { kind: "TEXT", text: "Box arrived crushed" });
+    expect(emit).toHaveBeenCalledTimes(1);
+    expect(emit.mock.calls[0][0]).toMatchObject({
+      name: "dispute_evidence_submitted", entityType: "Dispute", entityId: "d1", actorId: BUYER,
+      payload: { eventKey: "dispute_evidence_submitted:e7", submitterRole: "BUYER", kind: "TEXT" },
+    });
+    emit.mockClear();
+    m.dispute.findUnique.mockResolvedValue(disputeRow({ status: "RESOLVED_VENDOR", resolvedAt: new Date() }));
+    await expect(disputeV2Service.addEvidence(BUYER, "d1", { kind: "TEXT", text: "too late now" })).rejects.toMatchObject({ statusCode: 409 });
+    expect(emit).not.toHaveBeenCalled();
+  });
+
+  it("requestAppeal emits dispute_appealed only when the atomic claim wins", async () => {
+    m.dispute.findUnique.mockResolvedValue(disputeRow({ status: "RESOLVED_BUYER", resolvedAt: new Date() }));
+    m.dispute.updateMany.mockResolvedValue({ count: 0 });
+    await expect(disputeV2Service.requestAppeal(VENDOR_USER, "d1", "The courier photo proves delivery.")).rejects.toMatchObject({ statusCode: 409 });
+    expect(emit).not.toHaveBeenCalled();
+    m.dispute.updateMany.mockResolvedValue({ count: 1 });
+    await disputeV2Service.requestAppeal(VENDOR_USER, "d1", "The courier photo proves delivery.");
+    expect(names()).toEqual(["dispute_appealed"]);
+    expect(emit.mock.calls[0][0]).toMatchObject({ actorType: "vendor", payload: { eventKey: "dispute_appealed:d1", appellantRole: "VENDOR" } });
+  });
+
+  it("adminDecideAppeal emits dispute_appeal_decided with the decision; no open appeal emits nothing", async () => {
+    m.dispute.findUnique.mockResolvedValue(disputeRow({ appealStatus: "NONE" }));
+    await expect(disputeV2Service.adminDecideAppeal("admin", "d1", { decision: "UPHELD", reason: "reason long enough" })).rejects.toMatchObject({ statusCode: 409 });
+    expect(emit).not.toHaveBeenCalled();
+    m.dispute.findUnique.mockResolvedValue(disputeRow({ appealStatus: "REQUESTED" }));
+    m.dispute.updateMany.mockResolvedValue({ count: 1 });
+    await disputeV2Service.adminDecideAppeal("admin", "d1", { decision: "OVERTURNED", reason: "New evidence is conclusive" });
+    expect(names()).toEqual(["dispute_appeal_decided"]);
+    expect(emit.mock.calls[0][0]).toMatchObject({ actorType: "admin", payload: { decision: "OVERTURNED", eventKey: "dispute_appeal_decided:d1" } });
+  });
+
+  it("delivery proof submission emits delivery_proof_submitted; refused submissions (wrong vendor / wrong status) emit nothing", async () => {
+    m.vendor.findUnique.mockResolvedValue({ id: "v1" });
+    m.order.findUnique.mockResolvedValue({ id: "o1", vendorId: "v2", status: "DISPATCHED" });
+    await expect(deliveryProofService.addAsVendor(VENDOR_USER, "o1", { kind: "NOTE", note: "left at door" })).rejects.toMatchObject({ statusCode: 404 });
+    m.order.findUnique.mockResolvedValue({ id: "o1", vendorId: "v1", status: "PAID" });
+    await expect(deliveryProofService.addAsVendor(VENDOR_USER, "o1", { kind: "NOTE", note: "left at door" })).rejects.toMatchObject({ statusCode: 409 });
+    expect(emit).not.toHaveBeenCalled();
+    m.order.findUnique.mockResolvedValue({ id: "o1", vendorId: "v1", status: "DELIVERED" });
+    m.orderEvidence.create.mockResolvedValue({ id: "oe5" });
+    await deliveryProofService.addAsVendor(VENDOR_USER, "o1", { kind: "NOTE", note: "left at door" });
+    expect(emit.mock.calls[0][0]).toMatchObject({
+      name: "delivery_proof_submitted", entityType: "Order", entityId: "o1", actorType: "vendor",
+      payload: { eventKey: "delivery_proof_submitted:oe5", kind: "NOTE", hasFile: false },
+    });
+  });
+});
+
+describe("private asset signing", () => {
+  it("signed read URLs are requested with a 5 minute expiry", async () => {
+    m.dispute.findUnique
+      .mockResolvedValueOnce(disputeRow())
+      .mockResolvedValueOnce({ ...disputeRow(), reason: "r", type: "DAMAGED", claim: null, createdAt: new Date(), evidenceRequestedAt: null, evidenceRequestedFrom: null, appealDecidedAt: null, appealRequestedAt: null });
+    m.disputeEvidence.findMany.mockResolvedValue([{ id: "e1", disputeId: "d1", submitterRole: "BUYER", kind: "PHOTO", createdAt: new Date(), uploadAssetId: "a1" }]);
+    m.disputeMessage.findMany.mockResolvedValue([]);
+    m.uploadAsset.findUnique.mockResolvedValue({ key: "dispute_evidence/u/x.jpg", contentType: "image/jpeg" });
+    await disputeV2Service.getForParty(BUYER, "d1");
+    expect(vi.mocked(generatePresignedRead)).toHaveBeenLastCalledWith("dispute_evidence/u/x.jpg", 300);
+  });
+
+  it("a storage signing failure degrades to url null + urlUnavailable on the dispute view (no 500, no provider error leaked)", async () => {
+    vi.mocked(generatePresignedRead).mockRejectedValueOnce(new Error("AccessDenied: arn:aws:s3:::secret-bucket"));
+    m.dispute.findUnique
+      .mockResolvedValueOnce(disputeRow())
+      .mockResolvedValueOnce({ ...disputeRow(), reason: "r", type: "DAMAGED", claim: null, createdAt: new Date(), evidenceRequestedAt: null, evidenceRequestedFrom: null, appealDecidedAt: null, appealRequestedAt: null });
+    m.disputeEvidence.findMany.mockResolvedValue([{ id: "e1", disputeId: "d1", submitterRole: "BUYER", kind: "PHOTO", createdAt: new Date(), uploadAssetId: "a1" }]);
+    m.disputeMessage.findMany.mockResolvedValue([]);
+    m.uploadAsset.findUnique.mockResolvedValue({ key: "dispute_evidence/u/x.jpg", contentType: "image/jpeg" });
+    const view = await disputeV2Service.getForParty(BUYER, "d1");
+    expect(view.evidence[0]).toMatchObject({ id: "e1", url: null, urlUnavailable: true, contentType: "image/jpeg" });
+    expect(JSON.stringify(view)).not.toContain("secret-bucket");
+  });
+
+  it("a storage failure on the admin case view and the delivery-proof list also degrades per item", async () => {
+    vi.mocked(generatePresignedRead).mockRejectedValue(new Error("S3 down"));
+    try {
+      m.dispute.findUnique.mockResolvedValue({ ...disputeRow(), type: "OTHER", createdAt: new Date(), evidenceRequestedAt: null, evidenceRequestedFrom: null, appealDecidedAt: null, appealRequestedAt: null });
+      m.disputeEvidence.findMany.mockResolvedValue([{ id: "e1", disputeId: "d1", submitterRole: "BUYER", kind: "PHOTO", createdAt: new Date(), uploadAssetId: "a1" }]);
+      m.disputeMessage.findMany.mockResolvedValue([]);
+      m.uploadAsset.findUnique.mockResolvedValue({ key: "k", contentType: "image/png" });
+      const admin = await disputeV2Service.getForAdmin("d1");
+      expect(admin.evidence[0]).toMatchObject({ url: null, urlUnavailable: true });
+
+      m.order.findUnique.mockResolvedValue({ buyerId: BUYER, vendorId: "v1" });
+      m.orderEvidence.findMany.mockResolvedValue([{ id: "oe1", uploadAssetId: "a9" }, { id: "oe2", uploadAssetId: null, note: "text only" }]);
+      const items = await deliveryProofService.listForBuyer(BUYER, "o1");
+      expect(items[0]).toMatchObject({ url: null, urlUnavailable: true });
+      expect(items[1]).toMatchObject({ url: null, note: "text only" });
+    } finally {
+      vi.mocked(generatePresignedRead).mockImplementation(async (key: string) => `https://signed.example/${key}?sig=1`);
+    }
+  });
+
+  it("dispute evidence and delivery proof uploads are in the private category set (no public URL is ever issued)", async () => {
+    const actual = await vi.importActual<typeof import("../lib/storage")>("../lib/storage");
+    expect(actual.PRIVATE_UPLOAD_CATEGORIES.has("dispute_evidence")).toBe(true);
+    expect(actual.PRIVATE_UPLOAD_CATEGORIES.has("delivery_proof")).toBe(true);
+  });
+});

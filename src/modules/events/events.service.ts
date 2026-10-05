@@ -73,6 +73,17 @@ export const EVENT_NAMES = {
   community_buy_refund_started: "community_buy_refund_started",
   community_buy_fulfilled: "community_buy_fulfilled",
   community_buy_completed: "community_buy_completed",
+  // Dispute (handbook 11) - additive
+  dispute_opened: "dispute_opened",
+  dispute_evidence_submitted: "dispute_evidence_submitted",
+  dispute_resolved: "dispute_resolved",
+  dispute_appealed: "dispute_appealed",
+  dispute_appeal_decided: "dispute_appeal_decided",
+  // Delivery proof (handbook 11) - additive
+  delivery_proof_submitted: "delivery_proof_submitted",
+  // Refund (admin / dispute-driven refunds of orders)
+  refund_requested: "refund_requested",
+  refund_completed: "refund_completed",
   // Communication
   message_drafted: "message_drafted",
   message_test_sent: "message_test_sent",

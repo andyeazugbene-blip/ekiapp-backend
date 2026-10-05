@@ -1,5 +1,7 @@
 import type { DisputeEvidenceKind, DisputeParty, DisputeType } from "@prisma/client";
 
+import { logger } from "../../lib/logger";
+import { eventsService, EVENT_NAMES } from "../events/events.service";
 import { prisma } from "../../lib/prisma";
 import { generatePresignedRead } from "../../lib/storage";
 import { AppError } from "../../shared/errors/app-error";
@@ -90,12 +92,25 @@ function notify(userId: string | null | undefined, title: string, body: string, 
     .catch(() => undefined);
 }
 
-async function signed(assetId: string | null): Promise<{ url: string | null; contentType: string | null }> {
+export const SIGNED_URL_TTL_SECONDS = 300;
+
+/**
+ * Short-lived signed read for a private asset. A storage failure must never turn a
+ * dispute/proof read into a 500 (or leak the provider error): the row is still returned,
+ * with url null and urlUnavailable true so clients can show "file temporarily unavailable".
+ */
+export async function signedReadFor(assetId: string | null): Promise<{ url: string | null; contentType: string | null; urlUnavailable?: true }> {
   if (!assetId) return { url: null, contentType: null };
   const asset = await prisma.uploadAsset.findUnique({ where: { id: assetId }, select: { key: true, contentType: true } });
   if (!asset) return { url: null, contentType: null };
-  return { url: await generatePresignedRead(asset.key, 300), contentType: asset.contentType };
+  try {
+    return { url: await generatePresignedRead(asset.key, SIGNED_URL_TTL_SECONDS), contentType: asset.contentType };
+  } catch (error) {
+    logger.error("Could not sign a private asset read URL", { assetId, errorMessage: error instanceof Error ? error.message : String(error) });
+    return { url: null, contentType: asset.contentType, urlUnavailable: true };
+  }
 }
+const signed = signedReadFor;
 
 async function withSignedUrls<T extends { uploadAssetId: string | null }>(rows: T[]) {
   return Promise.all(rows.map(async (r) => ({ ...r, ...(await signed(r.uploadAssetId)) })));
@@ -201,6 +216,11 @@ export const disputeV2Service = {
     const created = await prisma.disputeEvidence.create({
       data: { disputeId, submittedById: userId, submitterRole: role, kind, uploadAssetId, text, note },
     });
+    eventsService.emit({
+      name: EVENT_NAMES.dispute_evidence_submitted, actorType: role === "BUYER" ? "user" : "vendor", actorId: userId,
+      entityType: "Dispute", entityId: disputeId, secondaryEntities: { evidenceId: created.id, orderId: dispute.orderId }, source: "api",
+      payload: { eventKey: `dispute_evidence_submitted:${created.id}`, kind, submitterRole: role },
+    });
     await notify(otherUserId, "New dispute evidence", `New evidence was added to the dispute for order ${orderNumber}.`, disputeId, dispute.orderId, "dispute_evidence");
     return created;
   },
@@ -229,6 +249,11 @@ export const disputeV2Service = {
       data: { appealStatus: "REQUESTED", appealReason: reason.trim(), appealRequestedById: userId, appealRequestedAt: new Date() },
     });
     if (updated.count === 0) throw new AppError("An appeal has already been filed", 409);
+    eventsService.emit({
+      name: EVENT_NAMES.dispute_appealed, actorType: role === "BUYER" ? "user" : "vendor", actorId: userId,
+      entityType: "Dispute", entityId: disputeId, secondaryEntities: { orderId: dispute.orderId }, source: "api",
+      payload: { eventKey: `dispute_appealed:${disputeId}`, appellantRole: role },
+    });
     const other = role === "BUYER" ? (await prisma.vendor.findUnique({ where: { id: dispute.vendorId }, select: { userId: true } }))?.userId : dispute.buyerId;
     await notify(other, "Dispute appeal filed", `The decision on order ${orderNumber} is under review after an appeal.`, disputeId, dispute.orderId, "dispute_appeal");
     return { appealStatus: "REQUESTED" as const };
@@ -315,6 +340,11 @@ export const disputeV2Service = {
       data: { appealStatus: decision as "UPHELD" | "OVERTURNED", appealDecidedById: adminId, appealDecidedAt: new Date(), appealDecisionReason: input.reason.trim() },
     });
     if (res.count === 0) throw new AppError("There is no open appeal on this dispute", 409);
+    eventsService.emit({
+      name: EVENT_NAMES.dispute_appeal_decided, actorType: "admin", actorId: adminId, entityType: "Dispute", entityId: disputeId,
+      secondaryEntities: { orderId: dispute.orderId }, source: "admin",
+      payload: { eventKey: `dispute_appeal_decided:${disputeId}`, decision },
+    });
     const vendor = await prisma.vendor.findUnique({ where: { id: dispute.vendorId }, select: { userId: true } });
     const text = `The appeal on the dispute for order ${dispute.order.orderNumber} was ${decision.toLowerCase()}.`;
     await Promise.all([

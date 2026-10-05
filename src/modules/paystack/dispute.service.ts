@@ -1,9 +1,10 @@
 import { prisma } from "../../lib/prisma";
+import { eventsService, EVENT_NAMES } from "../events/events.service";
 import { logger } from "../../lib/logger";
 import { AppError } from "../../shared/errors/app-error";
 import { releaseVendorEarnings } from "../../shared/utils/wallet-release";
 import { notificationsService } from "../notifications/notifications.service";
-import { defaultRespondByAt, parseDisputeType } from "../disputes/dispute-v2.service";
+import { computeDeadlineState, defaultRespondByAt, parseDisputeType } from "../disputes/dispute-v2.service";
 import { executeOrderRefund } from "../admin/admin-refunds.controller";
 
 export interface ResolveDisputeInput {
@@ -78,6 +79,13 @@ export const disputeService = {
       return d;
     });
 
+    // The create is guarded by the unique orderId + existing-dispute check, so this runs once per dispute.
+    eventsService.emit({
+      name: EVENT_NAMES.dispute_opened, actorType: "user", actorId: buyerId, entityType: "Dispute", entityId: dispute.id,
+      secondaryEntities: { orderId, vendorId: order.vendorId }, source: "api",
+      payload: { eventKey: `dispute_opened:${dispute.id}`, type: disputeType, escrow: isEscrow },
+    });
+
     // Notify vendor
     if (order.vendorId) {
       const vendor = await prisma.vendor.findUnique({ where: { id: order.vendorId }, select: { userId: true } });
@@ -147,6 +155,8 @@ export const disputeService = {
     return {
       items: items.map((d) => ({
         ...d,
+        // Overdue is computed state (handbook has no proactive-processing requirement): lets the queue sort/flag it.
+        deadline: computeDeadlineState(d),
         buyerName: buyerById.get(d.buyerId)?.name ?? null,
         buyerEmail: buyerById.get(d.buyerId)?.email ?? null,
         vendorName: vendorById.get(d.vendorId) ?? null,
@@ -301,6 +311,14 @@ export const disputeService = {
           data: { trustScore: { decrement: 20 } },
         });
       }
+    });
+
+    // The transaction above only ran for a dispute that was OPEN when read; eventKey lets consumers dedupe a replay.
+    eventsService.emit({
+      name: EVENT_NAMES.dispute_resolved, actorType: "admin", actorId: adminId, entityType: "Dispute", entityId: disputeId,
+      secondaryEntities: { orderId: dispute.orderId }, source: "admin_resolve",
+      amountMinor: input.refundAmount ?? null, currency: dispute.order.currency,
+      payload: { eventKey: `dispute_resolved:${disputeId}`, resolution: input.resolution, resultStatus: resolvedStatus!, fraudulent: input.fraudulent === true },
     });
 
     // If resolved in vendor's favour, release wallet earnings and initiate payout

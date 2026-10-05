@@ -1531,6 +1531,14 @@ class StripeWebhookService {
           failureReason: status === "FAILED" ? (refund.failure_reason ?? refund.status ?? "failed") : null,
         },
       });
+      if (status === "COMPLETED" && res.count > 0) {
+        // eventKey matches the synchronous path in admin-refunds.controller, so duplicates dedupe.
+        eventsService.emit({
+          name: EVENT_NAMES.refund_completed, actorType: "stripe", entityType: "Refund", entityId: refund.id,
+          source: "stripe_webhook", amountMinor: refund.amount, currency: refund.currency?.toUpperCase(),
+          payload: { eventKey: `refund_completed:${refund.id}`, provider: "stripe", providerRefundId: refund.id, stripeEventId: event.id },
+        });
+      }
       if (status === "FAILED") {
         logger.error("Stripe refund failed after acceptance - needs manual follow-up", { refundId: refund.id, matchedRows: res.count });
       }

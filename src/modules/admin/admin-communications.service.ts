@@ -1,5 +1,6 @@
 import { randomUUID } from "crypto";
 
+import { emitMessageEvent } from "../communications/message-events";
 import { BroadcastStatus, NotificationType, Prisma, UserRole } from "@prisma/client";
 
 import { isEmailEnabled, sendEmailDetailed } from "../../lib/email";
@@ -719,10 +720,20 @@ export const adminCommunicationsService = {
       });
     }
 
+    const workById = new Map(work.map((w) => [w.logId, w]));
     const setLog = (id: string, status: string, detail?: string, providerRef?: string) =>
-      prisma.communicationLog.update({ where: { id }, data: { status, statusDetail: detail ?? null, providerRef: providerRef ?? null } }).catch((error) => {
-        logger.warn("Could not update communication log", { id, errorMessage: error instanceof Error ? error.message : String(error) });
-      });
+      prisma.communicationLog.update({ where: { id }, data: { status, statusDetail: detail ?? null, providerRef: providerRef ?? null } })
+        .then(() => {
+          // Canonical message event for the real outcome. SENT in-app = stored in the inbox (delivered);
+          // SENT push/email = accepted by Expo/the mail provider (queued; push receipts later emit delivered).
+          const w = workById.get(id);
+          if (!w) return;
+          const outcome = status === "FAILED" ? "failed" : w.channel === "in_app" ? "delivered" : "queued";
+          emitMessageEvent(outcome, { logId: id, recipientId: w.recipient.id, channel: w.channel, eventKey, broadcastId, detail, source: "admin_broadcast" });
+        })
+        .catch((error) => {
+          logger.warn("Could not update communication log", { id, errorMessage: error instanceof Error ? error.message : String(error) });
+        });
 
     const link = input.deepLink;
     const individual = isIndividualAudience(input.audience);

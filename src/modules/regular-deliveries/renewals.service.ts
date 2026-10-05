@@ -11,6 +11,7 @@ import { resolveVendorCommission } from "../subscriptions/subscription-plan-util
 import { notificationsService } from "../notifications/notifications.service";
 import { automationService } from "../automation/automation.service";
 import { recordAudit } from "../../shared/utils/audit";
+import { eventsService, EVENT_NAMES } from "../events/events.service";
 import { nextCycleDate, recordAction } from "./buyer-subscriptions.service";
 import { adminPlatformSettingsService } from "../admin/admin-platform-settings.service";
 
@@ -218,6 +219,13 @@ export const renewalsService = {
       include: { items: true },
     });
 
+    // The DB unique (subscriptionId, cycleDate) means create() above succeeds once per cycle,
+    // so this fires once; eventKey lets consumers dedupe the at-least-once delivery anyway.
+    eventsService.emit({
+      name: EVENT_NAMES.renewal_due, actorType: "system", entityType: "Renewal", entityId: renewal.id,
+      secondaryEntities: { subscriptionId }, source: "generate_due_renewals", currency: renewal.currency,
+      payload: { eventKey: `renewal_due:${subscriptionId}:${cycleDate.toISOString()}`, subscriptionId, cycleDate: cycleDate.toISOString() },
+    });
     await this.advanceAfterStockSnapshot(renewal.id);
     return renewal;
   },
@@ -1106,6 +1114,11 @@ export const renewalsService = {
       return { order };
     });
 
+    eventsService.emit({
+      name: EVENT_NAMES.order_generated, actorType: "system", entityType: "Order", entityId: order.id,
+      secondaryEntities: { renewalId, subscriptionId: renewal.subscriptionId }, source: "renewal_paid", amountMinor: totalAmount, currency: renewal.currency,
+      payload: { eventKey: `order_generated:${renewalId}`, renewalId, subscriptionId: renewal.subscriptionId, orderNumber: order.orderNumber },
+    });
     await notifySubscriptionEvent(renewal.subscription.buyerId, "order_created", renewalId, renewal.subscriptionId, order.orderNumber);
     const vendor = await prisma.vendor.findUnique({ where: { id: vendorId }, select: { userId: true } });
     if (vendor) {

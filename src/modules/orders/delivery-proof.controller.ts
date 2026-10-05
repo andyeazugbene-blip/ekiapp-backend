@@ -1,6 +1,7 @@
 import type { Request, Response } from "express";
 
 import { AppError } from "../../shared/errors/app-error";
+import { recordAudit } from "../../shared/utils/audit";
 import { deliveryProofService } from "./delivery-proof.service";
 
 function ids(request: Request): { userId: string; orderId: string } {
@@ -13,6 +14,10 @@ function ids(request: Request): { userId: string; orderId: string } {
 export async function vendorAddDeliveryProof(request: Request, response: Response): Promise<void> {
   const { userId, orderId } = ids(request);
   const evidence = await deliveryProofService.addAsVendor(userId, orderId, (request.body ?? {}) as Record<string, unknown>);
+  await recordAudit({
+    actorId: userId, action: "order.delivery_proof_submitted", entityType: "Order", entityId: orderId,
+    metadata: { evidenceId: evidence.id, kind: evidence.kind, uploadAssetId: evidence.uploadAssetId ?? null, hasNote: !!evidence.note }, request,
+  });
   response.status(201).json({ evidence });
 }
 export async function vendorListDeliveryProof(request: Request, response: Response): Promise<void> {

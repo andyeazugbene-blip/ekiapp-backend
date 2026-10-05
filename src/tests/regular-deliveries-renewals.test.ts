@@ -964,3 +964,79 @@ describe("renewalsService.expirePriceApprovalTimeouts — reliability scenario #
     expect(m.buyerSubscription.update).not.toHaveBeenCalled();
   });
 });
+
+// ─── Canonical events: renewal_due / order_generated ────────────────────────
+import { eventsService as renewalEvents } from "../modules/events/events.service";
+
+describe("renewal job -> canonical events", () => {
+  const emit = vi.spyOn(renewalEvents, "emit").mockImplementation(() => undefined);
+  beforeEach(() => emit.mockClear());
+
+  it("createRenewalForCycle emits renewal_due once per created cycle, keyed by subscription + cycle date", async () => {
+    m.buyerSubscription.findUniqueOrThrow.mockResolvedValue({
+      id: "sub-ev", frequency: "WEEKLY",
+      offer: { discountPercent: null, products: [] },
+      items: [{ productId: "p1", quantity: 1, product: { currency: "GBP", priceInCents: 750, isActive: true, stock: 5 } }],
+    } as never);
+    m.renewalItem.findMany.mockResolvedValue([] as never);
+    m.renewal.create.mockImplementation(async (args: any) => ({ id: "renewal-ev", ...args.data, items: args.data.items.create }));
+    m.renewal.update.mockResolvedValue({} as never);
+    const cycle = new Date("2026-07-01T00:00:00.000Z");
+    await renewalsService.createRenewalForCycle("sub-ev", cycle);
+    expect(emit).toHaveBeenCalledTimes(1);
+    expect(emit.mock.calls[0][0]).toMatchObject({
+      name: "renewal_due", entityType: "Renewal", entityId: "renewal-ev", actorType: "system",
+      payload: { eventKey: `renewal_due:sub-ev:${cycle.toISOString()}`, subscriptionId: "sub-ev" },
+    });
+  });
+
+  it("a duplicate cycle (unique violation) and a fully paused cycle emit nothing", async () => {
+    m.buyerSubscription.findUniqueOrThrow.mockResolvedValue({
+      id: "sub-ev", frequency: "WEEKLY",
+      offer: { discountPercent: null, products: [{ productId: "p1", pausedAt: new Date() }] },
+      items: [{ productId: "p1", quantity: 1, product: { currency: "GBP", priceInCents: 750, isActive: true, stock: 5 } }],
+    } as never);
+    m.buyerSubscription.update.mockResolvedValue({} as never);
+    expect(await renewalsService.createRenewalForCycle("sub-ev", new Date())).toBeNull();
+    m.buyerSubscription.findUniqueOrThrow.mockResolvedValue({
+      id: "sub-ev", offer: { discountPercent: null, products: [] },
+      items: [{ productId: "p1", quantity: 1, product: { currency: "GBP", priceInCents: 750, isActive: true, stock: 5 } }],
+    } as never);
+    m.renewalItem.findMany.mockResolvedValue([] as never);
+    m.renewal.create.mockRejectedValue({ code: "P2002" });
+    await expect(renewalsService.createRenewalForCycle("sub-ev", new Date())).rejects.toMatchObject({ code: "P2002" });
+    expect(emit).not.toHaveBeenCalled();
+  });
+
+  it("convertPaidRenewalToOrder emits order_generated once; an already-converted renewal emits nothing", async () => {
+    const renewal = {
+      id: "renewal-7", status: "PAYMENT_PROCESSING", orderId: null, currency: "GBP", cycleDate: new Date("2026-06-01T00:00:00.000Z"), subscriptionId: "sub-1",
+      items: [{ productId: "p1", quantity: 2, currentUnitPrice: 1000, currency: "GBP", product: { title: "Rice", weightGrams: 500 } }],
+      deliveryFeeAmount: 600, deliveryZoneId: "zone-1",
+      subscription: { buyerId: "buyer-1", frequency: "WEEKLY", deliveryAddress: { line1: "1 Road", city: "London", country: "United Kingdom" }, offer: { vendorId: "vendor-1" } },
+    };
+    m.renewal.findUniqueOrThrow.mockResolvedValue(renewal as never);
+    m.vendor.findUnique.mockResolvedValue({ userId: "vendor-user-1" } as never);
+    const tx = {
+      product: { updateMany: vi.fn().mockResolvedValue({ count: 1 }) },
+      order: { create: vi.fn().mockResolvedValue({ id: "order-1", orderNumber: "EKI-100" }) },
+      wallet: { findUnique: vi.fn().mockResolvedValue(null), create: vi.fn().mockResolvedValue({ id: "w1" }), update: vi.fn().mockResolvedValue({}) },
+      walletTransaction: { create: vi.fn().mockResolvedValue({}) },
+      renewal: { update: vi.fn().mockResolvedValue({}) },
+      buyerSubscription: { update: vi.fn().mockResolvedValue({}) },
+    };
+    m.$transaction.mockImplementation(async (cb: any) => cb(tx));
+    await renewalsService.convertPaidRenewalToOrder("renewal-7", "pi_paid");
+    expect(emit).toHaveBeenCalledTimes(1);
+    expect(emit.mock.calls[0][0]).toMatchObject({
+      name: "order_generated", entityType: "Order", entityId: "order-1", amountMinor: 2600, currency: "GBP",
+      payload: { eventKey: "order_generated:renewal-7", renewalId: "renewal-7", subscriptionId: "sub-1" },
+    });
+
+    emit.mockClear();
+    m.renewal.findUniqueOrThrow.mockResolvedValue({ ...renewal, status: "ORDER_CREATED", orderId: "order-1" } as never);
+    m.order.findUnique.mockResolvedValue({ id: "order-1" } as never);
+    await renewalsService.convertPaidRenewalToOrder("renewal-7", "pi_paid");
+    expect(emit).not.toHaveBeenCalled();
+  });
+});

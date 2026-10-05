@@ -1,4 +1,5 @@
 import { eventsService, EVENT_NAMES } from "../events/events.service";
+import { emitCampaignLifecycleEvent } from "./community-buy-events";
 import { prisma } from "../../lib/prisma";
 import { logger } from "../../lib/logger";
 import { AppError } from "../../shared/errors/app-error";
@@ -2178,6 +2179,7 @@ export const communityCampaignsService = {
         });
         if (claim.count !== 1) continue;
         succeeded++;
+        emitCampaignLifecycleEvent(EVENT_NAMES.community_buy_target_reached, campaign.id, "close_due_campaigns", { fundingOutcome: outcome, confirmedShares: campaign.confirmedShares });
         await this.notifyOutcome(campaign.id, "succeeded");
         await this.createSupplierOrder(campaign);
         await this.chargePledgesAfterSuccess(campaign.id);
@@ -2338,6 +2340,7 @@ export const communityCampaignsService = {
         });
         if (claim.count !== 1) continue;
         rescued++;
+        emitCampaignLifecycleEvent(EVENT_NAMES.community_buy_target_reached, campaign.id, "evaluate_rescue_expiry", { fundingOutcome: outcome, confirmedShares: campaign.confirmedShares });
         await this.notifyOutcome(campaign.id, "succeeded");
         await this.createSupplierOrder(campaign);
         await this.chargePledgesAfterSuccess(campaign.id);
@@ -2348,6 +2351,7 @@ export const communityCampaignsService = {
         });
         if (claim.count !== 1) continue;
         failed++;
+        emitCampaignLifecycleEvent(EVENT_NAMES.community_buy_target_failed, campaign.id, "evaluate_rescue_expiry", { fundingOutcome: "BELOW_MINIMUM", confirmedShares: campaign.confirmedShares });
         await this.notifyOutcome(campaign.id, "failed");
         await this.createRefundRecordsForFailedCampaign(campaign.id);
         await this.cancelPledgesForFailedCampaign(campaign.id);
@@ -2406,6 +2410,7 @@ export const communityCampaignsService = {
     if (claim.count !== 1) {
       throw new AppError("Only a campaign in its rescue window can be ended this way", 409);
     }
+    emitCampaignLifecycleEvent(EVENT_NAMES.community_buy_target_failed, campaignId, "organiser_end_rescue", { fundingOutcome: "BELOW_MINIMUM" });
     const updated = await prisma.communityCampaign.findUniqueOrThrow({ where: { id: campaignId } });
     // Under PLEDGE_THEN_CHARGE, a campaign can only reach FAILED before it
     // was ever charged (charging happens exclusively on success — see
@@ -2551,6 +2556,10 @@ export const communityCampaignsService = {
         }
       }
     }
+    // Handbook 10: refund records exist => refunds have started. Only the call
+    // that actually created records emits; the eventKey lets consumers dedupe
+    // if a later call (e.g. admin cancel after failure) creates more.
+    if (created > 0) emitCampaignLifecycleEvent(EVENT_NAMES.community_buy_refund_started, campaignId, "refund_records_created", { refundCount: created });
     return created;
   },
 

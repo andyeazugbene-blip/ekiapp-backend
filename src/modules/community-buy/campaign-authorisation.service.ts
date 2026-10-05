@@ -1,4 +1,5 @@
 import { eventsService, EVENT_NAMES } from "../events/events.service";
+import { emitCampaignLifecycleEvent } from "./community-buy-events";
 import { LedgerAccountType, LedgerDirection, LedgerOwnerType } from "@prisma/client";
 import type Stripe from "stripe";
 
@@ -520,6 +521,7 @@ export const campaignAuthorisationService = {
         const claim = await prisma.communityCampaign.updateMany({ where: { id: campaign.id, status: "HOLD_WINDOW" }, data: { status: "PAYMENT_CAPTURE" } });
         if (claim.count !== 1) continue;
         proceeded++;
+        emitCampaignLifecycleEvent(EVENT_NAMES.community_buy_target_reached, campaign.id, "evaluate_authorisation_decisions", { authorisedQuantity, minimum });
         await this.notifyDecisionOutcome(campaign.id, "proceeding", { authorisedQuantity, minimum });
         await this.captureWorker(campaign.id);
       } else {
@@ -600,6 +602,7 @@ export const campaignAuthorisationService = {
     if (action === "cancel") {
       const claim = await prisma.communityCampaign.updateMany({ where: { id: campaignId, status: "DECISION_REQUIRED" }, data: { status: "FAILED", fundingOutcome: "BELOW_MINIMUM", closedAt: new Date() } });
       if (claim.count !== 1) throw new AppError("This campaign is no longer awaiting a decision", 409);
+      emitCampaignLifecycleEvent(EVENT_NAMES.community_buy_target_failed, campaignId, "organiser_decision_cancel", { fundingOutcome: "BELOW_MINIMUM" });
       await this.releaseAllHoldsForCampaign(campaignId, "organiser_cancelled");
       await this.notifyCancellationOutcome(campaignId, "organiser_cancelled");
       await recordAudit({ actorId: userId, action: "community_campaign.decision_cancel", entityType: "CommunityCampaign", entityId: campaignId });
@@ -644,6 +647,7 @@ export const campaignAuthorisationService = {
     for (const campaign of expired) {
       const claim = await prisma.communityCampaign.updateMany({ where: { id: campaign.id, status: "DECISION_REQUIRED" }, data: { status: "FAILED", fundingOutcome: "BELOW_MINIMUM", closedAt: new Date() } });
       if (claim.count !== 1) continue;
+      emitCampaignLifecycleEvent(EVENT_NAMES.community_buy_target_failed, campaign.id, "decision_timeout", { fundingOutcome: "BELOW_MINIMUM" });
       await this.releaseAllHoldsForCampaign(campaign.id, "decision_timeout");
       await this.notifyCancellationOutcome(campaign.id, "decision_timeout");
       cancelled++;
@@ -740,6 +744,7 @@ export const campaignAuthorisationService = {
         data: { status: "FAILED", fundingOutcome: "BELOW_MINIMUM", closedAt: new Date(), supplierDeclineReason: reason?.trim() || null },
       });
       if (claim.count !== 1) throw new AppError("This campaign is no longer awaiting reconfirmation", 409);
+      emitCampaignLifecycleEvent(EVENT_NAMES.community_buy_target_failed, campaign.id, "supplier_declined_reconfirmation", { fundingOutcome: "BELOW_MINIMUM" });
       await this.releaseAllHoldsForCampaign(campaign.id, "supplier_declined_reduced_quantity");
       await recordAudit({ actorId, action: "community_campaign.reconfirmation_declined", entityType: "CommunityCampaign", entityId: campaign.id, reason, metadata: { supplierDeclineReason: reason?.trim() || null } });
       const organiser = await prisma.organiserProfile.findUnique({ where: { id: campaign.organiserId } });
@@ -777,6 +782,7 @@ export const campaignAuthorisationService = {
     for (const campaign of expired) {
       const claim = await prisma.communityCampaign.updateMany({ where: { id: campaign.id, status: "AWAITING_SUPPLIER_RECONFIRMATION" }, data: { status: "FAILED", fundingOutcome: "BELOW_MINIMUM", closedAt: new Date() } });
       if (claim.count !== 1) continue;
+      emitCampaignLifecycleEvent(EVENT_NAMES.community_buy_target_failed, campaign.id, "supplier_reconfirmation_timeout", { fundingOutcome: "BELOW_MINIMUM" });
       await this.releaseAllHoldsForCampaign(campaign.id, "supplier_reconfirmation_timeout");
       await this.notifyCancellationOutcome(campaign.id, "supplier_reconfirmation_timeout");
       cancelled++;
