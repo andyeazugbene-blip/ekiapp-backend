@@ -2096,6 +2096,18 @@ export const communityCampaignsService = {
    * country match. 404 (not 403) on a mismatch or on missing country data,
    * same as "doesn't exist" — never reveals that a campaign exists in a
    * market the caller can't see.
+   *
+   * Bug fix (2026-10-05, "campaign won't load" report): a buyer who already
+   * JOINED this campaign (has a CampaignParticipant row for it) is also
+   * "involved" and must always get through, same as the organiser/supplier/
+   * admin above — the country gate exists to stop an unrelated buyer from
+   * discovering a campaign outside their market, not to lock out someone
+   * who already pledged to it. Without this, a participant whose
+   * User.country is empty or was later changed to something the market map
+   * doesn't resolve (see buyer-country.service.ts) was permanently 404'd
+   * out of a campaign they already joined, including the one their push
+   * notification linked to — with no way to self-serve a fix, since the
+   * country was only ever collected once, at registration.
    */
   async getForRequester(userId: string, campaignId: string) {
     const gate = await prisma.communityCampaign.findUnique({
@@ -2104,11 +2116,12 @@ export const communityCampaignsService = {
     });
     if (!gate) throw new AppError("Campaign not found", 404);
 
-    const [user, organiser] = await Promise.all([
+    const [user, organiser, participant] = await Promise.all([
       prisma.user.findUnique({ where: { id: userId }, select: { role: true } }),
       prisma.organiserProfile.findUnique({ where: { userId }, select: { id: true } }),
+      prisma.campaignParticipant.findFirst({ where: { campaignId, userId }, select: { id: true } }),
     ]);
-    let involved = user?.role === "ADMIN" || organiser?.id === gate.organiserId;
+    let involved = user?.role === "ADMIN" || organiser?.id === gate.organiserId || !!participant;
     if (!involved && gate.supplierAccountId) {
       const account = await prisma.supplierAccount.findUnique({ where: { userId }, select: { id: true } });
       involved = account?.id === gate.supplierAccountId;
