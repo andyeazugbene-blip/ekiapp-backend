@@ -23,6 +23,7 @@ import {
   getPublicHomePage,
   getPublicSellPage,
   getPublicInvitePage,
+  getStripeConnectReturnPage,
   getPublicPrivacyPage,
   getPublicTermsPage,
   getPublicRefundPolicyPage,
@@ -179,6 +180,14 @@ app.get("/vendor-agreement", (req, res, next) => {
 });
 app.get("/invite/:code", (req, res, next) => {
   Promise.resolve(getPublicInvitePage(req, res)).catch(next);
+});
+// Stripe Connect refresh_url/return_url targets (vendor + Community Buy
+// supplier onboarding) — see getStripeConnectReturnPage's doc comment.
+app.get("/vendor/stripe-connect", (req, res, next) => {
+  Promise.resolve(getStripeConnectReturnPage(req, res)).catch(next);
+});
+app.get("/supplier/stripe-connect", (req, res, next) => {
+  Promise.resolve(getStripeConnectReturnPage(req, res)).catch(next);
 });
 app.get("/vendor/subscription", (req, res, next) => {
   Promise.resolve(getPublicVendorSubscriptionPage(req, res)).catch(next);

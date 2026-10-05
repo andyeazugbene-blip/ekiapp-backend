@@ -2095,6 +2095,60 @@ const vendorAgreementPage: PageDefinition = {
   ],
 };
 
+/**
+ * Landing page for the two Stripe Connect flows' refresh_url/return_url
+ * (vendors/stripe-connect.service.ts, community-buy/supplier-stripe-
+ * connect.service.ts). Stripe requires both to be real HTTPS URLs; before
+ * this existed they pointed at a page that was never built, so a vendor or
+ * supplier who finished (or abandoned) Stripe's hosted onboarding form in
+ * their phone's browser landed on a dead page with no way back into the
+ * app -- bug report 2026-10-06 ("supplier add payout in Community Buy" /
+ * vendor "Stripe Connect won't be ready"). This page explains what
+ * happened in plain language and tries an automatic deep link into the
+ * app (scheme "ekiapp", see app.json) with a manual fallback button, since
+ * an automatic redirect is blocked on some mobile browsers without a user
+ * gesture. It never claims the account IS ready — only the app's own
+ * status check (now self-refreshing, see getMySupplierProfile /
+ * vendors.controller getStripeConnectStatus) is authoritative.
+ */
+function renderStripeConnectReturnLayout(kind: "refresh" | "success"): string {
+  const title = kind === "success" ? "Stripe details submitted" : "Let's finish setting up Stripe";
+  const body =
+    kind === "success"
+      ? "Thanks — your details were submitted to Stripe. Return to the Eki app to see your current status; some checks can take a few minutes."
+      : "Your previous Stripe setup link expired before you finished. Open the Eki app and tap “Set up payouts” again to pick up where you left off.";
+  return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Eki | Stripe setup</title>
+  <meta name="robots" content="noindex" />
+  <style>
+    *{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;background:#f6f8f7;color:#111827;font-family:Inter,Arial,sans-serif;padding:24px}
+    .card{width:min(92vw,460px);background:#fff;border:1px solid #dde7e2;border-radius:24px;padding:30px;box-shadow:0 20px 50px rgba(10,43,33,.08);text-align:center}
+    .logo{display:inline-grid;place-items:center;width:52px;height:52px;border-radius:14px;background:#076b51;color:#fff;font-weight:800;margin-bottom:18px}
+    h1{margin:0 0 12px;font-size:24px;letter-spacing:-.03em}
+    p{color:#5f6b66;line-height:1.55;margin:0 0 22px}
+    a{display:grid;place-items:center;height:50px;border-radius:14px;text-decoration:none;font-weight:800;background:#076b51;color:#fff}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="logo">E</div>
+    <h1>${escape(title)}</h1>
+    <p>${escape(body)}</p>
+    <a href="ekiapp://">Open the Eki app</a>
+  </div>
+  <script>
+    // Best-effort automatic return; the button above is the reliable path
+    // on browsers that block a scripted redirect without a tap.
+    try { window.location.href = "ekiapp://"; } catch (e) {}
+  </script>
+</body>
+</html>`;
+}
+
 function renderReferralInviteLayout(code: string): string {
   const safeCode = escape(code.trim().toUpperCase());
   return `<!doctype html>
@@ -2635,6 +2689,13 @@ export async function getPublicInvitePage(request: Request, response: Response):
   response.setHeader("Content-Type", "text/html; charset=utf-8");
   response.setHeader("Cache-Control", "public, max-age=300, s-maxage=900");
   response.status(200).send(renderReferralInviteLayout(String(request.params.code ?? "")));
+}
+
+/** See renderStripeConnectReturnLayout's doc comment. Never cached: the ?success=/?refresh= query is Stripe's own callback state. */
+export async function getStripeConnectReturnPage(request: Request, response: Response): Promise<void> {
+  response.setHeader("Content-Type", "text/html; charset=utf-8");
+  response.setHeader("Cache-Control", "no-store");
+  response.status(200).send(renderStripeConnectReturnLayout(request.query.refresh === "true" ? "refresh" : "success"));
 }
 
 export async function getPublicVendorSubscriptionPage(request: Request, response: Response): Promise<void> {

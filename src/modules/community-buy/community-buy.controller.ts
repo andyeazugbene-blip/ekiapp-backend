@@ -1017,7 +1017,23 @@ export async function getMySupplierProfile(request: Request, response: Response)
   const userId = requireUserId(request);
   const vendor = await prisma.vendor.findUnique({ where: { userId }, select: { id: true } });
   const legacyProfile = vendor ? await organiserSupplierService.getSupplierProfile(vendor.id) : null;
-  const account = await supplierAccountService.getView(userId);
+  let account = await supplierAccountService.getView(userId);
+  // Bug fix (2026-10-06, "supplier add payout in Community Buy"): this was
+  // the only screen a supplier ever sees their Stripe Connect readiness on,
+  // and it only ever read the cached chargesEnabled/payoutsEnabled columns
+  // -- there is no webhook wiring for this path (see
+  // supplier-stripe-connect.service.ts), and nothing on the client ever
+  // calls GET .../stripe-connect/status to refresh them, so a supplier who
+  // genuinely completed Stripe's hosted onboarding kept seeing "not ready"
+  // forever. getStatus() already does a safe, best-effort live Stripe
+  // re-sync (falls back to cached data on any error) -- running it here,
+  // transparently, on every profile fetch for an account that has a
+  // connected Stripe account but isn't fully enabled yet, fixes the mobile
+  // screen's existing GET-on-focus without needing an app update.
+  if ("providerConnectedAccountId" in account && account.providerConnectedAccountId && !(account.chargesEnabled && account.payoutsEnabled)) {
+    await supplierStripeConnectService.getStatus(userId);
+    account = await supplierAccountService.getView(userId);
+  }
   // `profile` kept for the currently-deployed mobile client (dual-read);
   // `account` is the new SupplierAccount-based shape a future client reads.
   response.json({ profile: legacyProfile, account });
