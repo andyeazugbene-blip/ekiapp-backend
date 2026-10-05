@@ -2,6 +2,7 @@ import { OrderStatus, UserRole } from "@prisma/client";
 
 import { env } from "../../config/env";
 import { prisma } from "../../lib/prisma";
+import { notTest, notTestOf } from "../../shared/utils/test-records";
 
 const PAID_STATUSES: OrderStatus[] = [
   "PAID", "CONFIRMED", "PROCESSING", "DISPATCHED", "IN_TRANSIT", "DELIVERED", "COMPLETED",
@@ -62,7 +63,7 @@ export async function getBuyerAnalytics(rawRange: unknown): Promise<BuyerAnalyti
 
   // Distinct buyers with paid orders in range
   const buyersInRange = await prisma.order.findMany({
-    where: { status: { in: PAID_STATUSES }, createdAt: { gte: since } },
+    where: { status: { in: PAID_STATUSES }, ...notTest(), createdAt: { gte: since } },
     select: { buyerId: true },
     distinct: ["buyerId"],
   });
@@ -72,7 +73,7 @@ export async function getBuyerAnalytics(rawRange: unknown): Promise<BuyerAnalyti
   const returningBuyerRows = buyerIdsInRange.length > 0
     ? await prisma.order.findMany({
         where: {
-          status: { in: PAID_STATUSES },
+          status: { in: PAID_STATUSES }, ...notTest(),
           createdAt: { lt: since },
           buyerId: { in: buyerIdsInRange },
         },
@@ -86,7 +87,7 @@ export async function getBuyerAnalytics(rawRange: unknown): Promise<BuyerAnalyti
   // Repeat purchase rate (all-time): buyers with >1 paid order / buyers with >=1
   const buyerOrderCounts = await prisma.order.groupBy({
     by: ["buyerId"],
-    where: { status: { in: PAID_STATUSES } },
+    where: { status: { in: PAID_STATUSES }, ...notTest() },
     _count: { _all: true },
   });
   const totalActiveBuyers = buyerOrderCounts.length;
@@ -97,7 +98,7 @@ export async function getBuyerAnalytics(rawRange: unknown): Promise<BuyerAnalyti
 
   // Avg orders per buyer in range
   const paidOrdersInRange = await prisma.order.count({
-    where: { status: { in: PAID_STATUSES }, createdAt: { gte: since } },
+    where: { status: { in: PAID_STATUSES }, ...notTest(), createdAt: { gte: since } },
   });
   const avgOrdersPerBuyer = buyerIdsInRange.length > 0
     ? Math.round((paidOrdersInRange / buyerIdsInRange.length) * 100) / 100
@@ -106,7 +107,7 @@ export async function getBuyerAnalytics(rawRange: unknown): Promise<BuyerAnalyti
   // Top 10 buyers by spend in range
   const topBuyerAgg = await prisma.order.groupBy({
     by: ["buyerId"],
-    where: { status: { in: PAID_STATUSES }, createdAt: { gte: since } },
+    where: { status: { in: PAID_STATUSES }, ...notTest(), createdAt: { gte: since } },
     _sum: { totalAmount: true },
     _count: { _all: true },
     _max: { createdAt: true },
@@ -133,7 +134,7 @@ export async function getBuyerAnalytics(rawRange: unknown): Promise<BuyerAnalyti
   // Buyer locations by country
   const buyerCountries = await prisma.user.groupBy({
     by: ["country"],
-    where: { role: UserRole.BUYER, country: { not: null } },
+    where: { role: UserRole.BUYER, country: { not: null }, ...notTest() },
     _count: { id: true },
     orderBy: { _count: { id: "desc" } },
     take: 20,
@@ -183,7 +184,7 @@ export async function getVendorAnalytics(rawRange: unknown): Promise<VendorAnaly
   // Top vendors by revenue (from OrderItem for accuracy)
   const revenueAgg = await prisma.orderItem.groupBy({
     by: ["vendorId"],
-    where: { order: { status: { in: PAID_STATUSES }, createdAt: { gte: since } } },
+    where: { order: { status: { in: PAID_STATUSES }, ...notTest(), createdAt: { gte: since } } },
     _sum: { totalAmount: true },
     _count: { orderId: true },
     orderBy: { _sum: { totalAmount: "desc" } },
@@ -193,7 +194,7 @@ export async function getVendorAnalytics(rawRange: unknown): Promise<VendorAnaly
   // Top vendors by order count
   const orderAgg = await prisma.orderItem.groupBy({
     by: ["vendorId"],
-    where: { order: { status: { in: PAID_STATUSES }, createdAt: { gte: since } } },
+    where: { order: { status: { in: PAID_STATUSES }, ...notTest(), createdAt: { gte: since } } },
     _count: { orderId: true },
     _sum: { totalAmount: true },
     orderBy: { _count: { orderId: "desc" } },
@@ -232,20 +233,20 @@ export async function getVendorAnalytics(rawRange: unknown): Promise<VendorAnaly
   // Vendors with no orders in range
   const vendorsWithOrdersInRange = await prisma.order.findMany({
     where: {
-      status: { in: PAID_STATUSES },
+      status: { in: PAID_STATUSES }, ...notTest(),
       createdAt: { gte: since },
       vendorId: { not: null },
     },
     select: { vendorId: true },
     distinct: ["vendorId"],
   });
-  const totalVendors = await prisma.vendor.count();
+  const totalVendors = await prisma.vendor.count({ where: notTest() });
   const vendorsWithNoOrders = totalVendors - vendorsWithOrdersInRange.length;
 
   // Vendor locations
   const vendorLocs = await prisma.vendor.groupBy({
     by: ["country", "city"],
-    where: { country: { not: null } },
+    where: { country: { not: null }, ...notTest() },
     _count: { id: true },
     orderBy: { _count: { id: "desc" } },
     take: 20,
@@ -258,7 +259,7 @@ export async function getVendorAnalytics(rawRange: unknown): Promise<VendorAnaly
   const currentVendorIds = new Set(vendorsWithOrdersInRange.map((v) => v.vendorId));
   const previousPeriodVendors = await prisma.order.findMany({
     where: {
-      status: { in: PAID_STATUSES },
+      status: { in: PAID_STATUSES }, ...notTest(),
       vendorId: { not: null },
       createdAt: { gte: previousSince, lt: since },
     },
@@ -309,7 +310,7 @@ export async function getOrderAnalytics(rawRange: unknown): Promise<OrderAnalyti
 
   // Fetch paid orders in range
   const orders = await prisma.order.findMany({
-    where: { status: { in: PAID_STATUSES }, createdAt: { gte: since } },
+    where: { status: { in: PAID_STATUSES }, ...notTest(), createdAt: { gte: since } },
     select: { totalAmount: true, createdAt: true },
   });
 
@@ -358,7 +359,7 @@ export async function getOrderAnalytics(rawRange: unknown): Promise<OrderAnalyti
   // Top products by quantity sold
   const productAgg = await prisma.orderItem.groupBy({
     by: ["productId"],
-    where: { order: { status: { in: PAID_STATUSES }, createdAt: { gte: since } } },
+    where: { order: { status: { in: PAID_STATUSES }, ...notTest(), createdAt: { gte: since } } },
     _sum: { quantity: true, totalAmount: true },
     orderBy: { _sum: { quantity: "desc" } },
     take: 10,
@@ -383,7 +384,7 @@ export async function getOrderAnalytics(rawRange: unknown): Promise<OrderAnalyti
   // Top categories by revenue
   // Need to join OrderItem → Product for category
   const itemsWithProducts = await prisma.orderItem.findMany({
-    where: { order: { status: { in: PAID_STATUSES }, createdAt: { gte: since } } },
+    where: { order: { status: { in: PAID_STATUSES }, ...notTest(), createdAt: { gte: since } } },
     select: {
       quantity: true,
       totalAmount: true,

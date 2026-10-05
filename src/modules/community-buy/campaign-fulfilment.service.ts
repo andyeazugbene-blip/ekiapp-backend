@@ -5,6 +5,8 @@ import { AppError } from "../../shared/errors/app-error";
 import { notificationsService } from "../notifications/notifications.service";
 import { isIndividualDeliveryEnabled } from "./community-buy-privacy.service";
 import { supportCaseService } from "./support-case.service";
+import { assertCampaignTransition } from "./campaign-transitions";
+import { notifyCampaignCompleted } from "./campaign-notifications";
 
 /**
  * Operational fulfilment tracking for a succeeded campaign — doc Phase 8.
@@ -329,6 +331,7 @@ export const campaignFulfilmentService = {
     });
     if (claim.count !== 1) throw new AppError("This campaign hasn't been dispatched or collected yet", 409);
     await recordFulfilmentEvent({ campaignId, actorUserId, actorRole: "ORGANISER", eventType: "COMPLETED" });
+    await markCampaignCompleted(campaignId);
     return prisma.campaignFulfilment.findUniqueOrThrow({ where: { campaignId } });
   },
 
@@ -660,6 +663,22 @@ async function notifyOrganiser(campaignId: string, event: string, title: string,
       campaignId,
       errorMessage: error instanceof Error ? error.message : String(error),
     });
+  }
+}
+
+/**
+ * Handbook 10.2: the campaign itself reaches COMPLETED when fulfilment completes
+ * (FULFILLING -> COMPLETED, atomic and idempotent). Best effort: a campaign in
+ * any other state (e.g. cancelled, under cancellation review) is left alone and
+ * the fulfilment record stays the source of truth.
+ */
+async function markCampaignCompleted(campaignId: string): Promise<void> {
+  try {
+    assertCampaignTransition("FULFILLING", "COMPLETED");
+    const claim = await prisma.communityCampaign.updateMany({ where: { id: campaignId, status: "FULFILLING" }, data: { status: "COMPLETED" } });
+    if (claim.count === 1) await notifyCampaignCompleted(campaignId);
+  } catch (error) {
+    logger.error("Could not mark campaign COMPLETED (non-blocking)", { campaignId, errorMessage: error instanceof Error ? error.message : String(error) });
   }
 }
 

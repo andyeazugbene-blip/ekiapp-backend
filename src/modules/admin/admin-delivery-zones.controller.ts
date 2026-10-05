@@ -3,7 +3,7 @@ import type { Request, Response } from "express";
 import { prisma } from "../../lib/prisma";
 import { currencyFromCountry } from "../../shared/currency";
 import { AppError } from "../../shared/errors/app-error";
-import { recordAudit } from "../../shared/utils/audit";
+import { recordAudit, requireAuditReason } from "../../shared/utils/audit";
 
 function requireUserId(request: Request): string {
   if (!request.user) {
@@ -30,6 +30,7 @@ export async function listAllDeliveryZones(_request: Request, response: Response
 
 export async function createDeliveryZone(request: Request, response: Response): Promise<void> {
   const raw = request.body as Record<string, unknown>;
+  const reason = requireAuditReason(raw.reason);
 
   if (typeof raw.name !== "string" || raw.name.trim().length === 0) {
     throw new AppError("name is required", 400);
@@ -68,6 +69,10 @@ export async function createDeliveryZone(request: Request, response: Response): 
     entityType: "DeliveryZone",
     entityId: zone.id,
     metadata: { name: zone.name, country: zone.country },
+    afterState: { name: zone.name, country: zone.country, currency: zone.currency, baseFeeAmount: zone.baseFeeAmount, feePerKgAmount: zone.feePerKgAmount, isActive: zone.isActive },
+    reason,
+    request,
+    failClosed: true,
   });
 
   response.status(201).json({ zone });
@@ -76,6 +81,7 @@ export async function createDeliveryZone(request: Request, response: Response): 
 export async function updateDeliveryZone(request: Request, response: Response): Promise<void> {
   const zoneId = requireIdParam(request);
   const raw = request.body as Record<string, unknown>;
+  const reason = requireAuditReason(raw.reason);
 
   const zone = await prisma.deliveryZone.findUnique({ where: { id: zoneId } });
   if (!zone) {
@@ -125,6 +131,11 @@ export async function updateDeliveryZone(request: Request, response: Response): 
     entityType: "DeliveryZone",
     entityId: zoneId,
     metadata: data,
+    beforeState: { name: zone.name, country: zone.country, currency: zone.currency, baseFeeAmount: zone.baseFeeAmount, feePerKgAmount: zone.feePerKgAmount, isActive: zone.isActive },
+    afterState: { name: updated.name, country: updated.country, currency: updated.currency, baseFeeAmount: updated.baseFeeAmount, feePerKgAmount: updated.feePerKgAmount, isActive: updated.isActive },
+    reason,
+    request,
+    failClosed: true,
   });
 
   response.status(200).json({ zone: updated });
@@ -135,6 +146,7 @@ export async function updateDeliveryZone(request: Request, response: Response): 
  * Corrects any zone whose stored currency doesn't match currencyFromCountry(country).
  */
 export async function fixDeliveryZoneCurrencies(request: Request, response: Response): Promise<void> {
+  const reason = requireAuditReason((request.body as Record<string, unknown> | undefined)?.reason);
   const zones = await prisma.deliveryZone.findMany({ select: { id: true, country: true, currency: true } });
   const corrections: { id: string; country: string; from: string; to: string }[] = [];
 
@@ -154,6 +166,9 @@ export async function fixDeliveryZoneCurrencies(request: Request, response: Resp
     action: "delivery_zone.fix_currencies",
     entityType: "DeliveryZone",
     metadata: { corrected: corrections.length, corrections },
+    reason,
+    request,
+    failClosed: true,
   });
 
   response.status(200).json({ checked: zones.length, corrected: corrections.length, corrections });
@@ -161,6 +176,7 @@ export async function fixDeliveryZoneCurrencies(request: Request, response: Resp
 
 export async function deleteDeliveryZone(request: Request, response: Response): Promise<void> {
   const zoneId = requireIdParam(request);
+  const reason = requireAuditReason((request.body as Record<string, unknown> | undefined)?.reason ?? request.query?.reason);
 
   const zone = await prisma.deliveryZone.findUnique({ where: { id: zoneId } });
   if (!zone) {
@@ -175,6 +191,10 @@ export async function deleteDeliveryZone(request: Request, response: Response): 
     entityType: "DeliveryZone",
     entityId: zoneId,
     metadata: { name: zone.name, country: zone.country },
+    beforeState: { name: zone.name, country: zone.country, currency: zone.currency, baseFeeAmount: zone.baseFeeAmount, feePerKgAmount: zone.feePerKgAmount, isActive: zone.isActive },
+    reason,
+    request,
+    failClosed: true,
   });
 
   response.status(200).json({ success: true });

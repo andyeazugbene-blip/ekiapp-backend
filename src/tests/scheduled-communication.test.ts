@@ -1,163 +1,164 @@
 /**
- * Phase D (admin broadcast: schedule/edit/cancel/history) —
- * scheduledCommunicationService had zero test coverage despite being the
- * real, already-wired schedule/edit/cancel/run subsystem admin broadcasts
- * use. Covers the real invariants: only SCHEDULED items can be edited or
- * cancelled, a past/invalid scheduledFor is rejected, and runDue()'s
- * atomic claim actually prevents a duplicate send if the sweep overlaps
- * itself (the exact failure mode that would double-email every recipient).
+ * Scheduled broadcasts: only SCHEDULED items are mutable, a past/invalid time
+ * is rejected, and runDue() has real claim semantics —
+ *   SCHEDULED -> SENDING (atomic) -> SENT only AFTER delivery completed,
+ * honours scheduledFor, never double-sends, and does nothing while the
+ * emergency pause is on.
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-vi.mock("../lib/prisma", () => ({
-  prisma: {
+vi.mock("../lib/prisma", () => {
+  const prisma: any = {
     scheduledCommunication: { create: vi.fn(), findMany: vi.fn(), count: vi.fn(), findUnique: vi.fn(), update: vi.fn(), updateMany: vi.fn() },
-  },
-}));
+    broadcast: { create: vi.fn(), findUnique: vi.fn(), update: vi.fn(), updateMany: vi.fn() },
+    $transaction: vi.fn(async (cb: any) => cb(prisma)),
+  };
+  return { prisma };
+});
 vi.mock("../lib/logger", () => ({ logger: { error: vi.fn(), info: vi.fn(), warn: vi.fn() } }));
+vi.mock("../lib/expo-push", () => ({ checkPushReceipts: vi.fn().mockResolvedValue({ checked: 0, invalidated: 0, errors: 0 }) }));
+vi.mock("../modules/communications/comms-pause.service", () => ({
+  commsPauseService: { isCommsPaused: vi.fn().mockResolvedValue(false) },
+}));
 vi.mock("../modules/admin/admin-communications.service", () => ({
-  adminCommunicationsService: { normalizeInput: vi.fn((x) => x), broadcast: vi.fn() },
+  adminCommunicationsService: {
+    normalizeInput: vi.fn((x) => ({ audience: "buyers", category: "marketing", wantsInApp: true, wantsPush: false, wantsEmail: false, subject: x.subject, body: x.body, channel: "in_app" })),
+    executeBroadcast: vi.fn(),
+    reconcileRecentBroadcasts: vi.fn().mockResolvedValue({ checked: 0, changed: 0 }),
+  },
+  audienceParamsOf: vi.fn(() => ({})),
+  selectedChannels: vi.fn(() => ["in_app"]),
 }));
 
 import { prisma } from "../lib/prisma";
+import { commsPauseService } from "../modules/communications/comms-pause.service";
 import { adminCommunicationsService } from "../modules/admin/admin-communications.service";
 import { scheduledCommunicationService } from "../modules/communications/scheduled-communication.service";
 
-const m = vi.mocked(prisma, true) as any;
+const m = prisma as any;
+const execute = vi.mocked(adminCommunicationsService.executeBroadcast);
+const paused = vi.mocked(commsPauseService.isCommsPaused);
+
+const inputStub: any = { audience: "buyers", category: "marketing", wantsInApp: true, wantsPush: false, wantsEmail: false, subject: "s", body: "b", channel: "in_app" };
+const future = () => new Date(Date.now() + 3600000).toISOString();
 
 beforeEach(() => {
   vi.clearAllMocks();
+  paused.mockResolvedValue(false);
+  m.$transaction.mockImplementation(async (cb: any) => cb(m));
+  m.scheduledCommunication.updateMany.mockResolvedValue({ count: 1 });
+  m.broadcast.updateMany.mockResolvedValue({ count: 1 });
 });
 
-describe("scheduledCommunicationService.create — real date validation", () => {
-  it("rejects an invalid date string", async () => {
-    await expect(scheduledCommunicationService.create({
-      audience: "all_buyers", channel: "email", subject: "s", body: "b", scheduledFor: "not-a-date", createdBy: "admin-1",
-    })).rejects.toMatchObject({ statusCode: 400 });
-    expect(m.scheduledCommunication.create).not.toHaveBeenCalled();
+describe("create — validation and paired Broadcast record", () => {
+  it("rejects an invalid date, a past date and a missing reason", async () => {
+    await expect(scheduledCommunicationService.create({ input: inputStub, reason: "Spring promo", scheduledFor: "nope", createdBy: "a" })).rejects.toMatchObject({ statusCode: 400 });
+    await expect(scheduledCommunicationService.create({ input: inputStub, reason: "Spring promo", scheduledFor: new Date(Date.now() - 60000).toISOString(), createdBy: "a" })).rejects.toMatchObject({ statusCode: 400 });
+    await expect(scheduledCommunicationService.create({ input: inputStub, reason: "x", scheduledFor: future(), createdBy: "a" })).rejects.toMatchObject({ statusCode: 400 });
+    expect(m.broadcast.create).not.toHaveBeenCalled();
   });
 
-  it("rejects a scheduledFor in the past — never schedules a broadcast that already should have fired", async () => {
-    await expect(scheduledCommunicationService.create({
-      audience: "all_buyers", channel: "email", subject: "s", body: "b", scheduledFor: new Date(Date.now() - 60000).toISOString(), createdBy: "admin-1",
-    })).rejects.toMatchObject({ statusCode: 400 });
-  });
-
-  it("creates a real SCHEDULED row for a valid future date", async () => {
-    m.scheduledCommunication.create.mockResolvedValue({ id: "sched-1", status: "SCHEDULED" });
-    const future = new Date(Date.now() + 3600000).toISOString();
-
-    await scheduledCommunicationService.create({ audience: "all_buyers", channel: "email", subject: "s", body: "b", scheduledFor: future, createdBy: "admin-1" });
-
-    expect(m.scheduledCommunication.create).toHaveBeenCalledWith(expect.objectContaining({
-      data: expect.objectContaining({ status: "SCHEDULED", audience: "all_buyers" }),
-    }));
+  it("creates a SCHEDULED Broadcast and its schedule row together", async () => {
+    m.broadcast.create.mockResolvedValue({ id: "b1" });
+    m.scheduledCommunication.create.mockResolvedValue({ id: "s1", broadcastId: "b1" });
+    await scheduledCommunicationService.create({ input: inputStub, reason: "Spring promo", scheduledFor: future(), createdBy: "admin-1" });
+    expect(m.broadcast.create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ status: "SCHEDULED" }) }));
+    expect(m.scheduledCommunication.create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ status: "SCHEDULED", broadcastId: "b1" }) }));
   });
 });
 
-describe("scheduledCommunicationService.cancel/update — only a SCHEDULED item is mutable", () => {
-  it("404s cancel for a non-existent item", async () => {
+describe("cancel / update — only SCHEDULED is mutable (atomic)", () => {
+  it("404s cancel for a missing item", async () => {
     m.scheduledCommunication.findUnique.mockResolvedValue(null);
-    await expect(scheduledCommunicationService.cancel("missing")).rejects.toMatchObject({ statusCode: 404 });
+    await expect(scheduledCommunicationService.cancel("x")).rejects.toMatchObject({ statusCode: 404 });
   });
 
-  it("refuses to cancel an item that already SENT", async () => {
-    m.scheduledCommunication.findUnique.mockResolvedValue({ id: "sched-1", status: "SENT" });
-    await expect(scheduledCommunicationService.cancel("sched-1")).rejects.toMatchObject({ statusCode: 400 });
-    expect(m.scheduledCommunication.update).not.toHaveBeenCalled();
+  it("refuses to cancel an item a runner already claimed (updateMany matched nothing)", async () => {
+    m.scheduledCommunication.findUnique.mockResolvedValue({ id: "s1", status: "SENDING", broadcastId: "b1" });
+    m.scheduledCommunication.updateMany.mockResolvedValue({ count: 0 });
+    await expect(scheduledCommunicationService.cancel("s1")).rejects.toMatchObject({ statusCode: 400 });
   });
 
-  it("cancels a genuinely SCHEDULED item", async () => {
-    m.scheduledCommunication.findUnique.mockResolvedValue({ id: "sched-1", status: "SCHEDULED" });
-    m.scheduledCommunication.update.mockResolvedValue({ id: "sched-1", status: "CANCELLED" });
-    await scheduledCommunicationService.cancel("sched-1");
-    expect(m.scheduledCommunication.update).toHaveBeenCalledWith({ where: { id: "sched-1" }, data: { status: "CANCELLED" } });
+  it("cancels the schedule and its Broadcast", async () => {
+    m.scheduledCommunication.findUnique.mockResolvedValue({ id: "s1", status: "SCHEDULED", broadcastId: "b1" });
+    await scheduledCommunicationService.cancel("s1");
+    expect(m.scheduledCommunication.updateMany).toHaveBeenCalledWith({ where: { id: "s1", status: "SCHEDULED" }, data: { status: "CANCELLED" } });
+    expect(m.broadcast.updateMany).toHaveBeenCalledWith(expect.objectContaining({ data: { status: "CANCELLED" } }));
   });
 
-  it("refuses to edit an item that already SENT or is CANCELLED", async () => {
-    m.scheduledCommunication.findUnique.mockResolvedValue({ id: "sched-1", status: "CANCELLED" });
-    await expect(scheduledCommunicationService.update("sched-1", { subject: "new subject" })).rejects.toMatchObject({ statusCode: 400 });
-  });
-
-  it("rejects an entirely empty update — nothing real to change", async () => {
-    m.scheduledCommunication.findUnique.mockResolvedValue({ id: "sched-1", status: "SCHEDULED" });
-    await expect(scheduledCommunicationService.update("sched-1", {})).rejects.toMatchObject({ statusCode: 400 });
-    expect(m.scheduledCommunication.update).not.toHaveBeenCalled();
-  });
-
-  it("rejects an invalid rescheduled date on update", async () => {
-    m.scheduledCommunication.findUnique.mockResolvedValue({ id: "sched-1", status: "SCHEDULED" });
-    await expect(scheduledCommunicationService.update("sched-1", { scheduledFor: "garbage" })).rejects.toMatchObject({ statusCode: 400 });
-  });
-
-  it("only writes the fields actually provided, trimmed", async () => {
-    m.scheduledCommunication.findUnique.mockResolvedValue({ id: "sched-1", status: "SCHEDULED" });
-    m.scheduledCommunication.update.mockResolvedValue({ id: "sched-1" });
-
-    await scheduledCommunicationService.update("sched-1", { subject: "  New subject  " });
-
-    expect(m.scheduledCommunication.update).toHaveBeenCalledWith({ where: { id: "sched-1" }, data: { subject: "New subject" } });
+  it("update rejects a non-SCHEDULED item and a past time", async () => {
+    m.scheduledCommunication.findUnique.mockResolvedValue({ id: "s1", status: "SENT" });
+    await expect(scheduledCommunicationService.update("s1", { subject: "n" })).rejects.toMatchObject({ statusCode: 400 });
+    m.scheduledCommunication.findUnique.mockResolvedValue({ id: "s1", status: "SCHEDULED", broadcastId: "b1" });
+    await expect(scheduledCommunicationService.update("s1", { scheduledFor: new Date(Date.now() - 1000).toISOString() })).rejects.toMatchObject({ statusCode: 400 });
   });
 });
 
-describe("scheduledCommunicationService.runDue — atomic claim, real idempotency", () => {
-  it("only processes items whose scheduledFor has actually passed, oldest first", async () => {
+describe("runDue — claim semantics", () => {
+  const due = (over: Record<string, unknown> = {}) => ({ id: "s1", broadcastId: "b1", createdBy: "admin-1", scheduledFor: new Date(Date.now() - 1000), ...over });
+
+  it("only selects items whose scheduledFor has passed", async () => {
     m.scheduledCommunication.findMany.mockResolvedValue([]);
     await scheduledCommunicationService.runDue();
-    const call = m.scheduledCommunication.findMany.mock.calls[0][0];
-    expect(call.where.status).toBe("SCHEDULED");
-    expect(call.orderBy).toEqual({ scheduledFor: "asc" });
+    const where = m.scheduledCommunication.findMany.mock.calls[0][0].where;
+    expect(where.status).toBe("SCHEDULED");
+    expect(where.scheduledFor.lte).toBeInstanceOf(Date);
   });
 
-  it("skips an item a concurrent runner already claimed — never double-sends", async () => {
-    m.scheduledCommunication.findMany.mockResolvedValue([{ id: "sched-1", audience: "all_buyers", channel: "email", subject: "s", body: "b", createdBy: "admin-1" }]);
-    // Another sweep already flipped this row's status — the guarded claim's WHERE no longer matches.
+  it("does nothing at all while the emergency pause is on (nothing claimed, items stay SCHEDULED)", async () => {
+    paused.mockResolvedValue(true);
+    const r = await scheduledCommunicationService.runDue();
+    expect(r).toMatchObject({ processed: 0, paused: true });
+    expect(m.scheduledCommunication.findMany).not.toHaveBeenCalled();
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it("skips an item another runner already claimed — never double-sends", async () => {
     m.scheduledCommunication.updateMany.mockResolvedValue({ count: 0 });
-
-    const result = await scheduledCommunicationService.runDue();
-
-    expect(result).toEqual({ processed: 1, sent: 0, failed: 0 });
-    expect(adminCommunicationsService.broadcast).not.toHaveBeenCalled();
+    m.scheduledCommunication.findMany.mockResolvedValue([due()]);
+    const r = await scheduledCommunicationService.runDue();
+    expect(execute).not.toHaveBeenCalled();
+    expect(r.sent).toBe(0);
   });
 
-  it("sends a real broadcast for a successfully-claimed item and marks it SENT", async () => {
-    m.scheduledCommunication.findMany.mockResolvedValue([{ id: "sched-1", audience: "all_buyers", channel: "email", subject: "s", body: "b", createdBy: "admin-1" }]);
-    m.scheduledCommunication.updateMany.mockResolvedValue({ count: 1 });
-    m.scheduledCommunication.update.mockResolvedValue({ id: "sched-1", status: "SENT" });
+  it("claims as SENDING first and marks SENT only AFTER delivery completes", async () => {
+    const order: string[] = [];
+    m.scheduledCommunication.findMany.mockResolvedValue([due()]);
+    m.scheduledCommunication.updateMany.mockImplementation(async ({ data }: any) => {
+      if (data.status === "SENDING") order.push("claim");
+      return { count: 1 };
+    });
+    execute.mockImplementation(async () => { order.push("deliver"); return { status: "SENT" as any }; });
+    m.scheduledCommunication.update.mockImplementation(async ({ data }: any) => { order.push(`final:${data.status}`); return {}; });
 
-    const result = await scheduledCommunicationService.runDue();
+    const r = await scheduledCommunicationService.runDue();
 
-    expect(adminCommunicationsService.broadcast).toHaveBeenCalledWith("admin-1", expect.objectContaining({ subject: "s" }));
-    expect(m.scheduledCommunication.update).toHaveBeenCalledWith(expect.objectContaining({ where: { id: "sched-1" }, data: expect.objectContaining({ status: "SENT" }) }));
-    expect(result).toEqual({ processed: 1, sent: 1, failed: 0 });
+    expect(order).toEqual(["claim", "deliver", "final:SENT"]);
+    expect(r).toMatchObject({ processed: 1, sent: 1, failed: 0 });
   });
 
-  it("marks an item FAILED (with the real error message) when the broadcast itself throws, and does not crash the sweep", async () => {
-    m.scheduledCommunication.findMany.mockResolvedValue([{ id: "sched-1", audience: "all_buyers", channel: "email", subject: "s", body: "b", createdBy: "admin-1" }]);
-    m.scheduledCommunication.updateMany.mockResolvedValue({ count: 1 });
-    vi.mocked(adminCommunicationsService.broadcast).mockRejectedValueOnce(new Error("provider down"));
-
-    const result = await scheduledCommunicationService.runDue();
-
-    expect(m.scheduledCommunication.update).toHaveBeenCalledWith(expect.objectContaining({
-      where: { id: "sched-1" },
-      data: expect.objectContaining({ status: "FAILED", error: "provider down" }),
-    }));
-    expect(result).toEqual({ processed: 1, sent: 0, failed: 1 });
+  it("marks FAILED with the real error when delivery throws, and the sweep continues", async () => {
+    m.scheduledCommunication.findMany.mockResolvedValue([due({ id: "s1", broadcastId: "b1" }), due({ id: "s2", broadcastId: "b2" })]);
+    execute.mockRejectedValueOnce(new Error("boom")).mockResolvedValueOnce({ status: "SENT" as any });
+    const r = await scheduledCommunicationService.runDue();
+    expect(m.scheduledCommunication.update).toHaveBeenCalledWith({ where: { id: "s1" }, data: { status: "FAILED", error: "boom" } });
+    expect(r).toMatchObject({ processed: 2, sent: 1, failed: 1 });
   });
 
-  it("one failing item never blocks the rest of the sweep", async () => {
-    m.scheduledCommunication.findMany.mockResolvedValue([
-      { id: "sched-1", audience: "all_buyers", channel: "email", subject: "s1", body: "b", createdBy: "admin-1" },
-      { id: "sched-2", audience: "all_buyers", channel: "email", subject: "s2", body: "b", createdBy: "admin-1" },
-    ]);
-    m.scheduledCommunication.updateMany.mockResolvedValue({ count: 1 });
-    vi.mocked(adminCommunicationsService.broadcast)
-      .mockRejectedValueOnce(new Error("provider down"))
-      .mockResolvedValueOnce({} as never);
+  it("a Broadcast that failed on every channel is FAILED, not SENT", async () => {
+    m.scheduledCommunication.findMany.mockResolvedValue([due()]);
+    execute.mockResolvedValue({ status: "FAILED" as any });
+    m.broadcast.findUnique.mockResolvedValue({ error: "Email provider is not configured; nothing was sent." });
+    const r = await scheduledCommunicationService.runDue();
+    expect(m.scheduledCommunication.update).toHaveBeenCalledWith({ where: { id: "s1" }, data: { status: "FAILED", error: "Email provider is not configured; nothing was sent." } });
+    expect(r.failed).toBe(1);
+  });
 
-    const result = await scheduledCommunicationService.runDue();
-
-    expect(result).toEqual({ processed: 2, sent: 1, failed: 1 });
+  it("reclaims a schedule stuck in SENDING as FAILED (never silently re-sent)", async () => {
+    m.scheduledCommunication.findMany.mockResolvedValue([]);
+    await scheduledCommunicationService.runDue();
+    const first = m.scheduledCommunication.updateMany.mock.calls[0][0];
+    expect(first.where.status).toBe("SENDING");
+    expect(first.data.status).toBe("FAILED");
   });
 });

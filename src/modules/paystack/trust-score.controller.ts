@@ -1,6 +1,7 @@
 import type { Request, Response } from "express";
 
 import { AppError } from "../../shared/errors/app-error";
+import { requireAuditReason } from "../../shared/utils/audit";
 import { trustScoreService } from "./trust-score.service";
 
 /**

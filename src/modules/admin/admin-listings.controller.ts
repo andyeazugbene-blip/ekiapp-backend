@@ -3,6 +3,7 @@ import type { Request, Response } from "express";
 import { AppError } from "../../shared/errors/app-error";
 import { recordAudit } from "../../shared/utils/audit";
 import { adminListingsService } from "./admin-listings.service";
+import { adminRestoreProduct, adminUnpublishProduct } from "./admin-products.controller";
 import { adminSuspensionService, parseSuspendInput, parseUnsuspendInput } from "./admin-suspension.service";
 
 function requireIdParam(request: Request): string {
@@ -150,28 +151,13 @@ export async function rejectVendor(request: Request, response: Response): Promis
   response.status(200).json({ vendor });
 }
 
+// Legacy route names kept; both now require a reason (handbook 14.6).
 export async function approveProduct(request: Request, response: Response): Promise<void> {
-  const productId = requireIdParam(request);
-  const product = await adminListingsService.approveProduct(productId);
-  await recordAudit({
-    actorId: requireUserId(request),
-    action: "product.approve",
-    entityType: "Product",
-    entityId: productId,
-  });
-  response.status(200).json({ product });
+  return adminRestoreProduct(request, response);
 }
 
 export async function disableProduct(request: Request, response: Response): Promise<void> {
-  const productId = requireIdParam(request);
-  const product = await adminListingsService.disableProduct(productId);
-  await recordAudit({
-    actorId: requireUserId(request),
-    action: "product.disable",
-    entityType: "Product",
-    entityId: productId,
-  });
-  response.status(200).json({ product });
+  return adminUnpublishProduct(request, response);
 }
 
 export async function getPayment(request: Request, response: Response): Promise<void> {

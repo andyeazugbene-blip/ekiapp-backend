@@ -5,6 +5,10 @@ import { prisma } from "../../lib/prisma";
 import { enqueueEmail } from "../../lib/email-queue";
 import { sendPushToUser } from "../../lib/expo-push";
 import { notificationsService } from "../notifications/notifications.service";
+import { commsPauseService, PAUSE_REASON } from "./comms-pause.service";
+import { AppError } from "../../shared/errors/app-error";
+import { recordAudit } from "../../shared/utils/audit";
+import type { Request } from "express";
 
 // ─── Template definitions ───────────────────────────────────────────────────
 
@@ -223,6 +227,13 @@ async function resolveTemplate(eventKey: string): Promise<CommunicationTemplate 
 
 export const communicationService = {
   async send(params: SendParams): Promise<SendResult> {
+    // Emergency pause (handbook 6.3): only automated/marketing sends are
+    // paused — transactional events (order, payment, verification) never are.
+    if (params.eventKey.startsWith("automation_") && (await commsPauseService.isAutomationsPaused())) {
+      logger.info("Communication suppressed: emergency_pause", { eventKey: params.eventKey });
+      return { outcome: "SUPPRESSED", reason: PAUSE_REASON };
+    }
+
     const template = await resolveTemplate(params.eventKey);
     if (!template || !template.enabled) {
       logger.info("Communication skipped: template disabled or not found", { eventKey: params.eventKey });
@@ -422,16 +433,67 @@ export const communicationService = {
     return seeded;
   },
 
-  async updateTemplate(key: string, data: { title?: string; body?: string; channels?: string[]; enabled?: boolean }): Promise<CommunicationTemplate> {
-    const updated = await prisma.communicationTemplate.update({
-      where: { key },
-      data: {
-        ...(data.title !== undefined && { title: data.title }),
-        ...(data.body !== undefined && { body: data.body }),
-        ...(data.channels !== undefined && { channels: data.channels }),
-        ...(data.enabled !== undefined && { enabled: data.enabled }),
-      },
+  /**
+   * Updates a template and records an immutable version snapshot (the first edit
+   * also snapshots the pre-edit baseline as v1) plus an audit entry.
+   */
+  async updateTemplate(
+    key: string,
+    data: { title?: string; body?: string; channels?: string[]; enabled?: boolean },
+    actor?: { id: string; reason?: string; request?: Request },
+  ): Promise<CommunicationTemplate> {
+    if (data.channels !== undefined) {
+      const bad = data.channels.filter((c) => !["email", "push", "in_app"].includes(c));
+      if (bad.length > 0 || data.channels.length === 0) throw new AppError("channels must be a non-empty subset of email, push, in_app", 400);
+    }
+    if (data.title !== undefined && !data.title.trim()) throw new AppError("title cannot be empty", 400);
+    if (data.body !== undefined && !data.body.trim()) throw new AppError("body cannot be empty", 400);
+
+    const before = await prisma.communicationTemplate.findUnique({ where: { key } });
+    if (!before) throw new AppError("Template not found", 404);
+
+    const updated = await prisma.$transaction(async (tx) => {
+      const latest = await tx.communicationTemplateVersion.findFirst({ where: { templateKey: key }, orderBy: { version: "desc" } });
+      let version = latest?.version ?? 0;
+      if (!latest) {
+        version = 1;
+        await tx.communicationTemplateVersion.create({
+          data: {
+            templateKey: key, version, title: before.title, body: before.body, channels: before.channels,
+            enabled: before.enabled, changedById: null, reason: "Baseline before first versioned edit",
+          },
+        });
+      }
+      const next = await tx.communicationTemplate.update({
+        where: { key },
+        data: {
+          ...(data.title !== undefined && { title: data.title.trim() }),
+          ...(data.body !== undefined && { body: data.body }),
+          ...(data.channels !== undefined && { channels: data.channels }),
+          ...(data.enabled !== undefined && { enabled: data.enabled }),
+        },
+      });
+      await tx.communicationTemplateVersion.create({
+        data: {
+          templateKey: key, version: version + 1, title: next.title, body: next.body, channels: next.channels,
+          enabled: next.enabled, changedById: actor?.id ?? null, reason: actor?.reason ?? null,
+        },
+      });
+      return next;
     });
+
+    if (actor) {
+      await recordAudit({
+        actorId: actor.id,
+        action: "communication_template.updated",
+        entityType: "CommunicationTemplate",
+        entityId: updated.id,
+        beforeState: { key, title: before.title, body: before.body, channels: before.channels, enabled: before.enabled },
+        afterState: { key, title: updated.title, body: updated.body, channels: updated.channels, enabled: updated.enabled },
+        reason: actor.reason,
+        request: actor.request,
+      });
+    }
     return {
       key: updated.key,
       title: updated.title,
@@ -442,12 +504,24 @@ export const communicationService = {
     };
   },
 
+  async getTemplateVersions(key: string) {
+    const versions = await prisma.communicationTemplateVersion.findMany({
+      where: { templateKey: key },
+      orderBy: { version: "desc" },
+      take: 50,
+    });
+    const ids = [...new Set(versions.map((v) => v.changedById).filter((x): x is string => !!x))];
+    const users = ids.length ? await prisma.user.findMany({ where: { id: { in: ids } }, select: { id: true, name: true, email: true } }) : [];
+    const byId = new Map(users.map((u) => [u.id, u]));
+    return versions.map((v) => ({ ...v, changedBy: v.changedById ? byId.get(v.changedById) ?? null : null }));
+  },
+
   async getStats() {
     // "Last 30 Days" per the admin dashboard label this feeds.
     const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
     const since = { createdAt: { gte: thirtyDaysAgo } };
     const [totalSent, totalFailed, totalQueued, total, byEvent, byChannel] = await Promise.all([
-      prisma.communicationLog.count({ where: { status: "SENT", ...since } }),
+      prisma.communicationLog.count({ where: { status: { in: ["SENT", "DELIVERED"] }, ...since } }),
       prisma.communicationLog.count({ where: { status: "FAILED", ...since } }),
       prisma.communicationLog.count({ where: { status: "QUEUED", ...since } }),
       prisma.communicationLog.count({ where: since }),
@@ -468,6 +542,7 @@ export const communicationService = {
     eventKey?: string;
     recipientType?: string;
     status?: string;
+    broadcastId?: string;
     limit?: number;
     offset?: number;
   }): Promise<{ items: any[]; total: number }> {
@@ -475,6 +550,7 @@ export const communicationService = {
     if (query.eventKey) where.eventKey = query.eventKey;
     if (query.recipientType) where.recipientType = query.recipientType;
     if (query.status) where.status = query.status;
+    if (query.broadcastId) where.broadcastId = query.broadcastId;
 
     const limit = Math.min(query.limit ?? 50, 100);
     const skip = query.offset ?? 0;

@@ -5,7 +5,9 @@ import { requireAdminPermission } from "../../middlewares/require-admin-permissi
 import { asyncHandler } from "../../shared/utils/async-handler";
 import {
   adminCreateReward,
-  adminDeleteReward,
+  adminArchiveReward,
+  adminPauseReward,
+  adminResumeReward,
   adminListRewards,
   adminUpdateReward,
   claimReward,
@@ -20,7 +22,9 @@ export const adminRewardsRouter = Router();
 adminRewardsRouter.get("/", authenticate, requireRole("ADMIN"), asyncHandler(requireAdminPermission("rewards.read")), asyncHandler(adminListRewards));
 adminRewardsRouter.post("/", authenticate, requireRole("ADMIN"), asyncHandler(requireAdminPermission("rewards.mutate")), asyncHandler(adminCreateReward));
 adminRewardsRouter.patch("/:id", authenticate, requireRole("ADMIN"), asyncHandler(requireAdminPermission("rewards.mutate")), asyncHandler(adminUpdateReward));
-adminRewardsRouter.delete("/:id", authenticate, requireRole("ADMIN"), asyncHandler(requireAdminPermission("rewards.mutate")), asyncHandler(adminDeleteReward));
+adminRewardsRouter.post("/:id/pause", authenticate, requireRole("ADMIN"), asyncHandler(requireAdminPermission("rewards.mutate")), asyncHandler(adminPauseReward));
+adminRewardsRouter.post("/:id/resume", authenticate, requireRole("ADMIN"), asyncHandler(requireAdminPermission("rewards.mutate")), asyncHandler(adminResumeReward));
+adminRewardsRouter.post("/:id/archive", authenticate, requireRole("ADMIN"), asyncHandler(requireAdminPermission("rewards.mutate")), asyncHandler(adminArchiveReward));
 
 // Buyer routes (mounted at /api/rewards)
 rewardsRouter.get("/active", asyncHandler(listActiveRewards));

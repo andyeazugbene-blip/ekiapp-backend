@@ -1,6 +1,8 @@
 import { prisma } from "../../lib/prisma";
 import { logger } from "../../lib/logger";
 import { automationService } from "./automation.service";
+import { getRuleGate, noteRuleSkipped } from "./automation-rule-gate";
+import { eventsService, EVENT_NAMES } from "../events/events.service";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -13,6 +15,8 @@ function isoWeek(d: Date): string {
   return `${d.getUTCFullYear()}-W${week}`;
 }
 
+export const FIRST_SALE_PAID_STATUSES = ["PAID", "CONFIRMED", "PROCESSING", "DISPATCHED", "IN_TRANSIT", "DELIVERED", "COMPLETED", "PAYMENT_SECURED", "VENDOR_CONFIRMED", "AUTO_RELEASED", "DISPUTED"] as const;
+
 /** FIRST_SALE: verified vendor, has an active product, has never sold anything. */
 async function detectFirstSale(): Promise<number> {
   const vendors = await prisma.vendor.findMany({
@@ -20,7 +24,9 @@ async function detectFirstSale(): Promise<number> {
       isSuspended: false,
       verificationStatus: "VERIFIED",
       products: { some: { isActive: true } },
-      orderItems: { none: {} },
+      // Only a PAID (non-failed/non-cancelled) order counts as a first sale. An
+      // unpaid/failed/cancelled order must not stop the First Sale nudge.
+      orderItems: { none: { order: { status: { in: [...FIRST_SALE_PAID_STATUSES] } } } },
     },
     select: { id: true, userId: true, storeName: true },
     take: 200,
@@ -453,6 +459,22 @@ export const automationDetectors = {
       ["CHECKOUT_PAYMENT_FOLLOW_UP", detectCheckoutPaymentFollowUp],
     ];
     for (const [name, job] of jobs) {
+      // Admin-paused / archived / draft rule: skip the whole detector and record why.
+      const gate = await getRuleGate(name);
+      if (!gate.runnable) {
+        results[name] = 0;
+        await noteRuleSkipped(name, gate.reason ?? "rule_paused");
+        eventsService.emit({
+          name: EVENT_NAMES.automation_suppressed,
+          actorType: "system",
+          entityType: "AutomationRule",
+          entityId: name,
+          source: "automation_sweep",
+          payload: { ruleKey: name, reason: gate.reason ?? "rule_paused", state: gate.state },
+        });
+        logger.info("Automation detector skipped: rule not active", { detector: name, reason: gate.reason });
+        continue;
+      }
       try {
         results[name] = await job();
       } catch (error) {

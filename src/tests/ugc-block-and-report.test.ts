@@ -15,6 +15,10 @@ vi.mock("../lib/prisma", () => ({
     userBlock: { findUnique: vi.fn(), upsert: vi.fn(), deleteMany: vi.fn() },
     contentReport: { findFirst: vi.fn(), create: vi.fn(), findMany: vi.fn(), update: vi.fn() },
     order: { findUnique: vi.fn() },
+    message: { findMany: vi.fn().mockResolvedValue([]) },
+    product: { findMany: vi.fn().mockResolvedValue([]) },
+    vendor: { findMany: vi.fn().mockResolvedValue([]) },
+    review: { findMany: vi.fn().mockResolvedValue([]) },
   },
 }));
 
@@ -114,7 +118,7 @@ describe("reportsService.listReports — real moderation queue, enriched with th
     ] as never);
     m.user.findMany.mockResolvedValue([{ id: "u1", name: "Real Reporter", email: "reporter@example.com" }] as never);
 
-    const result = await reportsService.listReports();
+    const { reports: result } = await reportsService.listReports();
 
     expect(result[0]).toEqual(
       expect.objectContaining({ reporter: { id: "u1", name: "Real Reporter", email: "reporter@example.com" } }),
@@ -127,7 +131,7 @@ describe("reportsService.listReports — real moderation queue, enriched with th
     ] as never);
     m.user.findMany.mockResolvedValue([] as never);
 
-    const result = await reportsService.listReports();
+    const { reports: result } = await reportsService.listReports();
 
     expect(result[0].reporter).toBeNull();
   });

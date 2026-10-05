@@ -14,6 +14,7 @@ function createRateLimiter(options: {
   windowMs: number;
   max: number;
   message: { error: string };
+  skip?: (request: Request) => boolean;
 }) {
   const store = new Map<string, RateLimitEntry>();
 
@@ -26,6 +27,10 @@ function createRateLimiter(options: {
   }, 60_000).unref();
 
   return (request: Request, response: Response, next: NextFunction): void => {
+    if (options.skip?.(request)) {
+      next();
+      return;
+    }
     const key = request.ip ?? "unknown";
     const now = Date.now();
 
@@ -78,4 +83,22 @@ export const generalRateLimiter = createRateLimiter({
   // keeps the exact same 100-requests-per-60s limit unchanged.
   max: process.env.NODE_ENV === "test" ? 100_000 : 100,
   message: { error: "Too many requests, please try again later." },
+  // Admin panel traffic has its own, higher budget (adminRateLimiter): one admin
+  // page legitimately makes several calls (permissions, action-centre badges, data).
+  skip: (request) => request.originalUrl.startsWith("/api/admin"),
+});
+
+// Authenticated admin panel API: generous per-IP budget, still bounded.
+export const adminRateLimiter = createRateLimiter({
+  windowMs: 60 * 1000,
+  max: process.env.NODE_ENV === "test" ? 100_000 : 600,
+  message: { error: "Too many requests, please try again later." },
+  skip: (request) => !request.originalUrl.startsWith("/api/admin"),
+});
+
+// Gift card code redemption: tight per-IP limit to blunt code-guessing.
+export const giftCardRedeemRateLimiter = createRateLimiter({
+  windowMs: 60 * 1000,
+  max: process.env.NODE_ENV === "test" ? 100_000 : 10,
+  message: { error: "Too many redemption attempts, please try again later." },
 });

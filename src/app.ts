@@ -10,7 +10,7 @@ import "./lib/sentry";
 import { swaggerSpec } from "./lib/swagger";
 import { errorHandler } from "./middlewares/error-handler";
 import { notFoundHandler } from "./middlewares/not-found";
-import { generalRateLimiter } from "./middlewares/rate-limit";
+import { adminRateLimiter, generalRateLimiter } from "./middlewares/rate-limit";
 import { requestIdMiddleware } from "./middlewares/request-id";
 import { requestLogger } from "./middlewares/request-logger";
 import { validateInputLength } from "./middlewares/validate-input-length";
@@ -118,6 +118,7 @@ app.use(express.urlencoded({ extended: true, limit: "2mb" }));
 
 // Rate limiting + input validation
 app.use("/api", generalRateLimiter);
+app.use("/api", adminRateLimiter);
 app.use(validateInputLength);
 
 // Routes

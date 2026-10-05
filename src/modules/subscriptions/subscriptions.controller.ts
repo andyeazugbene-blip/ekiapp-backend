@@ -1,6 +1,7 @@
 import type { Request, Response } from "express";
 
 import { AppError } from "../../shared/errors/app-error";
+import { requireAuditReason } from "../../shared/utils/audit";
 import { subscriptionsService } from "./subscriptions.service";
 import {
   validateActivateSubscriptionInput,
@@ -37,8 +38,9 @@ export async function upsertAdminPlan(request: Request, response: Response): Pro
     throw new AppError("Unauthorized", 401);
   }
 
+  const reason = requireAuditReason((request.body as Record<string, unknown> | undefined)?.reason);
   const input = validateSubscriptionPlanConfigInput(request.body);
-  const plan = await subscriptionsService.upsertPlanConfig(request.user.id, input);
+  const plan = await subscriptionsService.upsertPlanConfig(request.user.id, input, reason);
   response.status(200).json({ plan });
 }
 
@@ -52,7 +54,8 @@ export async function deleteAdminPlan(request: Request, response: Response): Pro
     throw new AppError("Plan id is required and must be a string", 400);
   }
 
-  const plan = await subscriptionsService.deletePlanConfig(request.user.id, planId);
+  const reason = requireAuditReason((request.body as Record<string, unknown> | undefined)?.reason ?? request.query?.reason);
+  const plan = await subscriptionsService.deletePlanConfig(request.user.id, planId, reason);
   response.status(200).json({ plan });
 }
 
@@ -66,8 +69,9 @@ export async function assignVendorPlan(request: Request, response: Response): Pr
     throw new AppError("Vendor id is required and must be a string", 400);
   }
 
+  const reason = requireAuditReason((request.body as Record<string, unknown> | undefined)?.reason);
   const input = validateAssignVendorPlanInput(request.body);
-  const subscription = await subscriptionsService.assignVendorPlan(request.user.id, vendorId, input);
+  const subscription = await subscriptionsService.assignVendorPlan(request.user.id, vendorId, input, reason);
   response.status(200).json({ subscription });
 }
 

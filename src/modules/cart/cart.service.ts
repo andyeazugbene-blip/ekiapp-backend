@@ -3,6 +3,7 @@ import type { PrismaClient } from "@prisma/client";
 
 import { prisma } from "../../lib/prisma";
 import { AppError } from "../../shared/errors/app-error";
+import { assertVendorsPurchasable } from "../products/seller-readiness";
 import type { AddCartItemInput, UpdateCartItemInput } from "./cart.types";
 
 type CartWithItems = Cart & { items: (CartItem & { product: Product })[] };
@@ -57,6 +58,8 @@ export const cartService = {
       const product = await tx.product.findUnique({ where: { id: input.productId } });
       if (!product) throw new AppError("Product not found", 404);
       if (!product.isActive) throw new AppError("Product is not available", 400);
+      // B15: seller must be able to receive payment (flag SELLER_PAYMENT_READINESS_GATE)
+      await assertVendorsPurchasable([product.vendorId], tx);
 
       // Multi-vendor: no vendor restriction — items from any vendor allowed
       const existingItem = cart.items.find((item) => item.productId === product.id);
@@ -107,6 +110,7 @@ export const cartService = {
       }
 
       assertProductPurchasable(item.product, input.quantity);
+      await assertVendorsPurchasable([item.product.vendorId], tx);
 
       await tx.cartItem.update({
         where: { id: item.id },

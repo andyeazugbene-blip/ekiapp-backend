@@ -16,6 +16,8 @@ export interface ScheduleAutomationInput {
   // transactional ones (low stock, payment recovery, renewal reminders) do
   // not — see isEligible() for the exact list.
   requiresMarketingConsent: boolean;
+  // Transactional notices (e.g. trial ending) are not held back by quiet hours.
+  bypassQuietHours?: boolean;
   title: string;
   body: string;
   data?: Record<string, unknown>;

@@ -11,6 +11,7 @@ import { prisma } from "../../lib/prisma";
 import { CURSOR_ORDER_BY } from "../../shared/constants";
 import { AppError } from "../../shared/errors/app-error";
 import { assertApprovedLaunchCountry } from "../vendors/vendors.service";
+import { adminProductsService } from "./admin-products.service";
 
 const MAX_LIMIT = 100;
 const DEFAULT_LIMIT = 20;
@@ -496,60 +497,13 @@ export const adminListingsService = {
     return { items: enriched, nextCursor, total };
   },
 
+  // Product moderation lives in admin-products.service.ts (handbook 14.6).
   async listProducts(query: Record<string, unknown>) {
-    const pagination = parsePagination(query);
-    const isActiveRaw = query.isActive;
-    let isActive: boolean | undefined;
-    if (isActiveRaw !== undefined) {
-      if (isActiveRaw === "true") isActive = true;
-      else if (isActiveRaw === "false") isActive = false;
-      else throw new AppError("Invalid isActive", 400);
-    }
-
-    const { items, nextCursor } = await paginate(
-      ({ take, cursor, skip }) =>
-        prisma.product.findMany({
-          where: isActive === undefined ? {} : { isActive },
-          include: { vendor: { select: { storeName: true, country: true, city: true } } },
-          orderBy: CURSOR_ORDER_BY,
-          take,
-          cursor,
-          skip,
-        }),
-      pagination,
-    );
-    // Map vendor name to top level
-    const enriched = (items as any[]).map((p: any) => ({ ...p, vendorName: p.vendor?.storeName ?? null, vendor: undefined }));
-    return { items: enriched, nextCursor };
+    return adminProductsService.listProducts(query);
   },
 
   async getProduct(productId: string) {
-    const product = await prisma.product.findUnique({
-      where: { id: productId },
-      include: {
-        vendor: {
-          select: {
-            storeName: true, contactEmail: true, country: true, city: true,
-            stripeAccountId: true, verificationStatus: true,
-          },
-        },
-        orderItems: {
-          select: { id: true, quantity: true, totalAmount: true, orderId: true },
-          orderBy: { id: "desc" },
-          take: 10,
-        },
-      },
-    });
-    if (!product) throw new AppError("Product not found", 404);
-    const deliveryZones = await prisma.deliveryZone.findMany({
-      where: { vendorId: product.vendorId, isActive: true },
-      select: { name: true, country: true, baseFeeAmount: true, feePerKgAmount: true },
-    });
-    const globalZones = await prisma.deliveryZone.findMany({
-      where: { vendorId: null, isActive: true, country: product.vendor?.country ?? undefined },
-      select: { name: true, country: true, baseFeeAmount: true, feePerKgAmount: true },
-    });
-    return { ...product, deliveryZones: [...deliveryZones, ...globalZones], vendorName: product.vendor?.storeName ?? null };
+    return adminProductsService.getProduct(productId);
   },
 
   async listOrders(query: Record<string, unknown>) {
@@ -746,25 +700,6 @@ export const adminListingsService = {
     ]);
     return updated;
   },
-
-  async approveProduct(productId: string) {
-    const product = await prisma.product.findUnique({ where: { id: productId } });
-    if (!product) throw new AppError("Product not found", 404);
-    return prisma.product.update({
-      where: { id: productId },
-      data: { isActive: true },
-    });
-  },
-
-  async disableProduct(productId: string) {
-    const product = await prisma.product.findUnique({ where: { id: productId } });
-    if (!product) throw new AppError("Product not found", 404);
-    return prisma.product.update({
-      where: { id: productId },
-      data: { isActive: false },
-    });
-  },
-
 
   async getPayment(paymentId: string) {
     const payment = await prisma.payment.findUnique({

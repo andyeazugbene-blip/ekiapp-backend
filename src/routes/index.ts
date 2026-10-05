@@ -12,6 +12,7 @@ import { cartRouter } from "../modules/cart/cart.routes";
 import { deliveryRouter } from "../modules/delivery/delivery.routes";
 import { healthRouter } from "../modules/health/health.routes";
 import { internalRouter } from "../modules/internal/internal.routes";
+import { unsubscribeRouter } from "../modules/communications/unsubscribe.routes";
 import { messagesRouter } from "../modules/messages/messages.routes";
 import { notificationsRouter } from "../modules/notifications/notifications.routes";
 import { ordersRouter } from "../modules/orders/orders.routes";
@@ -135,4 +136,6 @@ apiRouter.use("/gift-cards", giftCardsRouter_);
 apiRouter.use("/campaigns", campaignsRouter);
 apiRouter.use("/stripe", stripeRouter);
 apiRouter.use("/internal", internalRouter);
+// Public, token-authenticated marketing unsubscribe (email link + RFC 8058 one-click).
+apiRouter.use("/unsubscribe", unsubscribeRouter);
 

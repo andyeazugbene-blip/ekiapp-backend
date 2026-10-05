@@ -78,8 +78,44 @@ export function validatePurchaseGiftCardInput(body: Record<string, unknown>): Pu
 
   return {
     giftCardId,
-    recipientEmail: typeof body.recipientEmail === "string" ? body.recipientEmail.trim() || undefined : undefined,
+    recipientEmail: validateRecipientEmail(typeof body.recipientEmail === "string" ? body.recipientEmail.trim() || undefined : undefined),
     recipientName: typeof body.recipientName === "string" ? body.recipientName.trim() || undefined : undefined,
     message: typeof body.message === "string" ? body.message.trim() || undefined : undefined,
+  };
+}
+
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/;
+
+export function validateRecipientEmail(value: string | undefined): string | undefined {
+  if (value === undefined) return undefined;
+  if (!EMAIL_RE.test(value) || value.length > 254) throw new AppError("recipientEmail is not a valid email address", 400);
+  return value.toLowerCase();
+}
+
+export function validateRedeemGiftCardInput(body: Record<string, unknown>): { code: string; amount?: number } {
+  if (!body || typeof body !== "object") throw new AppError("Invalid request body", 400);
+  if (typeof body.code !== "string" || body.code.trim().length === 0 || body.code.length > 64) {
+    throw new AppError("code is required", 400);
+  }
+  let amount: number | undefined;
+  if (body.amount !== undefined && body.amount !== null && body.amount !== "") {
+    amount = Number(body.amount);
+    if (!Number.isInteger(amount) || amount <= 0) throw new AppError("amount must be a positive integer (minor units)", 400);
+  }
+  return { code: body.code, amount };
+}
+
+export function parseAdminPurchasedQuery(query: Record<string, unknown>): { q?: string; status?: string; limit: number; cursor?: string } {
+  let limit = 20;
+  if (query.limit !== undefined) {
+    const n = Number(query.limit);
+    if (!Number.isInteger(n) || n <= 0 || n > 100) throw new AppError("Invalid limit (1-100)", 400);
+    limit = n;
+  }
+  return {
+    q: typeof query.q === "string" && query.q.trim() ? query.q.trim() : undefined,
+    status: typeof query.status === "string" && query.status ? query.status.toUpperCase() : undefined,
+    cursor: typeof query.cursor === "string" && query.cursor ? query.cursor : undefined,
+    limit,
   };
 }

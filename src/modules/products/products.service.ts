@@ -5,6 +5,7 @@ import { CURSOR_ORDER_BY } from "../../shared/constants";
 import { currencyFromCountry } from "../../shared/currency";
 import { AppError } from "../../shared/errors/app-error";
 import { subscriptionsService } from "../subscriptions/subscriptions.service";
+import { isSellerReadinessGateEnabled, purchasableVendorWhere } from "./seller-readiness";
 import type {
   CreateProductInput,
   ListProductsQuery,
@@ -66,12 +67,19 @@ async function nextProductCode(): Promise<string> {
   return `EKI-${String((Number.isFinite(lastNumber) ? lastNumber : 10100) + 1).padStart(6, "0")}`;
 }
 
+/** Publish-check shared by vendor create and admin restore. */
+export function isProductComplete(p: { images: string[] | null | undefined; priceInCents: number }): boolean {
+  return (p.images?.length ?? 0) > 0 && p.priceInCents > 0;
+}
+
 export const productsService = {
   async createProduct(userId: string, input: CreateProductInput): Promise<Product> {
     const vendor = await getVendorWithVerification(userId);
 
     // Unverified vendors can only create draft (inactive) products
-    const forceDraft = !vendor.isVerified;
+    // Completeness gate (handbook 14.6): nothing goes live without at least
+    // one image and a price above zero.
+    const forceDraft = !vendor.isVerified || !isProductComplete({ images: input.images ?? [], priceInCents: input.priceAmount });
 
     // Enforce subscription product limit
     await subscriptionsService.enforceProductLimit(vendor.id);
@@ -121,6 +129,13 @@ export const productsService = {
     // no longer declares it — a product's currency always inherits from its
     // vendor and must never drift from it post-creation (see createProduct).
     const { priceAmount, costAmount, costCurrency, currency: _ignoredCurrency, ...rest } = input as UpdateProductInput & { currency?: string };
+
+    if (product.isActive && rest.images !== undefined && !isProductComplete({ images: rest.images, priceInCents: priceAmount ?? product.priceInCents })) {
+      throw new AppError("A live product needs at least one image. Add an image before removing the last one.", 400, null, "PRODUCT_INCOMPLETE");
+    }
+    if (product.isActive && priceAmount !== undefined && priceAmount <= 0) {
+      throw new AppError("Price must be greater than zero", 400, null, "PRODUCT_INCOMPLETE");
+    }
 
     return prisma.product.update({
       where: { id: productId },
@@ -178,6 +193,8 @@ export const productsService = {
     const items = await prisma.product.findMany({
       where: {
         isActive: true,
+        // B15: hide products whose seller cannot receive payment.
+        ...(isSellerReadinessGateEnabled() ? { vendor: purchasableVendorWhere() } : {}),
         ...(query.category ? { category: query.category } : {}),
         ...(query.vendorId ? { vendorId: query.vendorId } : {}),
       },

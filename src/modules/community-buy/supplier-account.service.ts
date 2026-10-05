@@ -4,6 +4,65 @@ import { AppError } from "../../shared/errors/app-error";
 import { revokeDeliveryReferencesForSupplierAccount } from "./community-buy-privacy.service";
 import { alertOps } from "./ops-alert.service";
 import { campaignPayoutService } from "./campaign-payout.service";
+import { notifyUserInAppAndEmail } from "./community-buy-notices";
+
+/** Pre-decision states: the application is still being worked. No Suspend / Restrict applies to these. */
+export const PENDING_APPLICATION_STATES = ["NOT_STARTED", "DRAFT", "VERIFICATION_REQUIRED", "UNDER_REVIEW", "INFORMATION_REQUIRED"] as const;
+const REVIEWABLE_STATES = ["UNDER_REVIEW", "INFORMATION_REQUIRED"] as const;
+
+type StatusInput = {
+  supplierState: string;
+  approvedAt?: Date | null;
+  chargesEnabled?: boolean;
+  payoutsEnabled?: boolean;
+  detailsSubmitted?: boolean;
+  stripeRequirementsDue?: string[];
+  providerConnectedAccountId?: string | null;
+};
+
+/**
+ * Handbook 14.11 - the UI must show Application / Account / Payout status
+ * separately. Pure derivation from stored columns, nothing is invented.
+ */
+export function deriveSupplierStatuses(a: StatusInput): {
+  application: "DRAFT" | "UNDER_REVIEW" | "VERIFICATION_REQUIRED" | "INFORMATION_REQUIRED" | "APPROVED" | "REJECTED";
+  account: "NOT_ACTIVE" | "ACTIVE" | "PAUSED" | "RESTRICTED" | "SUSPENDED" | "CLOSED";
+  payout: "READY" | "REQUIREMENTS_DUE" | "NOT_STARTED";
+} {
+  const s = a.supplierState;
+  let application: ReturnType<typeof deriveSupplierStatuses>["application"];
+  if (s === "REJECTED") application = "REJECTED";
+  else if (s === "NOT_STARTED" || s === "DRAFT") application = "DRAFT";
+  else if (s === "UNDER_REVIEW" || s === "VERIFICATION_REQUIRED" || s === "INFORMATION_REQUIRED") application = s;
+  else application = a.approvedAt || s === "APPROVED" ? "APPROVED" : "UNDER_REVIEW";
+  const account: ReturnType<typeof deriveSupplierStatuses>["account"] =
+    s === "APPROVED" ? "ACTIVE" : s === "PAUSED" || s === "RESTRICTED" || s === "SUSPENDED" || s === "CLOSED" ? s : "NOT_ACTIVE";
+  const due = a.stripeRequirementsDue ?? [];
+  const payout: ReturnType<typeof deriveSupplierStatuses>["payout"] =
+    a.payoutsEnabled && a.chargesEnabled && a.detailsSubmitted !== false && due.length === 0
+      ? "READY"
+      : a.providerConnectedAccountId || a.detailsSubmitted || due.length > 0
+        ? "REQUIREMENTS_DUE"
+        : "NOT_STARTED";
+  return { application, account, payout };
+}
+
+/** Payout-readiness gate used at supplier assignment (handbook 14.11): no paid assignment before payouts are enabled. */
+export function isSupplierPayoutReady(a: StatusInput): boolean {
+  return deriveSupplierStatuses(a).payout === "READY";
+}
+
+async function notifySupplier(account: { userId?: string; id: string }, event: string, title: string, body: string, reason?: string | null): Promise<void> {
+  if (!account.userId) return;
+  const full = reason ? `${body} Reason: ${reason}` : body;
+  await notifyUserInAppAndEmail({
+    userId: account.userId,
+    title,
+    body: full,
+    event,
+    data: { supplierAccountId: account.id },
+  });
+}
 
 // AT-30 — "before holds" states: participants have already committed
 // (campaign is publicly live or actively progressing toward capture) but
@@ -133,12 +192,16 @@ export const supplierAccountService = {
         categories,
         coverageRegions,
         collectionCapacityPerDay,
+        // Submitting the Supplier Centre application is the terms acceptance act.
+        termsAcceptedAt: new Date(),
       },
       update: {
         supplierState: "UNDER_REVIEW",
         categories,
         coverageRegions,
         collectionCapacityPerDay,
+        termsAcceptedAt: existing?.termsAcceptedAt ?? new Date(),
+        rejectedAt: null,
       },
     });
 
@@ -152,19 +215,119 @@ export const supplierAccountService = {
    * default to the review queue (UNDER_REVIEW/INFORMATION_REQUIRED) without
    * a separate endpoint.
    */
-  async listForAdmin(state?: string) {
-    return prisma.supplierAccount.findMany({
-      where: state ? { supplierState: state as never } : undefined,
+  async listForAdmin(filters?: string | { state?: string; q?: string; limit?: number; cursor?: string }) {
+    const f = typeof filters === "string" ? { state: filters } : filters ?? {};
+    const limit = Math.min(Math.max(f.limit ?? 25, 1), 100);
+    const where: Record<string, unknown> = {};
+    if (f.state) where.supplierState = f.state;
+    if (f.q?.trim()) {
+      const q = f.q.trim();
+      where.OR = [
+        { user: { name: { contains: q, mode: "insensitive" } } },
+        { user: { email: { contains: q, mode: "insensitive" } } },
+        { id: q },
+      ];
+    }
+    const rows = await prisma.supplierAccount.findMany({
+      where: where as never,
       include: { user: { select: { name: true, email: true } } },
-      orderBy: { createdAt: "desc" },
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      take: limit + 1,
+      ...(f.cursor ? { cursor: { id: f.cursor }, skip: 1 } : {}),
     });
+    const hasMore = rows.length > limit;
+    const items = (hasMore ? rows.slice(0, limit) : rows).map((row) => ({ ...row, statuses: deriveSupplierStatuses(row) }));
+    return { items, nextCursor: hasMore ? items[items.length - 1].id : null };
   },
 
-  async approve(id: string) {
-    return prisma.supplierAccount.update({
+  /** Dashboard counts: one bucket per real state so the total always equals the number of records. */
+  async countsForAdmin() {
+    const grouped = await prisma.supplierAccount.groupBy({ by: ["supplierState"], _count: { _all: true } });
+    const byState: Record<string, number> = {};
+    let total = 0;
+    for (const g of grouped) {
+      byState[g.supplierState] = g._count._all;
+      total += g._count._all;
+    }
+    return { byState, total };
+  },
+
+  /** Detail view for the admin review page. Performance figures are only returned where real data exists. */
+  async getForAdmin(id: string) {
+    const account = await prisma.supplierAccount.findUnique({
       where: { id },
-      data: { supplierState: "APPROVED", approvedAt: new Date(), reasonCode: null },
+      include: { user: { select: { id: true, name: true, email: true, phone: true, country: true } } },
     });
+    if (!account) throw new AppError("Supplier account not found", 404);
+    const campaignWhere = account.legacySupplierProfileId
+      ? { OR: [{ supplierAccountId: id }, { supplierId: account.legacySupplierProfileId }] }
+      : { supplierAccountId: id };
+    const [campaigns, supportCases] = await Promise.all([
+      prisma.communityCampaign.findMany({
+        where: campaignWhere,
+        select: { id: true, title: true, status: true, country: true, createdAt: true, fulfilment: { select: { status: true } } },
+        orderBy: { createdAt: "desc" },
+        take: 50,
+      }),
+      prisma.communityBuySupportCase.count({ where: { campaign: campaignWhere } }),
+    ]);
+    const assigned = campaigns.length;
+    const performance = assigned === 0
+      ? { available: false as const }
+      : {
+          available: true as const,
+          campaignsAssigned: assigned,
+          campaignsCompleted: campaigns.filter((c) => c.fulfilment?.status === "COMPLETED").length,
+          cancellations: campaigns.filter((c) => c.status === "CANCELLED").length,
+          disputes: supportCases,
+          // No per-campaign promised-vs-actual dispatch timestamps are stored, so this is not computed.
+          onTimeRate: null,
+        };
+    return { account: { ...account, statuses: deriveSupplierStatuses(account) }, campaigns, performance };
+  },
+
+  /**
+   * Handbook 14.11 - guarded approval. Only an application that is under
+   * review (or waiting on information) can be approved; CLOSED / SUSPENDED /
+   * REJECTED / already-approved accounts are never silently re-approved.
+   * Requires profile completeness, no outstanding provider verification and
+   * recorded terms acceptance (legacy-verified suppliers are exempt from the
+   * terms check - they were verified under the legacy process).
+   */
+  async approve(id: string, adminId?: string) {
+    const account = await prisma.supplierAccount.findUnique({ where: { id } });
+    if (!account) throw new AppError("Supplier account not found", 404);
+    if (!(REVIEWABLE_STATES as readonly string[]).includes(account.supplierState)) {
+      throw new AppError(`Only an application that is under review can be approved (current state: ${account.supplierState}).`, 409, { supplierState: account.supplierState }, "SUPPLIER_STATE_INVALID");
+    }
+    const blockers: string[] = [];
+    for (const field of computeRequirementsDue(account)) blockers.push(`incomplete:${field}`);
+    if ((account.stripeRequirementsDue ?? []).length > 0) blockers.push("verification_outstanding");
+    if (!account.termsAcceptedAt && !account.legacySupplierProfileId) blockers.push("terms_not_accepted");
+    if (blockers.length > 0) {
+      throw new AppError(`This application cannot be approved yet: ${blockers.join(", ")}.`, 409, { blockers }, "SUPPLIER_APPROVAL_BLOCKED");
+    }
+    const updated = await prisma.supplierAccount.update({
+      where: { id },
+      data: { supplierState: "APPROVED", approvedAt: new Date(), rejectedAt: null, reasonCode: null, reviewedById: adminId ?? null, reviewedAt: new Date() },
+    });
+    await notifySupplier(account, "supplier_approved", "Your supplier application was approved", "You can now be assigned to Community Buy campaigns. Complete payout setup to receive supplier payments.");
+    return updated;
+  },
+
+  /** Handbook 14.11 - decline an application with a reason. Notifies the supplier. */
+  async reject(id: string, reason: string, adminId: string) {
+    const account = await prisma.supplierAccount.findUnique({ where: { id } });
+    if (!account) throw new AppError("Supplier account not found", 404);
+    if (!["UNDER_REVIEW", "INFORMATION_REQUIRED", "VERIFICATION_REQUIRED"].includes(account.supplierState)) {
+      throw new AppError(`Only a pending application can be rejected (current state: ${account.supplierState}).`, 409, { supplierState: account.supplierState }, "SUPPLIER_STATE_INVALID");
+    }
+    const updated = await prisma.supplierAccount.update({
+      where: { id },
+      data: { supplierState: "REJECTED", rejectedAt: new Date(), reasonCode: reason, reviewedById: adminId, reviewedAt: new Date() },
+    });
+    await notifySupplier(account, "supplier_rejected", "Your supplier application was not approved", "Your application was reviewed and not approved.", reason);
+    return updated;
   },
 
   /**
@@ -176,10 +339,12 @@ export const supplierAccountService = {
    * community-buy-privacy.service.ts's isDataAccessAllowed().
    */
   async restrict(id: string, reason: string, controlScope: string | null = null) {
-    return prisma.supplierAccount.update({
+    const updated = await prisma.supplierAccount.update({
       where: { id },
       data: { supplierState: "RESTRICTED", reasonCode: reason, controlScope },
     });
+    await notifySupplier(updated, "supplier_restricted", "Your supplier account was restricted", "Your supplier account has been restricted and cannot take on new campaigns.", reason);
+    return updated;
   },
 
   /**
@@ -202,10 +367,12 @@ export const supplierAccountService = {
     // APPROVED if this account was previously approved (has approvedAt),
     // otherwise back to UNDER_REVIEW. controlScope is cleared — it only
     // ever means something while RESTRICTED.
-    return prisma.supplierAccount.update({
+    const updated = await prisma.supplierAccount.update({
       where: { id },
       data: { supplierState: account.approvedAt ? "APPROVED" : "UNDER_REVIEW", reasonCode: null, controlScope: null },
     });
+    await notifySupplier(updated, "supplier_unrestricted", "Your supplier account restriction was lifted", "Your supplier account is active again.");
+    return updated;
   },
 
   /** M5 — the equally-guarded reversal for suspend(); admin-only, same 2FA weight as suspend() itself (enforced at the route layer). Does not restore data access retroactively — a fresh manifest/emergency-contact call will simply see the now-current, allowed state; nothing needs to be "re-granted." */
@@ -213,10 +380,12 @@ export const supplierAccountService = {
     const account = await prisma.supplierAccount.findUnique({ where: { id } });
     if (!account) throw new AppError("Supplier account not found", 404);
     if (account.supplierState !== "SUSPENDED") throw new AppError("This account is not suspended", 409);
-    return prisma.supplierAccount.update({
+    const updated = await prisma.supplierAccount.update({
       where: { id },
       data: { supplierState: account.approvedAt ? "APPROVED" : "UNDER_REVIEW", reasonCode: null, suspendedAt: null },
     });
+    await notifySupplier(updated, "supplier_unsuspended", "Your supplier account suspension was lifted", "Your supplier account is active again.");
+    return updated;
   },
 
   /** M5 (spec §10.1/§10.2 step 6 "request information") — admin sends a specific correction request. The existing applyAsSupplier() re-application path (a plain upsert back to UNDER_REVIEW) is reused for resubmission — no separate "resubmit" endpoint invented. */
@@ -224,10 +393,15 @@ export const supplierAccountService = {
     const account = await prisma.supplierAccount.findUnique({ where: { id } });
     if (!account) throw new AppError("Supplier account not found", 404);
     if (account.supplierState === "CLOSED") throw new AppError("This supplier account is permanently closed", 409);
-    return prisma.supplierAccount.update({
+    if (!["UNDER_REVIEW", "VERIFICATION_REQUIRED", "INFORMATION_REQUIRED"].includes(account.supplierState)) {
+      throw new AppError(`Information can only be requested on a pending application (current state: ${account.supplierState}).`, 409, { supplierState: account.supplierState }, "SUPPLIER_STATE_INVALID");
+    }
+    const updated = await prisma.supplierAccount.update({
       where: { id },
       data: { supplierState: "INFORMATION_REQUIRED", reasonCode: reason },
     });
+    await notifySupplier(account, "supplier_information_required", "More information needed for your supplier application", "We need more information before we can review your application.", reason);
+    return updated;
   },
 
   /**
@@ -244,10 +418,14 @@ export const supplierAccountService = {
     const account = await prisma.supplierAccount.findUnique({ where: { id } });
     if (!account) throw new AppError("Supplier account not found", 404);
     if (account.supplierState === "CLOSED") throw new AppError("This supplier account is permanently closed", 409);
+    if ((PENDING_APPLICATION_STATES as readonly string[]).includes(account.supplierState) || account.supplierState === "REJECTED") {
+      throw new AppError("A pending or rejected application cannot be suspended. Request information or reject it instead.", 409, { supplierState: account.supplierState }, "SUPPLIER_STATE_INVALID");
+    }
     const updated = await prisma.supplierAccount.update({
       where: { id },
       data: { supplierState: "SUSPENDED", reasonCode: reason, suspendedAt: new Date() },
     });
+    await notifySupplier(account, "supplier_suspended", "Your supplier account was suspended", "Your supplier account is suspended and cannot take on or progress new work until resolved.", reason);
     await revokeDeliveryReferencesForSupplierAccount(id, "supplier_suspended", actorId);
     await alertSupplierSuspensionReviewNeeded(id, reason);
     return updated;
@@ -263,6 +441,7 @@ export const supplierAccountService = {
       data: { supplierState: "CLOSED", reasonCode: reason, closedAt: new Date() },
     });
     await revokeDeliveryReferencesForSupplierAccount(id, "supplier_closed", actorId);
+    await notifySupplier(account, "supplier_closed", "Your supplier account was closed", "Your supplier account was closed. Your history and records are retained.", reason);
     return updated;
   },
 

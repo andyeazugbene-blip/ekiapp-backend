@@ -17,6 +17,7 @@ import { createDeliveryReferenceForContribution } from "./community-buy-privacy.
 import { organiserFeeService } from "./organiser-fee.service";
 import { upsertParticipantWithAttribution } from "./campaign-participant-attribution.service";
 import { buyerCountryService } from "./buyer-country.service";
+import { notifyProgressMilestone } from "./campaign-notifications";
 
 /**
  * Client decision (2026-09-22, buyer-country acceptance fix) — a buyer may
@@ -292,6 +293,7 @@ async function createPledge(
   }
 
   const contribution = await prisma.campaignContribution.findUniqueOrThrow({ where: { id: claimed.id }, include: { participant: true } });
+  void notifyProgressMilestone(campaignId);
   await notificationsService.enqueue({
     userId: contribution.participant.userId,
     type: "COMMUNITY_CAMPAIGN_UPDATE",

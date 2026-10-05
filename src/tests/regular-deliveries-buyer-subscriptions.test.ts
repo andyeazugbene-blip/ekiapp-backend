@@ -121,7 +121,7 @@ describe("buyerSubscriptionsService.create — re-enforces listPublic's own elig
     m.subscriptionOffer.findUnique.mockResolvedValue(baseOffer as never);
 
     await expect(buyerSubscriptionsService.create("buyer-1", baseInput)).rejects.toThrow(
-      "Regular Deliveries are not available in this vendor's market",
+      "Foodstuffs Subscriptions are not available in this vendor's market",
     );
     expect(m.buyerSubscription.create).not.toHaveBeenCalled();
   });
@@ -180,7 +180,7 @@ describe("buyerSubscriptionsService.create — re-enforces listPublic's own elig
     m.subscriptionOffer.findUnique.mockResolvedValue(baseOffer as never);
 
     await expect(buyerSubscriptionsService.create("buyer-1", baseInput)).rejects.toThrow(
-      "Regular Deliveries are not available in this vendor's market",
+      "Foodstuffs Subscriptions are not available in this vendor's market",
     );
     expect(m.buyerSubscription.create).not.toHaveBeenCalled();
   });

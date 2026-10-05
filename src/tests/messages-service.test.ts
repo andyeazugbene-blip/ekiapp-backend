@@ -20,6 +20,7 @@ vi.mock("../lib/prisma", () => ({
     // Support-thread permission checks (adminRolesService.assertPermission) —
     // used when a non-participant admin accesses a SUPPORT conversation.
     adminRoleAssignment: { findMany: vi.fn().mockResolvedValue([]) },
+    auditLog: { create: vi.fn().mockResolvedValue({}) },
     $transaction: vi.fn(),
   },
 }));
@@ -216,7 +217,7 @@ describe("sendMessage / listMessages / markConversationRead — participant-only
     await messagesService.markConversationRead(BUYER.id, "conv-1");
 
     expect(m.message.updateMany).toHaveBeenCalledWith({
-      where: { conversationId: "conv-1", senderId: { not: BUYER.id }, readAt: null },
+      where: { conversationId: "conv-1", senderId: { not: BUYER.id }, readAt: null, isInternal: false },
       data: { readAt: expect.any(Date) },
     });
   });
@@ -361,6 +362,8 @@ describe("SUPPORT conversation access — any support.mutate/support.read admin,
   it("an ordinary (non-SUPPORT) conversation is NOT affected by the admin bypass — a non-participant admin is still forbidden", async () => {
     const ordinaryConversation = { id: "conv-ordinary", type: "BUYER_VENDOR", participantA: BUYER.id, participantB: OTHER_VENDOR_USER.id };
     m.conversation.findUnique.mockResolvedValue(ordinaryConversation);
+    m.user.findFirst.mockResolvedValue(null); // no ADMIN participant
+
     m.adminRoleAssignment.findMany.mockResolvedValue([{ role: { permissions: ["admin.*"] } }]);
 
     await expect(
@@ -369,37 +372,116 @@ describe("SUPPORT conversation access — any support.mutate/support.read admin,
   });
 });
 
-describe("listSupportConversationsForAdmin / getSupportConversationForAdmin — the shared admin inbox", () => {
-  it("lists every SUPPORT conversation regardless of which admin is the fixed participantB", async () => {
-    m.conversation.findMany.mockResolvedValue([
-      { id: "support-conv-3", type: "SUPPORT", participantA: BUYER.id, participantB: ADMIN.id, messages: [], lastMessageAt: new Date(), updatedAt: new Date(), createdAt: new Date() },
-    ]);
-    m.conversation.findUnique.mockResolvedValue({ id: "support-conv-3", type: "SUPPORT", participantA: BUYER.id, participantB: ADMIN.id, messages: [{ text: "hi", createdAt: new Date() }], lastMessageAt: new Date(), updatedAt: new Date(), createdAt: new Date() });
-    mockUsers({ [BUYER.id]: { ...BUYER, email: "buyer@example.com", avatar: null }, [ADMIN.id]: { ...ADMIN, email: "admin@example.com", avatar: null } });
-    m.message.count.mockResolvedValue(1);
+describe("participant paths never expose internal admin notes", () => {
+  const CONV = { id: "conv-1", type: "SUPPORT", participantA: BUYER.id, participantB: ADMIN.id };
 
-    const result = await messagesService.listSupportConversationsForAdmin({ limit: 20 });
-
-    expect(m.conversation.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: { type: "SUPPORT" } }));
-    expect(result.items).toHaveLength(1);
-    expect(result.items[0].buyerId).toBe(BUYER.id);
-    expect(result.items[0].unreadCount).toBe(1);
+  it("listMessages filters isInternal:false", async () => {
+    m.conversation.findUnique.mockResolvedValue(CONV);
+    m.message.findMany.mockResolvedValue([]);
+    await messagesService.listMessages(BUYER.id, "conv-1", { limit: 20 });
+    expect(m.message.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: { conversationId: "conv-1", isInternal: false },
+    }));
   });
 
-  it("identifies the buyer side by role, correctly, regardless of which of participantA/B happens to be the admin", async () => {
-    // Here the admin sorts as participantA (lexicographically before the buyer id) —
-    // the buyer must still be identified correctly by role, not by a fixed slot.
-    m.conversation.findUnique.mockResolvedValue({ id: "support-conv-4", type: "SUPPORT", participantA: ADMIN.id, participantB: BUYER.id, messages: [], lastMessageAt: new Date(), updatedAt: new Date(), createdAt: new Date() });
-    mockUsers({ [BUYER.id]: { ...BUYER, email: "buyer@example.com", avatar: null }, [ADMIN.id]: { ...ADMIN, email: "admin@example.com", avatar: null } });
+  it("conversation list preview and unread count exclude internal notes", async () => {
+    m.conversation.findMany.mockResolvedValue([{ id: "conv-1" }]);
+    m.conversation.findUnique.mockResolvedValue({ ...CONV, orderId: "", messages: [], lastMessageAt: null, updatedAt: new Date(), createdAt: new Date(), status: "OPEN" });
+    mockUsers({ [ADMIN.id]: { ...ADMIN, avatar: null, vendor: null } });
     m.message.count.mockResolvedValue(0);
-
-    const result = await messagesService.getSupportConversationForAdmin("support-conv-4");
-
-    expect(result.buyerId).toBe(BUYER.id);
+    const res = await messagesService.listConversations(BUYER.id, { limit: 20 });
+    expect(m.conversation.findUnique).toHaveBeenCalledWith(expect.objectContaining({
+      include: { messages: expect.objectContaining({ where: { isInternal: false } }) },
+    }));
+    expect(m.message.count).toHaveBeenCalledWith({
+      where: { conversationId: "conv-1", senderId: ADMIN.id, readAt: null, isInternal: false },
+    });
+    // The support side is shown as "Eki Support" to the participant.
+    expect(res.items[0].participantName).toBe("Eki Support");
+    expect(res.items[0].isSupport).toBe(true);
   });
 
-  it("404s for a conversation that isn't actually type SUPPORT", async () => {
-    m.conversation.findUnique.mockResolvedValue({ id: "conv-ordinary-2", type: "BUYER_VENDOR", participantA: BUYER.id, participantB: OTHER_VENDOR_USER.id });
-    await expect(messagesService.getSupportConversationForAdmin("conv-ordinary-2")).rejects.toMatchObject({ statusCode: 404 });
+  it("an internal note needs support.mutate and never notifies or pushes the participant", async () => {
+    m.conversation.findUnique.mockResolvedValue(CONV);
+    m.adminRoleAssignment.findMany.mockResolvedValue([{ role: { permissions: ["support.mutate"] } }]);
+    m.message.create.mockResolvedValue({ id: "note-1", conversationId: "conv-1", senderId: ADMIN.id, text: "internal", isInternal: true });
+    m.message.findUnique.mockResolvedValue({ id: "note-1", conversationId: "conv-1", senderId: ADMIN.id, text: "internal", isInternal: true });
+    mockUsers({ [ADMIN.id]: ADMIN });
+    m.notification.create.mockClear();
+    await messagesService.sendMessage(ADMIN.id, "conv-1", { text: "internal" }, { isInternal: true });
+    expect(m.message.create).toHaveBeenCalledWith({ data: expect.objectContaining({ isInternal: true }) });
+    expect(m.notification.create).not.toHaveBeenCalled();
+    expect(m.conversation.update).not.toHaveBeenCalled();
+  });
+
+  it("an internal note is refused without support.mutate", async () => {
+    m.conversation.findUnique.mockResolvedValue(CONV);
+    m.adminRoleAssignment.findMany.mockResolvedValue([]);
+    await expect(messagesService.sendMessage(ADMIN.id, "conv-1", { text: "x" }, { isInternal: true })).rejects.toMatchObject({ statusCode: 403 });
+  });
+});
+
+describe("reopen on new participant message", () => {
+  const CLOSED = { id: "conv-c", type: "SUPPORT", status: "CLOSED", participantA: BUYER.id, participantB: ADMIN.id };
+
+  beforeEach(() => {
+    m.$transaction.mockImplementation((ops: any[]) => Promise.all(ops));
+    m.message.create.mockResolvedValue({ id: "msg-r", conversationId: "conv-c", senderId: BUYER.id, text: "hello again" });
+    m.message.findUnique.mockResolvedValue({ id: "msg-r", conversationId: "conv-c", senderId: BUYER.id, text: "hello again" });
+  });
+
+  it("buyer message on a CLOSED thread reopens it", async () => {
+    m.conversation.findUnique.mockResolvedValue(CLOSED);
+    mockUsers({ [BUYER.id]: BUYER, [ADMIN.id]: ADMIN });
+    await messagesService.sendMessage(BUYER.id, "conv-c", { text: "hello again" });
+    expect(m.conversation.update).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ status: "OPEN", closedAt: null, closedById: null }),
+    }));
+  });
+
+  it("vendor message on a CLOSED support thread reopens it", async () => {
+    m.conversation.findUnique.mockResolvedValue({ ...CLOSED, participantA: VENDOR_USER.id });
+    mockUsers({ [VENDOR_USER.id]: VENDOR_USER, [ADMIN.id]: ADMIN });
+    await messagesService.sendMessage(VENDOR_USER.id, "conv-c", { text: "hello again" });
+    expect(m.conversation.update).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ status: "OPEN" }),
+    }));
+  });
+
+  it("an admin reply on a CLOSED thread does not change its status", async () => {
+    m.conversation.findUnique.mockResolvedValue(CLOSED);
+    m.adminRoleAssignment.findMany.mockResolvedValue([{ role: { permissions: ["support.mutate"] } }]);
+    mockUsers({ [BUYER.id]: BUYER, [ADMIN.id]: ADMIN });
+    await messagesService.sendMessage(ADMIN.id, "conv-c", { text: "fyi" });
+    const data = m.conversation.update.mock.calls.at(-1)[0].data;
+    expect(data.status).toBeUndefined();
+  });
+
+  it("an OPEN thread is not touched", async () => {
+    m.conversation.findUnique.mockResolvedValue({ ...CLOSED, status: "OPEN" });
+    mockUsers({ [BUYER.id]: BUYER, [ADMIN.id]: ADMIN });
+    await messagesService.sendMessage(BUYER.id, "conv-c", { text: "hi" });
+    const data = m.conversation.update.mock.calls.at(-1)[0].data;
+    expect(data.status).toBeUndefined();
+  });
+});
+
+describe("vendor support thread", () => {
+  it("startSupportConversation as a VENDOR creates a SUPPORT thread against the support admin", async () => {
+    mockUsers({ [VENDOR_USER.id]: VENDOR_USER, [ADMIN.id]: ADMIN });
+    m.user.findFirst.mockResolvedValue({ id: ADMIN.id });
+    m.conversation.findUnique.mockImplementation(({ where }: any) => {
+      if (where.participantA_participantB_orderId) return Promise.resolve(null);
+      return Promise.resolve({ id: "vs-1", type: "SUPPORT", status: "OPEN", orderId: "", participantA: ADMIN.id, participantB: VENDOR_USER.id, messages: [], lastMessageAt: new Date(), updatedAt: new Date(), createdAt: new Date() });
+    });
+    m.conversation.create.mockResolvedValue({ id: "vs-1" });
+    m.message.create.mockResolvedValue({ id: "vm-1" });
+    m.message.count.mockResolvedValue(0);
+    const result = await messagesService.startSupportConversation(VENDOR_USER.id, "Help with payouts");
+    expect(m.conversation.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ type: "SUPPORT" }),
+    }));
+    expect(result.participantName).toBe("Eki Support");
+    expect(result.isSupport).toBe(true);
   });
 });

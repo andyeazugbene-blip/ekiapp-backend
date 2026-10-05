@@ -29,6 +29,13 @@ async function grantSuperAdminRole(userId: string): Promise<void> {
  * Safe to call on every startup — idempotent.
  */
 export async function bootstrapAdmin(): Promise<void> {
+  // Migration-free role seeding on every start (even when ADMIN_EMAIL is not
+  // set): creates any missing default role (e.g. Operations Admin / Finance
+  // Admin on a database that predates them), never touches existing ones.
+  await adminRolesService.seedDefaultRoles().catch((error) => {
+    logger.warn("Could not seed default admin roles", { error: String(error) });
+  });
+
   const email = process.env.ADMIN_EMAIL;
   const password = process.env.ADMIN_PASSWORD;
   const name = process.env.ADMIN_NAME ?? "Admin";

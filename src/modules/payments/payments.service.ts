@@ -23,6 +23,7 @@ import { enqueueEmail } from "../../lib/email-queue";
 import { emailTemplates } from "../../lib/email-templates";
 import { notificationsService } from "../notifications/notifications.service";
 import { communicationService } from "../communications/communication.service";
+import { assertVendorsPurchasable } from "../products/seller-readiness";
 
 interface VendorGroup {
   vendorId: string;
@@ -85,6 +86,10 @@ class PaymentsService {
 
     const inactive = cart.items.find((item) => !item.product.isActive);
     if (inactive) throw new AppError(`Product "${inactive.product.title}" is not available`, 400);
+
+    // B15: every seller in the cart must be verified, not suspended/closed and
+    // able to receive payment (env SELLER_PAYMENT_READINESS_GATE, default on).
+    await assertVendorsPurchasable(cart.items.map((item) => item.product.vendorId));
 
     const outOfStock = cart.items.find((item) => item.product.stock < item.quantity);
     if (outOfStock) throw new AppError(`Insufficient stock for "${outOfStock.product.title}"`, 400);

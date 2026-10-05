@@ -7,13 +7,16 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "../lib/prisma";
 import { logger } from "../lib/logger";
 import { AppError } from "../shared/errors/app-error";
+import { isAdmin2faEnforced } from "../config/admin-2fa";
 
 /**
  * Middleware that enforces 2FA on sensitive admin routes.
  * If the admin has 2FA enabled, they must provide a valid TOTP code
  * (or backup code) in the `x-2fa-code` header.
  *
- * If 2FA is not enabled for the admin, the request passes through.
+ * If 2FA is not enabled for the admin: when ADMIN_2FA_ENFORCE is on (default
+ * in production) the request is refused with TWO_FACTOR_SETUP_REQUIRED;
+ * otherwise (development/test default) it passes through.
  */
 export async function require2fa(request: Request, _response: Response, next: NextFunction): Promise<void> {
   if (!request.user) {
@@ -40,8 +43,20 @@ export async function require2fa(request: Request, _response: Response, next: Ne
     return;
   }
 
-  // If 2FA not set up or not enabled, allow through
+  // 2FA not set up / not enabled: with ADMIN_2FA_ENFORCE (default on in
+  // production) the admin must enrol first; otherwise legacy pass-through.
   if (!record || !record.enabled) {
+    if (isAdmin2faEnforced()) {
+      next(
+        new AppError(
+          "Two-factor authentication must be set up before you can perform this action.",
+          403,
+          null,
+          "TWO_FACTOR_SETUP_REQUIRED",
+        ),
+      );
+      return;
+    }
     next();
     return;
   }

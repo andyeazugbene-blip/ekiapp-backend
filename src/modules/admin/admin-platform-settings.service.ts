@@ -2,7 +2,10 @@ import type { Request } from "express";
 
 import { prisma } from "../../lib/prisma";
 import { AppError } from "../../shared/errors/app-error";
-import { recordAudit } from "../../shared/utils/audit";
+import { recordAudit, requireAuditReason } from "../../shared/utils/audit";
+
+export const FLAG_PREFIX = "FLAG_";
+const FLAG_KEY_PATTERN = /^FLAG_[A-Z0-9_]{1,59}$/;
 
 /**
  * Client decision (2026-09-22, "FINAL CLIENT DECISIONS — APPLY NOW") —
@@ -137,10 +140,100 @@ export const adminPlatformSettingsService = {
       entityId: updated.id,
       beforeState: { key, value: before?.value ?? null },
       afterState: { key, value: updated.value },
+      metadata: { key },
       reason,
       request,
+      failClosed: true,
     });
 
     return { key, value: updated.value, updatedById: updated.updatedById, updatedAt: updated.updatedAt };
+  },
+
+  // ─── Platform flags (key/value + description, FLAG_ prefix) ───────────────
+  // Boolean feature flags stored in the same generic table (1 = on, 0 = off).
+  // A flag only has an effect where platform code reads it via getFlag(); the
+  // admin UI says so. History comes from the immutable AuditLog.
+
+  async getFlag(key: string, fallback = false): Promise<boolean> {
+    const row = await prisma.adminPlatformSetting.findUnique({ where: { key } });
+    return row ? row.value >= 1 : fallback;
+  },
+
+  async listFlags() {
+    const rows = await prisma.adminPlatformSetting.findMany({ where: { key: { startsWith: FLAG_PREFIX } }, orderBy: { key: "asc" } });
+    const userIds = [...new Set(rows.map((r) => r.updatedById).filter((v): v is string => Boolean(v)))];
+    const users = userIds.length ? await prisma.user.findMany({ where: { id: { in: userIds } }, select: { id: true, name: true, email: true } }) : [];
+    const byId = new Map(users.map((u) => [u.id, u]));
+    return rows.map((r) => ({
+      key: r.key,
+      enabled: r.value >= 1,
+      description: r.description ?? null,
+      updatedAt: r.updatedAt,
+      updatedBy: r.updatedById ? byId.get(r.updatedById) ?? { id: r.updatedById, name: null, email: null } : null,
+    }));
+  },
+
+  async setFlag(
+    key: string,
+    input: { enabled?: unknown; description?: unknown },
+    adminId: string,
+    rawReason: unknown,
+    request?: Request,
+  ) {
+    const reason = requireAuditReason(rawReason);
+    if (!FLAG_KEY_PATTERN.test(key)) {
+      throw new AppError("Flag key must look like FLAG_SOMETHING (A-Z, 0-9, _; 4-64 chars)", 400, undefined, "INVALID_FLAG_KEY");
+    }
+    if (typeof input.enabled !== "boolean") throw new AppError("enabled must be true or false", 400);
+    let description: string | undefined;
+    if (input.description !== undefined) {
+      if (typeof input.description !== "string" || input.description.trim().length > 300) throw new AppError("description must be text up to 300 characters", 400);
+      description = input.description.trim();
+    }
+    const before = await prisma.adminPlatformSetting.findUnique({ where: { key } });
+    if (!before && !description) throw new AppError("A new flag needs a description", 400, undefined, "FLAG_DESCRIPTION_REQUIRED");
+    const value = input.enabled ? 1 : 0;
+    const updated = await prisma.adminPlatformSetting.upsert({
+      where: { key },
+      update: { value, updatedById: adminId, ...(description !== undefined ? { description } : {}) },
+      create: { key, value, updatedById: adminId, description: description ?? null },
+    });
+    await recordAudit({
+      actorId: adminId,
+      action: before ? "admin_platform_flag.updated" : "admin_platform_flag.created",
+      entityType: "AdminPlatformSetting",
+      entityId: updated.id,
+      beforeState: before ? { key, enabled: before.value >= 1, description: before.description ?? null } : undefined,
+      afterState: { key, enabled: updated.value >= 1, description: updated.description ?? null },
+      metadata: { key },
+      reason,
+      request,
+      failClosed: true,
+    });
+    return { key, enabled: updated.value >= 1, description: updated.description ?? null, updatedAt: updated.updatedAt };
+  },
+
+  /** Change history for one setting/flag key, newest first, from the immutable audit log. */
+  async history(key: string, limit = 50) {
+    const rows = await prisma.auditLog.findMany({
+      where: {
+        entityType: "AdminPlatformSetting",
+        OR: [{ metadata: { path: ["key"], equals: key } }, { afterState: { path: ["key"], equals: key } }],
+      },
+      orderBy: { createdAt: "desc" },
+      take: Math.min(Math.max(limit, 1), 200),
+    });
+    const ids = [...new Set(rows.map((r) => r.actorId))];
+    const users = ids.length ? await prisma.user.findMany({ where: { id: { in: ids } }, select: { id: true, name: true, email: true } }) : [];
+    const byId = new Map(users.map((u) => [u.id, u]));
+    return rows.map((r) => ({
+      id: r.id,
+      action: r.action,
+      createdAt: r.createdAt,
+      reason: r.reason,
+      beforeState: r.beforeState,
+      afterState: r.afterState,
+      actor: byId.get(r.actorId) ?? { id: r.actorId, name: null, email: null },
+    }));
   },
 };

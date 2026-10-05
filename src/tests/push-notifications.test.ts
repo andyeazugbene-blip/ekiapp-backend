@@ -238,14 +238,14 @@ describe("checkPushReceipts — the real proof of delivery a ticket alone can ne
     expect(result).toEqual({ checked: 1, invalidated: 0, errors: 0 });
   });
 
-  it("never throws when Expo's receipts API is unreachable, and still cleans up the pending tickets", async () => {
+  it("never throws when Expo's receipts API is unreachable, and KEEPS recent tickets so delivery truth is not lost", async () => {
     m.pushTicket.findMany.mockResolvedValue([
       { id: "pt-4", ticketId: "ticket-4", token: "ExponentPushToken[x]", userId: "buyer-4", createdAt: new Date() },
     ] as never);
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("network down")));
 
     await expect(checkPushReceipts()).resolves.toEqual({ checked: 1, invalidated: 0, errors: 0 });
-    expect(m.pushTicket.deleteMany).toHaveBeenCalledWith({ where: { id: { in: ["pt-4"] } } });
+    expect(m.pushTicket.deleteMany).not.toHaveBeenCalled();
   });
 });
 

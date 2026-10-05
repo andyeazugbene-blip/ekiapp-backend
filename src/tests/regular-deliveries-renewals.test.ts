@@ -10,6 +10,9 @@ vi.mock("../lib/prisma", () => ({
     priceChangeRequest: { create: vi.fn(), update: vi.fn() },
     subscriptionPaymentAttempt: { count: vi.fn(), create: vi.fn(), update: vi.fn(), updateMany: vi.fn(), findFirst: vi.fn() },
     subscriptionOffer: { findUnique: vi.fn() },
+    subscriptionActionHistory: { create: vi.fn() },
+    adminPlatformSetting: { findUnique: vi.fn() },
+    notification: { findUnique: vi.fn() },
     vendor: { findUnique: vi.fn() },
     deliveryZone: { findFirst: vi.fn() },
     order: { findUnique: vi.fn() },
@@ -333,14 +336,21 @@ describe("renewalsService.attemptPayment", () => {
     m.renewal.findUniqueOrThrow.mockResolvedValue({ ...baseRenewal, status: "PAYMENT_FAILED" } as never);
     m.renewal.updateMany.mockResolvedValue({ count: 1 } as never);
     m.subscriptionPaymentAttempt.count.mockResolvedValue(3); // MAX_PAYMENT_ATTEMPTS already used
-    m.renewal.update.mockResolvedValue({ id: "renewal-6", subscriptionId: "sub-1" } as never);
+    m.renewal.findUniqueOrThrow.mockResolvedValueOnce({ ...baseRenewal, status: "PAYMENT_FAILED" } as never).mockResolvedValueOnce({ id: "renewal-6", subscriptionId: "sub-1", failureReason: "x" } as never);
     m.buyerSubscription.update.mockResolvedValue({ buyerId: "buyer-1", offer: { vendorId: "vendor-1" } } as never);
 
     await renewalsService.attemptPayment("renewal-6");
 
     expect(mCreateIntent).not.toHaveBeenCalled();
-    expect(m.renewal.update).toHaveBeenCalledWith(
-      expect.objectContaining({ where: { id: "renewal-6" }, data: expect.objectContaining({ status: "CANCELLED" }) }),
+    // B23: renewal CANCELLED, subscription PAUSED with reason payment_failed (not stuck in PAYMENT_ATTENTION).
+    expect(m.renewal.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: "renewal-6", status: { in: ["PAYMENT_FAILED", "PAYMENT_PROCESSING"] } }, data: expect.objectContaining({ status: "CANCELLED" }) }),
+    );
+    expect(m.buyerSubscription.update).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: "sub-1" }, data: expect.objectContaining({ status: "PAUSED", pausedReason: "payment_failed" }) }),
+    );
+    expect(notificationsService.enqueue).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: "buyer-1", data: expect.objectContaining({ event: "renewal_cancelled", cta: "update_payment_method" }) }),
     );
   });
 
@@ -903,11 +913,15 @@ describe("renewalsService.confirmStock — reliability scenario #10", () => {
 // ─── Reliability scenario #11 (architecture doc §18): "buyer does not approve price" ──
 
 describe("renewalsService.expirePriceApprovalTimeouts — reliability scenario #11", () => {
-  it("is a genuine no-op when no timeout duration is configured — CLIENT CONFIGURATION REQUIRED, never an invented default", async () => {
+  it("falls back to the documented 48h default when no timeout is configured (never 'infinite')", async () => {
+    m.renewal.findMany.mockResolvedValue([] as never);
+    const before = Date.now();
     const result = await renewalsService.expirePriceApprovalTimeouts();
 
     expect(result).toEqual({ configured: false, expired: 0 });
-    expect(m.renewal.findMany).not.toHaveBeenCalled();
+    const where = (m.renewal.findMany.mock.calls[0][0] as any).where;
+    const cutoff: Date = where.priceChangeRequest.createdAt.lte;
+    expect(Math.round((before - cutoff.getTime()) / 3_600_000)).toBe(48);
   });
 
   it("expires a renewal whose price-change request is older than the configured timeout and advances the subscription to its next cycle", async () => {

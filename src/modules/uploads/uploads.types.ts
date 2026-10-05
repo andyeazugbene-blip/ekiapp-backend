@@ -17,4 +17,10 @@ export interface CompleteUploadInput {
   assetId: string;
   key: string;
   sizeBytes?: number;
+  /** What the asset is attached to (optional; inferred for avatar/cover/verification). */
+  entityType?: UploadEntityType;
+  entityId?: string;
 }
+
+export const UPLOAD_ENTITY_TYPES = ["product", "store", "user", "message", "review", "vendor_verification"] as const;
+export type UploadEntityType = (typeof UPLOAD_ENTITY_TYPES)[number];

@@ -164,6 +164,7 @@ vi.mock("../modules/community-buy/community-campaigns.service", () => ({
     resume: (...a: unknown[]) => mockResumeCampaign(...a),
     cancel: (...a: unknown[]) => mockCancelCampaign(...a),
   },
+  parseReviewCriteria: (raw: unknown) => (raw ?? undefined),
 }));
 
 const mockJoin = vi.fn();
@@ -270,7 +271,9 @@ vi.mock("../modules/community-buy/market-configuration.service", () => ({
     update: (...a: unknown[]) => mockMarketUpdate(...a),
     listPublic: (...a: unknown[]) => mockMarketListPublic(...a),
     getPublic: (...a: unknown[]) => mockMarketGetPublic(...a),
+    getReadiness: () => ({ ready: false, items: [], unverified: false }),
   },
+  assertSuperAdmin: vi.fn().mockResolvedValue(undefined),
 }));
 
 const mockVendorFindUnique = vi.fn();
@@ -322,6 +325,8 @@ vi.mock("../lib/prisma", async () => {
         // this up for every request — without a mock it falls through to
         // a real DB call, which this test environment can't make. No admin
         // in these tests has 2FA enrolled.
+        // approve/reject read the campaign status for the audit beforeState.
+        if (prop === "communityCampaign") return { findUnique: vi.fn().mockResolvedValue({ status: "UNDER_REVIEW" }) };
         if (prop === "adminTwoFactor") return { findUnique: vi.fn().mockResolvedValue(null) };
         return (target as any)[prop];
       },
@@ -949,9 +954,9 @@ describe("Admin routes — permission-gated, id handling", () => {
   });
 
   it("POST /api/admin/community-campaigns/:id/approve — id parsed correctly for an admin", async () => {
-    const res = await request(app).post("/api/admin/community-campaigns/camp-55/approve").set("Authorization", `Bearer ${adminToken()}`);
+    const res = await request(app).post("/api/admin/community-campaigns/camp-55/approve").set("Authorization", `Bearer ${adminToken()}`).send({ criteria: { productAccurate: true } });
     expect(res.status).toBe(200);
-    expect(mockApproveCampaign).toHaveBeenCalledWith("admin-1", "camp-55");
+    expect(mockApproveCampaign).toHaveBeenCalledWith("admin-1", "camp-55", { productAccurate: true });
   });
 
   it("POST /api/admin/community-campaigns/:id/request-changes — 400 without notes", async () => {
@@ -970,9 +975,9 @@ describe("Admin routes — permission-gated, id handling", () => {
     const res = await request(app)
       .patch("/api/admin/community-buy/markets/GB")
       .set("Authorization", `Bearer ${adminToken()}`)
-      .send({ communityBuyEnabled: false });
+      .send({ communityBuyEnabled: false, reason: "Pausing market for review" });
     expect(res.status).toBe(200);
-    expect(mockMarketUpdate).toHaveBeenCalledWith("GB", { communityBuyEnabled: false });
+    expect(mockMarketUpdate).toHaveBeenCalledWith("GB", { communityBuyEnabled: false, reason: "Pausing market for review" });
   });
 
   it("GET /api/admin/community-buy/refunds — reachable for an admin", async () => {

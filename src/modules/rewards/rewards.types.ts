@@ -40,6 +40,7 @@ export interface RewardView {
   maxClaims: number | null;
   claimedCount: number;
   expiresAt: string | null;
+  archivedAt: string | null;
   createdAt: string;
 }
 

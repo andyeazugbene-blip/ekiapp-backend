@@ -8,6 +8,8 @@ import { stripe } from "../../lib/stripe";
 import { notificationsService } from "../notifications/notifications.service";
 import { referralsService } from "../referrals/referrals.service";
 import { rewardsService } from "../rewards/rewards.service";
+import { giftCardsService } from "../gift-cards/gift-cards.service";
+import { deliverPaidGiftCard } from "../gift-cards/gift-cards.notify";
 import { enqueueEmail } from "../../lib/email-queue";
 import { emailTemplates } from "../../lib/email-templates";
 import { stripeIdentityService } from "../verification/stripe-identity.service";
@@ -22,6 +24,7 @@ import { organiserStripeConnectService } from "../community-buy/organiser-stripe
 import { stripeConnectService as vendorStripeConnect } from "../vendors/stripe-connect.service";
 import { LedgerAccountType, LedgerDirection, LedgerOwnerType } from "@prisma/client";
 import { AppError } from "../../shared/errors/app-error";
+import { notifyVendorTrialEnding } from "../automation/vendor-trial-ending";
 import type { StripeWebhookInput, StripeWebhookResult } from "./stripe.types";
 
 /**
@@ -133,6 +136,12 @@ class StripeWebhookService {
 
     if (event.type === "customer.subscription.deleted") {
       return this.handleVendorSubscriptionDeleted(event);
+    }
+
+    // Vendor trial ending (Stripe sends this 3 days before the 14-day trial ends).
+    // Idempotent: WebhookEvent claim + the run deterministic dedupeKey.
+    if (event.type === "customer.subscription.trial_will_end") {
+      return this.runIdempotentWebhook(event, () => notifyVendorTrialEnding(event.data.object as Stripe.Subscription));
     }
 
     if (
@@ -444,21 +453,33 @@ class StripeWebhookService {
     }
 
     try {
-      return await prisma.$transaction(async (tx) => {
+      let activated: Awaited<ReturnType<typeof giftCardsService.activatePaidGiftCard>> | null = null;
+      const result: StripeWebhookResult = await prisma.$transaction(async (tx): Promise<StripeWebhookResult> => {
         if (await this.isDuplicate(tx, event.id, event.type, { orderId: purchasedGiftCardId })) {
           return { received: true, duplicate: true, eventId: event.id, type: event.type };
         }
 
-        // Mark the purchased gift card as completed (payment confirmed)
-        const existing = await tx.purchasedGiftCard.findUnique({
-          where: { id: purchasedGiftCardId },
-          select: { stripePaymentIntentId: true },
+        // Handbook 14.4: payment confirmed -> paidAt, ACTIVE, full balance,
+        // unguessable redemption code, expiry. Idempotent on paidAt, so a
+        // replayed event can never regenerate the code or reset the balance.
+        activated = await giftCardsService.activatePaidGiftCard(tx, {
+          purchasedGiftCardId,
+          paymentIntentId: paymentIntent.id,
+          amount: paymentIntent.amount_received || paymentIntent.amount,
+          currency: paymentIntent.currency,
         });
 
-        if (!existing) {
+        if (activated.outcome === "NOT_FOUND") {
           logger.error("Gift card purchase: purchased record not found", { purchasedGiftCardId, eventId: event.id });
           await this.markEventIgnored(tx, event.id);
           return { received: true, ignored: true, eventId: event.id, type: event.type };
+        }
+        if (activated.outcome === "MISMATCH" || activated.outcome === "CLOSED") {
+          // Not activated: needs a human (amount/currency mismatch, or an admin
+          // already cancelled this purchase). Event is recorded, never lost.
+          logger.error("Gift card purchase: payment not applied", {
+            eventId: event.id, purchasedGiftCardId, outcome: activated.outcome,
+          });
         }
 
         await tx.webhookEvent.update({
@@ -467,11 +488,18 @@ class StripeWebhookService {
         });
 
         logger.info("Webhook processed: gift_card_purchase succeeded", {
-          eventId: event.id, buyerId, purchasedGiftCardId,
+          eventId: event.id, buyerId, purchasedGiftCardId, outcome: activated.outcome,
         });
 
         return { received: true, eventId: event.id, type: event.type };
       }, { isolationLevel: "Serializable" });
+
+      // After commit: code email to recipient + buyer confirmation (best effort).
+      const done = activated as Awaited<ReturnType<typeof giftCardsService.activatePaidGiftCard>> | null;
+      if (done && done.outcome === "ACTIVATED") {
+        await deliverPaidGiftCard(done.info);
+      }
+      return result;
     } catch (error) {
       if (this.isUniqueConstraintError(error)) {
         return { received: true, duplicate: true, eventId: event.id, type: event.type };
@@ -1101,6 +1129,19 @@ class StripeWebhookService {
             return { received: true, duplicate: true, eventId: event.id, type: event.type };
           }
           await tx.webhookEvent.update({ where: { stripeEventId: event.id }, data: { status: "PROCESSED", processedAt: new Date() } });
+          // Handbook 14.4: keep the row for the audit trail, mark it cancelled
+          // (only while still unpaid). Never hard-deleted.
+          const gcId = paymentIntent.metadata?.purchasedGiftCardId;
+          if (gcId) {
+            await tx.purchasedGiftCard.updateMany({
+              where: { id: gcId, paidAt: null, status: "PENDING_PAYMENT" },
+              data: {
+                status: "CANCELLED",
+                statusReason: event.type === "payment_intent.canceled" ? "Payment canceled" : "Payment failed",
+                statusChangedAt: new Date(),
+              },
+            });
+          }
           logger.info(`Webhook processed: gift_card_purchase ${event.type}`, { eventId: event.id });
           return { received: true, eventId: event.id, type: event.type };
         }, { isolationLevel: "Serializable" });

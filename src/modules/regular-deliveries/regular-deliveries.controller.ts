@@ -7,6 +7,7 @@ import { subscriptionOffersService } from "./subscription-offers.service";
 import { buyerSubscriptionsService } from "./buyer-subscriptions.service";
 import { buyerPaymentMethodsService } from "./payment-methods.service";
 import { renewalsService } from "./renewals.service";
+import { requireReason, subscriptionAdminService } from "./subscription-admin.service";
 
 function requireUserId(request: Request): string {
   if (!request.user) throw new AppError("Unauthorized", 401);
@@ -291,7 +292,22 @@ export async function resumeBuyerSubscription(request: Request, response: Respon
 
 export async function cancelBuyerSubscription(request: Request, response: Response): Promise<void> {
   const buyerId = requireUserId(request);
-  response.json({ subscription: await buyerSubscriptionsService.cancel(buyerId, requireIdParam(request)) });
+  const cancelReason = typeof request.body?.cancelReason === "string" ? request.body.cancelReason : undefined;
+  response.json({ subscription: await buyerSubscriptionsService.cancel(buyerId, requireIdParam(request), cancelReason) });
+}
+
+/** POST /buyer/subscriptions/:id/reschedule-next - "Choose a new date for next delivery". */
+export async function rescheduleNextBuyerSubscription(request: Request, response: Response): Promise<void> {
+  const buyerId = requireUserId(request);
+  response.json({ subscription: await buyerSubscriptionsService.rescheduleNext(buyerId, requireIdParam(request), request.body?.date) });
+}
+
+/** POST /buyer/subscriptions/:id/payment-method - switch the card used for renewals (payment recovery). */
+export async function updateBuyerSubscriptionPaymentMethod(request: Request, response: Response): Promise<void> {
+  const buyerId = requireUserId(request);
+  const paymentMethodId = request.body?.paymentMethodId;
+  if (typeof paymentMethodId !== "string" || !paymentMethodId) throw new AppError("paymentMethodId is required", 400);
+  response.json({ subscription: await buyerSubscriptionsService.updatePaymentMethod(buyerId, requireIdParam(request), paymentMethodId) });
 }
 
 export async function skipNextRenewal(request: Request, response: Response): Promise<void> {
@@ -331,21 +347,12 @@ export async function changeBuyerSubscriptionFrequency(request: Request, respons
 
 // ─── Admin ─────────────────────────────────────────────────────────────────
 
-/** RD-08 (retry-payment slice only) — see renewalsService.adminRetryPayment() for scope notes. */
+/**
+ * Admin retry payment (reason + 2FA + audit). The id may be a renewal id (legacy
+ * exceptions queue) or a subscription id (detail page) - see subscriptionAdminService.retryPayment.
+ */
 export async function adminRetryRenewalPayment(request: Request, response: Response): Promise<void> {
-  const adminId = requireUserId(request);
-  const renewalId = requireIdParam(request);
-  const before = await prisma.renewal.findUnique({ where: { id: renewalId }, select: { status: true, failureReason: true } });
-  const renewal = await renewalsService.adminRetryPayment(renewalId);
-  await recordAudit({
-    actorId: adminId,
-    action: "renewal.admin_retry_payment",
-    entityType: "Renewal",
-    entityId: renewalId,
-    beforeState: before ? { status: before.status, failureReason: before.failureReason } : undefined,
-    afterState: renewal ? { status: renewal.status } : undefined,
-    request,
-  });
+  const renewal = await subscriptionAdminService.retryPayment(requireUserId(request), requireIdParam(request), request.body?.reason, request);
   response.json({ renewal });
 }
 
@@ -358,9 +365,8 @@ export async function adminForceCancelSubscription(request: Request, response: R
   const adminId = requireUserId(request);
   const subscriptionId = requireIdParam(request);
   const { reason, internalNote } = request.body ?? {};
-  if (typeof reason !== "string" || !reason.trim()) throw new AppError("reason is required", 400);
-  if (typeof internalNote !== "string" || !internalNote.trim()) throw new AppError("internalNote is required", 400);
-  const result = await renewalsService.adminForceCancel(adminId, subscriptionId, reason, internalNote);
+  const validReason = requireReason(reason);
+  const result = await renewalsService.adminForceCancel(adminId, subscriptionId, validReason, typeof internalNote === "string" ? internalNote : undefined, request);
   response.json(result);
 }
 
@@ -462,8 +468,7 @@ export async function adminResendPriceChangeNotification(request: Request, respo
 /** Admin cancel an invalid vendor price-change request — Decision 2. */
 export async function adminCancelInvalidPriceChange(request: Request, response: Response): Promise<void> {
   const adminId = requireUserId(request);
-  const { reason } = request.body ?? {};
-  if (typeof reason !== "string" || !reason.trim()) throw new AppError("reason is required", 400);
+  const reason = requireReason(request.body?.reason);
   const renewal = await renewalsService.adminCancelInvalidPriceChange(adminId, requireIdParam(request), reason);
   response.json({ renewal });
 }
@@ -471,8 +476,7 @@ export async function adminCancelInvalidPriceChange(request: Request, response: 
 /** Admin skip a renewal where policy permits — Decision 2. */
 export async function adminSkipRenewal(request: Request, response: Response): Promise<void> {
   const adminId = requireUserId(request);
-  const { reason } = request.body ?? {};
-  if (typeof reason !== "string" || !reason.trim()) throw new AppError("reason is required", 400);
+  const reason = requireReason(request.body?.reason);
   const renewal = await renewalsService.adminSkipRenewal(adminId, requireIdParam(request), reason);
   response.json({ renewal });
 }
@@ -480,8 +484,7 @@ export async function adminSkipRenewal(request: Request, response: Response): Pr
 /** Admin escalate a stuck exception for higher-tier support attention — approved client requirement. */
 export async function adminEscalateRenewal(request: Request, response: Response): Promise<void> {
   const adminId = requireUserId(request);
-  const { reason } = request.body ?? {};
-  if (typeof reason !== "string" || !reason.trim()) throw new AppError("reason is required", 400);
+  const reason = requireReason(request.body?.reason);
   const renewal = await renewalsService.adminEscalate(adminId, requireIdParam(request), reason);
   response.json({ renewal });
 }
@@ -491,25 +494,93 @@ export async function adminEscalateRenewal(request: Request, response: Response)
  * Support action only — must have been requested/authorized by buyer.
  */
 export async function adminChangeSubscriptionFrequency(request: Request, response: Response): Promise<void> {
-  const adminId = requireUserId(request);
-  const subscriptionId = requireIdParam(request);
   const { frequency, reason } = request.body ?? {};
-  if (typeof frequency !== "string") throw new AppError("frequency is required", 400);
-  if (typeof reason !== "string" || !reason.trim()) throw new AppError("reason is required — admin frequency changes must have a stated reason", 400);
-  const result = await buyerSubscriptionsService.adminChangeFrequency(adminId, subscriptionId, frequency as any, reason);
-  response.json(result);
+  response.json(await subscriptionAdminService.changeFrequency(requireUserId(request), requireIdParam(request), frequency, reason, request));
 }
 
-export async function adminListSubscriptionExceptions(_request: Request, response: Response): Promise<void> {
-  const items = await prisma.renewal.findMany({
-    where: { status: { in: ["AWAITING_PRICE_APPROVAL", "PAYMENT_FAILED", "AWAITING_STOCK"] } },
-    include: {
-      subscription: { include: { buyer: { select: { name: true, email: true } } } },
-      items: { include: { product: true } },
-    },
-    orderBy: { updatedAt: "desc" },
-    take: 200,
-  });
-  response.json({ items });
+// ─── Admin: Foodstuffs Subscription module (list / detail / reports / actions) ──
+
+export async function adminListSubscriptions(request: Request, response: Response): Promise<void> {
+  const q = request.query;
+  const str = (v: unknown) => (typeof v === "string" && v ? v : undefined);
+  response.json(
+    await subscriptionAdminService.list({
+      status: str(q.status), vendorId: str(q.vendorId), q: str(q.q), renewalFrom: str(q.renewalFrom), renewalTo: str(q.renewalTo),
+      cursor: str(q.cursor), limit: str(q.limit) ? Number(q.limit) : undefined,
+    }),
+  );
 }
 
+export async function adminGetSubscription(request: Request, response: Response): Promise<void> {
+  response.json(await subscriptionAdminService.detail(requireIdParam(request)));
+}
+
+export async function adminSubscriptionReports(request: Request, response: Response): Promise<void> {
+  response.json(await subscriptionAdminService.reports(request.query.days ? Number(request.query.days) : undefined));
+}
+
+export async function adminPauseSubscription(request: Request, response: Response): Promise<void> {
+  const subscription = await subscriptionAdminService.pause(requireUserId(request), requireIdParam(request), request.body?.reason, request.body?.resumeAt, request);
+  response.json({ subscription });
+}
+
+export async function adminResumeSubscription(request: Request, response: Response): Promise<void> {
+  response.json({ subscription: await subscriptionAdminService.resume(requireUserId(request), requireIdParam(request), request.body?.reason, request) });
+}
+
+export async function adminSkipNextSubscription(request: Request, response: Response): Promise<void> {
+  response.json({ subscription: await subscriptionAdminService.skipNext(requireUserId(request), requireIdParam(request), request.body?.reason, request) });
+}
+
+export async function adminSetNextDate(request: Request, response: Response): Promise<void> {
+  response.json({ subscription: await subscriptionAdminService.setNextDate(requireUserId(request), requireIdParam(request), request.body?.date, request.body?.reason, request) });
+}
+
+const EXCEPTION_STATUSES = ["AWAITING_PRICE_APPROVAL", "PAYMENT_FAILED", "AWAITING_STOCK"] as const;
+
+/**
+ * Renewal exceptions queue (price approvals, failed payments, stock waits).
+ * Server-side filters: ?status=<RenewalStatus> ?q=<buyer/vendor search> ?cursor= ?limit=.
+ * `counts` ignore the status filter so tabs can show per-queue totals.
+ */
+export async function adminListSubscriptionExceptions(request: Request, response: Response): Promise<void> {
+  const statusParam = typeof request.query.status === "string" ? request.query.status : "";
+  const status = (EXCEPTION_STATUSES as readonly string[]).includes(statusParam) ? (statusParam as (typeof EXCEPTION_STATUSES)[number]) : null;
+  const q = typeof request.query.q === "string" ? request.query.q.trim() : "";
+  const cursor = typeof request.query.cursor === "string" && request.query.cursor ? request.query.cursor : undefined;
+  const limit = Math.min(Math.max(Number(request.query.limit) || 25, 1), 100);
+
+  const search = q
+    ? {
+        OR: [
+          { id: q },
+          { subscription: { buyer: { name: { contains: q, mode: "insensitive" as const } } } },
+          { subscription: { buyer: { email: { contains: q, mode: "insensitive" as const } } } },
+          { subscription: { offer: { vendor: { storeName: { contains: q, mode: "insensitive" as const } } } } },
+        ],
+      }
+    : {};
+  const base = { status: { in: [...EXCEPTION_STATUSES] }, ...search };
+
+  const [rows, grouped] = await Promise.all([
+    prisma.renewal.findMany({
+      where: { ...base, ...(status ? { status } : {}) },
+      include: {
+        subscription: { include: { buyer: { select: { name: true, email: true } }, offer: { select: { title: true, vendor: { select: { id: true, storeName: true } } } } } },
+        items: { include: { product: true } },
+      },
+      orderBy: [{ updatedAt: "desc" }, { id: "desc" }],
+      take: limit + 1,
+      ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+    }),
+    prisma.renewal.groupBy({ by: ["status"], where: base, _count: { _all: true } }),
+  ]);
+  const hasMore = rows.length > limit;
+  const items = hasMore ? rows.slice(0, limit) : rows;
+  const counts: Record<string, number> = { all: 0, AWAITING_PRICE_APPROVAL: 0, PAYMENT_FAILED: 0, AWAITING_STOCK: 0 };
+  for (const g of grouped) {
+    counts[g.status] = g._count._all;
+    counts.all += g._count._all;
+  }
+  response.json({ items, nextCursor: hasMore ? items[items.length - 1].id : null, counts });
+}

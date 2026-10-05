@@ -3,6 +3,7 @@ import { Router } from "express";
 import { authenticate, requireRole } from "../../middlewares/authenticate";
 import { requireVendorProfile } from "../../middlewares/require-capability";
 import { requireAdminPermission } from "../../middlewares/require-admin-permission";
+import { require2fa } from "../../middlewares/require-2fa";
 import { asyncHandler } from "../../shared/utils/async-handler";
 import {
   adminCancelInvalidPriceChange,
@@ -11,7 +12,14 @@ import {
   adminContactBuyerFromSubscription,
   adminEscalateRenewal,
   adminForceCancelSubscription,
+  adminGetSubscription,
   adminListSubscriptionExceptions,
+  adminListSubscriptions,
+  adminPauseSubscription,
+  adminResumeSubscription,
+  adminSetNextDate,
+  adminSkipNextSubscription,
+  adminSubscriptionReports,
   adminResendPriceChangeNotification,
   adminRetryRenewalPayment,
   adminSkipRenewal,
@@ -42,8 +50,10 @@ import {
   resumeBuyerSubscription,
   resumeSubscriptionOfferProduct,
   resumeSubscriptionOfferRenewals,
+  rescheduleNextBuyerSubscription,
   retryRenewalPayment,
   skipNextRenewal,
+  updateBuyerSubscriptionPaymentMethod,
   unpublishSubscriptionOffer,
   updateBuyerSubscription,
   updateSubscriptionOffer,
@@ -110,41 +120,40 @@ buyerSubscriptionsRouter.post("/:id/cancel", asyncHandler(cancelBuyerSubscriptio
 buyerSubscriptionsRouter.post("/:id/skip-next", asyncHandler(skipNextRenewal));
 // Final Client Decision 3: buyer frequency editing.
 buyerSubscriptionsRouter.post("/:id/change-frequency", asyncHandler(changeBuyerSubscriptionFrequency));
+// Handbook section 9: choose a new date for the next delivery + switch card for payment recovery.
+buyerSubscriptionsRouter.post("/:id/reschedule-next", asyncHandler(rescheduleNextBuyerSubscription));
+buyerSubscriptionsRouter.post("/:id/payment-method", asyncHandler(updateBuyerSubscriptionPaymentMethod));
 
-// Admin: Regular Delivery monitoring and intervention — mounted at /admin/subscriptions
-// and /admin/renewals (inside the single main admin app).
-// Final Client Decisions 2 + 3.
-// Every mutation here is gated by the same orders.mutate admin permission
-// used for the closest sibling action elsewhere in the admin system
-// (force-process/complete order, subscription-exceptions retry-payment) —
-// requireRole("ADMIN") alone would let ANY admin role force-cancel a
-// subscription or contact a buyer, bypassing this codebase's established
-// permission-per-mutation convention (every other admin.routes.ts mutation
-// is gated this way).
+// Admin: Foodstuffs Subscription module - mounted at /admin/subscriptions and
+// /admin/renewals. Reads need subscriptions.read; every mutation needs
+// subscriptions.mutate + 2FA (when enabled) + a required reason (validated
+// server-side in subscription-admin.service.ts) + an AuditLog row.
+// Static paths (exceptions, reports) are registered before "/:id".
+const read = asyncHandler(requireAdminPermission("subscriptions.read"));
+const mutate = asyncHandler(requireAdminPermission("subscriptions.mutate"));
+const twoFa = asyncHandler(require2fa);
+
 export const adminSubscriptionsRouter = Router();
 adminSubscriptionsRouter.use(authenticate, requireRole("ADMIN"));
-adminSubscriptionsRouter.get("/exceptions", asyncHandler(requireAdminPermission("orders.read")), asyncHandler(adminListSubscriptionExceptions));
-// Retry payment (RD-08, existing)
-adminSubscriptionsRouter.post("/:id/retry-payment", asyncHandler(requireAdminPermission("orders.mutate")), asyncHandler(adminRetryRenewalPayment));
-// Forced cancellation (Decision 2 — exceptional support action)
-adminSubscriptionsRouter.post("/:id/force-cancel", asyncHandler(requireAdminPermission("orders.mutate")), asyncHandler(adminForceCancelSubscription));
-// Contact buyer from subscription context (Decision 2)
-adminSubscriptionsRouter.post("/:id/contact-buyer", asyncHandler(requireAdminPermission("orders.mutate")), asyncHandler(adminContactBuyerFromSubscription));
-// Admin frequency correction (Decision 3 — support action only)
-adminSubscriptionsRouter.post("/:id/change-frequency", asyncHandler(requireAdminPermission("orders.mutate")), asyncHandler(adminChangeSubscriptionFrequency));
+adminSubscriptionsRouter.get("/", read, asyncHandler(adminListSubscriptions));
+adminSubscriptionsRouter.get("/exceptions", read, asyncHandler(adminListSubscriptionExceptions));
+adminSubscriptionsRouter.get("/reports", read, asyncHandler(adminSubscriptionReports));
+adminSubscriptionsRouter.get("/:id", read, asyncHandler(adminGetSubscription));
+// Retry payment: :id is a renewal id (exceptions queue) or a subscription id (detail page).
+adminSubscriptionsRouter.post("/:id/retry-payment", mutate, twoFa, asyncHandler(adminRetryRenewalPayment));
+adminSubscriptionsRouter.post("/:id/pause", mutate, twoFa, asyncHandler(adminPauseSubscription));
+adminSubscriptionsRouter.post("/:id/resume", mutate, twoFa, asyncHandler(adminResumeSubscription));
+adminSubscriptionsRouter.post("/:id/skip-next", mutate, twoFa, asyncHandler(adminSkipNextSubscription));
+adminSubscriptionsRouter.post("/:id/set-next-date", mutate, twoFa, asyncHandler(adminSetNextDate));
+adminSubscriptionsRouter.post("/:id/force-cancel", mutate, twoFa, asyncHandler(adminForceCancelSubscription));
+adminSubscriptionsRouter.post("/:id/change-frequency", mutate, twoFa, asyncHandler(adminChangeSubscriptionFrequency));
+adminSubscriptionsRouter.post("/:id/contact-buyer", mutate, asyncHandler(adminContactBuyerFromSubscription));
 
 export const adminRenewalsRouter = Router();
 adminRenewalsRouter.use(authenticate, requireRole("ADMIN"));
-// Contact buyer from renewal context (Decision 2)
-adminRenewalsRouter.post("/:id/contact-buyer", asyncHandler(requireAdminPermission("orders.mutate")), asyncHandler(adminContactBuyerFromRenewal));
-// Resend price-change notification (Decision 2)
-adminRenewalsRouter.post("/:id/resend-price-change", asyncHandler(requireAdminPermission("orders.mutate")), asyncHandler(adminResendPriceChangeNotification));
-// Cancel invalid price-change request (Decision 2)
-adminRenewalsRouter.post("/:id/cancel-price-change", asyncHandler(requireAdminPermission("orders.mutate")), asyncHandler(adminCancelInvalidPriceChange));
-// Admin skip renewal (Decision 2)
-adminRenewalsRouter.post("/:id/admin-skip", asyncHandler(requireAdminPermission("orders.mutate")), asyncHandler(adminSkipRenewal));
-// Admin escalate a stuck exception (approved client requirement) — same
-// risk tier as the other RD admin actions above, not a financial mutation
-// (unlike Community Buy's refund escalation, which requires 2FA).
-adminRenewalsRouter.post("/:id/escalate", asyncHandler(requireAdminPermission("orders.mutate")), asyncHandler(adminEscalateRenewal));
-
+adminRenewalsRouter.post("/:id/contact-buyer", mutate, asyncHandler(adminContactBuyerFromRenewal));
+adminRenewalsRouter.post("/:id/resend-price-change", mutate, asyncHandler(adminResendPriceChangeNotification));
+adminRenewalsRouter.post("/:id/cancel-price-change", mutate, twoFa, asyncHandler(adminCancelInvalidPriceChange));
+adminRenewalsRouter.post("/:id/admin-skip", mutate, twoFa, asyncHandler(adminSkipRenewal));
+// Escalation is an internal flag, not a financial mutation: no 2FA.
+adminRenewalsRouter.post("/:id/escalate", mutate, asyncHandler(adminEscalateRenewal));

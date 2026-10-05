@@ -1,4 +1,5 @@
 import type Stripe from "stripe";
+import type { Request } from "express";
 
 import { prisma } from "../../lib/prisma";
 import { stripe } from "../../lib/stripe";
@@ -10,7 +11,7 @@ import { resolveVendorCommission } from "../subscriptions/subscription-plan-util
 import { notificationsService } from "../notifications/notifications.service";
 import { automationService } from "../automation/automation.service";
 import { recordAudit } from "../../shared/utils/audit";
-import { nextCycleDate } from "./buyer-subscriptions.service";
+import { nextCycleDate, recordAction } from "./buyer-subscriptions.service";
 import { adminPlatformSettingsService } from "../admin/admin-platform-settings.service";
 
 // Regular Deliveries had zero AuditLog coverage for anything beyond buyer-
@@ -25,8 +26,30 @@ import { adminPlatformSettingsService } from "../admin/admin-platform-settings.s
 // and a price-approval silently expiring.
 const SYSTEM_CRON_ACTOR = "system:cron";
 
-const MAX_PAYMENT_ATTEMPTS = 3;
+export const MAX_PAYMENT_ATTEMPTS = 3;
 const PRICE_CHANGE_APPROVAL_DEFAULT_BPS = 500; // 5%
+
+// Payment-recovery schedule (handbook section 9, gap B23). Delay applied after
+// the Nth FAILED attempt: +1 day, then +2 more (cumulative +3d), then a final
+// +2-day grace (cumulative +5d) during which the buyer can still fix their
+// card and retry by hand before the renewal is finalised: renewal CANCELLED
+// and the subscription PAUSED with reason "payment_failed" (never left stuck
+// in PAYMENT_ATTENTION).
+export const PAYMENT_RETRY_DELAY_DAYS = [1, 2, 2] as const;
+export const PAYMENT_FAILED_PAUSE_REASON = "payment_failed";
+// Used when the admin has not set PRICE_APPROVAL_TIMEOUT_HOURS (instead of "never expires").
+export const DEFAULT_PRICE_APPROVAL_TIMEOUT_HOURS = 48;
+// Admin-editable via AdminPlatformSetting key AWAITING_STOCK_TIMEOUT_HOURS.
+export const AWAITING_STOCK_TIMEOUT_SETTING_KEY = "AWAITING_STOCK_TIMEOUT_HOURS";
+export const DEFAULT_AWAITING_STOCK_TIMEOUT_HOURS = 72;
+// Advance price-change notice goes out when the next cycle is due within this window.
+const PRICE_NOTICE_WINDOW_HOURS = 36;
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+export function nextRetryDate(failedAttempts: number, from: Date = new Date()): Date {
+  const idx = Math.min(Math.max(failedAttempts, 1), PAYMENT_RETRY_DELAY_DAYS.length) - 1;
+  return new Date(from.getTime() + PAYMENT_RETRY_DELAY_DAYS[idx] * DAY_MS);
+}
 
 /**
  * Regular Deliveries renewal engine. Reuses the same Stripe account as the
@@ -108,7 +131,7 @@ export const renewalsService = {
       await notificationsService.enqueue({
         userId: sub.buyerId,
         type: "SUBSCRIPTION_UPDATE",
-        title: "Upcoming Regular Delivery",
+        title: "Upcoming Foodstuffs Subscription",
         body: `Your delivery from ${storeName} renews on ${sub.nextRenewalAt.toDateString()}.`,
         data: { type: "subscription_update", event: "renewal_upcoming", subscriptionId: sub.id },
         dedupeKey,
@@ -120,7 +143,7 @@ export const renewalsService = {
         subjectKey: `${sub.id}:${sub.nextRenewalAt.toISOString().slice(0, 10)}`,
         frequencyCapDays: 3,
         requiresMarketingConsent: false,
-        title: "Upcoming Regular Delivery",
+        title: "Upcoming Foodstuffs Subscription",
         body: `Your delivery from ${storeName} renews soon.`,
         data: { store_name: storeName, renewal_date: sub.nextRenewalAt.toDateString() },
       });
@@ -206,7 +229,7 @@ export const renewalsService = {
    * not an automated pass-through.
    */
   async advanceAfterStockSnapshot(renewalId: string) {
-    await prisma.renewal.update({ where: { id: renewalId }, data: { status: "AWAITING_STOCK" } });
+    await prisma.renewal.update({ where: { id: renewalId }, data: { status: "AWAITING_STOCK", awaitingStockSince: new Date() } });
   },
 
   async confirmStock(vendorUserId: string, renewalId: string) {
@@ -281,7 +304,7 @@ export const renewalsService = {
         subjectKey: renewalId,
         requiresMarketingConsent: false,
         title: "Price change needs your approval",
-        body: "Review the price change on your upcoming Regular Delivery.",
+        body: "Review the price change on your upcoming Foodstuffs Subscription delivery.",
       });
       return;
     }
@@ -352,7 +375,10 @@ export const renewalsService = {
     // A buyer who paused their subscription after this renewal was already
     // cleared for payment must not still be charged for it — pause() only
     // flips the subscription record; it doesn't touch an in-flight renewal.
-    if (renewal.subscription.status !== "ACTIVE") {
+    // PAYMENT_ATTENTION is the state handlePaymentFailure() puts the
+    // subscription in, so a retry of a failed renewal MUST be allowed from it
+    // (previously every buyer/admin retry died here with a 409 — part of B23).
+    if (renewal.subscription.status !== "ACTIVE" && renewal.subscription.status !== "PAYMENT_ATTENTION") {
       throw new AppError(`Subscription is ${renewal.subscription.status.toLowerCase()}, not active — payment skipped`, 409);
     }
     const paymentMethod = renewal.subscription.paymentMethod;
@@ -411,7 +437,7 @@ export const renewalsService = {
     // to Stripe.
     const claim = await prisma.renewal.updateMany({
       where: { id: renewalId, status: { in: ["READY_FOR_PAYMENT", "PAYMENT_FAILED"] } },
-      data: { status: "PAYMENT_PROCESSING", subtotalAmount: subtotal, deliveryFeeAmount, deliveryZoneId },
+      data: { status: "PAYMENT_PROCESSING", subtotalAmount: subtotal, deliveryFeeAmount, deliveryZoneId, nextRetryAt: null },
     });
     if (claim.count !== 1) {
       return prisma.renewal.findUnique({ where: { id: renewalId } });
@@ -637,7 +663,12 @@ export const renewalsService = {
   },
 
   async handlePaymentFailure(subscriptionId: string, renewalId: string, reason: string) {
-    await prisma.renewal.update({ where: { id: renewalId }, data: { status: "PAYMENT_FAILED", failureReason: reason } });
+    // Schedule the next automatic retry (or the final grace deadline once the
+    // attempts are used up) — see PAYMENT_RETRY_DELAY_DAYS.
+    const failedAttempts = await prisma.subscriptionPaymentAttempt.count({ where: { renewalId, status: "FAILED" } });
+    const retryAt = nextRetryDate(Math.max(failedAttempts, 1));
+    const finalAttempt = failedAttempts >= MAX_PAYMENT_ATTEMPTS;
+    await prisma.renewal.update({ where: { id: renewalId }, data: { status: "PAYMENT_FAILED", failureReason: reason, nextRetryAt: retryAt } });
     const sub = await prisma.buyerSubscription.update({
       where: { id: subscriptionId },
       data: { status: "PAYMENT_ATTENTION" },
@@ -652,17 +683,17 @@ export const renewalsService = {
       action: "renewal.payment_failed",
       entityType: "Renewal",
       entityId: renewalId,
-      metadata: { subscriptionId, reason },
+      metadata: { subscriptionId, reason, failedAttempts, nextRetryAt: retryAt.toISOString(), finalAttempt },
     });
-    await notifySubscriptionEvent(sub.buyerId, "payment_failed", renewalId, subscriptionId);
+    await notifySubscriptionEvent(sub.buyerId, "payment_failed", renewalId, subscriptionId, undefined, { retryAt, finalAttempt, attempt: failedAttempts });
     await automationService.scheduleAutomation({
       type: "PAYMENT_RECOVERY",
       recipientUserId: sub.buyerId,
       vendorId: sub.offer.vendorId,
       subjectKey: `renewal:${renewalId}`,
       requiresMarketingConsent: false,
-      title: "Your Regular Delivery payment didn't go through",
-      body: "Retry now to keep your subscription active.",
+      title: "Your Foodstuffs Subscription payment didn't go through",
+      body: "Update your payment method or retry now to keep your subscription active.",
     });
     return prisma.renewal.findUnique({ where: { id: renewalId } });
   },
@@ -673,15 +704,13 @@ export const renewalsService = {
    * The architecture doc defines the EXPIRED renewal status for exactly
    * this and requires it be tested, but names no duration a buyer has to
    * respond — see the PRICE_APPROVAL_TIMEOUT_HOURS admin operational
-   * setting (Settings -> Operational Thresholds in admin-web). Until an
-   * admin sets it, this is a genuine no-op: it never expires a renewal on
-   * an invented default.
+   * setting (Settings -> Operational Thresholds in admin-web). When the
+   * setting is unset the documented default (48h) applies instead of "never
+   * expires" so a cycle can never be blocked indefinitely.
    */
   async expirePriceApprovalTimeouts(): Promise<{ configured: boolean; expired: number }> {
-    const priceApprovalTimeoutHours = await adminPlatformSettingsService.getValue("PRICE_APPROVAL_TIMEOUT_HOURS");
-    if (priceApprovalTimeoutHours == null) {
-      return { configured: false, expired: 0 };
-    }
+    const configuredHours = await adminPlatformSettingsService.getValue("PRICE_APPROVAL_TIMEOUT_HOURS");
+    const priceApprovalTimeoutHours = configuredHours ?? DEFAULT_PRICE_APPROVAL_TIMEOUT_HOURS;
     const cutoff = new Date(Date.now() - priceApprovalTimeoutHours * 60 * 60 * 1000);
     const stale = await prisma.renewal.findMany({
       where: { status: "AWAITING_PRICE_APPROVAL", priceChangeRequest: { createdAt: { lte: cutoff } } },
@@ -711,23 +740,221 @@ export const renewalsService = {
       });
       await notifySubscriptionEvent(renewal.subscription.buyerId, "price_approval_expired", renewal.id, renewal.subscriptionId);
     }
-    return { configured: true, expired };
+    return { configured: configuredHours != null, expired };
   },
 
+  /**
+   * B23 dead-end fix. After the payment attempts are exhausted the renewal is
+   * CANCELLED and the SUBSCRIPTION IS PAUSED with reason "payment_failed" — it
+   * no longer sits in PAYMENT_ATTENTION forever. The buyer is told to update
+   * their payment method; the buyer (resume) or an admin (resume) can restart
+   * it, which schedules a fresh cycle immediately. Race-safe: only one caller
+   * can win the CANCELLED transition, so notifications/audit fire once.
+   */
   async cancelAfterRetriesExhausted(renewalId: string) {
-    const renewal = await prisma.renewal.update({ where: { id: renewalId }, data: { status: "CANCELLED", cancelledAt: new Date() } });
+    const claim = await prisma.renewal.updateMany({
+      where: { id: renewalId, status: { in: ["PAYMENT_FAILED", "PAYMENT_PROCESSING"] } },
+      data: { status: "CANCELLED", cancelledAt: new Date(), nextRetryAt: null },
+    });
+    if (claim.count !== 1) return null;
+    const renewal = await prisma.renewal.findUniqueOrThrow({ where: { id: renewalId } });
+    const now = new Date();
     const sub = await prisma.buyerSubscription.update({
       where: { id: renewal.subscriptionId },
-      data: { status: "PAYMENT_ATTENTION" },
+      data: { status: "PAUSED", pausedReason: PAYMENT_FAILED_PAUSE_REASON, pausedAt: now, pausedUntil: null },
+    });
+    await prisma.subscriptionActionHistory.create({
+      data: { subscriptionId: renewal.subscriptionId, action: "paused_payment_failed", metadata: { renewalId, reason: renewal.failureReason ?? null } as any },
     });
     await recordAudit({
       actorId: SYSTEM_CRON_ACTOR,
       action: "renewal.cancelled_retries_exhausted",
       entityType: "Renewal",
       entityId: renewalId,
+      beforeState: { renewalStatus: "PAYMENT_FAILED", subscriptionStatus: "PAYMENT_ATTENTION" },
+      afterState: { renewalStatus: "CANCELLED", subscriptionStatus: "PAUSED", pausedReason: PAYMENT_FAILED_PAUSE_REASON },
       metadata: { subscriptionId: renewal.subscriptionId },
     });
     await notifySubscriptionEvent(sub.buyerId, "renewal_cancelled", renewalId, renewal.subscriptionId);
+    return renewal;
+  },
+
+  // ─── Sweep steps (run from runRenewalsSweep) ──────────────────────────
+
+  /** One entry point so internal.routes.ts needs only a single call. Each step is isolated. */
+  async runRecoverySweep() {
+    const safe = async <T>(name: string, fn: () => Promise<T>, fallback: T): Promise<T> => {
+      try { return await fn(); } catch (err) { logger.error(`Renewals sweep step failed: ${name}`, { error: String(err) }); return fallback; }
+    };
+    const autoResumed = await safe("auto-resume", () => this.resumePausedDue(), 0);
+    const stockTimeouts = await safe("stock-timeouts", () => this.expireStockTimeouts(), { configuredHours: DEFAULT_AWAITING_STOCK_TIMEOUT_HOURS, skipped: 0 });
+    const priceNotices = await safe("price-notices", () => this.sendPriceChangeNotices(), 0);
+    const retries = await safe("payment-retries", () => this.retryDueFailedPayments(), { retried: 0, finalised: 0 });
+    return { autoResumed, stockTimedOut: stockTimeouts.skipped, priceNoticesSent: priceNotices, paymentRetried: retries.retried, paymentFinalised: retries.finalised };
+  },
+
+  /** Subscriptions paused "until" a date come back on their own once that date passes. */
+  async resumePausedDue(): Promise<number> {
+    const now = new Date();
+    const due = await prisma.buyerSubscription.findMany({
+      where: { status: "PAUSED", pausedUntil: { lte: now }, OR: [{ pausedReason: null }, { pausedReason: { not: PAYMENT_FAILED_PAUSE_REASON } }] },
+      select: { id: true, buyerId: true, nextRenewalAt: true },
+      take: 500,
+    });
+    let resumed = 0;
+    for (const sub of due) {
+      const nextRenewalAt = sub.nextRenewalAt && sub.nextRenewalAt > now ? sub.nextRenewalAt : now;
+      const claim = await prisma.buyerSubscription.updateMany({
+        where: { id: sub.id, status: "PAUSED", pausedUntil: { lte: now } },
+        data: { status: "ACTIVE", pausedUntil: null, pausedReason: null, pausedAt: null, nextRenewalAt },
+      });
+      if (claim.count !== 1) continue;
+      resumed++;
+      await prisma.subscriptionActionHistory.create({ data: { subscriptionId: sub.id, action: "auto_resumed", metadata: { nextRenewalAt: nextRenewalAt.toISOString() } as any } });
+      await notificationsService.enqueue({
+        userId: sub.buyerId,
+        type: "SUBSCRIPTION_UPDATE",
+        title: "Your Foodstuffs Subscription is back",
+        body: `Your pause has ended and your subscription is active again. Next delivery is prepared on ${nextRenewalAt.toDateString()}.`,
+        data: { type: "subscription_update", event: "auto_resumed", subscriptionId: sub.id },
+        dedupeKey: `AUTO_RESUMED:${sub.id}:${now.toISOString().slice(0, 10)}`,
+      }).catch(() => {});
+    }
+    return resumed;
+  },
+
+  /**
+   * A renewal the vendor never confirmed stock for must not block the cycle
+   * forever: after the configured window (AdminPlatformSetting
+   * AWAITING_STOCK_TIMEOUT_HOURS, default 72h) the cycle is auto-skipped, the
+   * buyer is told nothing was charged or substituted, and the vendor is told.
+   */
+  async expireStockTimeouts(): Promise<{ configuredHours: number; skipped: number }> {
+    const row = await prisma.adminPlatformSetting.findUnique({ where: { key: AWAITING_STOCK_TIMEOUT_SETTING_KEY } });
+    const hours = row && Number.isFinite(row.value) && row.value > 0 ? row.value : DEFAULT_AWAITING_STOCK_TIMEOUT_HOURS;
+    const cutoff = new Date(Date.now() - hours * 60 * 60 * 1000);
+    const stale = await prisma.renewal.findMany({
+      where: { status: "AWAITING_STOCK", OR: [{ awaitingStockSince: { lte: cutoff } }, { awaitingStockSince: null, createdAt: { lte: cutoff } }] },
+      include: { subscription: { include: { offer: { select: { title: true, vendor: { select: { userId: true, storeName: true } } } } } } },
+      take: 200,
+    });
+    let skipped = 0;
+    for (const renewal of stale) {
+      const claim = await prisma.renewal.updateMany({ where: { id: renewal.id, status: "AWAITING_STOCK" }, data: { status: "SKIPPED" } });
+      if (claim.count !== 1) continue;
+      skipped++;
+      await prisma.buyerSubscription.updateMany({
+        where: { id: renewal.subscriptionId, nextRenewalAt: renewal.cycleDate },
+        data: { nextRenewalAt: nextCycleDate(renewal.subscription.frequency, renewal.cycleDate) },
+      });
+      await prisma.subscriptionActionHistory.create({ data: { subscriptionId: renewal.subscriptionId, action: "stock_timeout_skipped", metadata: { renewalId: renewal.id, timeoutHours: hours } as any } });
+      await recordAudit({
+        actorId: SYSTEM_CRON_ACTOR,
+        action: "renewal.stock_timeout_skipped",
+        entityType: "Renewal",
+        entityId: renewal.id,
+        metadata: { subscriptionId: renewal.subscriptionId, timeoutHours: hours },
+      });
+      const storeName = renewal.subscription.offer.vendor.storeName;
+      await notificationsService.enqueue({
+        userId: renewal.subscription.buyerId,
+        type: "SUBSCRIPTION_UPDATE",
+        title: "Your Foodstuffs Subscription delivery was skipped",
+        body: `${storeName} couldn't confirm stock in time, so this delivery was skipped. You have not been charged and nothing was substituted. Your next delivery stays on schedule.`,
+        data: { type: "subscription_update", event: "stock_timeout_skipped", renewalId: renewal.id, subscriptionId: renewal.subscriptionId },
+      }).catch(() => {});
+      await notificationsService.enqueue({
+        userId: renewal.subscription.offer.vendor.userId,
+        type: "SUBSCRIPTION_UPDATE",
+        title: "Foodstuffs Subscription cycle skipped",
+        body: `A renewal for "${renewal.subscription.offer.title}" was skipped because stock wasn't confirmed within ${hours} hours. Confirm stock promptly next time to keep your subscribers.`,
+        data: { type: "subscription_update", event: "vendor_stock_timeout", renewalId: renewal.id },
+      }).catch(() => {});
+    }
+    return { configuredHours: hours, skipped };
+  },
+
+  /**
+   * Advance heads-up (about 24h before the cycle is prepared) when the live
+   * price of anything in the basket is higher than what the buyer last paid.
+   * Informational only: the existing approval gate (above the buyer's limit)
+   * is unchanged and still decides whether approval is required. Deduped per
+   * subscription + cycle date at the DB level.
+   */
+  async sendPriceChangeNotices(): Promise<number> {
+    const now = new Date();
+    const windowEnd = new Date(now.getTime() + PRICE_NOTICE_WINDOW_HOURS * 60 * 60 * 1000);
+    const upcoming = await prisma.buyerSubscription.findMany({
+      where: { status: "ACTIVE", nextRenewalAt: { gt: now, lte: windowEnd }, offer: { renewalsPaused: false } },
+      include: { items: { include: { product: true } }, offer: { select: { discountPercent: true, title: true, vendor: { select: { storeName: true } } } } },
+      take: 500,
+    });
+    let sent = 0;
+    for (const sub of upcoming) {
+      if (!sub.nextRenewalAt) continue;
+      const discount = sub.offer.discountPercent ?? 0;
+      const last = await prisma.renewalItem.findMany({
+        where: { renewal: { subscriptionId: sub.id, status: { in: ["PAID", "ORDER_CREATED"] } } },
+        orderBy: { createdAt: "desc" },
+      });
+      const lastByProduct = new Map<string, number>();
+      for (const item of last) if (!lastByProduct.has(item.productId)) lastByProduct.set(item.productId, item.currentUnitPrice);
+      const changes: string[] = [];
+      let needsApproval = false;
+      const limitBps = sub.priceChangeApprovalLimitBps ?? PRICE_CHANGE_APPROVAL_DEFAULT_BPS;
+      for (const item of sub.items) {
+        const before = lastByProduct.get(item.productId);
+        if (before == null || before <= 0) continue;
+        const now_ = discount > 0 ? Math.round(item.product.priceInCents * (1 - discount / 100)) : item.product.priceInCents;
+        if (now_ <= before) continue;
+        if (((now_ - before) / before) * 10000 > limitBps) needsApproval = true;
+        const cur = item.product.currency;
+        changes.push(`${item.product.title}: ${(before / 100).toFixed(2)} to ${(now_ / 100).toFixed(2)} ${cur}`);
+      }
+      if (changes.length === 0) continue;
+      const dedupeKey = `PRICE_NOTICE:${sub.id}:${sub.nextRenewalAt.toISOString().slice(0, 10)}`;
+      if (await prisma.notification.findUnique({ where: { dedupeKey }, select: { id: true } })) continue;
+      await notificationsService.enqueue({
+        userId: sub.buyerId,
+        type: "SUBSCRIPTION_UPDATE",
+        title: "Price change on your Foodstuffs Subscription",
+        body: `${sub.offer.vendor.storeName} has a new price on your next delivery (${sub.nextRenewalAt.toDateString()}). ${changes.join("; ")}.${needsApproval ? " You will be asked to approve it before you are charged." : ""}`,
+        data: { type: "subscription_update", event: "price_change_notice", subscriptionId: sub.id, approvalRequired: needsApproval },
+        dedupeKey,
+      });
+      sent++;
+    }
+    return sent;
+  },
+
+  /**
+   * Automatic payment-recovery schedule. PAYMENT_FAILED renewals whose
+   * nextRetryAt has passed are retried through the SAME attemptPayment() (atomic
+   * claim + per-attempt Stripe idempotency key), so this can never double-charge.
+   * Once MAX_PAYMENT_ATTEMPTS are used the renewal is finalised instead.
+   */
+  async retryDueFailedPayments(): Promise<{ retried: number; finalised: number }> {
+    const due = await prisma.renewal.findMany({
+      where: { status: "PAYMENT_FAILED", nextRetryAt: { lte: new Date() }, subscription: { status: { in: ["ACTIVE", "PAYMENT_ATTENTION"] } } },
+      select: { id: true },
+      take: 200,
+    });
+    let retried = 0;
+    let finalised = 0;
+    for (const { id } of due) {
+      try {
+        const attempts = await prisma.subscriptionPaymentAttempt.count({ where: { renewalId: id } });
+        if (attempts >= MAX_PAYMENT_ATTEMPTS) {
+          if (await this.cancelAfterRetriesExhausted(id)) finalised++;
+          continue;
+        }
+        await this.attemptPayment(id);
+        retried++;
+      } catch (err) {
+        logger.error("Renewal payment retry failed", { renewalId: id, error: String(err) });
+      }
+    }
+    return { retried, finalised };
   },
 
   async retryPayment(buyerId: string, renewalId: string) {
@@ -827,7 +1054,7 @@ export const renewalsService = {
           currency: renewal.currency,
           deliveryZoneId: zoneId,
           deliveryAddress: `${renewal.subscription.deliveryAddress.line1}, ${renewal.subscription.deliveryAddress.city}, ${renewal.subscription.deliveryAddress.country}`,
-          notes: "Regular Delivery renewal",
+          notes: "Foodstuffs Subscription renewal",
           items: {
             create: renewal.items.map((item) => ({
               productId: item.productId,
@@ -865,7 +1092,7 @@ export const renewalsService = {
         data: {
           walletId: wallet.id, vendorId, orderId: order.id,
           type: "PAYMENT_PENDING_CREDIT", amount: vendorEarnings, currency: renewal.currency,
-          description: `Regular Delivery renewal for order ${order.orderNumber}`,
+          description: `Foodstuffs Subscription renewal for order ${order.orderNumber}`,
         },
       });
       await tx.wallet.update({ where: { id: wallet.id }, data: { pendingBalance: { increment: vendorEarnings } } });
@@ -885,7 +1112,7 @@ export const renewalsService = {
       await notificationsService.enqueue({
         userId: vendor.userId,
         type: "SUBSCRIPTION_UPDATE",
-        title: "Regular Delivery renewal paid",
+        title: "Foodstuffs Subscription renewal paid",
         body: `Order ${order.orderNumber} was created from a subscription renewal.`,
         data: { type: "subscription_update", event: "vendor_renewal_paid", orderNumber: order.orderNumber },
       });
@@ -912,10 +1139,12 @@ export const renewalsService = {
     adminId: string,
     subscriptionId: string,
     reason: string,
-    internalNote: string,
+    internalNote?: string,
+    request?: Request,
   ): Promise<{ subscription: unknown; cancelledRenewals: number }> {
     if (!reason?.trim()) throw new AppError("A reason is required for admin forced cancellation", 400);
-    if (!internalNote?.trim()) throw new AppError("An internal note is required for admin forced cancellation", 400);
+    if (reason.trim().length < 5) throw new AppError("A reason of at least 5 characters is required", 400);
+    internalNote = internalNote?.trim() ? internalNote : reason;
 
     const sub = await prisma.buyerSubscription.findUnique({
       where: { id: subscriptionId },
@@ -931,15 +1160,15 @@ export const renewalsService = {
     const { count: cancelledRenewals } = await prisma.renewal.updateMany({
       where: {
         subscriptionId,
-        status: { in: ["SCHEDULED", "AWAITING_STOCK", "AWAITING_PRICE_APPROVAL", "READY_FOR_PAYMENT"] },
+        status: { in: ["SCHEDULED", "AWAITING_STOCK", "AWAITING_PRICE_APPROVAL", "READY_FOR_PAYMENT", "PAYMENT_FAILED"] },
       },
-      data: { status: "CANCELLED", cancelledAt: new Date() },
+      data: { status: "CANCELLED", cancelledAt: new Date(), nextRetryAt: null },
     });
 
     const before = { status: sub.status };
     const subscription = await prisma.buyerSubscription.update({
       where: { id: subscriptionId },
-      data: { status: "CANCELLED", cancelledAt: new Date(), nextRenewalAt: null },
+      data: { status: "CANCELLED", cancelledAt: new Date(), nextRenewalAt: null, cancelReason: reason.trim().slice(0, 300) },
     });
 
     await recordAudit({
@@ -949,14 +1178,17 @@ export const renewalsService = {
       entityId: subscriptionId,
       beforeState: before,
       afterState: { status: "CANCELLED", cancelledRenewals, reason, internalNote },
+      reason: reason.trim(),
+      request,
     });
+    await recordAction(subscriptionId, "admin_cancelled", adminId, { reason: reason.trim() });
 
     // Buyer notification.
     await notificationsService.enqueue({
       userId: sub.buyer.id,
       type: "SUBSCRIPTION_UPDATE",
-      title: "Your Regular Delivery has been cancelled",
-      body: `Your Regular Delivery subscription has been cancelled by Eki support. Only future unprocessed deliveries are affected. Reason: ${reason}.`,
+      title: "Your Foodstuffs Subscription has been cancelled",
+      body: `Your Foodstuffs Subscription has been cancelled by Eki support. Only future unprocessed deliveries are affected. Reason: ${reason}.`,
       data: { type: "subscription_update", event: "admin_force_cancelled", subscriptionId },
     }).catch(() => { /* non-blocking */ });
 
@@ -965,7 +1197,7 @@ export const renewalsService = {
       userId: sub.offer.vendor.userId,
       type: "SUBSCRIPTION_UPDATE",
       title: "Subscription cancelled by admin",
-      body: `A subscription for your Regular Delivery offer has been cancelled by Eki support. Only future unprocessed renewals are affected.`,
+      body: `A subscription for your Foodstuffs Subscription offer has been cancelled by Eki support. Only future unprocessed renewals are affected.`,
       data: { type: "subscription_update", event: "admin_force_cancelled", subscriptionId },
     }).catch(() => { /* non-blocking */ });
 
@@ -1036,7 +1268,7 @@ export const renewalsService = {
       userId: renewal.subscription.buyerId,
       type: "SUBSCRIPTION_UPDATE",
       title: "Price change cancelled",
-      body: "An upcoming price change on your Regular Delivery was cancelled by Eki support. Your delivery will proceed at the original price.",
+      body: "An upcoming price change on your Foodstuffs Subscription was cancelled by Eki support. Your delivery will proceed at the original price.",
       data: { type: "subscription_update", event: "admin_price_change_cancelled", renewalId, subscriptionId: renewal.subscription.id },
     }).catch(() => { /* non-blocking */ });
 
@@ -1131,27 +1363,38 @@ export const renewalsService = {
   },
 };
 
-async function notifySubscriptionEvent(buyerId: string, event: string, renewalId: string, subscriptionId: string, orderNumber?: string) {
+async function notifySubscriptionEvent(
+  buyerId: string,
+  event: string,
+  renewalId: string,
+  subscriptionId: string,
+  orderNumber?: string,
+  extra?: { retryAt?: Date; finalAttempt?: boolean; attempt?: number },
+) {
+  const retryText = extra?.retryAt ? extra.retryAt.toDateString() : null;
   const titles: Record<string, string> = {
     price_approval_required: "Price change needs your approval",
-    payment_failed: "Your Regular Delivery payment failed",
-    renewal_cancelled: "Your Regular Delivery was cancelled",
-    price_approval_expired: "Your Regular Delivery was skipped",
-    order_created: "Your Regular Delivery order was created",
+    payment_failed: extra?.finalAttempt ? "Last chance: update your payment method" : "Your Foodstuffs Subscription payment failed",
+    renewal_cancelled: "Your Foodstuffs Subscription is paused",
+    price_approval_expired: "Your Foodstuffs Subscription delivery was skipped",
+    order_created: "Your Foodstuffs Subscription order was created",
   };
   const bodies: Record<string, string> = {
     price_approval_required: "Review the updated price on your upcoming delivery.",
-    payment_failed: "We couldn't collect payment for your upcoming delivery. Retry from the app.",
-    renewal_cancelled: "We couldn't collect payment after several attempts. Your subscription needs attention.",
+    payment_failed: extra?.finalAttempt
+      ? `We couldn't collect payment for your upcoming delivery after ${extra.attempt ?? 3} attempts. Update your payment method or retry in the app by ${retryText ?? "soon"}, otherwise your subscription will be paused.`
+      : `We couldn't collect payment for your upcoming delivery. We'll try again on ${retryText ?? "the next scheduled run"}. You can update your payment method or retry now from the app.`,
+    renewal_cancelled: "We couldn't collect payment after several attempts, so this delivery was cancelled and your subscription is paused. Update your payment method in the app and resume to restart it.",
     price_approval_expired: "We didn't hear back about the price change in time, so this delivery was skipped.",
     order_created: orderNumber ? `Order ${orderNumber} has been created and is being prepared.` : "Your order was created.",
   };
+  const cta = event === "payment_failed" || event === "renewal_cancelled" ? "update_payment_method" : undefined;
   await notificationsService.enqueue({
     userId: buyerId,
     type: "SUBSCRIPTION_UPDATE",
-    title: titles[event] ?? "Regular Delivery update",
+    title: titles[event] ?? "Foodstuffs Subscription update",
     body: bodies[event] ?? "",
-    data: { type: "subscription_update", event, renewalId, subscriptionId },
+    data: { type: "subscription_update", event, renewalId, subscriptionId, ...(cta ? { cta } : {}), ...(retryText ? { nextRetryAt: extra!.retryAt!.toISOString() } : {}) },
   });
 }
 

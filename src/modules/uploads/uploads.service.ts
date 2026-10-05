@@ -36,6 +36,38 @@ function mimeToExt(mime: string): string {
   return map[mime] ?? ".bin";
 }
 
+/**
+ * Best-effort "what is this upload attached to" for the Content Review queue
+ * (handbook 7). Client-supplied product ids are only accepted when the caller
+ * owns the product; avatar/cover/verification are inferred from the owner.
+ */
+async function resolveEntity(
+  userId: string,
+  category: string,
+  input: CompleteUploadInput,
+): Promise<{ entityType: string; entityId: string } | null> {
+  try {
+    if (category === "avatar") return { entityType: "user", entityId: userId };
+    if (category === "cover" || category === "verification") {
+      const vendor = await prisma.vendor.findUnique({ where: { userId }, select: { id: true } });
+      if (vendor) return { entityType: category === "cover" ? "store" : "vendor_verification", entityId: vendor.id };
+      return null;
+    }
+    if (input.entityType && input.entityId) {
+      if (input.entityType === "product") {
+        const product = await prisma.product.findFirst({ where: { id: input.entityId, vendor: { userId } }, select: { id: true } });
+        return product ? { entityType: "product", entityId: product.id } : null;
+      }
+      if (input.entityType === "message" || input.entityType === "review") {
+        return { entityType: input.entityType, entityId: input.entityId };
+      }
+    }
+  } catch {
+    // Linking is best-effort; never fail an upload over it.
+  }
+  return null;
+}
+
 export const uploadsService = {
   async requestUploadUrl(userId: string, input: RequestUploadInput): Promise<UploadUrlResponse> {
     // If storage is not configured, return a clear error instead of fake URLs
@@ -92,12 +124,15 @@ export const uploadsService = {
       throw new AppError("Uploaded object was not found in storage", 409);
     }
 
+    const entity = await resolveEntity(userId, asset.category, input);
+
     const completed = await prisma.uploadAsset.update({
       where: { id: asset.id },
       data: {
         status: "COMPLETED",
         completedAt: new Date(),
         sizeBytes: input.sizeBytes ?? asset.sizeBytes,
+        ...(entity ? { entityType: entity.entityType, entityId: entity.entityId } : {}),
       },
     });
 

@@ -15,7 +15,7 @@ vi.mock("../lib/prisma", () => ({
     commissionTier: { deleteMany: vi.fn().mockResolvedValue({}) },
     subscriptionPlanConfig: { count: vi.fn().mockResolvedValue(1) },
     vendor: { findUnique: vi.fn() },
-    vendorSubscription: { upsert: vi.fn() },
+    vendorSubscription: { upsert: vi.fn(), findUnique: vi.fn().mockResolvedValue(null) },
     auditLog: { create: vi.fn().mockResolvedValue({}) },
   },
 }));
@@ -144,14 +144,14 @@ describe("assignVendorPlan — manual per-vendor plan change", () => {
     m.sellerPlan.findFirst.mockResolvedValue({ id: "plan-growth", slug: "growth", legacyPlan: "GROWTH", deletedAt: null, commissionTiers: [] });
     m.vendorSubscription.upsert.mockResolvedValue({ id: "vs-1", vendorId: "vendor-1", plan: "GROWTH", status: "ACTIVE", sellerPlan: null });
 
-    await subscriptionsService.assignVendorPlan(ADMIN_ID, "vendor-1", { plan: "growth" } as any);
+    await subscriptionsService.assignVendorPlan(ADMIN_ID, "vendor-1", { plan: "growth" } as any, "manual upgrade after support call");
 
     expect(m.vendorSubscription.upsert).toHaveBeenCalledWith(expect.objectContaining({
       where: { vendorId: "vendor-1" },
       update: expect.objectContaining({ sellerPlanId: "plan-growth", status: "ACTIVE" }),
     }));
     expect(m.auditLog.create).toHaveBeenCalledWith(expect.objectContaining({
-      data: expect.objectContaining({ actorId: ADMIN_ID, action: "VENDOR_SELLER_PLAN_ASSIGNED", entityId: "vendor-1" }),
+      data: expect.objectContaining({ actorId: ADMIN_ID, action: "VENDOR_SELLER_PLAN_ASSIGNED", entityId: "vendor-1", reason: "manual upgrade after support call" }),
     }));
   });
 });

@@ -33,7 +33,7 @@ export function nextCycleDate(frequency: SubscriptionFrequency, from: Date = new
   return next;
 }
 
-async function recordAction(subscriptionId: string, action: string, actorUserId?: string, metadata?: Record<string, unknown>) {
+export async function recordAction(subscriptionId: string, action: string, actorUserId?: string, metadata?: Record<string, unknown>) {
   await prisma.subscriptionActionHistory.create({
     data: { subscriptionId, action, actorUserId, metadata: metadata as any },
   });
@@ -46,6 +46,136 @@ export interface CreateBuyerSubscriptionInput {
   paymentMethodId: string;
   items: { productId: string; quantity: number }[];
 }
+
+export const PAYMENT_FAILED_REASON = "payment_failed";
+
+/** Renewals that exist but have not been charged yet - safe to cancel/skip. */
+export const OPEN_RENEWAL_STATUSES = ["SCHEDULED", "AWAITING_STOCK", "AWAITING_PRICE_APPROVAL", "READY_FOR_PAYMENT"] as const;
+const MAX_RESCHEDULE_DAYS = 90;
+
+export function parseRescheduleDate(raw: unknown): Date {
+  if (typeof raw !== "string" && !(raw instanceof Date)) throw new AppError("A new delivery date is required", 400);
+  const date = new Date(raw);
+  if (Number.isNaN(date.getTime())) throw new AppError("Invalid date", 400);
+  const now = Date.now();
+  if (date.getTime() < now + 60 * 60 * 1000) throw new AppError("Choose a date in the future", 400);
+  if (date.getTime() > now + MAX_RESCHEDULE_DAYS * 24 * 60 * 60 * 1000) {
+    throw new AppError(`Choose a date within the next ${MAX_RESCHEDULE_DAYS} days`, 400);
+  }
+  return date;
+}
+
+type SubscriptionRow = NonNullable<Awaited<ReturnType<typeof prisma.buyerSubscription.findUnique>>>;
+
+/**
+ * State transitions shared by the buyer endpoints and the admin actions, so
+ * both apply exactly the same rules (open renewals are cancelled/skipped so a
+ * paused, skipped or rescheduled subscription is never charged for a cycle
+ * the buyer opted out of). Callers add their own ownership/permission check,
+ * audit and notification.
+ */
+export const subscriptionLifecycle = {
+  async pause(sub: SubscriptionRow, actorUserId: string, opts: { resumeAt?: Date; by: "buyer" | "admin"; reason?: string }) {
+    if (sub.status !== "ACTIVE") throw new AppError("Only an active subscription can be paused", 409);
+    if (opts.resumeAt && (Number.isNaN(opts.resumeAt.getTime()) || opts.resumeAt.getTime() <= Date.now())) {
+      throw new AppError("Resume date must be in the future", 400);
+    }
+    // A renewal already cleared for payment must not still be charged.
+    await prisma.renewal.updateMany({
+      where: { subscriptionId: sub.id, status: { in: [...OPEN_RENEWAL_STATUSES] } },
+      data: { status: "CANCELLED", cancelledAt: new Date() },
+    });
+    const updated = await prisma.buyerSubscription.update({
+      where: { id: sub.id },
+      data: { status: "PAUSED", pausedUntil: opts.resumeAt ?? null, pausedReason: opts.by, pausedAt: new Date() },
+    });
+    await recordAction(sub.id, opts.by === "admin" ? "admin_paused" : "paused", actorUserId, { resumeAt: opts.resumeAt, reason: opts.reason });
+    return updated;
+  },
+
+  async resume(sub: SubscriptionRow, actorUserId: string, opts: { by?: "buyer" | "admin"; reason?: string } = {}) {
+    if (sub.status !== "PAUSED") throw new AppError("Only a paused subscription can be resumed", 409);
+    const wasPaymentFailure = sub.pausedReason === PAYMENT_FAILED_REASON;
+    if (wasPaymentFailure && !sub.paymentMethodId) {
+      throw new AppError("Add a payment method before resuming this subscription", 409);
+    }
+    const updated = await prisma.buyerSubscription.update({
+      where: { id: sub.id },
+      data: {
+        status: "ACTIVE",
+        pausedUntil: null,
+        pausedReason: null,
+        pausedAt: null,
+        // After a payment-failure pause the cycle that failed is gone, so the
+        // next one is prepared immediately; an ordinary pause restarts a full cycle.
+        nextRenewalAt: wasPaymentFailure ? new Date() : nextCycleDate(sub.frequency),
+      },
+    });
+    await recordAction(sub.id, opts.by === "admin" ? "admin_resumed" : "resumed", actorUserId, { afterPaymentFailure: wasPaymentFailure, reason: opts.reason });
+    return updated;
+  },
+
+  async skipNext(sub: SubscriptionRow, actorUserId: string, opts: { by?: "buyer" | "admin"; reason?: string } = {}) {
+    if (sub.status !== "ACTIVE") throw new AppError("Only an active subscription can skip its next renewal", 409);
+    if (!sub.nextRenewalAt) throw new AppError("No upcoming renewal to skip", 409);
+
+    // If a renewal already exists for that cycle (scheduler ran first), mark
+    // it skipped instead of silently leaving an orphaned scheduled renewal.
+    // READY_FOR_PAYMENT is included - without it, a renewal already cleared
+    // for payment stayed chargeable, so a buyer who skipped could still be
+    // charged by the next sweep.
+    await prisma.renewal.updateMany({
+      where: { subscriptionId: sub.id, cycleDate: sub.nextRenewalAt, status: { in: [...OPEN_RENEWAL_STATUSES] } },
+      data: { status: "SKIPPED" },
+    });
+    const updated = await prisma.buyerSubscription.update({
+      where: { id: sub.id },
+      data: { nextRenewalAt: nextCycleDate(sub.frequency, sub.nextRenewalAt) },
+    });
+    await recordAction(sub.id, opts.by === "admin" ? "admin_skipped_next" : "skipped_next", actorUserId, { skippedCycle: sub.nextRenewalAt.toISOString(), reason: opts.reason });
+    return updated;
+  },
+
+  async cancel(sub: SubscriptionRow, actorUserId: string, cancelReason?: string, opts: { by?: "buyer" | "admin" } = {}) {
+    if (sub.status === "CANCELLED") throw new AppError("Already cancelled", 409);
+    const reason = typeof cancelReason === "string" ? cancelReason.trim().slice(0, 300) : "";
+    // Cancels future unpaid renewals only - never touches a renewal that
+    // already produced a real order (spec 6.7).
+    await prisma.renewal.updateMany({
+      where: { subscriptionId: sub.id, status: { in: [...OPEN_RENEWAL_STATUSES] } },
+      data: { status: "CANCELLED", cancelledAt: new Date() },
+    });
+    const updated = await prisma.buyerSubscription.update({
+      where: { id: sub.id },
+      data: { status: "CANCELLED", cancelledAt: new Date(), nextRenewalAt: null, cancelReason: reason || null },
+    });
+    await recordAction(sub.id, opts.by === "admin" ? "admin_cancelled" : "cancelled", actorUserId, reason ? { reason } : undefined);
+    return updated;
+  },
+
+  /** Moves the next delivery/billing date. The cadence after it continues from the new date. */
+  async reschedule(sub: SubscriptionRow, newDate: Date, actorUserId: string, opts: { by: "buyer" | "admin"; reason?: string }) {
+    if (sub.status !== "ACTIVE") throw new AppError("Only an active subscription can change its next delivery date", 409);
+    if (sub.nextRenewalAt) {
+      const locked = await prisma.renewal.findFirst({
+        where: { subscriptionId: sub.id, cycleDate: sub.nextRenewalAt, status: { in: ["PAYMENT_PROCESSING", "PAYMENT_FAILED", "PAID", "ORDER_CREATED"] } },
+        select: { id: true },
+      });
+      if (locked) throw new AppError("This delivery is already being paid for, so its date can't be changed", 409);
+    }
+    await prisma.renewal.updateMany({
+      where: { subscriptionId: sub.id, status: { in: [...OPEN_RENEWAL_STATUSES] } },
+      data: { status: "SKIPPED" },
+    });
+    const updated = await prisma.buyerSubscription.update({ where: { id: sub.id }, data: { nextRenewalAt: newDate } });
+    await recordAction(sub.id, opts.by === "admin" ? "admin_rescheduled" : "rescheduled", actorUserId, {
+      from: sub.nextRenewalAt?.toISOString() ?? null,
+      to: newDate.toISOString(),
+      reason: opts.reason,
+    });
+    return updated;
+  },
+};
 
 export const buyerSubscriptionsService = {
   async create(buyerId: string, input: CreateBuyerSubscriptionInput) {
@@ -76,7 +206,7 @@ export const buyerSubscriptionsService = {
     const vendorActiveCodes = await vendorMarketsService.getActiveMarketCodes(offer.vendor.id);
     const eligibleInAnyMarket = vendorActiveCodes.some((code) => enabledMarketCodes.includes(code));
     if (!eligibleInAnyMarket) {
-      throw new AppError("Regular Deliveries are not available in this vendor's market", 400);
+      throw new AppError("Foodstuffs Subscriptions are not available in this vendor's market", 400);
     }
 
     const eligibleProductIds = new Set(
@@ -148,66 +278,60 @@ export const buyerSubscriptionsService = {
 
   async pause(buyerId: string, id: string, resumeAt?: Date) {
     const sub = await this.requireOwned(buyerId, id);
-    if (sub.status !== "ACTIVE") throw new AppError("Only an active subscription can be paused", 409);
-    const updated = await prisma.buyerSubscription.update({
-      where: { id },
-      data: { status: "PAUSED", pausedUntil: resumeAt ?? null },
-    });
-    await recordAction(id, "paused", buyerId, { resumeAt });
-    return updated;
+    return subscriptionLifecycle.pause(sub, buyerId, { resumeAt, by: "buyer" });
   },
 
   async resume(buyerId: string, id: string) {
     const sub = await this.requireOwned(buyerId, id);
-    if (sub.status !== "PAUSED") throw new AppError("Only a paused subscription can be resumed", 409);
-    const updated = await prisma.buyerSubscription.update({
-      where: { id },
-      data: { status: "ACTIVE", pausedUntil: null, nextRenewalAt: nextCycleDate(sub.frequency) },
-    });
-    await recordAction(id, "resumed", buyerId);
-    return updated;
+    return subscriptionLifecycle.resume(sub, buyerId);
   },
 
   async skipNext(buyerId: string, id: string) {
     const sub = await this.requireOwned(buyerId, id);
-    if (sub.status !== "ACTIVE") throw new AppError("Only an active subscription can skip its next renewal", 409);
-    if (!sub.nextRenewalAt) throw new AppError("No upcoming renewal to skip", 409);
-
-    // If a renewal already exists for that cycle (scheduler ran first), mark
-    // it skipped instead of silently leaving an orphaned scheduled renewal.
-    // READY_FOR_PAYMENT is included — without it, a renewal already cleared
-    // for payment stayed chargeable, so a buyer who skipped could still be
-    // charged by the next sweep.
-    await prisma.renewal.updateMany({
-      where: { subscriptionId: id, cycleDate: sub.nextRenewalAt, status: { in: ["SCHEDULED", "AWAITING_STOCK", "AWAITING_PRICE_APPROVAL", "READY_FOR_PAYMENT"] } },
-      data: { status: "SKIPPED" },
-    });
-
-    const updated = await prisma.buyerSubscription.update({
-      where: { id },
-      data: { nextRenewalAt: nextCycleDate(sub.frequency, sub.nextRenewalAt) },
-    });
-    await recordAction(id, "skipped_next", buyerId);
-    return updated;
+    return subscriptionLifecycle.skipNext(sub, buyerId);
   },
 
-  async cancel(buyerId: string, id: string) {
+  async cancel(buyerId: string, id: string, cancelReason?: string) {
     const sub = await this.requireOwned(buyerId, id);
-    if (sub.status === "CANCELLED") throw new AppError("Already cancelled", 409);
+    return subscriptionLifecycle.cancel(sub, buyerId, cancelReason);
+  },
 
-    // Cancels future unpaid renewals only — never touches a renewal that
-    // already produced a real order (spec §6.7).
-    await prisma.renewal.updateMany({
-      where: { subscriptionId: id, status: { in: ["SCHEDULED", "AWAITING_STOCK", "AWAITING_PRICE_APPROVAL", "READY_FOR_PAYMENT"] } },
-      data: { status: "CANCELLED", cancelledAt: new Date() },
-    });
+  /** Buyer picks a new date for the next delivery ("Choose a new date for next delivery"). */
+  async rescheduleNext(buyerId: string, id: string, rawDate: unknown) {
+    const sub = await this.requireOwned(buyerId, id);
+    return subscriptionLifecycle.reschedule(sub, parseRescheduleDate(rawDate), buyerId, { by: "buyer" });
+  },
 
-    const updated = await prisma.buyerSubscription.update({
-      where: { id },
-      data: { status: "CANCELLED", cancelledAt: new Date(), nextRenewalAt: null },
-    });
-    await recordAction(id, "cancelled", buyerId);
-    return updated;
+  /**
+   * Buyer points the subscription at a different saved card — the recovery
+   * path after a failed payment. A failed renewal still inside its retry
+   * schedule is retried at the next sweep; if its attempts are already used up
+   * it is finalised and, because the buyer has now fixed the card, the
+   * subscription is restarted right away (fresh cycle).
+   */
+  async updatePaymentMethod(buyerId: string, id: string, paymentMethodId: string) {
+    const sub = await this.requireOwned(buyerId, id);
+    if (sub.status === "CANCELLED") throw new AppError("This subscription is cancelled", 409);
+    const method = await prisma.buyerPaymentMethod.findUnique({ where: { id: paymentMethodId } });
+    if (!method || method.buyerId !== buyerId) throw new AppError("Payment method not found", 404);
+    await prisma.buyerSubscription.update({ where: { id }, data: { paymentMethodId } });
+    await recordAction(id, "payment_method_changed", buyerId, { paymentMethodId });
+
+    const { renewalsService, MAX_PAYMENT_ATTEMPTS } = await import("./renewals.service.js");
+    const failed = await prisma.renewal.findFirst({ where: { subscriptionId: id, status: "PAYMENT_FAILED" }, select: { id: true } });
+    if (failed) {
+      const attempts = await prisma.subscriptionPaymentAttempt.count({ where: { renewalId: failed.id } });
+      if (attempts < MAX_PAYMENT_ATTEMPTS) {
+        await prisma.renewal.update({ where: { id: failed.id }, data: { nextRetryAt: new Date() } });
+      } else {
+        await renewalsService.cancelAfterRetriesExhausted(failed.id);
+      }
+    }
+    const fresh = await prisma.buyerSubscription.findUniqueOrThrow({ where: { id } });
+    if (fresh.status === "PAUSED" && fresh.pausedReason === PAYMENT_FAILED_REASON) {
+      return subscriptionLifecycle.resume(fresh, buyerId);
+    }
+    return fresh;
   },
 
   /**
@@ -287,7 +411,7 @@ export const buyerSubscriptionsService = {
     await notificationsService.enqueue({
       userId: buyerId,
       type: "SUBSCRIPTION_UPDATE",
-      title: "Regular Delivery frequency updated",
+      title: "Foodstuffs Subscription frequency updated",
       body: `Your delivery frequency has been changed to ${FREQUENCY_LABEL[newFrequency]}. Next delivery: ${newNextRenewalAt.toLocaleDateString("en-GB")}.`,
       data: {
         type: "regular_delivery_frequency_changed",
@@ -339,7 +463,7 @@ export const buyerSubscriptionsService = {
     await notificationsService.enqueue({
       userId: sub.buyerId,
       type: "SUBSCRIPTION_UPDATE",
-      title: "Regular Delivery frequency updated",
+      title: "Foodstuffs Subscription frequency updated",
       body: `Your delivery frequency has been updated to ${FREQUENCY_LABEL[newFrequency]} by Eki support. Next delivery: ${newNextRenewalAt.toLocaleDateString("en-GB")}.`,
       data: {
         type: "regular_delivery_frequency_changed",

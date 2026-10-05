@@ -10,6 +10,9 @@ vi.mock("../lib/prisma", () => ({
     priceChangeRequest: { create: vi.fn(), update: vi.fn() },
     subscriptionPaymentAttempt: { count: vi.fn(), create: vi.fn(), update: vi.fn(), updateMany: vi.fn(), findFirst: vi.fn() },
     subscriptionOffer: { findUnique: vi.fn() },
+    subscriptionActionHistory: { create: vi.fn() },
+    adminPlatformSetting: { findUnique: vi.fn() },
+    notification: { findUnique: vi.fn() },
     vendor: { findUnique: vi.fn() },
     deliveryZone: { findFirst: vi.fn() },
     order: { findUnique: vi.fn() },
@@ -45,6 +48,7 @@ beforeEach(() => vi.clearAllMocks());
 describe("renewalsService — real audit trail for material transitions", () => {
   it("handlePaymentFailure records a real audit entry with the failure reason", async () => {
     m.renewal.update.mockResolvedValue({} as never);
+    m.subscriptionPaymentAttempt.count.mockResolvedValue(1);
     m.buyerSubscription.update.mockResolvedValue({ buyerId: "buyer-1", offer: { vendorId: "vendor-1" } } as never);
 
     await renewalsService.handlePaymentFailure("sub-1", "renewal-1", "card_declined");
@@ -59,7 +63,8 @@ describe("renewalsService — real audit trail for material transitions", () => 
   });
 
   it("cancelAfterRetriesExhausted records a real audit entry", async () => {
-    m.renewal.update.mockResolvedValueOnce({ id: "renewal-2", subscriptionId: "sub-2" } as never);
+    m.renewal.updateMany.mockResolvedValueOnce({ count: 1 } as never);
+    m.renewal.findUniqueOrThrow.mockResolvedValueOnce({ id: "renewal-2", subscriptionId: "sub-2" } as never);
     m.buyerSubscription.update.mockResolvedValue({ buyerId: "buyer-2" } as never);
 
     await renewalsService.cancelAfterRetriesExhausted("renewal-2");
