@@ -12,6 +12,8 @@ const MAX_SIZES: Record<string, number> = {
   cover: 5 * 1024 * 1024,
   verification: 10 * 1024 * 1024,
   message: 5 * 1024 * 1024,
+  dispute_evidence: 10 * 1024 * 1024,
+  delivery_proof: 5 * 1024 * 1024,
 };
 
 function generateKey(userId: string, input: RequestUploadInput): string {

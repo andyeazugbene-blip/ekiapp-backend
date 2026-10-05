@@ -1,3 +1,4 @@
+import { deriveVendorSubscriptionState } from "../subscriptions/vendor-subscription-state";
 import { assertManualVerificationAllowed, deriveVendorProviderReadiness, isProviderControlledVendor } from "../vendors/vendor-provider-readiness";
 import {
   OrderStatus,
@@ -11,6 +12,7 @@ import { prisma } from "../../lib/prisma";
 import { CURSOR_ORDER_BY } from "../../shared/constants";
 import { AppError } from "../../shared/errors/app-error";
 import { assertApprovedLaunchCountry } from "../vendors/vendors.service";
+import { deliveryProofService } from "../orders/delivery-proof.service";
 import { adminProductsService } from "./admin-products.service";
 
 const MAX_LIMIT = 100;
@@ -284,7 +286,7 @@ export const adminListingsService = {
       avgRating: reviewAgg._avg.rating,
       totalReviews: reviewAgg._count,
       totalRevenue: totalRevenue._sum.totalAmount ?? 0,
-      subscription,
+      subscription: subscription ? { ...subscription, ...(() => { const st = deriveVendorSubscriptionState(subscription); return { lifecycle: st.lifecycle, inTrial: st.inTrial, trialDaysRemaining: st.trialDaysRemaining, billingStarted: st.billingStarted }; })() } : null,
       storeOrders,
       completedOrders,
       gmvByCurrency: gmvByCurrency.map((g) => ({ currency: g.currency, amount: g._sum.totalAmount ?? 0, orders: g._count.id })),
@@ -384,6 +386,7 @@ export const adminListingsService = {
       vendorInfo: vInfo,
       refunds,
       dispute,
+      deliveryProof: await deliveryProofService.listForAdmin(orderId),
       payoutRequests,
       webhookEvents,
       stripeLivemode: (process.env.STRIPE_SECRET_KEY ?? "").startsWith("sk_live_"),
@@ -486,6 +489,7 @@ export const adminListingsService = {
         subscriptionStatus: sub?.status ?? null,
         subscriptionPeriodEnd: sub?.currentPeriodEnd ?? null,
         trialEndsAt: sub?.trialEndsAt ?? null,
+        subscriptionLifecycle: deriveVendorSubscriptionState(sub ? { ...sub, stripeSubscriptionId: sub.plan === "FREE" ? null : "x" } : null).lifecycle,
         provider: {
           stage: readiness.stage,
           identityState: readiness.identity.state,

@@ -1,3 +1,4 @@
+import { eventsService, EVENT_NAMES } from "../events/events.service";
 import { NotificationType, OrderStatus, PaymentStatus, Prisma, SubscriptionPlan, SubscriptionStatus } from "@prisma/client";
 import type Stripe from "stripe";
 
@@ -367,6 +368,14 @@ class StripeWebhookService {
     // Fire notifications AFTER transaction commits
     if (paidOrders.length > 0) {
       this.sendSuccessNotifications(buyerId, paidOrders);
+      for (const o of paidOrders) {
+        // At-least-once: consumers dedupe on payload.stripeEventId.
+        eventsService.emit({
+          name: EVENT_NAMES.payment_succeeded, actorType: "stripe", entityType: "Order", entityId: o.id,
+          source: "stripe_webhook", secondaryEntities: { buyerId, vendorId: o.vendorId },
+          payload: { stripeEventId: event.id },
+        });
+      }
     }
     referralsService.creditReferralBonusOnFirstOrder(buyerId).catch((err) => {
       logger.error("Referral bonus credit failed", { buyerId, error: String(err) });
@@ -1141,6 +1150,15 @@ class StripeWebhookService {
       return this.handleCommunityBuyHoldEvent(event);
     }
 
+    if (event.type === "payment_intent.payment_failed" && kind !== "wallet_topup" && kind !== "gift_card_purchase" && kind !== "community_buy_hold") {
+      const failure = this.paymentFailureFields(paymentIntent);
+      eventsService.emit({
+        name: EVENT_NAMES.payment_failed, actorType: "stripe", entityType: checkoutId ? "Checkout" : "PaymentIntent",
+        entityId: checkoutId ?? paymentIntent.id, source: "stripe_webhook",
+        payload: { stripeEventId: event.id, failureCode: failure.failureCode, paymentMethodType: failure.paymentMethodType },
+      });
+    }
+
     // Gift card purchase canceled/failed: nothing to reverse (payment never completed)
     if (kind === "gift_card_purchase") {
       try {
@@ -1685,6 +1703,12 @@ class StripeWebhookService {
       // correctly, but the buyer had no way to learn their refund actually
       // happened short of manually reopening the order later.
       if (result.refundedBuyerId && result.refundedOrderIds && result.refundedOrderIds.length > 0) {
+        for (const orderId of result.refundedOrderIds) {
+          eventsService.emit({
+            name: EVENT_NAMES.order_refunded, actorType: "stripe", entityType: "Order", entityId: orderId,
+            source: "stripe_webhook", secondaryEntities: { buyerId: result.refundedBuyerId }, payload: { stripeEventId: event.id },
+          });
+        }
         notificationsService.enqueue({
           userId: result.refundedBuyerId,
           type: NotificationType.ADMIN_BROADCAST,

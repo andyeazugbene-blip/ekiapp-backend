@@ -519,6 +519,7 @@ model Order {
   paystackTransaction   PaystackTransaction?
   deliveryOtp           DeliveryOtp?
   dispute               Dispute?
+  evidence              OrderEvidence[]
   walletTransactions    WalletTransaction[]
   renewal               Renewal?
   createdAt             DateTime             @default(now())
@@ -1669,13 +1670,111 @@ model Dispute {
   refundAmount Int?
   resolvedById String?
   resolvedAt   DateTime?
+  // Handbook 11 L454: issue type, claim, evidence, deadlines, communication, decision, appeal.
+  type           DisputeType   @default(OTHER)
+  claim          String?
+  respondByAt    DateTime?
+  appealStatus   DisputeAppealStatus @default(NONE)
+  appealReason   String?
+  appealRequestedById String?
+  appealRequestedAt   DateTime?
+  appealDecidedById   String?
+  appealDecidedAt     DateTime?
+  appealDecisionReason String?
+  decisionReason String?
+  evidenceRequestedAt DateTime?
+  evidenceRequestedFrom String?
   order        Order         @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  evidence     DisputeEvidence[]
+  messages     DisputeMessage[]
   createdAt    DateTime      @default(now())
   updatedAt    DateTime      @updatedAt
 
   @@index([status, createdAt])
   @@index([buyerId])
   @@index([vendorId])
+}
+
+enum DisputeType {
+  NOT_RECEIVED
+  DAMAGED
+  WRONG_ITEM
+  QUALITY
+  OTHER
+}
+
+enum DisputeAppealStatus {
+  NONE
+  REQUESTED
+  UPHELD
+  OVERTURNED
+}
+
+enum DisputeParty {
+  BUYER
+  VENDOR
+  ADMIN
+}
+
+enum DisputeEvidenceKind {
+  PHOTO
+  DOCUMENT
+  TEXT
+}
+
+model DisputeEvidence {
+  id             String              @id @default(cuid())
+  disputeId      String
+  submittedById  String
+  submitterRole  DisputeParty
+  kind           DisputeEvidenceKind
+  uploadAssetId  String?
+  text           String?
+  note           String?
+  dispute        Dispute             @relation(fields: [disputeId], references: [id], onDelete: Cascade)
+  createdAt      DateTime            @default(now())
+
+  @@index([disputeId, createdAt])
+}
+
+model DisputeMessage {
+  id        String       @id @default(cuid())
+  disputeId String
+  authorId  String
+  authorRole DisputeParty
+  body      String
+  internal  Boolean      @default(false)
+  dispute   Dispute      @relation(fields: [disputeId], references: [id], onDelete: Cascade)
+  createdAt DateTime     @default(now())
+
+  @@index([disputeId, createdAt])
+}
+
+enum OrderEvidenceKind {
+  DELIVERY_PHOTO
+  PICKUP_CONFIRMATION
+  SIGNATURE
+  NOTE
+}
+
+enum OrderEvidenceRole {
+  VENDOR
+  COURIER
+  ADMIN
+}
+
+model OrderEvidence {
+  id            String            @id @default(cuid())
+  orderId       String
+  kind          OrderEvidenceKind
+  uploadAssetId String?
+  note          String?
+  submittedById String
+  submitterRole OrderEvidenceRole
+  order         Order             @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  createdAt     DateTime          @default(now())
+
+  @@index([orderId, createdAt])
 }
 
 /**

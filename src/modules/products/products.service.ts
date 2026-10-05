@@ -1,3 +1,4 @@
+import { eventsService, EVENT_NAMES } from "../events/events.service";
 import type { Product } from "@prisma/client";
 
 import { prisma } from "../../lib/prisma";
@@ -87,7 +88,7 @@ export const productsService = {
     // Product currency ALWAYS inherits from vendor — input.currency is ignored
     for (let attempt = 0; attempt < 5; attempt++) {
       try {
-        return await prisma.product.create({
+        const created = await prisma.product.create({
           data: {
             productCode: await nextProductCode(),
             vendorId: vendor.id,
@@ -104,6 +105,13 @@ export const productsService = {
             ...(forceDraft ? { isActive: false } : {}),
           },
         });
+        if (created.isActive) {
+          eventsService.emit({
+            name: EVENT_NAMES.product_published, actorType: "vendor", actorId: userId, entityType: "Product", entityId: created.id,
+            source: "vendor_app", secondaryEntities: { vendorId: vendor.id },
+          });
+        }
+        return created;
       } catch (error: any) {
         if (error?.code !== "P2002" || !String(error?.meta?.target ?? "").includes("productCode")) throw error;
       }

@@ -92,7 +92,7 @@ function normalizeName(raw: unknown): string {
 // "community_buy.mutate" since there's no finer-grained split of that
 // permission yet), the role is genuinely broader than its name suggests —
 // documented here rather than silently pretended away.
-const DEFAULT_ROLES: { name: string; description: string; permissions: AdminPermission[] }[] = [
+export const DEFAULT_ROLES: { name: string; description: string; permissions: AdminPermission[] }[] = [
   { name: "Super Administrator", description: "Full access to every admin action.", permissions: ["admin.*"] },
   {
     name: "Read-Only Auditor",

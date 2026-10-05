@@ -1,3 +1,4 @@
+import { eventsService, EVENT_NAMES } from "../events/events.service";
 import { LedgerAccountType, LedgerDirection, LedgerOwnerType, Prisma } from "@prisma/client";
 import type Stripe from "stripe";
 
@@ -302,6 +303,10 @@ async function createPledge(
     data: { type: "community_campaign_update", event: "pledge_recorded", campaignId },
   });
 
+  eventsService.emit({
+    name: EVENT_NAMES.community_buy_joined, actorType: "user", entityType: "CampaignContribution", entityId: claimed.id,
+    source: "api", secondaryEntities: { campaignId }, amountMinor: amount, currency: campaign.currency,
+  });
   return { contributionId: claimed.id, quantity, amount, currency: campaign.currency, status: "PLEDGED" };
 }
 

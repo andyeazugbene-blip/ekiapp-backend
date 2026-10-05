@@ -1,3 +1,4 @@
+import { eventsService, EVENT_NAMES } from "../events/events.service";
 import { LedgerAccountType, LedgerDirection, LedgerOwnerType } from "@prisma/client";
 import type Stripe from "stripe";
 
@@ -246,6 +247,10 @@ export const campaignAuthorisationService = {
 
     await notifyParticipant(userId, "commitment_recorded", "Commitment recorded", "Save your card to complete your commitment. You will not be charged today.", campaignId);
 
+    eventsService.emit({
+      name: EVENT_NAMES.community_buy_joined, actorType: "user", actorId: userId, entityType: "CampaignContribution", entityId: claimed.id,
+      source: "api", secondaryEntities: { campaignId }, amountMinor: amount, currency: campaign.currency,
+    });
     return { contributionId: claimed.id, quantity, amount, currency: campaign.currency, status: "PLEDGED", setupIntentClientSecret: setupIntent.client_secret };
   },
 

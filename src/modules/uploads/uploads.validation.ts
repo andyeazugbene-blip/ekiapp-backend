@@ -2,7 +2,7 @@ import { AppError } from "../../shared/errors/app-error";
 import { UPLOAD_ENTITY_TYPES } from "./uploads.types";
 import type { CompleteUploadInput, RequestUploadInput, UploadCategory, UploadEntityType } from "./uploads.types";
 
-const ALLOWED_CATEGORIES: Set<string> = new Set(["product", "avatar", "cover", "verification", "message"]);
+const ALLOWED_CATEGORIES: Set<string> = new Set(["product", "avatar", "cover", "verification", "message", "dispute_evidence", "delivery_proof"]);
 
 const ALLOWED_IMAGE_TYPES = new Set([
   "image/jpeg",
@@ -33,14 +33,14 @@ export function validateRequestUploadInput(input: unknown): RequestUploadInput {
   }
 
   if (typeof raw.category !== "string" || !ALLOWED_CATEGORIES.has(raw.category)) {
-    throw new AppError("Invalid category (product, avatar, cover, verification, message)", 400);
+    throw new AppError("Invalid category (product, avatar, cover, verification, message, dispute_evidence, delivery_proof)", 400);
   }
 
   const category = raw.category as UploadCategory;
   const contentType = raw.contentType.trim().toLowerCase();
 
   // Validate content type based on category
-  if (category === "verification") {
+  if (category === "verification" || category === "dispute_evidence") {
     if (!ALLOWED_DOC_TYPES.has(contentType)) {
       throw new AppError("Verification documents must be JPEG, PNG, WebP, or PDF", 400);
     }

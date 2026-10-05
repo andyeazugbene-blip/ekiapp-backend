@@ -1,3 +1,4 @@
+import { eventsService, EVENT_NAMES } from "../events/events.service";
 import { VendorVerificationStatus } from "@prisma/client";
 
 import { env } from "../../config/env";
@@ -92,6 +93,10 @@ export const stripeIdentityService = {
       });
 
       logger.info("Vendor verified via Stripe Identity", { vendorId, sessionId: session.id });
+      eventsService.emit({
+        name: EVENT_NAMES.verification_completed, actorType: "stripe", entityType: "Vendor", entityId: vendorId,
+        source: "stripe_identity_webhook", payload: { sessionId: session.id },
+      });
 
       communicationService.send({
         eventKey: "vendor_verification_approved",

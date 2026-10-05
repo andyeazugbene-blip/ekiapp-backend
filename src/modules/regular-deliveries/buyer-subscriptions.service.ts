@@ -1,3 +1,4 @@
+import { eventsService, EVENT_NAMES } from "../events/events.service";
 import type { SubscriptionFrequency } from "@prisma/client";
 
 import { prisma } from "../../lib/prisma";
@@ -33,10 +34,36 @@ export function nextCycleDate(frequency: SubscriptionFrequency, from: Date = new
   return next;
 }
 
+const SUBSCRIPTION_EVENT_BY_ACTION: Record<string, string> = {
+  created: EVENT_NAMES.subscription_created,
+  paused: EVENT_NAMES.subscription_paused,
+  admin_paused: EVENT_NAMES.subscription_paused,
+  admin_resumed: EVENT_NAMES.subscription_resumed,
+  admin_cancelled: EVENT_NAMES.subscription_cancelled,
+  skipped_next: EVENT_NAMES.subscription_skipped,
+  admin_skipped_next: EVENT_NAMES.subscription_skipped,
+  resumed: EVENT_NAMES.subscription_resumed,
+  auto_resumed: EVENT_NAMES.subscription_resumed,
+  cancelled: EVENT_NAMES.subscription_cancelled,
+  skipped: EVENT_NAMES.subscription_skipped,
+  skip_next: EVENT_NAMES.subscription_skipped,
+  admin_skip: EVENT_NAMES.subscription_skipped,
+  payment_failed: EVENT_NAMES.subscription_payment_failed,
+  payment_retry: EVENT_NAMES.payment_retry,
+  renewed: EVENT_NAMES.subscription_renewed,
+};
+
 export async function recordAction(subscriptionId: string, action: string, actorUserId?: string, metadata?: Record<string, unknown>) {
   await prisma.subscriptionActionHistory.create({
     data: { subscriptionId, action, actorUserId, metadata: metadata as any },
   });
+  const eventName = SUBSCRIPTION_EVENT_BY_ACTION[action];
+  if (eventName) {
+    eventsService.emit({
+      name: eventName, actorType: actorUserId ? "user" : "system", actorId: actorUserId ?? null,
+      entityType: "BuyerSubscription", entityId: subscriptionId, source: "regular_deliveries", payload: { action },
+    });
+  }
 }
 
 export interface CreateBuyerSubscriptionInput {

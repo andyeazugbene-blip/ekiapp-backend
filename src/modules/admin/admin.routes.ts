@@ -163,6 +163,7 @@ import {
   updateAdminRole,
 } from "./admin-roles.controller";
 import { completeOrder, processStuckOrder } from "./admin-orders.controller";
+import { adminDisputeDecideAppeal, adminDisputePostMessage, adminDisputeRequestEvidence, adminDisputeV2Detail } from "../disputes/disputes.controller";
 import { adminListOrderRefunds, adminRefundOrder } from "./admin-refunds.controller";
 import {
   addVendorMarket,
@@ -685,6 +686,10 @@ adminRouter.post("/content-review/assets/:id/:action", asyncHandler(requireAdmin
 // Escrow disputes
 adminRouter.get("/disputes", asyncHandler(requireAdminPermission("disputes.read")), asyncHandler(adminListDisputes));
 adminRouter.get("/disputes/:id", asyncHandler(requireAdminPermission("disputes.read")), asyncHandler(adminGetDispute));
+adminRouter.get("/disputes/:id/case", asyncHandler(requireAdminPermission("disputes.read")), asyncHandler(adminDisputeV2Detail));
+adminRouter.post("/disputes/:id/messages", asyncHandler(requireAdminPermission("disputes.mutate")), asyncHandler(adminDisputePostMessage));
+adminRouter.post("/disputes/:id/request-evidence", asyncHandler(requireAdminPermission("disputes.mutate")), asyncHandler(adminDisputeRequestEvidence));
+adminRouter.post("/disputes/:id/appeal-decision", asyncHandler(requireAdminPermission("disputes.mutate")), asyncHandler(require2fa), asyncHandler(adminDisputeDecideAppeal));
 adminRouter.patch("/disputes/:id/resolve", asyncHandler(requireAdminPermission("disputes.mutate")), asyncHandler(require2fa), asyncHandler(adminResolveDispute));
 
 // Real Stripe chargebacks (architecture doc §15.3 "Chargebacks") — distinct

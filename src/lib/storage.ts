@@ -91,6 +91,9 @@ export interface PresignedUpload {
 
 const PRESIGN_EXPIRY = 300; // 5 minutes
 
+/** Categories never exposed through a public URL: reads go through short-lived signed URLs only. */
+export const PRIVATE_UPLOAD_CATEGORIES = new Set(["verification", "dispute_evidence", "delivery_proof"]);
+
 // @ts-ignore — kept for documentation; will be used when content-length validation is added
 const _MAX_SIZES: Record<string, number> = {
   product: 5 * 1024 * 1024,       // 5MB
@@ -136,7 +139,7 @@ export async function generatePresignedUpload(
 
   // Public uploads need a public URL. Verification uploads are returned only
   // through admin short-lived signed reads.
-  if (category !== "verification" && !PUBLIC_URL) {
+  if (!PRIVATE_UPLOAD_CATEGORIES.has(category) && !PUBLIC_URL) {
     throw new Error("S3_PUBLIC_URL is not configured. Cannot generate public URL for uploads.");
   }
 
@@ -150,7 +153,7 @@ export async function generatePresignedUpload(
     expiresIn: PRESIGN_EXPIRY,
   });
 
-  const publicUrl = category === "verification" ? undefined : `${PUBLIC_URL}/${key}`;
+  const publicUrl = PRIVATE_UPLOAD_CATEGORIES.has(category) ? undefined : `${PUBLIC_URL}/${key}`;
 
   return { uploadUrl, publicUrl, key };
 }

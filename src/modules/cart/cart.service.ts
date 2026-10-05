@@ -1,3 +1,4 @@
+import { eventsService, EVENT_NAMES } from "../events/events.service";
 import type { Cart, CartItem, Prisma, Product } from "@prisma/client";
 import type { PrismaClient } from "@prisma/client";
 
@@ -52,6 +53,15 @@ export const cartService = {
   // cart — currency safety is enforced at checkout time (backend FX
   // normalization into one checkout currency), never by blocking the add.
   async addItem(buyerId: string, input: AddCartItemInput): Promise<CartWithItems> {
+    const result = await this.addItemTx(buyerId, input);
+    eventsService.emit({
+      name: EVENT_NAMES.item_added_to_cart, actorType: "user", actorId: buyerId, entityType: "Product", entityId: input.productId,
+      source: "api", payload: { quantity: input.quantity },
+    });
+    return result;
+  },
+
+  async addItemTx(buyerId: string, input: AddCartItemInput): Promise<CartWithItems> {
     return prisma.$transaction(async (tx) => {
       const cart = await getOrCreateCart(buyerId, tx);
 

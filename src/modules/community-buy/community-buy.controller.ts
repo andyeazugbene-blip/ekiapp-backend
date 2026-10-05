@@ -1813,8 +1813,8 @@ export async function adminCreateMarketConfiguration(request: Request, response:
 export async function adminUpdateMarketReadiness(request: Request, response: Response): Promise<void> {
   const adminId = requireUserId(request);
   const countryCode = requireIdParam(request).toUpperCase();
-  const reason = requireReason(request);
   await assertSuperAdmin(adminId);
+  const reason = requireReason(request);
   const before = await marketConfigurationService.get(countryCode);
   const config = await marketConfigurationService.setReadiness(countryCode, request.body, adminId);
   await recordAudit({ actorId: adminId, action: "community_market_config.readiness_update", entityType: "MarketConfiguration", entityId: countryCode, reason, beforeState: before ?? undefined, afterState: config as unknown as Record<string, unknown>, request });
@@ -1828,6 +1828,9 @@ export async function adminSetMarketPayments(request: Request, response: Respons
   const reason = requireReason(request);
   const enable = request.body?.enabled;
   if (typeof enable !== "boolean") throw new AppError("enabled must be a boolean", 400);
+  // Super Admin ONLY to enable Community Buy payments (owner decision): checked first,
+  // server-side, before any data is read or the service is entered. The service re-checks.
+  if (enable) await assertSuperAdmin(adminId);
   const before = await marketConfigurationService.get(countryCode);
   const config = await marketConfigurationService.setPaymentsEnabled(countryCode, enable, { actorId: adminId, reason, approvalRef: typeof request.body?.approvalReference === "string" ? request.body.approvalReference : null });
   await recordAudit({

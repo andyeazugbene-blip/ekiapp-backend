@@ -129,6 +129,14 @@ async function persist(input: EmitEventInput): Promise<void> {
   });
 }
 
+function logEmitFailure(name: string, error: unknown): void {
+  try {
+    logger.warn("Event emit failed", { name, error: error instanceof Error ? error.message : String(error) });
+  } catch {
+    // logging must never turn a swallowed event failure into an unhandled rejection
+  }
+}
+
 export const eventsService = {
   /**
    * Fire-and-forget. Returns void synchronously; the DB write is not awaited by
@@ -138,10 +146,10 @@ export const eventsService = {
   emit(input: EmitEventInput): void {
     try {
       void persist(input).catch((error) => {
-        logger.warn("Event emit failed", { name: input.name, error: error instanceof Error ? error.message : String(error) });
+        logEmitFailure(input.name, error);
       });
     } catch (error) {
-      logger.warn("Event emit failed", { name: input.name, error: error instanceof Error ? error.message : String(error) });
+      logEmitFailure(input.name, error);
     }
   },
 
@@ -151,7 +159,7 @@ export const eventsService = {
       await persist(input);
       return true;
     } catch (error) {
-      logger.warn("Event emit failed", { name: input.name, error: error instanceof Error ? error.message : String(error) });
+      logEmitFailure(input.name, error);
       return false;
     }
   },

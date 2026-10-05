@@ -11,6 +11,8 @@ import { swaggerSpec } from "./lib/swagger";
 import { errorHandler } from "./middlewares/error-handler";
 import { notFoundHandler } from "./middlewares/not-found";
 import { adminRateLimiter, generalRateLimiter } from "./middlewares/rate-limit";
+import { resolveCorsOrigins } from "./config/cors";
+import { logger } from "./lib/logger";
 import { requestIdMiddleware } from "./middlewares/request-id";
 import { requestLogger } from "./middlewares/request-logger";
 import { validateInputLength } from "./middlewares/validate-input-length";
@@ -77,21 +79,14 @@ app.use(requestIdMiddleware);
 
 // CORS - restrict origins in production, allow all in dev.
 const isProduction = process.env.NODE_ENV === "production";
-const defaultOrigins = [
-  "https://culinarytales.app",
-  "https://www.culinarytales.app",
-  "https://ekiapp-backend.vercel.app",
-  "https://admin-web-eta-six.vercel.app",
-  "https://ekiapp-admin.vercel.app",
-  "https://admin-byr91fle1-andyekiapp-s-projects.vercel.app",
-  "https://admin-69fl6skwn-andyekiapp-s-projects.vercel.app",
-  "https://admin-web-gray-six.vercel.app",
-];
-const allowedOrigins = process.env.CORS_ORIGINS
-  ? process.env.CORS_ORIGINS.split(",").map((origin) => origin.trim())
-  : isProduction
-    ? defaultOrigins
-    : undefined;
+const corsResolution = resolveCorsOrigins(process.env, isProduction);
+if (corsResolution.rejected.length > 0) {
+  logger.warn("CORS: ignored invalid origin entries (must be exact https origins, no wildcard/path)", { rejected: corsResolution.rejected });
+}
+if (corsResolution.source === "CORS_ORIGIN") {
+  logger.warn("CORS: using legacy CORS_ORIGIN; rename it to CORS_ORIGINS");
+}
+const allowedOrigins = corsResolution.origins === true ? undefined : corsResolution.origins;
 
 app.use(
   cors({

@@ -1,3 +1,4 @@
+import { eventsService, EVENT_NAMES } from "../events/events.service";
 import crypto from "crypto";
 
 import bcrypt from "bcryptjs";
@@ -199,6 +200,13 @@ export const authService = {
         throw new AppError("Phone already registered", 409);
       }
       throw error;
+    }
+
+    if (user.role === UserRole.VENDOR) {
+      eventsService.emit({
+        name: EVENT_NAMES.merchant_registered, actorType: "user", actorId: user.id, entityType: "User", entityId: user.id,
+        source: "api", payload: { country: user.country ?? null },
+      });
     }
 
     if (input.referralCode) {

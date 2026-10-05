@@ -1,3 +1,4 @@
+import { eventsService, EVENT_NAMES } from "../events/events.service";
 import type { NotificationType, Order, OrderStatus } from "@prisma/client";
 
 import { prisma } from "../../lib/prisma";
@@ -250,6 +251,17 @@ export const ordersService = {
           ...(newStatus === "DELIVERED" ? { deliveredAt: new Date() } : {}),
         },
         include: orderInclude,
+      });
+    }
+
+    const lifecycleEvent: Record<string, string> = {
+      CONFIRMED: EVENT_NAMES.order_accepted, DISPATCHED: EVENT_NAMES.order_dispatched,
+      DELIVERED: EVENT_NAMES.order_delivered, COMPLETED: EVENT_NAMES.order_completed,
+    };
+    if (lifecycleEvent[newStatus]) {
+      eventsService.emit({
+        name: lifecycleEvent[newStatus], actorType: "vendor", actorId: userId, entityType: "Order", entityId: orderId,
+        source: "vendor_app", secondaryEntities: { buyerId: order.buyerId, vendorId: vendor.id }, payload: { fromStatus: order.status },
       });
     }
 

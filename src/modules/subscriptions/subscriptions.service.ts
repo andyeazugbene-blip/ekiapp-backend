@@ -1,3 +1,4 @@
+import { deriveVendorSubscriptionState } from "./vendor-subscription-state";
 import { Prisma } from "@prisma/client";
 import type {
   CommissionTier,
@@ -186,11 +187,10 @@ function formatSubscriptionResponse(subscription: VendorSubscriptionWithPlan) {
     cancelledAt: subscription.cancelledAt,
     trialStartedAt: subscription.trialStartedAt,
     trialEndsAt: subscription.trialEndsAt,
-    inTrial: Boolean(subscription.trialEndsAt && subscription.trialEndsAt.getTime() > Date.now() && subscription.status === "ACTIVE"),
-    trialDaysRemaining:
-      subscription.trialEndsAt && subscription.trialEndsAt.getTime() > Date.now()
-        ? Math.ceil((subscription.trialEndsAt.getTime() - Date.now()) / 86_400_000)
-        : 0,
+    ...(() => {
+      const st = deriveVendorSubscriptionState(subscription);
+      return { lifecycle: st.lifecycle, inTrial: st.inTrial, trialDaysRemaining: st.trialDaysRemaining, billingStarted: st.billingStarted };
+    })(),
     stripeSubscriptionId: subscription.stripeSubscriptionId,
     stripeCustomerId: subscription.stripeCustomerId,
     platformFeeBps: plan?.defaultPlatformFeeBps,

@@ -2,30 +2,45 @@
 /**
  * Vercel build step: apply Prisma migrations ONLY for real production deployments.
  *
- * Why: Preview and Production share the same DATABASE_URL in this project, so a
- * normal branch preview build running `prisma migrate deploy` would mutate the
- * PRODUCTION schema before the change was ever reviewed or merged.
+ * Why: Preview and Production may share the same DATABASE_URL, so a normal branch
+ * preview build running `prisma migrate deploy` would mutate the PRODUCTION schema
+ * before the change was reviewed or merged.
  *
- * Rules:
- *  - VERCEL_ENV=production  -> run `prisma migrate deploy` (forward-only, never reset).
- *  - VERCEL_ENV=preview     -> skip, loudly. Previews never touch the schema.
- *  - VERCEL_ENV=development / unset (local `vercel build`) -> skip.
- *  - FORCE_MIGRATE=1 overrides the skip (explicit, for a dedicated staging project
- *    that has its OWN database). Never set it on a project sharing the prod DB.
+ * Decision table (pure function `decide`, unit-tested):
+ *   VERCEL_ENV=production                      -> migrate
+ *   VERCEL_ENV=preview | development | unset   -> skip
+ *   anything unrecognised                      -> skip (fail safe)
+ *   FORCE_MIGRATE=1 AND VERCEL_ENV!=production -> migrate (explicit opt-in, for a
+ *     dedicated staging project with its OWN database; never set it on a project
+ *     that shares the production DATABASE_URL)
+ *
+ * This script is a guardrail, not isolation: the Preview environment must ALSO get
+ * its own DATABASE_URL in the Vercel dashboard (see docs/PRODUCTION_ENVIRONMENT_CHECKLIST.md).
  */
 const { spawnSync } = require("node:child_process");
 
-const env = (process.env.VERCEL_ENV || "").toLowerCase();
-const force = process.env.FORCE_MIGRATE === "1";
-
-if (env !== "production" && !force) {
-  console.log(
-    `[vercel-migrate] VERCEL_ENV="${env || "unset"}": skipping prisma migrate deploy ` +
-      "(only production deployments may change the database schema).",
-  );
-  process.exit(0);
+function decide(env) {
+  const vercelEnv = String(env.VERCEL_ENV || "").trim().toLowerCase();
+  const force = env.FORCE_MIGRATE === "1";
+  if (vercelEnv === "production") return { migrate: true, reason: "production deployment" };
+  if (force) return { migrate: true, reason: `FORCE_MIGRATE=1 (VERCEL_ENV=${vercelEnv || "unset"})` };
+  return {
+    migrate: false,
+    reason: `VERCEL_ENV="${vercelEnv || "unset"}": only production deployments may change the database schema`,
+  };
 }
 
-console.log(`[vercel-migrate] VERCEL_ENV="${env || "unset"}"${force ? " (FORCE_MIGRATE=1)" : ""}: running prisma migrate deploy`);
-const res = spawnSync("npx", ["prisma", "migrate", "deploy"], { stdio: "inherit", shell: process.platform === "win32" });
-process.exit(res.status ?? 1);
+function main() {
+  const d = decide(process.env);
+  if (!d.migrate) {
+    console.log(`[vercel-migrate] SKIP prisma migrate deploy - ${d.reason}`);
+    return 0;
+  }
+  console.log(`[vercel-migrate] RUN prisma migrate deploy - ${d.reason}`);
+  const res = spawnSync("npx", ["prisma", "migrate", "deploy"], { stdio: "inherit", shell: process.platform === "win32" });
+  return res.status ?? 1;
+}
+
+module.exports = { decide };
+
+if (require.main === module) process.exit(main());

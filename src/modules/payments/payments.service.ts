@@ -1,3 +1,4 @@
+import { eventsService, EVENT_NAMES } from "../events/events.service";
 import crypto from "crypto";
 
 import type { Prisma } from "@prisma/client";
@@ -604,6 +605,18 @@ class PaymentsService {
 
       return { checkoutId: checkout.id, orderIds };
     }, { isolationLevel: "Serializable" });
+
+    // Canonical events - emitted only after the checkout transaction committed.
+    eventsService.emit({
+      name: EVENT_NAMES.checkout_started, actorType: "user", actorId: buyerId, entityType: "Checkout", entityId: checkoutId,
+      source: "api", payload: { orderCount: orderIds.length },
+    });
+    for (const oid of orderIds) {
+      eventsService.emit({
+        name: EVENT_NAMES.order_created, actorType: "user", actorId: buyerId, entityType: "Order", entityId: oid,
+        source: "api", secondaryEntities: { checkoutId },
+      });
+    }
 
     // ─── Step 4: Stripe call OUTSIDE transaction (if needed) ───────────────
 

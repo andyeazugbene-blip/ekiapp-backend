@@ -19,6 +19,7 @@ vi.mock("../lib/prisma", () => ({
     dispute: { findUnique: vi.fn().mockResolvedValue(null) },
     payoutRequest: { findMany: vi.fn().mockResolvedValue([]) },
     webhookEvent: { findMany: vi.fn().mockResolvedValue([]) },
+    orderEvidence: { findMany: vi.fn().mockResolvedValue([]) },
   },
 }));
 

@@ -1,3 +1,4 @@
+import { eventsService, EVENT_NAMES } from "../events/events.service";
 import { prisma } from "../../lib/prisma";
 import { logger } from "../../lib/logger";
 import { AppError } from "../../shared/errors/app-error";
@@ -586,6 +587,10 @@ export const communityCampaignsService = {
         fulfilmentDeadline: parseOptionalDate(input.fulfilmentDeadline, "fulfilmentDeadline"),
         status: "DRAFT",
       },
+    });
+    eventsService.emit({
+      name: EVENT_NAMES.community_buy_created, actorType: "user", actorId: userId, entityType: "CommunityCampaign", entityId: campaign.id,
+      source: "api", payload: { country: (campaign as { country?: string | null }).country ?? null },
     });
     // Real supplier invitation — fires exactly when the commitment state
     // actually comes into existence (supplierId assigned, supplierCommitted:
@@ -1242,6 +1247,9 @@ export const communityCampaignsService = {
       where: { id: campaignId },
       data: { status: "APPROVED", reviewedById: adminId, reviewedAt: new Date(), ...(criteria ? { reviewCriteria: criteria } : {}) },
     });
+    eventsService.emit({
+      name: EVENT_NAMES.community_buy_approved, actorType: "admin", actorId: adminId, entityType: "CommunityCampaign", entityId: campaignId, source: "admin_panel",
+    });
     await notifyCampaign(campaign.organiser.userId, "approved", "Campaign approved", `${campaign.title} has been approved.`, campaignId);
     return updated;
   },
@@ -1810,7 +1818,12 @@ export const communityCampaignsService = {
         ...(campaign.slug || typeof campaign.title !== "string" ? {} : { slug: `${slugify(campaign.title).slice(0, 60) || "campaign"}-${campaign.id.slice(-6)}` }),
       },
     });
-    if (!opensLater) void notifyCampaignLiveDiscovery(campaignId);
+    if (!opensLater) {
+      eventsService.emit({
+        name: EVENT_NAMES.community_buy_published, actorType: "user", actorId: userId, entityType: "CommunityCampaign", entityId: campaignId, source: "api",
+      });
+      void notifyCampaignLiveDiscovery(campaignId);
+    }
     return published;
   },
 

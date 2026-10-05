@@ -3,6 +3,7 @@ import { logger } from "../../lib/logger";
 import { AppError } from "../../shared/errors/app-error";
 import { releaseVendorEarnings } from "../../shared/utils/wallet-release";
 import { notificationsService } from "../notifications/notifications.service";
+import { defaultRespondByAt, parseDisputeType } from "../disputes/dispute-v2.service";
 import { executeOrderRefund } from "../admin/admin-refunds.controller";
 
 export interface ResolveDisputeInput {
@@ -17,7 +18,9 @@ export const disputeService = {
    * Buyer opens a dispute on a DISPATCHED escrow order.
    * Freezes the auto-release clock.
    */
-  async openDispute(buyerId: string, orderId: string, reason: string): Promise<{ disputeId: string }> {
+  async openDispute(buyerId: string, orderId: string, reason: string, extra: { type?: unknown; claim?: unknown } = {}): Promise<{ disputeId: string }> {
+    const disputeType = parseDisputeType(extra.type);
+    const claim = typeof extra.claim === "string" && extra.claim.trim() ? extra.claim.trim().slice(0, 4000) : null;
     if (!reason || reason.trim().length < 5) {
       throw new AppError("Please provide a reason (at least 5 characters)", 400);
     }
@@ -59,6 +62,9 @@ export const disputeService = {
           buyerId,
           vendorId: order.vendorId ?? "",
           reason: reason.trim(),
+          type: disputeType,
+          claim,
+          respondByAt: defaultRespondByAt(),
           status: "OPEN",
         },
       });
@@ -280,6 +286,7 @@ export const disputeService = {
         data: {
           status: resolvedStatus!,
           resolution: input.note,
+          decisionReason: input.note,
           fraudulent: input.fraudulent ?? false,
           refundAmount: input.refundAmount ?? null,
           resolvedById: adminId,
