@@ -203,6 +203,39 @@ describe("Direct campaign access — getForRequester()", () => {
     expect(result.id).toBe(CANADA_CAMPAIGN);
   });
 
+  it("bug fix (2026-10-05): a buyer who already JOINED a campaign can still view it even when their own country no longer resolves to any market (empty, or an unmapped free-text value)", async () => {
+    const participantUserId = "buyer-joined-canada-campaign";
+    mockUserCountry(participantUserId, null); // country unset — requireMarketCode() would normally 403 here
+    m.communityCampaign.findUnique.mockImplementation(async ({ where, select }: any) => {
+      if (where?.id !== CANADA_CAMPAIGN) return null;
+      if (select) return { country: "CA", organiserId: "org-none", supplierId: null, supplierAccountId: null };
+      return {
+        id: CANADA_CAMPAIGN, country: "CA", pricePerShareMinor: null,
+        supplier: null, supplierAccount: null,
+        organiser: { firstNameOnlyDisplay: false, isVerified: true, user: { name: "Organiser" } },
+        contributions: [], _count: { participants: 0 },
+      };
+    });
+    m.organiserProfile.findUnique.mockResolvedValue(null as never);
+    m.campaignParticipant.findFirst.mockImplementation(async ({ where }: any) =>
+      where?.campaignId === CANADA_CAMPAIGN && where?.userId === participantUserId ? { id: "participant-1" } : null,
+    );
+
+    const result = await communityCampaignsService.getForRequester(participantUserId, CANADA_CAMPAIGN);
+    expect(result.id).toBe(CANADA_CAMPAIGN);
+  });
+
+  it("an unrelated buyer with no country is still blocked, even if some OTHER campaign has a participant row for them", async () => {
+    mockUserCountry("buyer-no-country", null);
+    mockCampaignCountry(BELGIUM_CAMPAIGN, "BE");
+    m.campaignParticipant.findFirst.mockResolvedValue(null as never); // not a participant of BELGIUM_CAMPAIGN
+
+    await expect(communityCampaignsService.getForRequester("buyer-no-country", BELGIUM_CAMPAIGN)).rejects.toMatchObject({
+      statusCode: 403,
+      code: "COUNTRY_REQUIRED",
+    });
+  });
+
   it("an admin can view any campaign regardless of the admin's own country", async () => {
     const adminUserId = "admin-1";
     m.user.findUnique.mockImplementation(async ({ where }: any) =>
