@@ -1,3 +1,4 @@
+import { adminSuspensionService } from "../admin/admin-suspension.service";
 import { Router, type Request, type Response } from "express";
 
 import { logger } from "../../lib/logger";
@@ -19,6 +20,7 @@ import { paymentAnomalyService } from "../ledger/payment-anomaly.service";
 import { fulfilmentDelayService } from "../community-buy/fulfilment-delay.service";
 import { enqueueEmail } from "../../lib/email-queue";
 import { checkPushReceipts } from "../../lib/expo-push";
+import { supportRetentionService } from "../messages/support-retention.service";
 
 export const internalRouter = Router();
 
@@ -55,8 +57,10 @@ async function runVerificationProofCleanup() {
 // passed. Previously the only trigger was an admin manually clicking "Run
 // Due Now" in the admin panel — "Schedule Later" silently did nothing
 // unless someone remembered to come back and click that button.
+// Also pulls real Expo push receipts and refreshes broadcast statuses (Sent ->
+// Delivered / Partially delivered). Scheduled by vercel.json every 5 minutes.
 async function runScheduledCommunications() {
-  return scheduledCommunicationService.runDue();
+  return scheduledCommunicationService.sweep();
 }
 
 // Runs the Automation Engine detectors that don't depend on Regular
@@ -73,6 +77,9 @@ async function runRenewalsSweep() {
   const generation = await renewalsService.generateDueRenewals();
   const reminded = await renewalsService.sendUpcomingRenewalReminders();
   const priceApprovalExpiry = await renewalsService.expirePriceApprovalTimeouts();
+  // Foodstuffs Subscription recovery: pausedUntil auto-resume, AWAITING_STOCK
+  // timeout, advance price notices, automatic payment retry schedule.
+  const recovery = await renewalsService.runRecoverySweep();
 
   // Reliability scenario #6 "provider timeout" recovery — a renewal left
   // ambiguous by a connection/API error during attemptPayment() (see that
@@ -111,7 +118,7 @@ async function runRenewalsSweep() {
       logger.error("Renewal payment attempt failed", { renewalId: renewal.id, error: String(err) });
     }
   }
-  return { ...generation, reminded, priceApprovalExpiry, requeried, attempted: readyForPayment.length, charged, failed };
+  return { ...generation, reminded, priceApprovalExpiry, ...recovery, requeried, attempted: readyForPayment.length, charged, failed };
 }
 
 // Community Buy: closes campaigns whose deadline has passed (deciding
@@ -347,6 +354,10 @@ const jobs: [string, string, () => Promise<Record<string, unknown>>][] = [
   ["payment-anomaly-scan", "duplicate-payment / financial-inconsistency scan", runPaymentAnomalyScan],
   ["fulfilment-delay-scan", "supplier-fulfilment delay scan", runFulfilmentDelayScan],
   ["push-receipt-check", "Expo push receipt check", runPushReceiptCheck],
+  // Dry-run by default; purges only when SUPPORT_RETENTION_ENABLED (see support-retention.service.ts).
+  ["support-retention-sweep", "support conversation retention sweep", () => supportRetentionService.sweep()],
+  // Timed suspensions (Handbook 4.3): lift those whose end date has passed.
+  ["suspension-expiry", "timed suspension expiry", () => adminSuspensionService.liftExpired()],
 ];
 
 for (const [path, name, run] of jobs) {

@@ -238,14 +238,14 @@ describe("checkPushReceipts — the real proof of delivery a ticket alone can ne
     expect(result).toEqual({ checked: 1, invalidated: 0, errors: 0 });
   });
 
-  it("never throws when Expo's receipts API is unreachable, and still cleans up the pending tickets", async () => {
+  it("never throws when Expo's receipts API is unreachable, and KEEPS recent tickets so delivery truth is not lost", async () => {
     m.pushTicket.findMany.mockResolvedValue([
       { id: "pt-4", ticketId: "ticket-4", token: "ExponentPushToken[x]", userId: "buyer-4", createdAt: new Date() },
     ] as never);
     vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("network down")));
 
     await expect(checkPushReceipts()).resolves.toEqual({ checked: 1, invalidated: 0, errors: 0 });
-    expect(m.pushTicket.deleteMany).toHaveBeenCalledWith({ where: { id: { in: ["pt-4"] } } });
+    expect(m.pushTicket.deleteMany).not.toHaveBeenCalled();
   });
 });
 
@@ -299,5 +299,41 @@ describe("sendPushToUser — real event-to-device routing", () => {
     await sendPushToUser("buyer-no-devices", { title: "Hi", body: "There" });
 
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+// ─── Canonical message events (real Expo receipts) ──────────────────────────
+import { eventsService as pushEvents } from "../modules/events/events.service";
+
+describe("checkPushReceipts -> canonical message events", () => {
+  const emit = vi.spyOn(pushEvents, "emit").mockImplementation(() => undefined);
+  beforeEach(() => {
+    emit.mockClear();
+    (m as any).communicationLog = { updateMany: vi.fn().mockResolvedValue({ count: 1 }) };
+  });
+
+  it("an OK receipt on a broadcast log emits message_delivered; an error receipt emits message_failed", async () => {
+    m.pushTicket.findMany.mockResolvedValue([
+      { id: "pt-1", ticketId: "t1", token: "ExponentPushToken[a]", userId: "u1", createdAt: new Date(0), logId: "log-1" },
+      { id: "pt-2", ticketId: "t2", token: "ExponentPushToken[b]", userId: "u2", createdAt: new Date(0), logId: "log-2" },
+    ] as never);
+    m.pushTicket.deleteMany.mockResolvedValue({ count: 2 } as never);
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ data: { t1: { status: "ok" }, t2: { status: "error", details: { error: "MessageRateExceeded" } } } }),
+    }));
+    await checkPushReceipts();
+    const evs = emit.mock.calls.map((c) => c[0]);
+    expect(evs.find((e) => e.name === "message_delivered")).toMatchObject({ entityId: "log-1", source: "expo_receipt", payload: { eventKey: "message_delivered:log-1", channel: "push" } });
+    expect(evs.find((e) => e.name === "message_failed")).toMatchObject({ entityId: "log-2", payload: { eventKey: "message_failed:log-2" } });
+  });
+
+  it("emits nothing when the log row was not updated (count 0)", async () => {
+    (m as any).communicationLog.updateMany.mockResolvedValue({ count: 0 });
+    m.pushTicket.findMany.mockResolvedValue([{ id: "pt-1", ticketId: "t1", token: "ExponentPushToken[a]", userId: "u1", createdAt: new Date(0), logId: "log-1" }] as never);
+    m.pushTicket.deleteMany.mockResolvedValue({ count: 1 } as never);
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, json: async () => ({ data: { t1: { status: "ok" } } }) }));
+    await checkPushReceipts();
+    expect(emit).not.toHaveBeenCalled();
   });
 });

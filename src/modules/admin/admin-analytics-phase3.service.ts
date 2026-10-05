@@ -2,6 +2,7 @@ import { OrderStatus, WalletTransactionType } from "@prisma/client";
 
 import { env } from "../../config/env";
 import { prisma } from "../../lib/prisma";
+import { notTest, notTestOf } from "../../shared/utils/test-records";
 
 const PAID_STATUSES: OrderStatus[] = [
   "PAID", "CONFIRMED", "PROCESSING", "DISPATCHED", "IN_TRANSIT", "DELIVERED", "COMPLETED",
@@ -58,17 +59,17 @@ export async function getPaymentAnalytics(rawRange: unknown): Promise<PaymentAna
   const [successAgg, failedAgg, refundAgg, walletAgg, paidPayoutAgg, pendingPayoutAgg, recentPayouts] =
     await Promise.all([
       prisma.payment.aggregate({
-        where: { status: "SUCCEEDED", createdAt: { gte: since } },
+        where: { status: "SUCCEEDED", createdAt: { gte: since }, ...notTest() },
         _count: { _all: true },
         _sum: { amount: true },
       }),
       prisma.payment.aggregate({
-        where: { status: "FAILED", createdAt: { gte: since } },
+        where: { status: "FAILED", createdAt: { gte: since }, ...notTest() },
         _count: { _all: true },
         _sum: { amount: true },
       }),
       prisma.order.aggregate({
-        where: { status: "REFUNDED", updatedAt: { gte: since } },
+        where: { status: "REFUNDED", updatedAt: { gte: since }, ...notTest() },
         _count: { _all: true },
         _sum: { totalAmount: true },
       }),
@@ -79,17 +80,17 @@ export async function getPaymentAnalytics(rawRange: unknown): Promise<PaymentAna
         _sum: { amount: true },
       }),
       prisma.payoutRequest.aggregate({
-        where: { status: "PAID", createdAt: { gte: since } },
+        where: { status: "PAID", createdAt: { gte: since }, ...notTestOf("vendor") },
         _count: { _all: true },
         _sum: { amount: true },
       }),
       prisma.payoutRequest.aggregate({
-        where: { status: "PENDING" },
+        where: { status: "PENDING", ...notTestOf("vendor") },
         _count: { _all: true },
         _sum: { amount: true },
       }),
       prisma.payoutRequest.findMany({
-        where: { status: "PAID" },
+        where: { status: "PAID", ...notTestOf("vendor") },
         orderBy: { paidAt: "desc" },
         take: 10,
         include: { vendor: { select: { id: true, storeName: true } } },
@@ -166,7 +167,7 @@ export async function getGeographicAnalytics(rawRange: unknown): Promise<Geograp
 
   // Paid orders in range
   const paidOrders = await prisma.order.findMany({
-    where: { status: { in: PAID_STATUSES }, createdAt: { gte: since } },
+    where: { status: { in: PAID_STATUSES }, ...notTest(), createdAt: { gte: since } },
     select: { buyerId: true, totalAmount: true },
   });
 
@@ -244,7 +245,7 @@ export async function getGeographicAnalytics(rawRange: unknown): Promise<Geograp
   // Vendor locations
   const vendorLocs = await prisma.vendor.groupBy({
     by: ["country", "city"],
-    where: { country: { not: null } },
+    where: { country: { not: null }, ...notTest() },
     _count: { id: true },
     orderBy: { _count: { id: "desc" } },
     take: 30,

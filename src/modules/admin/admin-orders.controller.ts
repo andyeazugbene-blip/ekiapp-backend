@@ -11,7 +11,9 @@ function requireAdminId(request: Request): string {
 export async function processStuckOrder(request: Request, response: Response): Promise<void> {
   const id = request.params.id;
   if (typeof id !== "string" || id.length === 0) throw new AppError("Invalid id", 400);
-  const result = await adminOrdersService.processStuckOrder(id, requireAdminId(request), request);
+  const reason = typeof request.body?.reason === "string" ? request.body.reason.trim() : "";
+  if (reason.length < 10) throw new AppError("A reason of at least 10 characters is required", 400);
+  const result = await adminOrdersService.processStuckOrder(id, requireAdminId(request), request, reason);
   response.status(200).json(result);
 }
 

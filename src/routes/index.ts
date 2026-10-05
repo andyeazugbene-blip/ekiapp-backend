@@ -12,9 +12,11 @@ import { cartRouter } from "../modules/cart/cart.routes";
 import { deliveryRouter } from "../modules/delivery/delivery.routes";
 import { healthRouter } from "../modules/health/health.routes";
 import { internalRouter } from "../modules/internal/internal.routes";
+import { unsubscribeRouter } from "../modules/communications/unsubscribe.routes";
 import { messagesRouter } from "../modules/messages/messages.routes";
 import { notificationsRouter } from "../modules/notifications/notifications.routes";
 import { ordersRouter } from "../modules/orders/orders.routes";
+import { disputesRouter } from "../modules/disputes/disputes.routes";
 import { paymentsRouter } from "../modules/payments/payments.routes";
 import { payoutRequestsRouter } from "../modules/payouts/payouts.routes";
 import { productsRouter } from "../modules/products/products.routes";
@@ -99,6 +101,7 @@ apiRouter.use("/products", productsRouter);
 apiRouter.use("/cart", cartRouter);
 apiRouter.use("/delivery", deliveryRouter);
 apiRouter.use("/orders", ordersRouter);
+apiRouter.use("/disputes", disputesRouter);
 apiRouter.use("/payments", paymentsRouter);
 apiRouter.use("/payout-requests", payoutRequestsRouter);
 apiRouter.use("/notifications", notificationsRouter);
@@ -135,4 +138,6 @@ apiRouter.use("/gift-cards", giftCardsRouter_);
 apiRouter.use("/campaigns", campaignsRouter);
 apiRouter.use("/stripe", stripeRouter);
 apiRouter.use("/internal", internalRouter);
+// Public, token-authenticated marketing unsubscribe (email link + RFC 8058 one-click).
+apiRouter.use("/unsubscribe", unsubscribeRouter);
 

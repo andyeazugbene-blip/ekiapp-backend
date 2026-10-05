@@ -1,6 +1,7 @@
 import type { Request, Response } from "express";
 
 import { AppError } from "../../shared/errors/app-error";
+import { contentReviewService } from "./content-review.service";
 import { uploadsService } from "./uploads.service";
 import { validateCompleteUploadInput, validateRequestUploadInput } from "./uploads.validation";
 
@@ -33,5 +34,7 @@ export async function adminListUploads(request: Request, response: Response): Pr
 export async function adminGetUploadReadUrl(request: Request, response: Response): Promise<void> {
   const assetId = typeof request.params.id === "string" ? request.params.id : "";
   if (!assetId) throw new AppError("Invalid upload asset id", 400);
-  response.status(200).json(await uploadsService.getAdminReadUrl(assetId));
+  // Audited (and verification.read-gated for identity documents) via Content Review.
+  if (!request.user) throw new AppError("Unauthorized", 401);
+  response.status(200).json(await contentReviewService.readUrl(assetId, request.user.id, request));
 }

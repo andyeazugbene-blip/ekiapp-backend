@@ -15,6 +15,14 @@ vi.mock("../lib/prisma", () => ({
     order: { findUnique: vi.fn(), update: vi.fn() },
     paystackTransaction: { update: vi.fn() },
     auditLog: { create: vi.fn() },
+    refund: {
+      aggregate: vi.fn().mockResolvedValue({ _sum: { amountMinor: 0 } }),
+      count: vi.fn().mockResolvedValue(0),
+      create: vi.fn().mockResolvedValue({ id: "refund-row-1" }),
+      update: vi.fn().mockResolvedValue({}),
+      findUnique: vi.fn().mockResolvedValue(null),
+      findMany: vi.fn().mockResolvedValue([]),
+    },
     $transaction: vi.fn(),
   },
 }));

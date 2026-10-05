@@ -6,10 +6,10 @@ import { recordAudit } from "../../shared/utils/audit";
 import { organiserSupplierService } from "./organiser-supplier.service";
 import { supplierAccountService } from "./supplier-account.service";
 import { supplierStripeConnectService } from "./supplier-stripe-connect.service";
-import { communityCampaignsService } from "./community-campaigns.service";
+import { communityCampaignsService, parseReviewCriteria } from "./community-campaigns.service";
 import { campaignContributionsService } from "./campaign-contributions.service";
 import { campaignFulfilmentService } from "./campaign-fulfilment.service";
-import { marketConfigurationService } from "./market-configuration.service";
+import { marketConfigurationService, assertSuperAdmin } from "./market-configuration.service";
 import { supportCaseService } from "./support-case.service";
 import { supplierInvitationService } from "./supplier-invitation.service";
 import { adminApprovalsService } from "../admin/admin-approvals.service";
@@ -1058,8 +1058,12 @@ export async function adminListRecentlyClosedCampaigns(_request: Request, respon
 export async function adminApproveCampaign(request: Request, response: Response): Promise<void> {
   const adminId = requireUserId(request);
   const id = requireIdParam(request);
-  const campaign = await communityCampaignsService.approve(adminId, id);
-  await recordAudit({ actorId: adminId, action: "community_campaign.approve", entityType: "CommunityCampaign", entityId: id, afterState: { status: campaign.status }, request });
+  // Handbook 10.3: approval is recorded against review criteria.
+  const criteria = parseReviewCriteria(request.body?.criteria);
+  if (!criteria || Object.keys(criteria).length === 0) throw new AppError("criteria (review checklist) is required", 400);
+  const before = await prisma.communityCampaign.findUnique({ where: { id }, select: { status: true } });
+  const campaign = await communityCampaignsService.approve(adminId, id, criteria);
+  await recordAudit({ actorId: adminId, action: "community_campaign.approve", entityType: "CommunityCampaign", entityId: id, beforeState: before ?? undefined, afterState: { status: campaign.status, criteria }, reason: typeof request.body?.notes === "string" ? request.body.notes : undefined, request });
   response.json({ campaign });
 }
 
@@ -1076,18 +1080,68 @@ export async function adminRequestCampaignChanges(request: Request, response: Re
 export async function adminRejectCampaign(request: Request, response: Response): Promise<void> {
   const adminId = requireUserId(request);
   const id = requireIdParam(request);
-  const notes = typeof request.body?.notes === "string" ? request.body.notes : undefined;
-  const campaign = await communityCampaignsService.reject(adminId, id, notes);
-  await recordAudit({ actorId: adminId, action: "community_campaign.reject", entityType: "CommunityCampaign", entityId: id, reason: notes, afterState: { status: campaign.status }, request });
+  const notes = typeof request.body?.notes === "string" ? request.body.notes.trim() : "";
+  if (notes.length < 5) throw new AppError("Rejection notes of at least 5 characters are required", 400);
+  const criteria = parseReviewCriteria(request.body?.criteria);
+  const before = await prisma.communityCampaign.findUnique({ where: { id }, select: { status: true } });
+  const campaign = await communityCampaignsService.reject(adminId, id, notes, criteria);
+  await recordAudit({ actorId: adminId, action: "community_campaign.reject", entityType: "CommunityCampaign", entityId: id, reason: notes, beforeState: before ?? undefined, afterState: { status: campaign.status, criteria: criteria ?? null }, request });
   response.json({ campaign });
 }
 
 export async function adminPauseCampaign(request: Request, response: Response): Promise<void> {
   const adminId = requireUserId(request);
   const id = requireIdParam(request);
-  const campaign = await communityCampaignsService.pause(adminId, id);
-  await recordAudit({ actorId: adminId, action: "community_campaign.pause", entityType: "CommunityCampaign", entityId: id, afterState: { status: campaign.status }, request });
+  const reason = request.body?.reason;
+  if (typeof reason !== "string" || reason.trim().length < 5) throw new AppError("A reason of at least 5 characters is required to pause a campaign", 400);
+  const campaign = await communityCampaignsService.pause(adminId, id, reason.trim());
+  await recordAudit({ actorId: adminId, action: "community_campaign.pause", entityType: "CommunityCampaign", entityId: id, reason: reason.trim(), beforeState: { status: "LIVE" }, afterState: { status: campaign.status }, request });
   response.json({ campaign });
+}
+
+/** POST /admin/community-campaigns/:id/extend-deadline - admin extension (community_buy.mutate + 2FA), reason required, participants notified. */
+export async function adminExtendCampaignDeadline(request: Request, response: Response): Promise<void> {
+  const adminId = requireUserId(request);
+  const id = requireIdParam(request);
+  const { newDeadline, reason } = request.body ?? {};
+  if (typeof newDeadline !== "string") throw new AppError("newDeadline is required", 400);
+  if (typeof reason !== "string" || reason.trim().length < 5) throw new AppError("A reason of at least 5 characters is required", 400);
+  const result = await communityCampaignsService.extendDeadlineByAdmin(adminId, id, { newDeadline, reason });
+  await recordAudit({
+    actorId: adminId,
+    action: "community_campaign.extend_deadline",
+    entityType: "CommunityCampaign",
+    entityId: id,
+    reason: reason.trim(),
+    beforeState: { deadline: result.previousDeadline, status: result.previousStatus },
+    afterState: { deadline: result.campaign.deadline, status: result.campaign.status },
+    request,
+  });
+  response.json({ campaign: result.campaign });
+}
+
+/** POST /admin/community-campaigns/:id/message - audited, rate-limited message to participants / organiser / supplier / all. */
+export async function adminMessageCampaignAudience(request: Request, response: Response): Promise<void> {
+  const adminId = requireUserId(request);
+  const id = requireIdParam(request);
+  const { audience, title, message, reason } = request.body ?? {};
+  if (typeof reason !== "string" || reason.trim().length < 5) throw new AppError("A reason of at least 5 characters is required", 400);
+  const result = await communityCampaignsService.messageAudience(adminId, id, { audience, title, message });
+  await recordAudit({
+    actorId: adminId,
+    action: "community_campaign.admin_message",
+    entityType: "CommunityCampaign",
+    entityId: id,
+    reason: reason.trim(),
+    metadata: { audience, title, sent: result.sent },
+    request,
+  });
+  response.json(result);
+}
+
+/** GET /admin/community-campaigns/:id/admin-detail - handbook 10.1 unified admin view. */
+export async function adminGetCampaignDetail(request: Request, response: Response): Promise<void> {
+  response.json(await communityCampaignsService.getAdminDetail(requireIdParam(request)));
 }
 
 export async function adminResumeCampaign(request: Request, response: Response): Promise<void> {
@@ -1175,15 +1229,49 @@ export async function adminVerifySupplier(request: Request, response: Response):
 // SupplierAccount (distinct from the legacy Vendor-keyed SupplierProfile
 // above). Backend-only for now; an admin-web review screen is Workstream 3.
 export async function adminListSupplierAccounts(request: Request, response: Response): Promise<void> {
-  const state = typeof request.query.state === "string" ? request.query.state : undefined;
-  response.json({ items: await supplierAccountService.listForAdmin(state) });
+  const q = request.query;
+  const limit = typeof q.limit === "string" ? Number.parseInt(q.limit, 10) : undefined;
+  const [list, counts] = await Promise.all([
+    supplierAccountService.listForAdmin({
+      state: typeof q.state === "string" && q.state ? q.state : undefined,
+      q: typeof q.q === "string" ? q.q : undefined,
+      limit: Number.isFinite(limit) ? limit : undefined,
+      cursor: typeof q.cursor === "string" && q.cursor ? q.cursor : undefined,
+    }),
+    supplierAccountService.countsForAdmin(),
+  ]);
+  response.json({ ...list, counts });
+}
+
+/** GET /admin/community-buy/supplier-accounts/:id - detail for the review page. */
+export async function adminGetSupplierAccount(request: Request, response: Response): Promise<void> {
+  response.json(await supplierAccountService.getForAdmin(requireIdParam(request)));
+}
+
+function requireSupplierReason(request: Request): string {
+  const reason = request.body?.reason;
+  if (typeof reason !== "string" || reason.trim().length < 5) throw new AppError("A reason of at least 5 characters is required", 400);
+  return reason.trim();
 }
 
 export async function adminApproveSupplierAccount(request: Request, response: Response): Promise<void> {
   const adminId = requireUserId(request);
   const id = requireIdParam(request);
-  const account = await supplierAccountService.approve(id);
-  await recordAudit({ actorId: adminId, action: "community_supplier_account.approve", entityType: "SupplierAccount", entityId: id, afterState: { supplierState: account.supplierState }, request });
+  const reason = requireSupplierReason(request);
+  const before = await prisma.supplierAccount.findUnique({ where: { id }, select: { supplierState: true } });
+  const account = await supplierAccountService.approve(id, adminId);
+  await recordAudit({ actorId: adminId, action: "community_supplier_account.approve", entityType: "SupplierAccount", entityId: id, reason, beforeState: before ?? undefined, afterState: { supplierState: account.supplierState }, request });
+  response.json({ account });
+}
+
+/** Handbook 14.11 - reject a pending application (reason required, supplier notified). */
+export async function adminRejectSupplierAccount(request: Request, response: Response): Promise<void> {
+  const adminId = requireUserId(request);
+  const id = requireIdParam(request);
+  const reason = requireSupplierReason(request);
+  const before = await prisma.supplierAccount.findUnique({ where: { id }, select: { supplierState: true } });
+  const account = await supplierAccountService.reject(id, reason, adminId);
+  await recordAudit({ actorId: adminId, action: "community_supplier_account.reject", entityType: "SupplierAccount", entityId: id, reason, beforeState: before ?? undefined, afterState: { supplierState: account.supplierState }, request });
   response.json({ account });
 }
 
@@ -1199,7 +1287,7 @@ export async function adminRestrictSupplierAccount(request: Request, response: R
   const adminId = requireUserId(request);
   const id = requireIdParam(request);
   const { reason, controlScope } = request.body ?? {};
-  if (typeof reason !== "string" || reason.length === 0) throw new AppError("reason is required", 400);
+  if (typeof reason !== "string" || reason.trim().length < 5) throw new AppError("A reason of at least 5 characters is required", 400);
   if (controlScope !== undefined && controlScope !== null && controlScope !== FULFILMENT_ACCESS_PRESERVED_SCOPE) {
     throw new AppError(`controlScope must be "${FULFILMENT_ACCESS_PRESERVED_SCOPE}" or omitted`, 400);
   }
@@ -1233,7 +1321,7 @@ export async function adminRequestSupplierInformation(request: Request, response
   const adminId = requireUserId(request);
   const id = requireIdParam(request);
   const { reason } = request.body ?? {};
-  if (typeof reason !== "string" || reason.length === 0) throw new AppError("reason is required", 400);
+  if (typeof reason !== "string" || reason.trim().length < 5) throw new AppError("A reason of at least 5 characters is required", 400);
   const account = await supplierAccountService.requestInformation(id, reason);
   await recordAudit({ actorId: adminId, action: "community_supplier_account.request_information", entityType: "SupplierAccount", entityId: id, reason, afterState: { supplierState: account.supplierState }, request });
   response.json({ account });
@@ -1244,7 +1332,7 @@ export async function adminSuspendSupplierAccount(request: Request, response: Re
   const adminId = requireUserId(request);
   const id = requireIdParam(request);
   const { reason } = request.body ?? {};
-  if (typeof reason !== "string" || reason.length === 0) throw new AppError("reason is required", 400);
+  if (typeof reason !== "string" || reason.trim().length < 5) throw new AppError("A reason of at least 5 characters is required", 400);
   const account = await supplierAccountService.suspend(id, reason, adminId);
   await recordAudit({ actorId: adminId, action: "community_supplier_account.suspend", entityType: "SupplierAccount", entityId: id, reason, afterState: { supplierState: account.supplierState }, request });
   response.json({ account });
@@ -1255,7 +1343,7 @@ export async function adminCloseSupplierAccount(request: Request, response: Resp
   const adminId = requireUserId(request);
   const id = requireIdParam(request);
   const { reason } = request.body ?? {};
-  if (typeof reason !== "string" || reason.length === 0) throw new AppError("reason is required", 400);
+  if (typeof reason !== "string" || reason.trim().length < 5) throw new AppError("A reason of at least 5 characters is required", 400);
   const account = await supplierAccountService.close(id, reason, adminId);
   await recordAudit({ actorId: adminId, action: "community_supplier_account.close", entityType: "SupplierAccount", entityId: id, reason, afterState: { supplierState: account.supplierState }, request });
   response.json({ account });
@@ -1266,7 +1354,7 @@ export async function adminRevokeSupplierDataAccess(request: Request, response: 
   const adminId = requireUserId(request);
   const id = requireIdParam(request);
   const { reason } = request.body ?? {};
-  if (typeof reason !== "string" || reason.length === 0) throw new AppError("reason is required", 400);
+  if (typeof reason !== "string" || reason.trim().length < 5) throw new AppError("A reason of at least 5 characters is required", 400);
   const revokedCount = await revokeDeliveryReferencesForSupplierAccount(id, reason, adminId);
   await recordAudit({ actorId: adminId, action: "community_supplier_account.data_access_revoked", entityType: "SupplierAccount", entityId: id, reason, metadata: { revokedCount }, request });
   response.json({ revokedCount });
@@ -1676,13 +1764,27 @@ export async function adminResolveAttributionReview(request: Request, response: 
   response.json({ participant });
 }
 
+function requireReason(request: Request): string {
+  const reason = request.body?.reason;
+  if (typeof reason !== "string" || reason.trim().length < 5) throw new AppError("A reason of at least 5 characters is required", 400);
+  return reason.trim().slice(0, 1000);
+}
+
+/** Handbook 14.9 - feature availability (toggles) is separate from verified payment readiness (checklist). */
+function marketView(config: NonNullable<Awaited<ReturnType<typeof marketConfigurationService.get>>>) {
+  const readiness = marketConfigurationService.getReadiness(config);
+  return { ...config, readiness };
+}
+
 export async function adminListMarketConfigurations(_request: Request, response: Response): Promise<void> {
-  response.json({ items: await marketConfigurationService.list() });
+  const items = await marketConfigurationService.list();
+  response.json({ items: items.map(marketView) });
 }
 
 export async function adminUpdateMarketConfiguration(request: Request, response: Response): Promise<void> {
   const adminId = requireUserId(request);
-  const countryCode = requireIdParam(request);
+  const countryCode = requireIdParam(request).toUpperCase();
+  const reason = requireReason(request);
   const before = await marketConfigurationService.get(countryCode);
   const config = await marketConfigurationService.update(countryCode, request.body);
   await recordAudit({
@@ -1690,12 +1792,84 @@ export async function adminUpdateMarketConfiguration(request: Request, response:
     action: "community_market_config.update",
     entityType: "MarketConfiguration",
     entityId: countryCode,
-    metadata: request.body,
+    reason,
     beforeState: before ?? undefined,
     afterState: config,
     request,
   });
-  response.json({ config });
+  response.json({ config: marketView(config) });
+}
+
+/** POST /admin/community-buy/markets - add a market without a migration (all flags start off, no payment readiness). */
+export async function adminCreateMarketConfiguration(request: Request, response: Response): Promise<void> {
+  const adminId = requireUserId(request);
+  const reason = requireReason(request);
+  const config = await marketConfigurationService.createMarket({ countryCode: request.body?.countryCode, currency: request.body?.currency });
+  await recordAudit({ actorId: adminId, action: "community_market_config.create", entityType: "MarketConfiguration", entityId: config.countryCode, reason, afterState: config as unknown as Record<string, unknown>, request });
+  response.status(201).json({ config: marketView(config) });
+}
+
+/** PATCH /admin/community-buy/markets/:id/readiness - Super Administrator records payment readiness evidence. */
+export async function adminUpdateMarketReadiness(request: Request, response: Response): Promise<void> {
+  const adminId = requireUserId(request);
+  const countryCode = requireIdParam(request).toUpperCase();
+  await assertSuperAdmin(adminId);
+  const reason = requireReason(request);
+  const before = await marketConfigurationService.get(countryCode);
+  const config = await marketConfigurationService.setReadiness(countryCode, request.body, adminId);
+  await recordAudit({ actorId: adminId, action: "community_market_config.readiness_update", entityType: "MarketConfiguration", entityId: countryCode, reason, beforeState: before ?? undefined, afterState: config as unknown as Record<string, unknown>, request });
+  response.json({ config: marketView(config) });
+}
+
+/** POST /admin/community-buy/markets/:id/payments - enable (Super Administrator + readiness + approval ref + 2FA) or disable Community Buy payments. */
+export async function adminSetMarketPayments(request: Request, response: Response): Promise<void> {
+  const adminId = requireUserId(request);
+  const countryCode = requireIdParam(request).toUpperCase();
+  const reason = requireReason(request);
+  const enable = request.body?.enabled;
+  if (typeof enable !== "boolean") throw new AppError("enabled must be a boolean", 400);
+  // Super Admin ONLY to enable Community Buy payments (owner decision): checked first,
+  // server-side, before any data is read or the service is entered. The service re-checks.
+  if (enable) await assertSuperAdmin(adminId);
+  const before = await marketConfigurationService.get(countryCode);
+  const config = await marketConfigurationService.setPaymentsEnabled(countryCode, enable, { actorId: adminId, reason, approvalRef: typeof request.body?.approvalReference === "string" ? request.body.approvalReference : null });
+  await recordAudit({
+    actorId: adminId,
+    action: enable ? "community_market_config.payments_enabled" : "community_market_config.payments_disabled",
+    entityType: "MarketConfiguration",
+    entityId: countryCode,
+    reason,
+    metadata: { approvalReference: request.body?.approvalReference ?? null },
+    beforeState: before ?? undefined,
+    afterState: config as unknown as Record<string, unknown>,
+    request,
+  });
+  response.json({ config: marketView(config) });
+}
+
+/** GET /admin/community-buy/markets/:id/history - per-market change history, straight from the immutable audit log. */
+export async function adminGetMarketHistory(request: Request, response: Response): Promise<void> {
+  const countryCode = requireIdParam(request).toUpperCase();
+  const rows = await prisma.auditLog.findMany({
+    where: { entityType: "MarketConfiguration", entityId: countryCode },
+    orderBy: { createdAt: "desc" },
+    take: 100,
+  });
+  const actorIds = [...new Set(rows.map((r) => r.actorId))];
+  const actors = actorIds.length ? await prisma.user.findMany({ where: { id: { in: actorIds } }, select: { id: true, name: true, email: true } }) : [];
+  const actorMap = new Map(actors.map((a) => [a.id, a]));
+  response.json({
+    items: rows.map((r) => ({
+      id: r.id,
+      action: r.action,
+      reason: r.reason,
+      createdAt: r.createdAt,
+      actor: actorMap.get(r.actorId) ?? { id: r.actorId, name: null, email: null },
+      beforeState: r.beforeState,
+      afterState: r.afterState,
+      metadata: r.metadata,
+    })),
+  });
 }
 
 export async function adminGetLedgerSummary(_request: Request, response: Response): Promise<void> {

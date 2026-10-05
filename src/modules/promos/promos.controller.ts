@@ -1,6 +1,8 @@
 import type { Request, Response } from "express";
 
+import { prisma } from "../../lib/prisma";
 import { AppError } from "../../shared/errors/app-error";
+import { recordAudit, requireAuditReason } from "../../shared/utils/audit";
 import { promosService } from "./promos.service";
 import {
   validateCreatePromoCodeInput,
@@ -58,8 +60,19 @@ export async function listPublicDeals(_request: Request, response: Response): Pr
 // ─── Admin ───────────────────────────────────────────────────────────────────
 
 export async function createPromoCode(request: Request, response: Response): Promise<void> {
+  const reason = requireAuditReason((request.body as Record<string, unknown> | undefined)?.reason);
   const input = validateCreatePromoCodeInput(request.body);
   const promoCode = await promosService.createPromoCode(input);
+  await recordAudit({
+    actorId: requireUserId(request),
+    action: "promo_code.create",
+    entityType: "PromoCode",
+    entityId: promoCode.id,
+    afterState: { code: promoCode.code, type: promoCode.type, value: promoCode.value, maxUses: promoCode.maxUses, validUntil: promoCode.validUntil, vendorId: promoCode.vendorId },
+    reason,
+    request,
+    failClosed: true,
+  });
   response.status(201).json({ promoCode });
 }
 
@@ -69,7 +82,21 @@ export async function listPromoCodes(_request: Request, response: Response): Pro
 }
 
 export async function updatePromoCode(request: Request, response: Response): Promise<void> {
+  const reason = requireAuditReason((request.body as Record<string, unknown> | undefined)?.reason);
   const input = validateUpdatePromoCodeInput(request.body);
-  const promoCode = await promosService.updatePromoCode(requireIdParam(request), input);
+  const promoId = requireIdParam(request);
+  const before = await prisma.promoCode.findUnique({ where: { id: promoId } });
+  const promoCode = await promosService.updatePromoCode(promoId, input);
+  await recordAudit({
+    actorId: requireUserId(request),
+    action: "promo_code.update",
+    entityType: "PromoCode",
+    entityId: promoId,
+    beforeState: before ? { code: before.code, isActive: before.isActive, maxUses: before.maxUses, validUntil: before.validUntil } : undefined,
+    afterState: { code: promoCode.code, isActive: promoCode.isActive, maxUses: promoCode.maxUses, validUntil: promoCode.validUntil },
+    reason,
+    request,
+    failClosed: true,
+  });
   response.status(200).json({ promoCode });
 }

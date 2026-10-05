@@ -199,7 +199,7 @@ export const subscriptionOffersService = {
       await notificationsService.enqueue({
         userId: subscription.buyerId,
         type: "SUBSCRIPTION_UPDATE",
-        title: "A product in your Regular Delivery is paused",
+        title: "A product in your Foodstuffs Subscription is paused",
         body: `${product?.title ?? "A product"} in ${offer.title} won't be included in your next renewal${reason ? `: ${reason}` : "."}`,
         data: { type: "subscription_update", event: "product_paused", offerId, productId },
       });

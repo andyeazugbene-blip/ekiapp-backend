@@ -61,6 +61,7 @@ export const vendorDashboardService = {
           },
           senderId: { not: userId },
           readAt: null,
+          isInternal: false,
         },
       }),
     ]);
@@ -169,7 +170,7 @@ export const vendorDashboardService = {
     // Market-aware visibility (spec rule: "do not show Community Buy in
     // unsupported markets") — real backend market config, not a client guess.
     if (anyMarketHas("regularDeliveriesEnabled")) {
-      marketingTools.push({ id: "regular_deliveries", type: "regular_deliveries", label: "Regular Deliveries", route: "/(vendor)/regular-deliveries" });
+      marketingTools.push({ id: "regular_deliveries", type: "regular_deliveries", label: "Foodstuffs Subscriptions", route: "/(vendor)/regular-deliveries" });
     }
     if (anyMarketHas("communityBuyEnabled")) {
       marketingTools.push({ id: "community_buy", type: "community_buy", label: "Community Buy", route: "/(vendor)/community-buy-supplier" });

@@ -3,6 +3,8 @@ import { OrderStatus, UserRole } from "@prisma/client";
 import { env } from "../../config/env";
 import { prisma } from "../../lib/prisma";
 import { CURSOR_ORDER_BY } from "../../shared/constants";
+import { notTest, notTestOf } from "../../shared/utils/test-records";
+import { getActionCentre } from "./admin-action-centre.service";
 import type {
   AdminAnalyticsData,
   AdminAuditLogItem,
@@ -55,19 +57,19 @@ export const adminDashboardService = {
       pendingPayoutsCount,
       expiringSubscriptionsCount,
     ] = await Promise.all([
-      prisma.vendor.count(),
-      prisma.vendor.count({ where: { verificationStatus: "PENDING" } }),
-      prisma.vendor.count({ where: { isSuspended: true } }),
-      prisma.order.count(),
-      prisma.order.count({ where: { status: "PENDING" } }),
-      prisma.user.count({ where: { role: UserRole.BUYER } }),
-      prisma.vendor.count({ where: { createdAt: { gte: weekStart } } }),
-      prisma.order.count({ where: { createdAt: { gte: weekStart } } }),
+      prisma.vendor.count({ where: notTest() }),
+      prisma.vendor.count({ where: { verificationStatus: "PENDING", ...notTest() } }),
+      prisma.vendor.count({ where: { isSuspended: true, ...notTest() } }),
+      prisma.order.count({ where: notTest() }),
+      prisma.order.count({ where: { status: "PENDING", ...notTest() } }),
+      prisma.user.count({ where: { role: UserRole.BUYER, ...notTest() } }),
+      prisma.vendor.count({ where: { createdAt: { gte: weekStart }, ...notTest() } }),
+      prisma.order.count({ where: { createdAt: { gte: weekStart }, ...notTest() } }),
       prisma.payment.aggregate({
-        where: { status: "SUCCEEDED" },
+        where: { status: "SUCCEEDED", ...notTest() },
         _sum: { amount: true },
       }),
-      prisma.payoutRequest.count({ where: { status: "PENDING" } }),
+      prisma.payoutRequest.count({ where: { status: "PENDING", ...notTestOf("vendor") } }),
       prisma.vendorSubscription.count({
         where: { status: "ACTIVE", currentPeriodEnd: { not: null, lte: sevenDaysFromNow } },
       }),
@@ -100,19 +102,19 @@ export const adminDashboardService = {
     // Revenue aggregations
     const [revenueToday, revenueWeek, revenueMonth, revenueAll] = await Promise.all([
       prisma.payment.aggregate({
-        where: { status: "SUCCEEDED", processedAt: { gte: todayStart } },
+        where: { status: "SUCCEEDED", processedAt: { gte: todayStart }, ...notTest() },
         _sum: { amount: true },
       }),
       prisma.payment.aggregate({
-        where: { status: "SUCCEEDED", processedAt: { gte: weekStart } },
+        where: { status: "SUCCEEDED", processedAt: { gte: weekStart }, ...notTest() },
         _sum: { amount: true },
       }),
       prisma.payment.aggregate({
-        where: { status: "SUCCEEDED", processedAt: { gte: monthStart } },
+        where: { status: "SUCCEEDED", processedAt: { gte: monthStart }, ...notTest() },
         _sum: { amount: true },
       }),
       prisma.payment.aggregate({
-        where: { status: "SUCCEEDED" },
+        where: { status: "SUCCEEDED", ...notTest() },
         _sum: { amount: true },
       }),
     ]);
@@ -120,18 +122,18 @@ export const adminDashboardService = {
     // Order status counts
     const [totalOrders, pendingOrders, paidOrders, completedOrders, failedOrders] =
       await Promise.all([
-        prisma.order.count(),
-        prisma.order.count({ where: { status: "PENDING" } }),
-        prisma.order.count({ where: { status: { in: PAID_STATUSES } } }),
-        prisma.order.count({ where: { status: "COMPLETED" } }),
-        prisma.order.count({ where: { status: "FAILED" } }),
+        prisma.order.count({ where: notTest() }),
+        prisma.order.count({ where: { status: "PENDING", ...notTest() } }),
+        prisma.order.count({ where: { status: { in: PAID_STATUSES }, ...notTest() } }),
+        prisma.order.count({ where: { status: "COMPLETED", ...notTest() } }),
+        prisma.order.count({ where: { status: "FAILED", ...notTest() } }),
       ]);
 
     // Top vendors by revenue (from order items)
     const topVendorItems = await prisma.orderItem.groupBy({
       by: ["vendorId"],
       where: {
-        order: { status: { in: PAID_STATUSES } },
+        order: { status: { in: PAID_STATUSES }, ...notTest() },
       },
       _sum: { totalAmount: true },
       _count: { orderId: true },
@@ -155,11 +157,11 @@ export const adminDashboardService = {
 
     // Growth + active counts
     const [newUsersThisWeek, newVendorsThisWeek, newOrdersThisWeek, activeVendors, totalBuyers] = await Promise.all([
-      prisma.user.count({ where: { createdAt: { gte: weekStart } } }),
-      prisma.vendor.count({ where: { createdAt: { gte: weekStart } } }),
-      prisma.order.count({ where: { createdAt: { gte: weekStart } } }),
-      prisma.vendor.count({ where: { isSuspended: false } }),
-      prisma.user.count({ where: { role: UserRole.BUYER } }),
+      prisma.user.count({ where: { createdAt: { gte: weekStart }, ...notTest() } }),
+      prisma.vendor.count({ where: { createdAt: { gte: weekStart }, ...notTest() } }),
+      prisma.order.count({ where: { createdAt: { gte: weekStart }, ...notTest() } }),
+      prisma.vendor.count({ where: { isSuspended: false, ...notTest() } }),
+      prisma.user.count({ where: { role: UserRole.BUYER, ...notTest() } }),
     ]);
 
     return {
@@ -187,6 +189,9 @@ export const adminDashboardService = {
       buyers: { active: totalBuyers },
     };
   },
+
+  /** Handbook §3 Action Centre — see admin-action-centre.service.ts. */
+  getActionCentre,
 
   async listAuditLogs(query: ListAuditLogsQuery) {
     const items = await prisma.auditLog.findMany({

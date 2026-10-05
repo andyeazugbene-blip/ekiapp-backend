@@ -7,6 +7,8 @@ export const ADMIN_PERMISSIONS = [
   "admin.*",
   "dashboard.read",
   "analytics.read",
+  "automation.read",
+  "automation.mutate",
   "users.read",
   "users.mutate",
   "vendors.read",
@@ -90,7 +92,7 @@ function normalizeName(raw: unknown): string {
 // "community_buy.mutate" since there's no finer-grained split of that
 // permission yet), the role is genuinely broader than its name suggests —
 // documented here rather than silently pretended away.
-const DEFAULT_ROLES: { name: string; description: string; permissions: AdminPermission[] }[] = [
+export const DEFAULT_ROLES: { name: string; description: string; permissions: AdminPermission[] }[] = [
   { name: "Super Administrator", description: "Full access to every admin action.", permissions: ["admin.*"] },
   {
     name: "Read-Only Auditor",
@@ -143,9 +145,52 @@ const DEFAULT_ROLES: { name: string; description: string; permissions: AdminPerm
   {
     name: "Risk / Fraud",
     description: "Suspends accounts, handles disputes, reviews audit trail, moderates content reports.",
-    permissions: ["users.read", "users.mutate", "vendors.read", "vendors.mutate", "disputes.read", "disputes.mutate", "security.mutate", "audit.read", "reports.read", "reports.mutate"],
+    permissions: ["users.read", "users.mutate", "vendors.read", "vendors.mutate", "disputes.read", "disputes.mutate", "security.mutate", "audit.read", "reports.read", "reports.mutate", "content.read", "content.mutate"],
+  },
+  // Handbook decision 5: explicit Operations Admin / Finance Admin roles.
+  // Least-privilege sets are documented in docs/admin-role-matrix.md (FE repo).
+  {
+    name: "Operations Admin",
+    description: "Day-to-day marketplace operations: users, vendors, orders, catalogue, verification, delivery, support, content and communications. No money movement, settings, roles or audit export.",
+    permissions: [
+      "dashboard.read", "analytics.read", "automation.read",
+      "users.read", "users.mutate", "vendors.read", "vendors.mutate",
+      "orders.read", "orders.mutate", "products.read", "products.mutate",
+      "reviews.read", "reviews.mutate", "verification.read", "verification.mutate",
+      "delivery_zones.read", "delivery_zones.mutate", "disputes.read", "disputes.mutate",
+      "escrow.read", "communications.read", "communications.send",
+      "promos.read", "promos.mutate", "campaigns.read", "campaigns.mutate",
+      "subscriptions.read", "subscriptions.mutate", "community_buy.read",
+      "reports.read", "reports.mutate", "support.read", "support.mutate",
+      "rewards.read", "rewards.mutate", "content.read", "content.mutate",
+      "approvals.read",
+    ],
+  },
+  {
+    name: "Finance Admin",
+    description: "Money movement and reconciliation: refunds, payouts, escrow, Community Buy settlements, approvals and audit visibility. No user/vendor administration, settings or roles.",
+    permissions: [
+      "dashboard.read", "analytics.read",
+      "orders.read", "payments.mutate", "payouts.read", "payouts.mutate", "escrow.read",
+      "disputes.read", "disputes.mutate", "vendors.read", "users.read",
+      "subscriptions.read", "promos.read", "community_buy.read", "community_buy.mutate",
+      "approvals.read", "approvals.decide", "audit.read", "reports.read", "settings.read",
+    ],
   },
 ];
+
+/**
+ * Wildcard-aware permission match, shared by the guard and /admin/me/permissions.
+ * Grants: exact string, "admin.*" (everything), or "prefix.*" (everything under
+ * that prefix, e.g. "orders.*" matches "orders.read").
+ */
+export function permissionMatches(granted: readonly string[], required: string): boolean {
+  for (const g of granted) {
+    if (g === required || g === "admin.*") return true;
+    if (g.endsWith(".*") && required.startsWith(g.slice(0, -1))) return true;
+  }
+  return false;
+}
 
 export const adminRolesService = {
   permissions() {
@@ -233,6 +278,11 @@ export const adminRolesService = {
   },
 
   async removeAssignment(assignmentId: string) {
+    const existing = await prisma.adminRoleAssignment.findUnique({ where: { id: assignmentId }, include: { role: { select: { name: true, permissions: true } } } });
+    if (existing && existing.role.permissions.includes("admin.*")) {
+      const remaining = await prisma.adminRoleAssignment.count({ where: { role: { permissions: { has: "admin.*" } }, NOT: { id: assignmentId } } });
+      if (remaining === 0) throw new AppError("The last Super Administrator assignment cannot be removed", 409, null, "LAST_SUPER_ADMIN");
+    }
     await prisma.adminRoleAssignment.delete({ where: { id: assignmentId } });
   },
 
@@ -255,7 +305,7 @@ export const adminRolesService = {
 
   async assertPermission(userId: string, permission: string) {
     const permissions = await this.userPermissions(userId);
-    if (!permissions.includes("admin.*") && !permissions.includes(permission)) {
+    if (!permissionMatches(permissions, permission)) {
       throw new AppError("Admin role does not have permission for this action", 403, null, "ADMIN_PERMISSION_DENIED");
     }
   },

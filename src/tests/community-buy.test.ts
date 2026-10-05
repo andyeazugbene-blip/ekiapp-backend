@@ -462,7 +462,7 @@ describe("communityCampaignsService rescue-window organiser actions", () => {
  */
 describe("campaignFulfilmentService.markDispatched — NAV-08: fulfilment_update audience tagging", () => {
   it("tags only the organiser's notification with audience:organiser", async () => {
-    m.supplierProfile.findUnique.mockResolvedValue({ id: "sup-1", vendorId: "vendor-1", vendor: { userId: "vendor-user-1" } } as never);
+    m.supplierProfile.findUnique.mockResolvedValue({ id: "sup-1", vendorId: "vendor-1", vendor: { userId: "vendor-user-1", stripeChargesEnabled: true, stripePayoutsEnabled: true } } as never);
     m.communityCampaign.findUnique
       .mockResolvedValueOnce({ id: "camp-fd-1", supplierId: "sup-1", title: "Rice Bulk Buy" } as never)
       .mockResolvedValueOnce({
@@ -2304,7 +2304,7 @@ describe("communityCampaignsService.reassignSupplier — necessary companion to 
       title: "Bulk rice buy", minimumShares: 5, maximumShares: 15, fulfilmentOwner: "SUPPLIER",
     } as never);
     m.organiserProfile.findUnique.mockResolvedValue({ id: "org-1" } as never);
-    m.supplierProfile.findUnique.mockResolvedValue({ id: "sup-2", isVerified: true, isRestricted: false, country: "GB", vendor: { userId: "supplier-user-2" } } as never);
+    m.supplierProfile.findUnique.mockResolvedValue({ id: "sup-2", isVerified: true, isRestricted: false, country: "GB", vendor: { userId: "supplier-user-2", stripeChargesEnabled: true, stripePayoutsEnabled: true } } as never);
     m.communityCampaign.update.mockResolvedValue({ id: "camp-1", supplierId: "sup-2" } as never);
 
     await communityCampaignsService.reassignSupplier("organiser-user-1", "camp-1", "sup-2");
@@ -2359,7 +2359,7 @@ describe("communityCampaignsService.reassignSupplier — necessary companion to 
   it("rejects a supplier from a different market", async () => {
     m.communityCampaign.findUnique.mockResolvedValue({ id: "camp-1", organiserId: "org-1", status: "DRAFT", termsLockedAt: null, supplierId: "sup-1", country: "GB", fulfilmentOwner: "SUPPLIER" } as never);
     m.organiserProfile.findUnique.mockResolvedValue({ id: "org-1" } as never);
-    m.supplierProfile.findUnique.mockResolvedValue({ id: "sup-2", isVerified: true, isRestricted: false, country: "FR" } as never);
+    m.supplierProfile.findUnique.mockResolvedValue({ id: "sup-2", isVerified: true, isRestricted: false, country: "FR", vendor: { userId: "v-user", stripeChargesEnabled: true, stripePayoutsEnabled: true } } as never);
     await expect(communityCampaignsService.reassignSupplier("organiser-user-1", "camp-1", "sup-2")).rejects.toMatchObject({ statusCode: 400 });
   });
 
@@ -2375,7 +2375,7 @@ describe("communityCampaignsService.reassignSupplier — necessary companion to 
       title: "Bulk rice buy", minimumShares: 5, maximumShares: 15, fulfilmentOwner: "SUPPLIER",
     } as never);
     m.organiserProfile.findUnique.mockResolvedValue({ id: "org-1" } as never);
-    m.supplierAccount.findUnique.mockResolvedValue({ id: "acct-new-1", userId: "account-supplier-1", supplierState: "APPROVED", coverageRegions: ["GB"], legacySupplierProfileId: null } as never);
+    m.supplierAccount.findUnique.mockResolvedValue({ id: "acct-new-1", userId: "account-supplier-1", supplierState: "APPROVED", coverageRegions: ["GB"], payoutsEnabled: true, chargesEnabled: true, legacySupplierProfileId: null } as never);
     m.communityCampaign.update.mockResolvedValue({ id: "camp-1", supplierAccountId: "acct-new-1" } as never);
 
     await communityCampaignsService.reassignSupplier("organiser-user-1", "camp-1", undefined, "acct-new-1");
@@ -2413,7 +2413,7 @@ describe("Workstream 3 — SupplierAccount campaign assignment (create/update)",
     m.organiserProfile.findUnique.mockResolvedValue({ id: "org-1", isRestricted: false } as never);
     m.marketConfiguration.findUnique.mockResolvedValue({ countryCode: "GB", communityBuyEnabled: true } as never);
     m.marketConfiguration.count.mockResolvedValue(1);
-    m.supplierAccount.findUnique.mockResolvedValue({ id: "acct-new-1", userId: "account-supplier-1", supplierState: "APPROVED", coverageRegions: ["GB"], legacySupplierProfileId: null } as never);
+    m.supplierAccount.findUnique.mockResolvedValue({ id: "acct-new-1", userId: "account-supplier-1", supplierState: "APPROVED", coverageRegions: ["GB"], payoutsEnabled: true, chargesEnabled: true, legacySupplierProfileId: null } as never);
     m.communityCampaign.create.mockResolvedValue({ id: "camp-new", title: "Bulk rice buy" } as never);
 
     await communityCampaignsService.create("organiser-user-1", { ...wsBaseInput, fulfilmentOwner: "SUPPLIER", supplierAccountId: "acct-new-1" });
@@ -2429,7 +2429,7 @@ describe("Workstream 3 — SupplierAccount campaign assignment (create/update)",
     m.organiserProfile.findUnique.mockResolvedValue({ id: "org-1", isRestricted: false } as never);
     m.marketConfiguration.findUnique.mockResolvedValue({ countryCode: "GB", communityBuyEnabled: true } as never);
     m.marketConfiguration.count.mockResolvedValue(1);
-    m.supplierAccount.findUnique.mockResolvedValue({ id: "acct-linked-1", userId: "supplier-user-1", supplierState: "APPROVED", coverageRegions: ["GB"], legacySupplierProfileId: "sup-1" } as never);
+    m.supplierAccount.findUnique.mockResolvedValue({ id: "acct-linked-1", userId: "supplier-user-1", supplierState: "APPROVED", coverageRegions: ["GB"], payoutsEnabled: true, chargesEnabled: true, legacySupplierProfileId: "sup-1" } as never);
     m.communityCampaign.create.mockResolvedValue({ id: "camp-new" } as never);
 
     await communityCampaignsService.create("organiser-user-1", { ...wsBaseInput, fulfilmentOwner: "SUPPLIER", supplierAccountId: "acct-linked-1" });
@@ -2464,7 +2464,7 @@ describe("Workstream 3 — SupplierAccount campaign assignment (create/update)",
     m.organiserProfile.findUnique.mockResolvedValue({ id: "org-1", isRestricted: false } as never);
     m.marketConfiguration.findUnique.mockResolvedValue({ countryCode: "GB", communityBuyEnabled: true } as never);
     m.marketConfiguration.count.mockResolvedValue(1);
-    m.supplierAccount.findUnique.mockResolvedValue({ id: "acct-fr-1", userId: "fr-user-1", supplierState: "APPROVED", coverageRegions: ["FR"], legacySupplierProfileId: null } as never);
+    m.supplierAccount.findUnique.mockResolvedValue({ id: "acct-fr-1", userId: "fr-user-1", supplierState: "APPROVED", coverageRegions: ["FR"], payoutsEnabled: true, chargesEnabled: true, legacySupplierProfileId: null } as never);
     await expect(
       communityCampaignsService.create("organiser-user-1", { ...wsBaseInput, fulfilmentOwner: "SUPPLIER", supplierAccountId: "acct-fr-1" }),
     ).rejects.toMatchObject({ statusCode: 400 });
@@ -2687,7 +2687,7 @@ describe("Client correction — supplier is optional, never a publication gate",
     m.organiserProfile.findUnique.mockResolvedValue({ id: "org-1", isVerified: true, isRestricted: false } as never);
     m.marketConfiguration.findUnique.mockResolvedValue({ countryCode: "GB", communityBuyEnabled: true } as never);
     m.marketConfiguration.count.mockResolvedValue(1);
-    m.supplierProfile.findUnique.mockResolvedValue({ id: "sup-1", isVerified: true, isRestricted: false, country: "GB", vendor: { userId: "supplier-user-1" } } as never);
+    m.supplierProfile.findUnique.mockResolvedValue({ id: "sup-1", isVerified: true, isRestricted: false, country: "GB", vendor: { userId: "supplier-user-1", stripeChargesEnabled: true, stripePayoutsEnabled: true } } as never);
     m.communityCampaign.create.mockResolvedValue({ id: "camp-3c", fulfilmentOwner: "SUPPLIER", deliveryResponsibility: "SUPPLIER" } as never);
 
     await communityCampaignsService.create("organiser-user-1", { ...baseInput, fulfilmentOwner: "SUPPLIER", supplierId: "sup-1", deliveryResponsibility: "SUPPLIER" });
@@ -2751,7 +2751,7 @@ describe("Client correction — supplier is optional, never a publication gate",
       title: "Bulk rice buy", minimumShares: 5, maximumShares: 15,
     } as never);
     m.organiserProfile.findUnique.mockResolvedValue({ id: "org-1" } as never);
-    m.supplierProfile.findUnique.mockResolvedValue({ id: "sup-2", isVerified: true, isRestricted: false, country: "GB", vendor: { userId: "supplier-user-2" } } as never);
+    m.supplierProfile.findUnique.mockResolvedValue({ id: "sup-2", isVerified: true, isRestricted: false, country: "GB", vendor: { userId: "supplier-user-2", stripeChargesEnabled: true, stripePayoutsEnabled: true } } as never);
     m.communityCampaign.update.mockResolvedValue({ id: "camp-7", status: "LIVE", supplierId: "sup-2" } as never);
 
     const result = await communityCampaignsService.reassignSupplier("organiser-user-1", "camp-7", "sup-2");
@@ -2835,7 +2835,7 @@ describe("Client correction — supplier is optional, never a publication gate",
     m.organiserProfile.findUnique.mockResolvedValue({ id: "org-1", isVerified: true, isRestricted: false } as never);
     m.marketConfiguration.findUnique.mockResolvedValue({ countryCode: "GB", communityBuyEnabled: true } as never);
     m.marketConfiguration.count.mockResolvedValue(1);
-    m.supplierProfile.findUnique.mockResolvedValue({ id: "sup-1", isVerified: true, isRestricted: false, country: "FR" } as never);
+    m.supplierProfile.findUnique.mockResolvedValue({ id: "sup-1", isVerified: true, isRestricted: false, country: "FR", vendor: { userId: "v-user", stripeChargesEnabled: true, stripePayoutsEnabled: true } } as never);
 
     await expect(
       communityCampaignsService.create("organiser-user-1", { ...baseInput, fulfilmentOwner: "SUPPLIER", supplierId: "sup-1" }),
@@ -2869,7 +2869,7 @@ describe("Client correction — supplier is optional, never a publication gate",
     m.organiserProfile.findUnique.mockResolvedValue({ id: "org-1", isVerified: true, isRestricted: false } as never);
     m.marketConfiguration.findUnique.mockResolvedValue({ countryCode: "GB", communityBuyEnabled: true } as never);
     m.marketConfiguration.count.mockResolvedValue(1);
-    m.supplierProfile.findUnique.mockResolvedValue({ id: "sup-1", isVerified: true, isRestricted: false, country: "GB", vendor: { userId: "supplier-user-1" } } as never);
+    m.supplierProfile.findUnique.mockResolvedValue({ id: "sup-1", isVerified: true, isRestricted: false, country: "GB", vendor: { userId: "supplier-user-1", stripeChargesEnabled: true, stripePayoutsEnabled: true } } as never);
     m.communityCampaign.create.mockResolvedValue({ id: "camp-13", title: "Bulk rice buy" } as never);
 
     await communityCampaignsService.create("organiser-user-1", { ...baseInput, fulfilmentOwner: "SUPPLIER", supplierId: "sup-1" });
@@ -2899,7 +2899,7 @@ describe("Phase 8.1 — supplier notifications (invitation, accept, inventory co
       m.organiserProfile.findUnique.mockResolvedValue({ id: "org-1", isVerified: true, isRestricted: false } as never);
       m.marketConfiguration.findUnique.mockResolvedValue({ countryCode: "GB", communityBuyEnabled: true } as never);
       m.marketConfiguration.count.mockResolvedValue(1);
-      m.supplierProfile.findUnique.mockResolvedValue({ id: "sup-1", isVerified: true, isRestricted: false, country: "GB", vendor: { userId: "supplier-user-1" } } as never);
+      m.supplierProfile.findUnique.mockResolvedValue({ id: "sup-1", isVerified: true, isRestricted: false, country: "GB", vendor: { userId: "supplier-user-1", stripeChargesEnabled: true, stripePayoutsEnabled: true } } as never);
       m.communityCampaign.create.mockResolvedValue({ id: "camp-new", title: "Bulk rice buy" } as never);
 
       const result = await communityCampaignsService.create("organiser-user-1", validInput);
@@ -2918,7 +2918,7 @@ describe("Phase 8.1 — supplier notifications (invitation, accept, inventory co
       m.organiserProfile.findUnique.mockResolvedValue({ id: "org-1", isVerified: true, isRestricted: false } as never);
       m.marketConfiguration.findUnique.mockResolvedValue({ countryCode: "GB", communityBuyEnabled: true } as never);
       m.marketConfiguration.count.mockResolvedValue(1);
-      m.supplierProfile.findUnique.mockResolvedValue({ id: "sup-1", isVerified: true, isRestricted: false, country: "GB", vendor: { userId: "supplier-user-1" } } as never);
+      m.supplierProfile.findUnique.mockResolvedValue({ id: "sup-1", isVerified: true, isRestricted: false, country: "GB", vendor: { userId: "supplier-user-1", stripeChargesEnabled: true, stripePayoutsEnabled: true } } as never);
       m.communityCampaign.create.mockResolvedValueOnce({ id: "camp-a" } as never).mockResolvedValueOnce({ id: "camp-b" } as never);
 
       await communityCampaignsService.create("organiser-user-1", validInput);
@@ -2937,7 +2937,7 @@ describe("Phase 8.1 — supplier notifications (invitation, accept, inventory co
       m.organiserProfile.findUnique.mockResolvedValue({ id: "org-1", isVerified: true, isRestricted: false } as never);
       m.marketConfiguration.findUnique.mockResolvedValue({ countryCode: "GB", communityBuyEnabled: true } as never);
       m.marketConfiguration.count.mockResolvedValue(1);
-      m.supplierProfile.findUnique.mockResolvedValue({ id: "sup-1", isVerified: true, isRestricted: false, country: "GB", vendor: { userId: "supplier-user-1" } } as never);
+      m.supplierProfile.findUnique.mockResolvedValue({ id: "sup-1", isVerified: true, isRestricted: false, country: "GB", vendor: { userId: "supplier-user-1", stripeChargesEnabled: true, stripePayoutsEnabled: true } } as never);
       await expect(
         communityCampaignsService.create("organiser-user-1", { ...validInput, minimumShares: 0 }),
       ).rejects.toMatchObject({ statusCode: 400 });
@@ -2949,7 +2949,7 @@ describe("Phase 8.1 — supplier notifications (invitation, accept, inventory co
       m.organiserProfile.findUnique.mockResolvedValue({ id: "org-1", isVerified: true, isRestricted: false } as never);
       m.marketConfiguration.findUnique.mockResolvedValue({ countryCode: "GB", communityBuyEnabled: true } as never);
       m.marketConfiguration.count.mockResolvedValue(1);
-      m.supplierProfile.findUnique.mockResolvedValue({ id: "sup-1", isVerified: true, isRestricted: false, country: "GB", vendor: { userId: "supplier-user-1" } } as never);
+      m.supplierProfile.findUnique.mockResolvedValue({ id: "sup-1", isVerified: true, isRestricted: false, country: "GB", vendor: { userId: "supplier-user-1", stripeChargesEnabled: true, stripePayoutsEnabled: true } } as never);
       m.communityCampaign.create.mockResolvedValue({ id: "camp-new" } as never);
       vi.mocked(notificationsService.enqueue).mockRejectedValueOnce(new Error("push provider down"));
 
@@ -3017,7 +3017,7 @@ describe("Phase 8.1 — supplier notifications (invitation, accept, inventory co
     const inventoryCampaign = { id: "camp-1", supplierId: "sup-1", confirmedShares: 8, title: "Bulk rice buy", organiser: { userId: "organiser-1" } };
 
     it("notifies the organiser with the confirmed quantity, correct event, and deep-link data", async () => {
-      m.supplierProfile.findUnique.mockResolvedValue({ vendorId: "vendor-1", id: "sup-1", vendor: { userId: "vendor-user-1" } } as never);
+      m.supplierProfile.findUnique.mockResolvedValue({ vendorId: "vendor-1", id: "sup-1", vendor: { userId: "vendor-user-1", stripeChargesEnabled: true, stripePayoutsEnabled: true } } as never);
       m.communityCampaign.findUnique
         .mockResolvedValueOnce(inventoryCampaign as never) // requireSupplierOwned's own lookup
         .mockResolvedValueOnce(inventoryCampaign as never); // notifyOrganiser's separate lookup
@@ -3036,7 +3036,7 @@ describe("Phase 8.1 — supplier notifications (invitation, accept, inventory co
     });
 
     it("rejects a duplicate inventory confirmation and does not send a second notification", async () => {
-      m.supplierProfile.findUnique.mockResolvedValue({ vendorId: "vendor-1", id: "sup-1", vendor: { userId: "vendor-user-1" } } as never);
+      m.supplierProfile.findUnique.mockResolvedValue({ vendorId: "vendor-1", id: "sup-1", vendor: { userId: "vendor-user-1", stripeChargesEnabled: true, stripePayoutsEnabled: true } } as never);
       m.communityCampaign.findUnique.mockResolvedValue(inventoryCampaign as never);
       m.campaignFulfilment.findUnique.mockResolvedValue({ campaignId: "camp-1", status: "INVENTORY_CONFIRMED" } as never);
 
@@ -3053,7 +3053,7 @@ describe("Phase 8.1 — supplier notifications (invitation, accept, inventory co
     });
 
     it("a notification failure does not roll back the inventory-confirmed state", async () => {
-      m.supplierProfile.findUnique.mockResolvedValue({ vendorId: "vendor-1", id: "sup-1", vendor: { userId: "vendor-user-1" } } as never);
+      m.supplierProfile.findUnique.mockResolvedValue({ vendorId: "vendor-1", id: "sup-1", vendor: { userId: "vendor-user-1", stripeChargesEnabled: true, stripePayoutsEnabled: true } } as never);
       m.communityCampaign.findUnique.mockResolvedValue(inventoryCampaign as never);
       m.campaignFulfilment.findUnique.mockResolvedValue({ campaignId: "camp-1", status: "AWAITING_INVENTORY_CONFIRMATION" } as never);
       m.campaignFulfilment.findUniqueOrThrow.mockResolvedValue({ campaignId: "camp-1", status: "INVENTORY_CONFIRMED" } as never);
@@ -3581,5 +3581,81 @@ describe("Acceptance audit — restricted organiser cannot mutate an owned campa
     m.campaignRefund.findMany.mockResolvedValue([] as never);
 
     await expect(communityCampaignsService.getRefundProgressForOrganiser("organiser-user-1", "camp-1")).resolves.toEqual({ total: 0, completed: 0, pending: 0, failed: 0 });
+  });
+});
+
+// ─── Canonical lifecycle events (handbook 12) ───────────────────────────────
+import { eventsService as lifecycleEvents } from "../modules/events/events.service";
+
+describe("Community Buy canonical lifecycle events", () => {
+  const emit = vi.spyOn(lifecycleEvents, "emit").mockImplementation(() => undefined);
+  const names = () => emit.mock.calls.map((c) => c[0].name);
+  beforeEach(() => emit.mockClear());
+
+  const dueCampaign = (over: Record<string, unknown> = {}) => ({
+    id: "camp-ev", minimumShares: 3, goalShares: 6, maximumShares: 6, confirmedShares: 6, pricePerShareMinor: 1000, currency: "GBP", supplierId: "sup-1", title: "Ev", ...over,
+  });
+  const wire = () => {
+    m.communityCampaign.findUnique.mockResolvedValue({ id: "camp-ev", title: "Ev", organiser: { userId: "o1" }, participants: [] } as never);
+    m.campaignSupplierPayment.findUnique.mockResolvedValue(null);
+    m.supplierProfile.findUnique.mockResolvedValue({ vendor: { userId: "s1", stripeAccountId: "acct_1" } } as never);
+  };
+
+  it("closeDueCampaigns: target met emits community_buy_target_reached once, with fundingOutcome and a stable eventKey", async () => {
+    m.communityCampaign.findMany.mockResolvedValue([dueCampaign()] as never);
+    m.communityCampaign.updateMany.mockResolvedValue({ count: 1 } as never);
+    wire();
+    await communityCampaignsService.closeDueCampaigns();
+    expect(names()).toEqual(["community_buy_target_reached"]);
+    expect(emit.mock.calls[0][0]).toMatchObject({
+      entityType: "CommunityCampaign", entityId: "camp-ev", actorType: "system",
+      payload: { eventKey: "community_buy_target_reached:camp-ev", fundingOutcome: "GOAL_REACHED" },
+    });
+  });
+
+  it("closeDueCampaigns: a lost atomic claim (count 0) and a rescue-window opening emit nothing", async () => {
+    m.communityCampaign.findMany.mockResolvedValue([dueCampaign()] as never);
+    m.communityCampaign.updateMany.mockResolvedValue({ count: 0 } as never);
+    await communityCampaignsService.closeDueCampaigns();
+    m.communityCampaign.findMany.mockResolvedValue([dueCampaign({ confirmedShares: 1 })] as never);
+    m.communityCampaign.updateMany.mockResolvedValue({ count: 1 } as never);
+    wire();
+    await communityCampaignsService.closeDueCampaigns();
+    expect(emit).not.toHaveBeenCalled();
+  });
+
+  it("closeDueCampaigns does not fail when the event layer throws", async () => {
+    emit.mockImplementationOnce(() => { throw new Error("db down"); });
+    m.communityCampaign.findMany.mockResolvedValue([dueCampaign()] as never);
+    m.communityCampaign.updateMany.mockResolvedValue({ count: 1 } as never);
+    wire();
+    await expect(communityCampaignsService.closeDueCampaigns()).resolves.toMatchObject({ succeeded: 1 });
+  });
+
+  it("evaluateRescueExpiry: rescued -> target_reached; expired below minimum -> target_failed", async () => {
+    m.communityCampaign.findMany.mockResolvedValue([dueCampaign({ confirmedShares: 3 })] as never);
+    m.communityCampaign.updateMany.mockResolvedValue({ count: 1 } as never);
+    wire();
+    await communityCampaignsService.evaluateRescueExpiry();
+    expect(names()).toEqual(["community_buy_target_reached"]);
+    emit.mockClear();
+    m.communityCampaign.findMany.mockResolvedValue([dueCampaign({ confirmedShares: 1 })] as never);
+    m.campaignContribution.findMany.mockResolvedValue([] as never);
+    await communityCampaignsService.evaluateRescueExpiry();
+    expect(names()).toEqual(["community_buy_target_failed"]);
+    expect(emit.mock.calls[0][0].payload).toMatchObject({ eventKey: "community_buy_target_failed:camp-ev", fundingOutcome: "BELOW_MINIMUM" });
+  });
+
+  it("createRefundRecordsForFailedCampaign: emits community_buy_refund_started only when records were created, not for duplicates", async () => {
+    m.campaignContribution.findMany.mockResolvedValue([{ id: "c1", amount: 500, buyerServiceFeeAmount: 0, deliveryFeeAmountMinor: 0, currency: "GBP" }] as never);
+    m.campaignRefund.create.mockResolvedValue({ id: "r1" } as never);
+    m.campaignContribution.update.mockResolvedValue({} as never);
+    await communityCampaignsService.createRefundRecordsForFailedCampaign("camp-ev");
+    expect(names()).toEqual(["community_buy_refund_started"]);
+    expect(emit.mock.calls[0][0].payload).toMatchObject({ refundCount: 1, eventKey: "community_buy_refund_started:camp-ev" });
+    emit.mockClear();
+    m.campaignRefund.create.mockRejectedValue({ code: "P2002" });
+    await communityCampaignsService.createRefundRecordsForFailedCampaign("camp-ev");
+    expect(emit).not.toHaveBeenCalled();
   });
 });

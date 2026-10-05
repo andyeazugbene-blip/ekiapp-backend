@@ -76,7 +76,7 @@ export const buyerPaymentMethodsService = {
       where: { paymentMethodId: id, status: { in: ["ACTIVE", "PAYMENT_ATTENTION"] } },
     });
     if (activeSubscriptions > 0) {
-      throw new AppError("This card is in use by an active Regular Delivery. Update the subscription first.", 409);
+      throw new AppError("This card is in use by an active Foodstuffs Subscription. Update the subscription first.", 409);
     }
     await stripe.paymentMethods.detach(pm.stripePaymentMethodId).catch(() => {});
     await prisma.buyerPaymentMethod.delete({ where: { id } });

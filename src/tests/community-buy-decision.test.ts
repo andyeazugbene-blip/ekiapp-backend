@@ -388,3 +388,38 @@ describe("assertReconfirmationDeadlineSafe() — M3 gap 7 (AT-18 safe escalation
     }));
   });
 });
+
+// ─── Canonical lifecycle events ─────────────────────────────────────────────
+import { eventsService as decisionEvents } from "../modules/events/events.service";
+
+describe("AUTHORISE_THEN_CAPTURE canonical events", () => {
+  const emit = vi.spyOn(decisionEvents, "emit").mockImplementation(() => undefined);
+  const names = () => emit.mock.calls.map((c) => c[0].name);
+  beforeEach(() => emit.mockClear());
+
+  it("proceeding at the decision deadline emits community_buy_target_reached; entering DECISION_REQUIRED emits nothing", async () => {
+    m.communityCampaign.findMany.mockResolvedValue([baseCampaign()] as any);
+    m.campaignContribution.findMany.mockResolvedValue([{ quantity: 6 }, { quantity: 5 }] as any);
+    m.communityCampaign.findUnique.mockResolvedValue({ ...baseCampaign(), organiser: { userId: "organiser-user-1" } } as any);
+    m.communityCampaign.findUniqueOrThrow.mockResolvedValue(baseCampaign({ status: "PAYMENT_CAPTURE" }) as any);
+    await campaignAuthorisationService.evaluateAuthorisationDecisions();
+    expect(names()).toEqual(["community_buy_target_reached"]);
+    emit.mockClear();
+    m.campaignContribution.findMany.mockResolvedValue([{ quantity: 3 }] as any);
+    await campaignAuthorisationService.evaluateAuthorisationDecisions();
+    expect(emit).not.toHaveBeenCalled();
+  });
+
+  it("a lost claim emits nothing; the 24h decision timeout emits community_buy_target_failed", async () => {
+    m.communityCampaign.findMany.mockResolvedValue([baseCampaign({ status: "DECISION_REQUIRED" })] as any);
+    m.communityBuyPaymentAuthorisation.findMany.mockResolvedValue([]);
+    m.communityCampaign.findUnique.mockResolvedValue({ ...baseCampaign(), organiser: { userId: "organiser-user-1" }, supplier: null, supplierAccount: null } as any);
+    m.communityCampaign.updateMany.mockResolvedValue({ count: 0 } as any);
+    await campaignAuthorisationService.evaluateDecisionTimeouts();
+    expect(emit).not.toHaveBeenCalled();
+    m.communityCampaign.updateMany.mockResolvedValue({ count: 1 } as any);
+    await campaignAuthorisationService.evaluateDecisionTimeouts();
+    expect(names()).toEqual(["community_buy_target_failed"]);
+    expect(emit.mock.calls[0][0].source).toBe("decision_timeout");
+  });
+});

@@ -14,6 +14,7 @@ import {
 } from "./orders.controller";
 import { buyerConfirmDelivery, resendBuyerDeliveryOtp } from "../paystack/escrow.controller";
 import { openDispute } from "../paystack/dispute.controller";
+import { buyerListDeliveryProof } from "./delivery-proof.controller";
 
 export const ordersRouter = Router();
 
@@ -38,6 +39,9 @@ ordersRouter.post("/:id/resend-delivery-otp", asyncHandler(resendBuyerDeliveryOt
 
 // Buyer: open dispute on escrow order
 ordersRouter.post("/:id/dispute", asyncHandler(openDispute));
+
+// Buyer: read delivery/pickup proof for own order (signed URLs)
+ordersRouter.get("/:id/delivery-proof", asyncHandler(buyerListDeliveryProof));
 
 // Vendor: list own orders, get order detail, update status
 ordersRouter.get("/vendor/list", asyncHandler(listVendorOrders));

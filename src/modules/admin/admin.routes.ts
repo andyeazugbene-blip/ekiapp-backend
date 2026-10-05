@@ -1,3 +1,6 @@
+import { accountTimeline, addNote, listNotes } from "./admin-notes.controller";
+import { checkVendorClose, closeVendor } from "./admin-vendor-close";
+import { getVendorStripeStatus, sendVendorStripeReminder } from "./admin-vendor-provider.controller";
 /**
  * Admin routes — convention:
  *
@@ -16,7 +19,17 @@ import { Router } from "express";
 import { env } from "../../config/env";
 import { authenticate, requireRole } from "../../middlewares/authenticate";
 import { requireAdminPermission } from "../../middlewares/require-admin-permission";
+import { requireAnyAdminPermission } from "../../middlewares/require-any-admin-permission";
+import {
+  getContentAsset, getContentReadUrl, getContentReviewCounts, listContentReviewQueue,
+  listIdentityDocuments, moderateContentAsset,
+} from "../uploads/content-review.controller";
 import { require2fa } from "../../middlewares/require-2fa";
+import { listAuditLogsV2, getAuditLogFacets, exportAuditLogs } from "./admin-audit-logs.controller";
+import {
+  getMyPermissions, listAdminAccounts, inviteAdmin, deactivateAdmin, reactivateAdmin,
+  changeAdminRole, revokeOtherSessions, getIntegrationsStatus,
+} from "./admin-team.controller";
 import {
   adminApprovePayoutRequest, adminGetPayoutRequest,
   adminListPayoutRequests,
@@ -74,7 +87,7 @@ import {
 } from "../stripe/stripe-disputes.controller";
 import { adminAdjustTrustScore } from "../paystack/trust-score.controller";
 import { getEscrowHealth, updateEscrowProvider } from "../paystack/escrow-health.controller";
-import { listOperationalThresholds, updateOperationalThreshold } from "./admin-platform-settings.controller";
+import { listOperationalThresholds, updateOperationalThreshold, listPlatformFlags, upsertPlatformFlag, getSettingHistory } from "./admin-platform-settings.controller";
 import {
   adminApproveVerificationReview,
   adminDeleteVerificationFiles,
@@ -85,6 +98,8 @@ import {
   adminReviewDocument,
 } from "../verification/verification.controller";
 import { asyncHandler } from "../../shared/utils/async-handler";
+import { testRecordScope } from "../../shared/utils/test-records";
+import { getActionCentre, searchAdmin, setTestFlag } from "./admin-dashboard-extras.controller";
 import { AppError } from "../../shared/errors/app-error";
 import {
   getAdminAnalytics,
@@ -127,13 +142,17 @@ import {
   listWalletTransactions, getPayment, getWalletTransaction,
   rejectVendor,
 } from "./admin-listings.controller";
-import { previewAdminBroadcastAudience, sendAdminBroadcast, testSendAdminBroadcast } from "./admin-communications.controller";
+import {
+  getAdminBroadcast, getChannelStatus, getCommsPause, listAdminBroadcasts, previewAdminBroadcastAudience,
+  previewAdminBroadcastMessage, refreshAdminBroadcastReceipts, searchBroadcastRecipients, sendAdminBroadcast,
+  setCommsPause, testSendAdminBroadcast,
+} from "./admin-communications.controller";
 import {
   getCommunicationStats, listCommunicationLogs, listCommunicationTemplates,
   seedCommunicationTemplates, updateCommunicationTemplate,
   createScheduledCommunication, listScheduledCommunications,
   cancelScheduledCommunication, runScheduledCommunications,
-  updateScheduledCommunication,
+  updateScheduledCommunication, listCommunicationTemplateVersions,
 } from "../communications/communication.controller";
 import {
   assignAdminRole,
@@ -144,6 +163,7 @@ import {
   updateAdminRole,
 } from "./admin-roles.controller";
 import { completeOrder, processStuckOrder } from "./admin-orders.controller";
+import { adminDisputeDecideAppeal, adminDisputePostMessage, adminDisputeRequestEvidence, adminDisputeV2Detail } from "../disputes/disputes.controller";
 import { adminListOrderRefunds, adminRefundOrder } from "./admin-refunds.controller";
 import {
   addVendorMarket,
@@ -155,6 +175,11 @@ import {
   unsuspendVendor,
 } from "./admin-vendors.controller";
 import { getAdminAutomationSummary } from "../automation/automation.controller";
+import {
+  archiveAutomationRule, automationEmergencyStop, automationReleaseEmergencyStop, duplicateAutomationRule, getAutomationFailures,
+  getAutomationPerformance, listAdminEvents, listAutomationRules, listAutomationRuns, pauseAutomationRule, resumeAutomationRule,
+  retryAutomationRun, testAutomationRule, updateAutomationRule,
+} from "../automation/automation-admin.controller";
 import {
   adminApproveCampaign,
   adminApproveExtension,
@@ -225,6 +250,15 @@ import {
   adminUnrestrictSupplier,
   adminUpdateSupportCase,
   adminUpdateMarketConfiguration,
+  adminCreateMarketConfiguration,
+  adminUpdateMarketReadiness,
+  adminSetMarketPayments,
+  adminGetMarketHistory,
+  adminGetSupplierAccount,
+  adminExtendCampaignDeadline,
+  adminMessageCampaignAudience,
+  adminGetCampaignDetail,
+  adminRejectSupplierAccount,
   adminVerifyOrganiser,
   adminGetOrganiserStripeConnectStatus,
   adminVerifySupplier,
@@ -233,6 +267,12 @@ import {
   adminHoldOrganiserPayout,
 } from "../community-buy/community-buy.controller";
 import {
+  adminCloseSupportConversation,
+  adminDeescalateSupportConversation,
+  adminEscalateSupportConversation,
+  adminListSupportMessages,
+  adminReopenSupportConversation,
+  adminReplySupportConversation,
   adminGetSupportConversation,
   adminListSupportConversations,
 } from "../messages/messages.controller";
@@ -254,6 +294,7 @@ import {
 } from "../uploads/uploads.controller";
 import { adminRewardsRouter } from "../rewards/rewards.routes";
 import { adminGiftCardsRouter } from "../gift-cards/gift-cards.routes";
+import { adminRestoreProduct, adminUnpublishProduct } from "./admin-products.controller";
 import { adminCampaignsRouter } from "../campaigns/campaigns.routes";
 import { adminResetUsers } from "./admin-reset.controller";
 
@@ -278,6 +319,16 @@ adminRouter.post(
 adminRouter.use(authenticate, requireRole("ADMIN"));
 
 // Dashboard & Analytics
+// Test (QA/seed) records are excluded from these aggregates unless ?includeTest=true.
+adminRouter.use(["/dashboard", "/analytics", "/revenue"], testRecordScope);
+// Any admin: sections and KPIs are filtered by the viewer's own permissions inside the service.
+adminRouter.get("/dashboard/action-centre", asyncHandler(getActionCentre));
+// Global search: any admin; results are filtered per entity by the admin's read permissions.
+adminRouter.get("/search", asyncHandler(searchAdmin));
+// Test-record isolation (handbook 2.1 L139): flag/unflag QA data, reason required, audited.
+adminRouter.patch("/users/:id/test-flag", asyncHandler(requireAdminPermission("users.mutate")), asyncHandler(setTestFlag("user")));
+adminRouter.patch("/vendors/:id/test-flag", asyncHandler(requireAdminPermission("vendors.mutate")), asyncHandler(setTestFlag("vendor")));
+adminRouter.patch("/orders/:id/test-flag", asyncHandler(requireAdminPermission("orders.mutate")), asyncHandler(setTestFlag("order")));
 adminRouter.get("/dashboard", asyncHandler(requireAdminPermission("dashboard.read")), asyncHandler(getAdminDashboard));
 adminRouter.get("/analytics", asyncHandler(requireAdminPermission("analytics.read")), asyncHandler(getAdminAnalytics));
 // Canonical revenue chart endpoint. /revenue is kept as an alias.
@@ -290,8 +341,25 @@ adminRouter.get("/analytics/orders", asyncHandler(requireAdminPermission("analyt
 adminRouter.get("/analytics/payments", asyncHandler(requireAdminPermission("analytics.read")), asyncHandler(getAnalyticsPayments));
 adminRouter.get("/analytics/geography", asyncHandler(requireAdminPermission("analytics.read")), asyncHandler(getAnalyticsGeography));
 adminRouter.get("/revenue", asyncHandler(requireAdminPermission("analytics.read")), asyncHandler(getAdminRevenue));
-adminRouter.get("/audit-logs", asyncHandler(requireAdminPermission("audit.read")), asyncHandler(listAuditLogs));
+adminRouter.get("/audit-logs", asyncHandler(requireAdminPermission("audit.read")), asyncHandler(listAuditLogsV2));
+adminRouter.get("/audit-logs/facets", asyncHandler(requireAdminPermission("audit.read")), asyncHandler(getAuditLogFacets));
+adminRouter.get("/audit-logs/export", asyncHandler(requireAdminPermission("audit.read")), asyncHandler(require2fa), asyncHandler(exportAuditLogs));
 adminRouter.get("/automation/summary", asyncHandler(requireAdminPermission("analytics.read")), asyncHandler(getAdminAutomationSummary));
+// Automation Centre (W11): rules, run history, failures, canonical events. Mutations: 2FA + required reason + audit.
+adminRouter.get("/automation/rules", asyncHandler(requireAdminPermission("automation.read")), asyncHandler(listAutomationRules));
+adminRouter.patch("/automation/rules/:id", asyncHandler(requireAdminPermission("automation.mutate")), asyncHandler(require2fa), asyncHandler(updateAutomationRule));
+adminRouter.post("/automation/rules/:id/pause", asyncHandler(requireAdminPermission("automation.mutate")), asyncHandler(require2fa), asyncHandler(pauseAutomationRule));
+adminRouter.post("/automation/rules/:id/resume", asyncHandler(requireAdminPermission("automation.mutate")), asyncHandler(require2fa), asyncHandler(resumeAutomationRule));
+adminRouter.post("/automation/rules/:id/archive", asyncHandler(requireAdminPermission("automation.mutate")), asyncHandler(require2fa), asyncHandler(archiveAutomationRule));
+adminRouter.post("/automation/rules/:id/duplicate", asyncHandler(requireAdminPermission("automation.mutate")), asyncHandler(require2fa), asyncHandler(duplicateAutomationRule));
+adminRouter.post("/automation/rules/:id/test", asyncHandler(requireAdminPermission("automation.mutate")), asyncHandler(require2fa), asyncHandler(testAutomationRule));
+adminRouter.post("/automation/emergency-stop", asyncHandler(requireAdminPermission("automation.mutate")), asyncHandler(require2fa), asyncHandler(automationEmergencyStop));
+adminRouter.post("/automation/emergency-stop/release", asyncHandler(requireAdminPermission("automation.mutate")), asyncHandler(require2fa), asyncHandler(automationReleaseEmergencyStop));
+adminRouter.get("/automation/runs", asyncHandler(requireAdminPermission("automation.read")), asyncHandler(listAutomationRuns));
+adminRouter.post("/automation/runs/:id/retry", asyncHandler(requireAdminPermission("automation.mutate")), asyncHandler(require2fa), asyncHandler(retryAutomationRun));
+adminRouter.get("/automation/failures", asyncHandler(requireAdminPermission("automation.read")), asyncHandler(getAutomationFailures));
+adminRouter.get("/automation/performance", asyncHandler(requireAdminPermission("automation.read")), asyncHandler(getAutomationPerformance));
+adminRouter.get("/events", asyncHandler(requireAdminPermission("automation.read")), asyncHandler(listAdminEvents));
 // Regular Delivery admin actions (list/retry-payment/force-cancel/contact-buyer/
 // change-frequency/price-change remediation) live under adminSubscriptionsRouter
 // and adminRenewalsRouter (src/modules/regular-deliveries/regular-deliveries.routes.ts,
@@ -301,12 +369,15 @@ adminRouter.get("/automation/summary", asyncHandler(requireAdminPermission("anal
 // Community Buy
 adminRouter.get("/community-campaigns/review", asyncHandler(requireAdminPermission("community_buy.read")), asyncHandler(adminListCampaignsForReview));
 adminRouter.get("/community-campaigns/closed", asyncHandler(requireAdminPermission("community_buy.read")), asyncHandler(adminListRecentlyClosedCampaigns));
-adminRouter.post("/community-campaigns/:id/approve", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(adminApproveCampaign));
-adminRouter.post("/community-campaigns/:id/request-changes", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(adminRequestCampaignChanges));
-adminRouter.post("/community-campaigns/:id/reject", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(adminRejectCampaign));
-adminRouter.post("/community-campaigns/:id/pause", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(adminPauseCampaign));
-adminRouter.post("/community-campaigns/:id/resume", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(adminResumeCampaign));
-adminRouter.post("/community-campaigns/:id/issue-notes", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(adminSetCampaignIssueNotes));
+adminRouter.post("/community-campaigns/:id/approve", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(require2fa), asyncHandler(adminApproveCampaign));
+adminRouter.post("/community-campaigns/:id/request-changes", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(require2fa), asyncHandler(adminRequestCampaignChanges));
+adminRouter.post("/community-campaigns/:id/reject", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(require2fa), asyncHandler(adminRejectCampaign));
+adminRouter.post("/community-campaigns/:id/pause", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(require2fa), asyncHandler(adminPauseCampaign));
+adminRouter.get("/community-campaigns/:id/admin-detail", asyncHandler(requireAdminPermission("community_buy.read")), asyncHandler(adminGetCampaignDetail));
+adminRouter.post("/community-campaigns/:id/extend-deadline", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(require2fa), asyncHandler(adminExtendCampaignDeadline));
+adminRouter.post("/community-campaigns/:id/message", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(adminMessageCampaignAudience));
+adminRouter.post("/community-campaigns/:id/resume", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(require2fa), asyncHandler(adminResumeCampaign));
+adminRouter.post("/community-campaigns/:id/issue-notes", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(require2fa), asyncHandler(adminSetCampaignIssueNotes));
 // Cancel/end — Phase 9 (REQ-CB-A-002). No 2FA: matches reject/pause/resume,
 // since cancel is only ever reachable pre-charge (see the service method's
 // own comment) — no money moves, so it sits in the same tier as those,
@@ -398,7 +469,11 @@ adminRouter.post("/approvals/:id/decide", asyncHandler(requireAdminPermission("a
 adminRouter.get("/approval-rules", asyncHandler(requireAdminPermission("roles.read")), asyncHandler(adminListApprovalRules));
 adminRouter.put("/approval-rules/:actionType", asyncHandler(requireAdminPermission("roles.mutate")), asyncHandler(require2fa), asyncHandler(adminUpsertApprovalRule));
 adminRouter.get("/community-buy/markets", asyncHandler(requireAdminPermission("community_buy.read")), asyncHandler(adminListMarketConfigurations));
-adminRouter.patch("/community-buy/markets/:id", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(adminUpdateMarketConfiguration));
+adminRouter.post("/community-buy/markets", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(require2fa), asyncHandler(adminCreateMarketConfiguration));
+adminRouter.patch("/community-buy/markets/:id", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(require2fa), asyncHandler(adminUpdateMarketConfiguration));
+adminRouter.patch("/community-buy/markets/:id/readiness", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(require2fa), asyncHandler(adminUpdateMarketReadiness));
+adminRouter.post("/community-buy/markets/:id/payments", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(require2fa), asyncHandler(adminSetMarketPayments));
+adminRouter.get("/community-buy/markets/:id/history", asyncHandler(requireAdminPermission("community_buy.read")), asyncHandler(adminGetMarketHistory));
 adminRouter.get("/community-buy/ledger", asyncHandler(requireAdminPermission("community_buy.read")), asyncHandler(adminGetLedgerSummary));
 adminRouter.get("/community-campaigns/:id/ledger", asyncHandler(requireAdminPermission("community_buy.read")), asyncHandler(adminGetCampaignLedger));
 
@@ -441,6 +516,8 @@ adminRouter.post("/community-buy/suppliers/:id/unrestrict", asyncHandler(require
 // SupplierAccount (distinct from /community-buy/suppliers above, which
 // still operates on the legacy Vendor-keyed SupplierProfile).
 adminRouter.get("/community-buy/supplier-accounts", asyncHandler(requireAdminPermission("community_buy.read")), asyncHandler(adminListSupplierAccounts));
+adminRouter.get("/community-buy/supplier-accounts/:id", asyncHandler(requireAdminPermission("community_buy.read")), asyncHandler(adminGetSupplierAccount));
+adminRouter.post("/community-buy/supplier-accounts/:id/reject", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(adminRejectSupplierAccount));
 adminRouter.post("/community-buy/supplier-accounts/:id/approve", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(adminApproveSupplierAccount));
 adminRouter.post("/community-buy/supplier-accounts/:id/restrict", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(adminRestrictSupplierAccount));
 adminRouter.post("/community-buy/supplier-accounts/:id/unrestrict", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(adminUnrestrictSupplierAccount));
@@ -462,9 +539,18 @@ adminRouter.get("/users", asyncHandler(requireAdminPermission("users.read")), as
 adminRouter.get("/users/:id", asyncHandler(requireAdminPermission("users.read")), asyncHandler(getUser));
 adminRouter.get("/vendors/stats", asyncHandler(requireAdminPermission("vendors.read")), asyncHandler(getVendorStats));
 adminRouter.get("/vendors", asyncHandler(requireAdminPermission("vendors.read")), asyncHandler(listVendors));
+adminRouter.get("/vendors/:id/stripe-status", asyncHandler(requireAdminPermission("vendors.read")), asyncHandler(getVendorStripeStatus));
+adminRouter.post("/vendors/:id/stripe-reminder", asyncHandler(requireAdminPermission("verification.mutate")), asyncHandler(sendVendorStripeReminder));
 adminRouter.get("/vendors/:id", asyncHandler(requireAdminPermission("vendors.read")), asyncHandler(getVendor));
 adminRouter.patch("/vendors/:id", asyncHandler(requireAdminPermission("vendors.mutate")), asyncHandler(updateVendor));
-adminRouter.delete("/vendors/:id", asyncHandler(requireAdminPermission("vendors.mutate")), asyncHandler(require2fa), asyncHandler(deleteVendor));
+adminRouter.get("/users/:id/notes", asyncHandler(requireAdminPermission("users.read")), asyncHandler(listNotes("User")));
+adminRouter.post("/users/:id/notes", asyncHandler(requireAdminPermission("users.mutate")), asyncHandler(addNote("User")));
+adminRouter.get("/users/:id/timeline", asyncHandler(requireAdminPermission("users.read")), asyncHandler(accountTimeline("User")));
+adminRouter.get("/vendors/:id/notes", asyncHandler(requireAdminPermission("vendors.read")), asyncHandler(listNotes("Vendor")));
+adminRouter.post("/vendors/:id/notes", asyncHandler(requireAdminPermission("vendors.mutate")), asyncHandler(addNote("Vendor")));
+adminRouter.get("/vendors/:id/timeline", asyncHandler(requireAdminPermission("vendors.read")), asyncHandler(accountTimeline("Vendor")));
+adminRouter.get("/vendors/:id/close-check", asyncHandler(requireAdminPermission("vendors.read")), asyncHandler(checkVendorClose));
+adminRouter.post("/vendors/:id/close", asyncHandler(requireAdminPermission("vendors.mutate")), asyncHandler(require2fa), asyncHandler(closeVendor));
 adminRouter.post("/vendors/bulk-approve", asyncHandler(requireAdminPermission("vendors.mutate")), asyncHandler(bulkApproveVendors));
 adminRouter.post("/vendors/bulk-reject", asyncHandler(requireAdminPermission("vendors.mutate")), asyncHandler(bulkRejectVendors));
 adminRouter.post("/vendors/bulk-suspend", asyncHandler(requireAdminPermission("vendors.mutate")), asyncHandler(require2fa), asyncHandler(bulkSuspendVendors));
@@ -479,8 +565,19 @@ adminRouter.get("/wallet-transactions/:id", asyncHandler(requireAdminPermission(
 adminRouter.get("/wallet-transactions", asyncHandler(requireAdminPermission("orders.read")), asyncHandler(listWalletTransactions));
 
 // Communications
-adminRouter.post("/broadcasts", asyncHandler(requireAdminPermission("communications.send")), asyncHandler(sendAdminBroadcast));
+// Handbook 6.2: send/schedule needs 2FA + reason + prior test-send proof (validated in the controller).
+adminRouter.post("/broadcasts", asyncHandler(requireAdminPermission("communications.send")), asyncHandler(require2fa), asyncHandler(sendAdminBroadcast));
+adminRouter.get("/broadcasts", asyncHandler(requireAdminPermission("communications.read")), asyncHandler(listAdminBroadcasts));
+adminRouter.post("/broadcasts/preview", asyncHandler(requireAdminPermission("communications.send")), asyncHandler(previewAdminBroadcastMessage));
 adminRouter.get("/broadcasts/audience-count", asyncHandler(requireAdminPermission("communications.send")), asyncHandler(previewAdminBroadcastAudience));
+adminRouter.get("/broadcasts/:id", asyncHandler(requireAdminPermission("communications.read")), asyncHandler(getAdminBroadcast));
+adminRouter.post("/broadcasts/:id/check-receipts", asyncHandler(requireAdminPermission("communications.read")), asyncHandler(refreshAdminBroadcastReceipts));
+adminRouter.get("/communications/channel-status", asyncHandler(requireAdminPermission("communications.read")), asyncHandler(getChannelStatus));
+adminRouter.get("/communications/recipients", asyncHandler(requireAdminPermission("communications.send")), asyncHandler(searchBroadcastRecipients));
+// Emergency pause: Super Administrator only ("admin.*"), 2FA, reason, audited.
+adminRouter.get("/communications/pause", asyncHandler(requireAdminPermission("communications.read")), asyncHandler(getCommsPause));
+adminRouter.post("/communications/pause", asyncHandler(requireAdminPermission("admin.*")), asyncHandler(require2fa), asyncHandler(setCommsPause));
+adminRouter.get("/communications/templates/:key/versions", asyncHandler(requireAdminPermission("communications.read")), asyncHandler(listCommunicationTemplateVersions));
 adminRouter.post("/broadcasts/test-send", asyncHandler(requireAdminPermission("communications.send")), asyncHandler(testSendAdminBroadcast));
 adminRouter.get("/communications/stats", asyncHandler(requireAdminPermission("communications.send")), asyncHandler(getCommunicationStats));
 adminRouter.get("/communications", asyncHandler(requireAdminPermission("communications.send")), asyncHandler(listCommunicationLogs));
@@ -502,14 +599,21 @@ adminRouter.post("/communications/run-scheduled", asyncHandler(requireAdminPermi
 // messages.service.ts's assertConversationAccess().
 adminRouter.get("/support/conversations", asyncHandler(requireAdminPermission("support.read")), asyncHandler(adminListSupportConversations));
 adminRouter.get("/support/conversations/:id", asyncHandler(requireAdminPermission("support.read")), asyncHandler(adminGetSupportConversation));
+// Thread incl. internal notes (the generic participant route never returns them), reply/note, lifecycle.
+adminRouter.get("/support/conversations/:id/messages", asyncHandler(requireAdminPermission("support.read")), asyncHandler(adminListSupportMessages));
+adminRouter.post("/support/conversations/:id/messages", asyncHandler(requireAdminPermission("support.mutate")), asyncHandler(adminReplySupportConversation));
+adminRouter.patch("/support/conversations/:id/close", asyncHandler(requireAdminPermission("support.mutate")), asyncHandler(adminCloseSupportConversation));
+adminRouter.patch("/support/conversations/:id/reopen", asyncHandler(requireAdminPermission("support.mutate")), asyncHandler(adminReopenSupportConversation));
+adminRouter.patch("/support/conversations/:id/escalate", asyncHandler(requireAdminPermission("support.mutate")), asyncHandler(adminEscalateSupportConversation));
+adminRouter.patch("/support/conversations/:id/deescalate", asyncHandler(requireAdminPermission("support.mutate")), asyncHandler(adminDeescalateSupportConversation));
 
 // Admin role management
 adminRouter.get("/roles", asyncHandler(requireAdminPermission("roles.read")), asyncHandler(listAdminRoles));
-adminRouter.post("/roles", asyncHandler(requireAdminPermission("roles.mutate")), asyncHandler(createAdminRole));
-adminRouter.patch("/roles/:id", asyncHandler(requireAdminPermission("roles.mutate")), asyncHandler(updateAdminRole));
-adminRouter.delete("/roles/:id", asyncHandler(requireAdminPermission("roles.mutate")), asyncHandler(deleteAdminRole));
-adminRouter.post("/roles/:id/assignments", asyncHandler(requireAdminPermission("roles.mutate")), asyncHandler(assignAdminRole));
-adminRouter.delete("/role-assignments/:id", asyncHandler(requireAdminPermission("roles.mutate")), asyncHandler(removeAdminRoleAssignment));
+adminRouter.post("/roles", asyncHandler(requireAdminPermission("roles.mutate")), asyncHandler(require2fa), asyncHandler(createAdminRole));
+adminRouter.patch("/roles/:id", asyncHandler(requireAdminPermission("roles.mutate")), asyncHandler(require2fa), asyncHandler(updateAdminRole));
+adminRouter.delete("/roles/:id", asyncHandler(requireAdminPermission("roles.mutate")), asyncHandler(require2fa), asyncHandler(deleteAdminRole));
+adminRouter.post("/roles/:id/assignments", asyncHandler(requireAdminPermission("roles.mutate")), asyncHandler(require2fa), asyncHandler(assignAdminRole));
+adminRouter.delete("/role-assignments/:id", asyncHandler(requireAdminPermission("roles.mutate")), asyncHandler(require2fa), asyncHandler(removeAdminRoleAssignment));
 
 // Vendor moderation
 adminRouter.patch("/vendors/:id/approve", asyncHandler(requireAdminPermission("vendors.mutate")), asyncHandler(approveVendor));
@@ -517,7 +621,9 @@ adminRouter.patch("/vendors/:id/reject", asyncHandler(requireAdminPermission("ve
 
 // Product moderation
 adminRouter.patch("/products/:id/approve", asyncHandler(requireAdminPermission("products.mutate")), asyncHandler(approveProduct));
-adminRouter.patch("/products/:id/disable", asyncHandler(requireAdminPermission("products.mutate")), asyncHandler(disableProduct));
+adminRouter.patch("/products/:id/disable", asyncHandler(requireAdminPermission("products.mutate")), asyncHandler(require2fa), asyncHandler(disableProduct));
+adminRouter.post("/products/:id/unpublish", asyncHandler(requireAdminPermission("products.mutate")), asyncHandler(require2fa), asyncHandler(adminUnpublishProduct));
+adminRouter.post("/products/:id/restore", asyncHandler(requireAdminPermission("products.mutate")), asyncHandler(adminRestoreProduct));
 
 // Order management
 // 2FA-gated (acceptance audit fix): both mutate payment/order state and
@@ -529,8 +635,8 @@ adminRouter.patch("/orders/:id/complete", asyncHandler(requireAdminPermission("o
 // Payout management
 adminRouter.get("/payout-requests/:id", asyncHandler(requireAdminPermission("payouts.read")), asyncHandler(adminGetPayoutRequest));
 adminRouter.get("/payout-requests", asyncHandler(requireAdminPermission("payouts.read")), asyncHandler(adminListPayoutRequests));
-adminRouter.patch("/payout-requests/:id/approve", asyncHandler(requireAdminPermission("payouts.mutate")), asyncHandler(adminApprovePayoutRequest));
-adminRouter.patch("/payout-requests/:id/reject", asyncHandler(requireAdminPermission("payouts.mutate")), asyncHandler(adminRejectPayoutRequest));
+adminRouter.patch("/payout-requests/:id/approve", asyncHandler(requireAdminPermission("payouts.mutate")), asyncHandler(require2fa), asyncHandler(adminApprovePayoutRequest));
+adminRouter.patch("/payout-requests/:id/reject", asyncHandler(requireAdminPermission("payouts.mutate")), asyncHandler(require2fa), asyncHandler(adminRejectPayoutRequest));
 
 // Verification document review
 adminRouter.get("/verifications", asyncHandler(requireAdminPermission("verification.read")), asyncHandler(adminListVerificationQueue));
@@ -567,12 +673,23 @@ adminRouter.get("/reviews", asyncHandler(requireAdminPermission("reviews.read"))
 adminRouter.patch("/reviews/:id/moderate", asyncHandler(requireAdminPermission("reviews.mutate")), asyncHandler(adminModerateReview));
 
 // Content reports
-adminRouter.get("/reports", asyncHandler(requireAdminPermission("reports.read")), asyncHandler(adminListReports));
-adminRouter.patch("/reports/:id", asyncHandler(requireAdminPermission("reports.mutate")), asyncHandler(adminReviewReport));
+// Content Review (handbook 7). content.* is the new gate; reports.* roles keep working.
+adminRouter.get("/reports", asyncHandler(requireAnyAdminPermission("content.read", "reports.read")), asyncHandler(adminListReports));
+adminRouter.patch("/reports/:id", asyncHandler(requireAnyAdminPermission("content.mutate", "reports.mutate")), asyncHandler(adminReviewReport));
+adminRouter.get("/content-review/counts", asyncHandler(requireAnyAdminPermission("content.read", "reports.read")), asyncHandler(getContentReviewCounts));
+adminRouter.get("/content-review/queue", asyncHandler(requireAdminPermission("content.read")), asyncHandler(listContentReviewQueue));
+adminRouter.get("/content-review/identity-documents", asyncHandler(requireAdminPermission("verification.read")), asyncHandler(listIdentityDocuments));
+adminRouter.get("/content-review/assets/:id", asyncHandler(requireAnyAdminPermission("content.read", "verification.read")), asyncHandler(getContentAsset));
+adminRouter.get("/content-review/assets/:id/read-url", asyncHandler(requireAnyAdminPermission("content.read", "verification.read")), asyncHandler(getContentReadUrl));
+adminRouter.post("/content-review/assets/:id/:action", asyncHandler(requireAdminPermission("content.mutate")), asyncHandler(moderateContentAsset));
 
 // Escrow disputes
 adminRouter.get("/disputes", asyncHandler(requireAdminPermission("disputes.read")), asyncHandler(adminListDisputes));
 adminRouter.get("/disputes/:id", asyncHandler(requireAdminPermission("disputes.read")), asyncHandler(adminGetDispute));
+adminRouter.get("/disputes/:id/case", asyncHandler(requireAdminPermission("disputes.read")), asyncHandler(adminDisputeV2Detail));
+adminRouter.post("/disputes/:id/messages", asyncHandler(requireAdminPermission("disputes.mutate")), asyncHandler(adminDisputePostMessage));
+adminRouter.post("/disputes/:id/request-evidence", asyncHandler(requireAdminPermission("disputes.mutate")), asyncHandler(adminDisputeRequestEvidence));
+adminRouter.post("/disputes/:id/appeal-decision", asyncHandler(requireAdminPermission("disputes.mutate")), asyncHandler(require2fa), asyncHandler(adminDisputeDecideAppeal));
 adminRouter.patch("/disputes/:id/resolve", asyncHandler(requireAdminPermission("disputes.mutate")), asyncHandler(require2fa), asyncHandler(adminResolveDispute));
 
 // Real Stripe chargebacks (architecture doc §15.3 "Chargebacks") — distinct
@@ -588,7 +705,7 @@ adminRouter.delete("/users/:id", asyncHandler(requireAdminPermission("users.muta
 
 // Escrow health monitoring
 adminRouter.get("/escrow/health", asyncHandler(requireAdminPermission("escrow.read")), asyncHandler(getEscrowHealth));
-adminRouter.patch("/escrow/providers/:id", asyncHandler(requireAdminPermission("settings.mutate")), asyncHandler(updateEscrowProvider));
+adminRouter.patch("/escrow/providers/:id", asyncHandler(requireAdminPermission("settings.mutate")), asyncHandler(require2fa), asyncHandler(updateEscrowProvider));
 
 // Admin-managed operational thresholds (client decision 2026-09-22) — real
 // persisted settings, not .env values. Reversible, non-financial-custody
@@ -596,7 +713,18 @@ adminRouter.patch("/escrow/providers/:id", asyncHandler(requireAdminPermission("
 // provider settings above — no 2FA per the client's explicit "do not add
 // unnecessary 2FA" instruction.
 adminRouter.get("/settings/operational-thresholds", asyncHandler(requireAdminPermission("settings.read")), asyncHandler(listOperationalThresholds));
-adminRouter.patch("/settings/operational-thresholds/:key", asyncHandler(requireAdminPermission("settings.mutate")), asyncHandler(updateOperationalThreshold));
+adminRouter.get("/settings/flags", asyncHandler(requireAdminPermission("settings.read")), asyncHandler(listPlatformFlags));
+adminRouter.put("/settings/flags/:key", asyncHandler(requireAdminPermission("settings.mutate")), asyncHandler(require2fa), asyncHandler(upsertPlatformFlag));
+adminRouter.get("/settings/history/:key", asyncHandler(requireAdminPermission("settings.read")), asyncHandler(getSettingHistory));
+adminRouter.get("/integrations/status", asyncHandler(requireAdminPermission("settings.read")), asyncHandler(getIntegrationsStatus));
+adminRouter.get("/me/permissions", asyncHandler(getMyPermissions));
+adminRouter.post("/me/sessions/revoke-others", asyncHandler(revokeOtherSessions));
+adminRouter.get("/admins", asyncHandler(requireAdminPermission("roles.read")), asyncHandler(listAdminAccounts));
+adminRouter.post("/admins/invite", asyncHandler(requireAdminPermission("roles.mutate")), asyncHandler(require2fa), asyncHandler(inviteAdmin));
+adminRouter.post("/admins/:id/deactivate", asyncHandler(requireAdminPermission("roles.mutate")), asyncHandler(require2fa), asyncHandler(deactivateAdmin));
+adminRouter.post("/admins/:id/reactivate", asyncHandler(requireAdminPermission("roles.mutate")), asyncHandler(require2fa), asyncHandler(reactivateAdmin));
+adminRouter.put("/admins/:id/role", asyncHandler(requireAdminPermission("roles.mutate")), asyncHandler(require2fa), asyncHandler(changeAdminRole));
+adminRouter.patch("/settings/operational-thresholds/:key", asyncHandler(requireAdminPermission("settings.mutate")), asyncHandler(require2fa), asyncHandler(updateOperationalThreshold));
 
 // Rewards / Gifts management
 adminRouter.use("/rewards", adminRewardsRouter);
@@ -609,10 +737,10 @@ adminRouter.use("/campaigns", adminCampaignsRouter);
 
 
 // ─── 2FA Management ─────────────────────────────────────────────────────────
-adminRouter.post("/2fa/setup", asyncHandler(requireAdminPermission("security.mutate")), asyncHandler(setup2fa));
-adminRouter.post("/2fa/verify", asyncHandler(requireAdminPermission("security.mutate")), asyncHandler(verify2fa));
-adminRouter.post("/2fa/disable", asyncHandler(requireAdminPermission("security.mutate")), asyncHandler(disable2fa));
-adminRouter.post("/2fa/backup-codes/regenerate", asyncHandler(requireAdminPermission("security.mutate")), asyncHandler(regenerateBackupCodes));
+adminRouter.post("/2fa/setup", asyncHandler(setup2fa));
+adminRouter.post("/2fa/verify", asyncHandler(verify2fa));
+adminRouter.post("/2fa/disable", asyncHandler(disable2fa));
+adminRouter.post("/2fa/backup-codes/regenerate", asyncHandler(regenerateBackupCodes));
 
 // ─── Sensitive operations requiring 2FA (if enabled) ────────────────────────
 adminRouter.get("/refunds", asyncHandler(requireAdminPermission("orders.read")), asyncHandler(adminListOrderRefunds));
@@ -622,5 +750,5 @@ adminRouter.patch("/vendors/:id/unsuspend", asyncHandler(requireAdminPermission(
 adminRouter.get("/vendors/:id/markets", asyncHandler(requireAdminPermission("vendors.read")), asyncHandler(listVendorMarkets));
 adminRouter.post("/vendors/:id/markets", asyncHandler(requireAdminPermission("vendors.mutate")), asyncHandler(require2fa), asyncHandler(addVendorMarket));
 adminRouter.patch("/vendors/:id/markets/:marketCode", asyncHandler(requireAdminPermission("vendors.mutate")), asyncHandler(require2fa), asyncHandler(setVendorMarketEnabled));
-adminRouter.delete("/vendors/:id/markets/:marketCode", asyncHandler(requireAdminPermission("vendors.mutate")), asyncHandler(require2fa), asyncHandler(removeVendorMarket));
+// Handbook 14.7 L576: markets are disabled/enabled, never permanently removed (history is kept).
 adminRouter.patch("/payout-requests/:id/mark-paid", asyncHandler(requireAdminPermission("payouts.mutate")), asyncHandler(require2fa), asyncHandler(adminMarkPayoutRequestPaid));

@@ -22,6 +22,7 @@ vi.mock("../lib/prisma", () => ({
   },
 }));
 
+vi.mock("../lib/stripe", () => ({ stripe: { paymentIntents: { retrieve: vi.fn().mockResolvedValue({ status: "succeeded" }) } } }));
 vi.mock("../lib/logger", () => ({ logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } }));
 vi.mock("../modules/notifications/notifications.service", () => ({
   notificationsService: { enqueue: vi.fn().mockResolvedValue(undefined) },
@@ -80,7 +81,7 @@ describe("processStuckOrder — audit logging + idempotency", () => {
   function pendingOrder(overrides: Record<string, unknown> = {}) {
     return {
       id: "order-1", status: "PENDING", vendorId: "vendor-1",
-      payment: { id: "pay-1", status: "PENDING", vendorEarningsAmount: 1000, currency: "gbp" },
+      payment: { id: "pay-1", status: "PENDING", vendorEarningsAmount: 1000, currency: "gbp", provider: "stripe", stripePaymentIntentId: "pi_1" },
       items: [{ vendorId: "vendor-1" }],
       checkout: { buyerId: "buyer-1" },
       ...overrides,
@@ -104,7 +105,7 @@ describe("processStuckOrder — audit logging + idempotency", () => {
     m.vendor.findUnique.mockResolvedValue({ userId: "vendor-user-1" });
     m.wallet.findUnique.mockResolvedValue({ pendingBalance: 1000, availableBalance: 0 });
 
-    await adminOrdersService.processStuckOrder("order-1", ADMIN_ID);
+    await adminOrdersService.processStuckOrder("order-1", ADMIN_ID, undefined, "Webhook never arrived, verified in Stripe");
 
     expect(m.auditLog.create).toHaveBeenCalledWith(expect.objectContaining({
       data: expect.objectContaining({
@@ -113,7 +114,7 @@ describe("processStuckOrder — audit logging + idempotency", () => {
         entityType: "Order",
         entityId: "order-1",
         beforeState: { status: "PENDING", paymentStatus: "PENDING" },
-        afterState: { status: "PAID", paymentStatus: "SUCCEEDED", walletCredited: 1000 },
+        afterState: { status: "PAID", paymentStatus: "SUCCEEDED", walletCredited: 1000, stripeStatus: "succeeded" },
       }),
     }));
   });
@@ -133,5 +134,38 @@ describe("processStuckOrder — audit logging + idempotency", () => {
 
     await expect(adminOrdersService.processStuckOrder("order-1", ADMIN_ID)).rejects.toMatchObject({ statusCode: 409 });
     expect(m.auditLog.create).not.toHaveBeenCalled();
+  });
+});
+
+describe("processStuckOrder - provider truth (Handbook 5.3)", () => {
+  function stripeOrder(paymentOverrides: Record<string, unknown> = {}) {
+    return {
+      id: "order-1", status: "PENDING", vendorId: "vendor-1",
+      payment: { id: "pay-1", status: "PENDING", vendorEarningsAmount: 1000, currency: "gbp", provider: "stripe", stripePaymentIntentId: "pi_1", ...paymentOverrides },
+      items: [{ vendorId: "vendor-1" }], checkout: { buyerId: "buyer-1" },
+    };
+  }
+
+  it("refuses when Stripe says the PaymentIntent is not succeeded - nothing is changed", async () => {
+    const { stripe } = await import("../lib/stripe");
+    (stripe.paymentIntents.retrieve as any).mockResolvedValueOnce({ status: "requires_payment_method" });
+    m.order.findUnique.mockResolvedValue(stripeOrder());
+    await expect(adminOrdersService.processStuckOrder("order-1", ADMIN_ID, undefined, "Trying to force a failed payment")).rejects.toMatchObject({ statusCode: 409 });
+    expect(m.$transaction).not.toHaveBeenCalled();
+  });
+
+  it("refuses non-Stripe or PI-less payments", async () => {
+    m.order.findUnique.mockResolvedValue(stripeOrder({ provider: "paystack" }));
+    await expect(adminOrdersService.processStuckOrder("order-1", ADMIN_ID, undefined, "Repairing a paystack order")).rejects.toMatchObject({ statusCode: 409 });
+    m.order.findUnique.mockResolvedValue(stripeOrder({ stripePaymentIntentId: null }));
+    await expect(adminOrdersService.processStuckOrder("order-1", ADMIN_ID, undefined, "Repairing an order with no PI")).rejects.toMatchObject({ statusCode: 409 });
+  });
+
+  it("does not guess when Stripe cannot be reached", async () => {
+    const { stripe } = await import("../lib/stripe");
+    (stripe.paymentIntents.retrieve as any).mockRejectedValueOnce(new Error("network"));
+    m.order.findUnique.mockResolvedValue(stripeOrder());
+    await expect(adminOrdersService.processStuckOrder("order-1", ADMIN_ID, undefined, "Stripe is unreachable test")).rejects.toMatchObject({ statusCode: 502 });
+    expect(m.$transaction).not.toHaveBeenCalled();
   });
 });

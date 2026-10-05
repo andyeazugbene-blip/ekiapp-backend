@@ -63,7 +63,7 @@ describe("INITIAL_MARKETS — the approved launch-market list itself", () => {
 });
 
 describe("ensureDefaults() — a fresh database seeds every approved market already enabled", () => {
-  it("upserts every approved market with communityBuyEnabled/organiser/supplier applications/payments all true, and PLEDGE_THEN_CHARGE, when the table is empty", async () => {
+  it("upserts every approved market with Community Buy/organiser/supplier applications enabled but payments OFF (handbook 14.9 - needs verified readiness) and the rail DISABLED, when the table is empty", async () => {
     m.marketConfiguration.count.mockResolvedValue(0);
     m.marketConfiguration.upsert.mockResolvedValue({});
 
@@ -75,7 +75,8 @@ describe("ensureDefaults() — a fresh database seeds every approved market alre
       expect(created.communityBuyEnabled).toBe(true);
       expect(created.organiserApplicationsEnabled).toBe(true);
       expect(created.supplierApplicationsEnabled).toBe(true);
-      expect(created.communityBuyPaymentsEnabled).toBe(true);
+      expect(created.communityBuyPaymentsEnabled).toBe(false);
+      expect(created.paymentMode).toBe("DISABLED");
       expect(created.communityBuyPaymentMode).toBe("PLEDGE_THEN_CHARGE");
     }
     const seededCodes = m.marketConfiguration.upsert.mock.calls.map((c: any) => c[0].create.countryCode).sort();

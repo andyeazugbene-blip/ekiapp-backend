@@ -4,6 +4,7 @@ import { authenticate } from "../../middlewares/authenticate";
 import { requireVendorProfileOrAdmin } from "../../middlewares/require-capability";
 import { requireSellerPlanFeature } from "../../middlewares/require-seller-plan-feature";
 import { asyncHandler } from "../../shared/utils/async-handler";
+import { vendorAddDeliveryProof, vendorListDeliveryProof } from "../orders/delivery-proof.controller";
 import {
   getVendorOrder,
   listVendorOrders,
@@ -117,6 +118,8 @@ vendorsRouter.get("/me/verification/stripe-status", requireVendorProfileOrAdmin(
 
 // Vendor order management
 vendorsRouter.get("/me/orders", requireVendorProfileOrAdmin(), asyncHandler(listVendorOrders));
+vendorsRouter.post("/me/orders/:id/delivery-proof", requireVendorProfileOrAdmin(), asyncHandler(vendorAddDeliveryProof));
+vendorsRouter.get("/me/orders/:id/delivery-proof", requireVendorProfileOrAdmin(), asyncHandler(vendorListDeliveryProof));
 vendorsRouter.get("/me/orders/:id", requireVendorProfileOrAdmin(), asyncHandler(getVendorOrder));
 vendorsRouter.patch("/me/orders/:id/status", requireVendorProfileOrAdmin(), asyncHandler(updateVendorOrderStatus));
 vendorsRouter.post("/me/orders/:id/confirm-escrow", requireVendorProfileOrAdmin(), asyncHandler(vendorConfirmEscrowOrder));

@@ -1,8 +1,10 @@
+import { eventsService, EVENT_NAMES } from "../events/events.service";
 import type { Cart, CartItem, Prisma, Product } from "@prisma/client";
 import type { PrismaClient } from "@prisma/client";
 
 import { prisma } from "../../lib/prisma";
 import { AppError } from "../../shared/errors/app-error";
+import { assertVendorsPurchasable } from "../products/seller-readiness";
 import type { AddCartItemInput, UpdateCartItemInput } from "./cart.types";
 
 type CartWithItems = Cart & { items: (CartItem & { product: Product })[] };
@@ -51,12 +53,23 @@ export const cartService = {
   // cart — currency safety is enforced at checkout time (backend FX
   // normalization into one checkout currency), never by blocking the add.
   async addItem(buyerId: string, input: AddCartItemInput): Promise<CartWithItems> {
+    const result = await this.addItemTx(buyerId, input);
+    eventsService.emit({
+      name: EVENT_NAMES.item_added_to_cart, actorType: "user", actorId: buyerId, entityType: "Product", entityId: input.productId,
+      source: "api", payload: { quantity: input.quantity },
+    });
+    return result;
+  },
+
+  async addItemTx(buyerId: string, input: AddCartItemInput): Promise<CartWithItems> {
     return prisma.$transaction(async (tx) => {
       const cart = await getOrCreateCart(buyerId, tx);
 
       const product = await tx.product.findUnique({ where: { id: input.productId } });
       if (!product) throw new AppError("Product not found", 404);
       if (!product.isActive) throw new AppError("Product is not available", 400);
+      // B15: seller must be able to receive payment (flag SELLER_PAYMENT_READINESS_GATE)
+      await assertVendorsPurchasable([product.vendorId], tx);
 
       // Multi-vendor: no vendor restriction — items from any vendor allowed
       const existingItem = cart.items.find((item) => item.productId === product.id);
@@ -107,6 +120,7 @@ export const cartService = {
       }
 
       assertProductPurchasable(item.product, input.quantity);
+      await assertVendorsPurchasable([item.product.vendorId], tx);
 
       await tx.cartItem.update({
         where: { id: item.id },

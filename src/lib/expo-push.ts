@@ -1,5 +1,6 @@
 import crypto from "crypto";
 
+import { emitMessageEvent } from "../modules/communications/message-events";
 import { logger } from "./logger";
 import { prisma } from "./prisma";
 
@@ -71,11 +72,31 @@ function hashToken(token: string): string {
  * real delivery failures (bad credentials, expired token, rate limits)
  * surface only in the receipt, fetched separately after a delay.
  */
+export interface ExpoSendOutcome {
+  /** Tickets Expo accepted (handed to Expo, NOT yet proof of APNs/FCM delivery). */
+  accepted: number;
+  /** Tickets (or whole requests) Expo rejected. */
+  rejected: number;
+  /** First error code/message, for diagnosis and CommunicationLog.statusDetail. */
+  error?: string;
+  /** Expo ticket ids that were accepted. */
+  ticketIds: string[];
+}
+
 export async function sendExpoPush(
   messages: ExpoPushMessage[],
-  context?: { userId: string }[],
+  context?: { userId: string; logId?: string }[],
 ): Promise<void> {
-  if (messages.length === 0) return;
+  await sendExpoPushDetailed(messages, context);
+}
+
+/** Same as sendExpoPush but reports what Expo actually did with the messages. */
+export async function sendExpoPushDetailed(
+  messages: ExpoPushMessage[],
+  context?: { userId: string; logId?: string }[],
+): Promise<ExpoSendOutcome> {
+  const outcome: ExpoSendOutcome = { accepted: 0, rejected: 0, ticketIds: [] };
+  if (messages.length === 0) return outcome;
 
   try {
     const response = await fetch(EXPO_PUSH_URL, {
@@ -94,7 +115,7 @@ export async function sendExpoPush(
         status: response.status,
         body: body.slice(0, 500),
       });
-      return;
+      return { ...outcome, rejected: messages.length, error: `expo_http_${response.status}` };
     }
 
     const result = await response.json() as { data?: ExpoPushTicket[]; errors?: unknown[] };
@@ -103,16 +124,18 @@ export async function sendExpoPush(
       logger.warn("Expo Push API returned unexpected format", {
         body: JSON.stringify(result).slice(0, 500),
       });
-      return;
+      return { ...outcome, rejected: messages.length, error: "expo_unexpected_response" };
     }
 
-    const ticketsToTrack: { ticketId: string; token: string; userId: string }[] = [];
+    const ticketsToTrack: { ticketId: string; token: string; userId: string; logId?: string }[] = [];
 
     for (let i = 0; i < result.data.length; i++) {
       const ticket = result.data[i];
       const token = messages[i]?.to;
       if (ticket.status === "error") {
         const errorCode = ticket.details?.error ?? ticket.message ?? "unknown";
+        outcome.rejected++;
+        outcome.error = outcome.error ?? errorCode;
         if (errorCode === "DeviceNotRegistered") {
           await prisma.pushToken.deleteMany({ where: { token } }).catch(() => {});
           logger.info("Removed invalid push token (DeviceNotRegistered, from ticket)", { tokenHash: hashToken(token) });
@@ -127,8 +150,11 @@ export async function sendExpoPush(
           });
         }
       } else if (ticket.status === "ok" && ticket.id && token) {
+        outcome.accepted++;
+        outcome.ticketIds.push(ticket.id);
         const userId = context?.[i]?.userId;
-        if (userId) ticketsToTrack.push({ ticketId: ticket.id, token, userId });
+        const logId = context?.[i]?.logId;
+        if (userId) ticketsToTrack.push({ ticketId: ticket.id, token, userId, ...(logId ? { logId } : {}) });
       }
     }
 
@@ -144,7 +170,9 @@ export async function sendExpoPush(
       messageCount: messages.length,
       errorMessage: error instanceof Error ? error.message : String(error),
     });
+    return { ...outcome, rejected: messages.length, error: "expo_unreachable" };
   }
+  return outcome;
 }
 
 /**
@@ -158,10 +186,15 @@ export async function sendExpoPush(
  * (as opposed to at ticket time) still gets the token removed — some
  * invalid-token cases only surface at the receipt stage.
  */
-export async function checkPushReceipts(): Promise<{ checked: number; invalidated: number; errors: number }> {
-  const cutoff = new Date(Date.now() - RECEIPT_CHECK_DELAY_MS);
+export async function checkPushReceipts(
+  opts: { logIds?: string[]; ignoreDelay?: boolean } = {},
+): Promise<{ checked: number; invalidated: number; errors: number }> {
+  const cutoff = new Date(Date.now() - (opts.ignoreDelay ? 0 : RECEIPT_CHECK_DELAY_MS));
   const pending = await prisma.pushTicket.findMany({
-    where: { createdAt: { lte: cutoff } },
+    where: {
+      createdAt: { lte: cutoff },
+      ...(opts.logIds ? { logId: { in: opts.logIds } } : {}),
+    },
     take: RECEIPT_BATCH_SIZE,
   });
 
@@ -169,6 +202,11 @@ export async function checkPushReceipts(): Promise<{ checked: number; invalidate
 
   let invalidated = 0;
   let errors = 0;
+  // Tickets whose receipt was actually returned by Expo (or are too old to
+  // ever get one) are resolved and removed; the rest are kept for the next pass
+  // so an unreachable/late receipts API never silently loses delivery truth.
+  const resolvedIds: string[] = [];
+  const staleCutoff = Date.now() - 24 * 60 * 60 * 1000;
 
   try {
     const response = await fetch(EXPO_RECEIPTS_URL, {
@@ -185,9 +223,23 @@ export async function checkPushReceipts(): Promise<{ checked: number; invalidate
       const result = await response.json() as { data?: Record<string, ExpoPushReceipt> };
       for (const ticket of pending) {
         const receipt = result.data?.[ticket.ticketId];
-        if (!receipt || receipt.status !== "error") continue;
+        if (!receipt) {
+          if (ticket.createdAt.getTime() < staleCutoff) {
+            resolvedIds.push(ticket.id);
+            if (ticket.logId) await markLog(ticket.logId, "FAILED", "no_receipt_after_24h");
+          }
+          continue;
+        }
+        resolvedIds.push(ticket.id);
+
+        if (receipt.status !== "error") {
+          // Receipt ok = APNs/FCM accepted the message (provider-level delivery).
+          if (ticket.logId) await markLog(ticket.logId, "DELIVERED", "provider_receipt_ok");
+          continue;
+        }
 
         const errorCode = receipt.details?.error ?? receipt.message ?? "unknown";
+        if (ticket.logId) await markLog(ticket.logId, "FAILED", errorCode);
         if (errorCode === "DeviceNotRegistered") {
           await prisma.pushToken.deleteMany({ where: { token: ticket.token } }).catch(() => {});
           invalidated++;
@@ -214,9 +266,32 @@ export async function checkPushReceipts(): Promise<{ checked: number; invalidate
     });
   }
 
-  await prisma.pushTicket.deleteMany({ where: { id: { in: pending.map((p) => p.id) } } });
+  if (resolvedIds.length > 0) {
+    await prisma.pushTicket.deleteMany({ where: { id: { in: resolvedIds } } });
+  }
 
   return { checked: pending.length, invalidated, errors };
+}
+
+/**
+ * Records the real provider outcome on a broadcast's per-recipient
+ * CommunicationLog row. Never throws.
+ */
+async function markLog(logId: string, status: "DELIVERED" | "FAILED", detail: string): Promise<void> {
+  try {
+    // DELIVERED wins: a user with two devices where one receipt is OK is delivered.
+    const result = await prisma.communicationLog.updateMany({
+      where: status === "DELIVERED" ? { id: logId } : { id: logId, status: { not: "DELIVERED" } },
+      data: { status, statusDetail: detail, ...(status === "DELIVERED" ? { deliveredAt: new Date() } : {}) },
+    });
+    // Real provider receipt => canonical message event (eventKey = name:logId, so a re-checked receipt dedupes).
+    if (result?.count === 1) emitMessageEvent(status === "DELIVERED" ? "delivered" : "failed", { logId, channel: "push", detail, source: "expo_receipt" });
+  } catch (error) {
+    logger.warn("Could not record push receipt on communication log", {
+      logId,
+      errorMessage: error instanceof Error ? error.message : String(error),
+    });
+  }
 }
 
 /**
@@ -224,19 +299,32 @@ export async function checkPushReceipts(): Promise<{ checked: number; invalidate
  * Loads tokens from DB, sends via Expo, never throws.
  * channelId maps to Android notification channels (default, orders, payouts, messages).
  */
+export interface PushSendResult {
+  /** Devices (tokens) the user has registered. 0 => nothing could be sent. */
+  tokens: number;
+  /** Messages Expo accepted (handed to Expo). */
+  accepted: number;
+  rejected: number;
+  error?: string;
+  ticketIds: string[];
+}
+
 export async function sendPushToUser(
   userId: string,
   notification: { title: string; body: string; data?: Record<string, unknown> },
-): Promise<void> {
+  opts: { logId?: string } = {},
+): Promise<PushSendResult> {
+  const result: PushSendResult = { tokens: 0, accepted: 0, rejected: 0, ticketIds: [] };
   try {
     const tokens = await prisma.pushToken.findMany({
       where: { userId },
       select: { token: true },
     });
+    result.tokens = tokens.length;
 
     if (tokens.length === 0) {
       logger.info("Push skipped: no push tokens for user", { userId });
-      return;
+      return result;
     }
 
     // Map notification type to channel (Android) and category (iOS)
@@ -269,13 +357,22 @@ export async function sendPushToUser(
     // one stale/orphaned token silently zeroed out delivery to that user's
     // valid, current token too. Isolating per token contains the failure to
     // the one bad token (still cleaned up individually via its own ticket).
-    await Promise.allSettled(
-      messages.map((message) => sendExpoPush([message], [{ userId }])),
+    const outcomes = await Promise.allSettled(
+      messages.map((message) => sendExpoPushDetailed([message], [{ userId, ...(opts.logId ? { logId: opts.logId } : {}) }])),
     );
+    for (const o of outcomes) {
+      if (o.status !== "fulfilled") { result.rejected++; continue; }
+      result.accepted += o.value.accepted;
+      result.rejected += o.value.rejected;
+      result.ticketIds.push(...o.value.ticketIds);
+      if (o.value.error && !result.error) result.error = o.value.error;
+    }
   } catch (error) {
     logger.warn("sendPushToUser failed", {
       userId,
       errorMessage: error instanceof Error ? error.message : String(error),
     });
+    result.error = "push_exception";
   }
+  return result;
 }

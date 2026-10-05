@@ -1,3 +1,4 @@
+import { eventsService, EVENT_NAMES } from "../events/events.service";
 import crypto from "crypto";
 
 import type { Prisma } from "@prisma/client";
@@ -23,6 +24,7 @@ import { enqueueEmail } from "../../lib/email-queue";
 import { emailTemplates } from "../../lib/email-templates";
 import { notificationsService } from "../notifications/notifications.service";
 import { communicationService } from "../communications/communication.service";
+import { assertVendorsPurchasable } from "../products/seller-readiness";
 
 interface VendorGroup {
   vendorId: string;
@@ -85,6 +87,10 @@ class PaymentsService {
 
     const inactive = cart.items.find((item) => !item.product.isActive);
     if (inactive) throw new AppError(`Product "${inactive.product.title}" is not available`, 400);
+
+    // B15: every seller in the cart must be verified, not suspended/closed and
+    // able to receive payment (env SELLER_PAYMENT_READINESS_GATE, default on).
+    await assertVendorsPurchasable(cart.items.map((item) => item.product.vendorId));
 
     const outOfStock = cart.items.find((item) => item.product.stock < item.quantity);
     if (outOfStock) throw new AppError(`Insufficient stock for "${outOfStock.product.title}"`, 400);
@@ -599,6 +605,18 @@ class PaymentsService {
 
       return { checkoutId: checkout.id, orderIds };
     }, { isolationLevel: "Serializable" });
+
+    // Canonical events - emitted only after the checkout transaction committed.
+    eventsService.emit({
+      name: EVENT_NAMES.checkout_started, actorType: "user", actorId: buyerId, entityType: "Checkout", entityId: checkoutId,
+      source: "api", payload: { orderCount: orderIds.length },
+    });
+    for (const oid of orderIds) {
+      eventsService.emit({
+        name: EVENT_NAMES.order_created, actorType: "user", actorId: buyerId, entityType: "Order", entityId: oid,
+        source: "api", secondaryEntities: { checkoutId },
+      });
+    }
 
     // ─── Step 4: Stripe call OUTSIDE transaction (if needed) ───────────────
 

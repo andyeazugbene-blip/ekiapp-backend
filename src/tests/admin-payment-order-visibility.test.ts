@@ -12,9 +12,14 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 vi.mock("../lib/prisma", () => ({
   prisma: {
-    order: { findMany: vi.fn(), findUnique: vi.fn() },
-    payment: { findMany: vi.fn(), findUnique: vi.fn() },
+    order: { findMany: vi.fn(), findUnique: vi.fn(), count: vi.fn().mockResolvedValue(0) },
+    payment: { findMany: vi.fn(), findUnique: vi.fn(), count: vi.fn().mockResolvedValue(0) },
     vendor: { findMany: vi.fn(), findUnique: vi.fn() },
+    refund: { findMany: vi.fn().mockResolvedValue([]) },
+    dispute: { findUnique: vi.fn().mockResolvedValue(null) },
+    payoutRequest: { findMany: vi.fn().mockResolvedValue([]) },
+    webhookEvent: { findMany: vi.fn().mockResolvedValue([]) },
+    orderEvidence: { findMany: vi.fn().mockResolvedValue([]) },
   },
 }));
 
@@ -57,13 +62,13 @@ describe("listOrders — enum validation + cursor pagination", () => {
   it("filters by a valid status, uppercased", async () => {
     m.order.findMany.mockResolvedValue([]);
     await adminListingsService.listOrders({ status: "paid" });
-    expect(m.order.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: { status: "PAID" } }));
+    expect(m.order.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: { status: "PAID", isTest: false } }));
   });
 
   it("lists everything with no filter when status is omitted", async () => {
     m.order.findMany.mockResolvedValue([]);
     await adminListingsService.listOrders({});
-    expect(m.order.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: {} }));
+    expect(m.order.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: { isTest: false } }));
   });
 
   it("returns a real nextCursor only when there are more results than the page size, and never leaks the extra row", async () => {

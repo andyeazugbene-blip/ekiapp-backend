@@ -3,6 +3,7 @@ import type { Request, Response } from "express";
 import { AppError } from "../../shared/errors/app-error";
 import { recordAudit } from "../../shared/utils/audit";
 import { disputeService } from "./dispute.service";
+import { disputeV2Service } from "../disputes/dispute-v2.service";
 
 /**
  * POST /api/orders/:id/dispute
@@ -13,12 +14,12 @@ export async function openDispute(request: Request, response: Response): Promise
   const orderId = String(request.params.id ?? "");
   if (!orderId) throw new AppError("Order ID required", 400);
 
-  const { reason } = request.body as Record<string, unknown>;
+  const { reason, type, claim } = request.body as Record<string, unknown>;
   if (typeof reason !== "string" || !reason.trim()) {
     throw new AppError("reason is required", 400);
   }
 
-  const result = await disputeService.openDispute(request.user.id, orderId, reason);
+  const result = await disputeService.openDispute(request.user.id, orderId, reason, { type, claim });
   response.status(201).json(result);
 }
 
@@ -31,7 +32,9 @@ export async function adminListDisputes(request: Request, response: Response): P
   const limit = Math.min(Math.max(Number(request.query.limit) || 20, 1), 100);
   const cursor = typeof request.query.cursor === "string" ? request.query.cursor : undefined;
 
-  const result = await disputeService.listDisputes({ status, limit, cursor });
+  const q = typeof request.query.q === "string" && request.query.q.trim() ? request.query.q.trim() : undefined;
+  const vendorId = typeof request.query.vendorId === "string" && request.query.vendorId ? request.query.vendorId : undefined;
+  const result = await disputeService.listDisputes({ status, q, vendorId, limit, cursor });
   response.status(200).json(result);
 }
 
@@ -44,7 +47,8 @@ export async function adminGetDispute(request: Request, response: Response): Pro
   if (!disputeId) throw new AppError("Dispute ID required", 400);
 
   const dispute = await disputeService.getDispute(disputeId);
-  response.status(200).json({ dispute });
+  const caseView = await disputeV2Service.getForAdmin(disputeId);
+  response.status(200).json({ dispute: { ...dispute, ...caseView } });
 }
 
 /**

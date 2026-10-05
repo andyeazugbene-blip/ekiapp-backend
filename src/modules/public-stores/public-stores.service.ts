@@ -1,5 +1,6 @@
 import crypto from "crypto";
 
+import { eventsService, EVENT_NAMES } from "../events/events.service";
 import bcrypt from "bcryptjs";
 import { Prisma } from "@prisma/client";
 
@@ -1288,6 +1289,15 @@ export const publicStoresService = {
         } as Prisma.InputJsonValue,
       },
     });
+
+    // The public storefront's "open" beacon is the only store-view signal in the
+    // platform: client-reported, one per page open (NOT unique visitors).
+    if (input.event === "open") {
+      eventsService.emit({
+        name: EVENT_NAMES.store_viewed, actorType: viewerId ? "user" : "anonymous", actorId: viewerId ?? null,
+        entityType: "Vendor", entityId: vendor.id, source, payload: { storeSlug: vendor.storeSlug, clientReported: true },
+      });
+    }
 
     return this.getAnalyticsSummaryForVendor(vendor.id, vendor.storeSlug);
   },

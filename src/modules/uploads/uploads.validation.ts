@@ -1,7 +1,8 @@
 import { AppError } from "../../shared/errors/app-error";
-import type { CompleteUploadInput, RequestUploadInput, UploadCategory } from "./uploads.types";
+import { UPLOAD_ENTITY_TYPES } from "./uploads.types";
+import type { CompleteUploadInput, RequestUploadInput, UploadCategory, UploadEntityType } from "./uploads.types";
 
-const ALLOWED_CATEGORIES: Set<string> = new Set(["product", "avatar", "cover", "verification", "message"]);
+const ALLOWED_CATEGORIES: Set<string> = new Set(["product", "avatar", "cover", "verification", "message", "dispute_evidence", "delivery_proof"]);
 
 const ALLOWED_IMAGE_TYPES = new Set([
   "image/jpeg",
@@ -32,14 +33,14 @@ export function validateRequestUploadInput(input: unknown): RequestUploadInput {
   }
 
   if (typeof raw.category !== "string" || !ALLOWED_CATEGORIES.has(raw.category)) {
-    throw new AppError("Invalid category (product, avatar, cover, verification, message)", 400);
+    throw new AppError("Invalid category (product, avatar, cover, verification, message, dispute_evidence, delivery_proof)", 400);
   }
 
   const category = raw.category as UploadCategory;
   const contentType = raw.contentType.trim().toLowerCase();
 
   // Validate content type based on category
-  if (category === "verification") {
+  if (category === "verification" || category === "dispute_evidence") {
     if (!ALLOWED_DOC_TYPES.has(contentType)) {
       throw new AppError("Verification documents must be JPEG, PNG, WebP, or PDF", 400);
     }
@@ -71,5 +72,17 @@ export function validateCompleteUploadInput(input: unknown): CompleteUploadInput
   if (sizeBytes !== undefined && (!Number.isInteger(sizeBytes) || sizeBytes <= 0)) {
     throw new AppError("Invalid sizeBytes", 400);
   }
-  return { assetId: raw.assetId.trim(), key: raw.key.trim(), sizeBytes };
+  let entityType: UploadEntityType | undefined;
+  let entityId: string | undefined;
+  if (raw.entityType !== undefined && raw.entityType !== null && raw.entityType !== "") {
+    if (typeof raw.entityType !== "string" || !(UPLOAD_ENTITY_TYPES as readonly string[]).includes(raw.entityType)) {
+      throw new AppError("Invalid entityType", 400);
+    }
+    if (typeof raw.entityId !== "string" || raw.entityId.trim().length === 0 || raw.entityId.length > 64) {
+      throw new AppError("entityId is required with entityType", 400);
+    }
+    entityType = raw.entityType as UploadEntityType;
+    entityId = raw.entityId.trim();
+  }
+  return { assetId: raw.assetId.trim(), key: raw.key.trim(), sizeBytes, entityType, entityId };
 }

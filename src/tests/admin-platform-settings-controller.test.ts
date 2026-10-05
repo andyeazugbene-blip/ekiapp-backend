@@ -68,21 +68,19 @@ describe("updateOperationalThreshold", () => {
     expect(res.json).toHaveBeenCalledWith({ setting: expect.objectContaining({ key: "PAYOUT_STUCK_THRESHOLD_HOURS", value: 72 }) });
   });
 
-  it("passes undefined reason (not an empty string) when none is provided — the service must not audit a blank reason as if one was given", async () => {
-    vi.mocked(adminPlatformSettingsService.setValue).mockResolvedValue({} as never);
+  it("refuses (400 REASON_REQUIRED) when no reason is provided — handbook §14.12, server-validated", async () => {
     const res = fakeResponse();
     const request = { user: { id: "admin-1" }, params: { key: "PRICE_APPROVAL_TIMEOUT_HOURS" }, body: { value: 10 } } as unknown as Request;
 
-    await updateOperationalThreshold(request, res);
-
-    expect(adminPlatformSettingsService.setValue).toHaveBeenCalledWith("PRICE_APPROVAL_TIMEOUT_HOURS", 10, "admin-1", undefined, request);
+    await expect(updateOperationalThreshold(request, res)).rejects.toMatchObject({ statusCode: 400, code: "REASON_REQUIRED" });
+    expect(adminPlatformSettingsService.setValue).not.toHaveBeenCalled();
   });
 
   it("surfaces whatever validation error the service throws (e.g. invalid value) rather than swallowing it", async () => {
     const { AppError } = await import("../shared/errors/app-error");
     vi.mocked(adminPlatformSettingsService.setValue).mockRejectedValue(new AppError("value must be a finite number greater than zero", 400));
     const res = fakeResponse();
-    const request = { user: { id: "admin-1" }, params: { key: "PRICE_APPROVAL_TIMEOUT_HOURS" }, body: { value: -5 } } as unknown as Request;
+    const request = { user: { id: "admin-1" }, params: { key: "PRICE_APPROVAL_TIMEOUT_HOURS" }, body: { value: -5, reason: "correcting a typo" } } as unknown as Request;
 
     await expect(updateOperationalThreshold(request, res)).rejects.toMatchObject({ statusCode: 400 });
   });

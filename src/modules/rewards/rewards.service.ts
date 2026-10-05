@@ -25,9 +25,12 @@ function toRewardView(reward: any): RewardView {
     maxClaims: reward.maxClaims,
     claimedCount: reward.claimedCount,
     expiresAt: reward.expiresAt ? reward.expiresAt.toISOString() : null,
+    archivedAt: reward.archivedAt ? reward.archivedAt.toISOString() : null,
     createdAt: reward.createdAt.toISOString(),
   };
 }
+
+const DEFAULT_REWARD_CURRENCY = (process.env.DEFAULT_CURRENCY ?? "EUR").toUpperCase();
 
 function toUserRewardView(ur: any): UserRewardView {
   return {
@@ -53,7 +56,7 @@ export const rewardsService = {
         description: input.description ?? null,
         type: input.type,
         value: input.value,
-        currency: input.currency ?? "GBP",
+        currency: input.currency ?? DEFAULT_REWARD_CURRENCY,
         minOrderAmount: input.minOrderAmount ?? null,
         isActive: input.isActive ?? true,
         maxClaims: input.maxClaims ?? null,
@@ -64,13 +67,16 @@ export const rewardsService = {
   },
 
   // ─── Admin: List all ──────────────────────────────────────────────────────
-  async listAll(): Promise<RewardView[]> {
-    const rewards = await prisma.reward.findMany({ orderBy: { createdAt: "desc" } });
+  async listAll(opts: { includeArchived?: boolean } = {}): Promise<RewardView[]> {
+    const rewards = await prisma.reward.findMany({
+      where: opts.includeArchived ? {} : { archivedAt: null },
+      orderBy: { createdAt: "desc" },
+    });
     return rewards.map(toRewardView);
   },
 
   // ─── Admin: Update ────────────────────────────────────────────────────────
-  async update(rewardId: string, input: UpdateRewardInput): Promise<RewardView> {
+  async update(rewardId: string, input: UpdateRewardInput): Promise<{ before: RewardView; after: RewardView }> {
     const reward = await prisma.reward.findUnique({ where: { id: rewardId } });
     if (!reward) throw new AppError("Reward not found", 404);
 
@@ -88,14 +94,26 @@ export const rewardsService = {
     }
 
     const updated = await prisma.reward.update({ where: { id: rewardId }, data });
-    return toRewardView(updated);
+    return { before: toRewardView(reward), after: toRewardView(updated) };
   },
 
-  // ─── Admin: Delete ────────────────────────────────────────────────────────
-  async delete(rewardId: string): Promise<void> {
+  // ─── Admin: Pause / Resume / Archive (never hard delete: history and
+  // claims are retained; handbook 14.4) ────────────────────────────────────
+  async setState(
+    rewardId: string,
+    action: "pause" | "resume" | "archive",
+  ): Promise<{ before: RewardView; after: RewardView }> {
     const reward = await prisma.reward.findUnique({ where: { id: rewardId } });
     if (!reward) throw new AppError("Reward not found", 404);
-    await prisma.reward.delete({ where: { id: rewardId } });
+    if (action === "resume" && reward.archivedAt) throw new AppError("Archived items cannot be resumed", 409);
+    const data =
+      action === "pause"
+        ? { isActive: false }
+        : action === "resume"
+          ? { isActive: true }
+          : { isActive: false, archivedAt: reward.archivedAt ?? new Date() };
+    const updated = await prisma.reward.update({ where: { id: rewardId }, data });
+    return { before: toRewardView(reward), after: toRewardView(updated) };
   },
 
   // ─── Public: List active rewards ──────────────────────────────────────────
@@ -104,6 +122,7 @@ export const rewardsService = {
     const rewards = await prisma.reward.findMany({
       where: {
         isActive: true,
+        archivedAt: null,
         OR: [{ maxClaims: null }, { claimedCount: { lt: 999999 } }],
       },
       orderBy: { createdAt: "desc" },

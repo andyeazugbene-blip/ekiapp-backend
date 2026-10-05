@@ -1,8 +1,10 @@
 import { prisma } from "../../lib/prisma";
+import { eventsService, EVENT_NAMES } from "../events/events.service";
 import { logger } from "../../lib/logger";
 import { AppError } from "../../shared/errors/app-error";
 import { releaseVendorEarnings } from "../../shared/utils/wallet-release";
 import { notificationsService } from "../notifications/notifications.service";
+import { computeDeadlineState, defaultRespondByAt, parseDisputeType } from "../disputes/dispute-v2.service";
 import { executeOrderRefund } from "../admin/admin-refunds.controller";
 
 export interface ResolveDisputeInput {
@@ -17,7 +19,9 @@ export const disputeService = {
    * Buyer opens a dispute on a DISPATCHED escrow order.
    * Freezes the auto-release clock.
    */
-  async openDispute(buyerId: string, orderId: string, reason: string): Promise<{ disputeId: string }> {
+  async openDispute(buyerId: string, orderId: string, reason: string, extra: { type?: unknown; claim?: unknown } = {}): Promise<{ disputeId: string }> {
+    const disputeType = parseDisputeType(extra.type);
+    const claim = typeof extra.claim === "string" && extra.claim.trim() ? extra.claim.trim().slice(0, 4000) : null;
     if (!reason || reason.trim().length < 5) {
       throw new AppError("Please provide a reason (at least 5 characters)", 400);
     }
@@ -59,6 +63,9 @@ export const disputeService = {
           buyerId,
           vendorId: order.vendorId ?? "",
           reason: reason.trim(),
+          type: disputeType,
+          claim,
+          respondByAt: defaultRespondByAt(),
           status: "OPEN",
         },
       });
@@ -70,6 +77,13 @@ export const disputeService = {
       });
 
       return d;
+    });
+
+    // The create is guarded by the unique orderId + existing-dispute check, so this runs once per dispute.
+    eventsService.emit({
+      name: EVENT_NAMES.dispute_opened, actorType: "user", actorId: buyerId, entityType: "Dispute", entityId: dispute.id,
+      secondaryEntities: { orderId, vendorId: order.vendorId }, source: "api",
+      payload: { eventKey: `dispute_opened:${dispute.id}`, type: disputeType, escrow: isEscrow },
     });
 
     // Notify vendor
@@ -98,17 +112,29 @@ export const disputeService = {
   /**
    * Admin lists all disputes (with optional status filter).
    */
-  async listDisputes(query: { status?: string; limit: number; cursor?: string }) {
-    const where = query.status ? { status: query.status as any } : {};
-    const items = await prisma.dispute.findMany({
-      where,
-      orderBy: { createdAt: "desc" },
-      take: query.limit + 1,
-      ...(query.cursor ? { cursor: { id: query.cursor }, skip: 1 } : {}),
-      include: {
-        order: { select: { orderNumber: true, totalAmount: true, currency: true, vendorEarnings: true } },
-      },
-    });
+  async listDisputes(query: { status?: string; q?: string; vendorId?: string; limit: number; cursor?: string }) {
+    const where: Record<string, unknown> = {};
+    if (query.status) where.status = query.status;
+    if (query.vendorId) where.vendorId = query.vendorId;
+    if (query.q) {
+      where.OR = [
+        { reason: { contains: query.q, mode: "insensitive" } },
+        { order: { orderNumber: { contains: query.q, mode: "insensitive" } } },
+        { id: query.q },
+      ];
+    }
+    const [items, total] = await Promise.all([
+      prisma.dispute.findMany({
+        where: where as never,
+        orderBy: { createdAt: "desc" },
+        take: query.limit + 1,
+        ...(query.cursor ? { cursor: { id: query.cursor }, skip: 1 } : {}),
+        include: {
+          order: { select: { orderNumber: true, totalAmount: true, currency: true, vendorEarnings: true } },
+        },
+      }),
+      prisma.dispute.count({ where: where as never }),
+    ]);
 
     let nextCursor: string | null = null;
     if (items.length > query.limit) {
@@ -116,7 +142,28 @@ export const disputeService = {
       nextCursor = next?.id ?? null;
     }
 
-    return { items, nextCursor };
+    // Human names first (Handbook 2.1 L134): resolve buyer + store names in two batched lookups.
+    const buyerIds = [...new Set(items.map((d) => d.buyerId))];
+    const vendorIds = [...new Set(items.map((d) => d.vendorId))];
+    const [buyers, vendors] = await Promise.all([
+      prisma.user.findMany({ where: { id: { in: buyerIds } }, select: { id: true, name: true, email: true } }),
+      prisma.vendor.findMany({ where: { id: { in: vendorIds } }, select: { id: true, storeName: true } }),
+    ]);
+    const buyerById = new Map(buyers.map((u) => [u.id, u]));
+    const vendorById = new Map(vendors.map((v) => [v.id, v.storeName]));
+
+    return {
+      items: items.map((d) => ({
+        ...d,
+        // Overdue is computed state (handbook has no proactive-processing requirement): lets the queue sort/flag it.
+        deadline: computeDeadlineState(d),
+        buyerName: buyerById.get(d.buyerId)?.name ?? null,
+        buyerEmail: buyerById.get(d.buyerId)?.email ?? null,
+        vendorName: vendorById.get(d.vendorId) ?? null,
+      })),
+      nextCursor,
+      total,
+    };
   },
 
   /**
@@ -143,7 +190,11 @@ export const disputeService = {
       },
     });
     if (!dispute) throw new AppError("Dispute not found", 404);
-    return dispute;
+    const [buyer, vendor] = await Promise.all([
+      prisma.user.findUnique({ where: { id: dispute.buyerId }, select: { id: true, name: true, email: true } }),
+      prisma.vendor.findUnique({ where: { id: dispute.vendorId }, select: { id: true, storeName: true, userId: true } }),
+    ]);
+    return { ...dispute, buyer, vendor };
   },
 
   /**
@@ -245,6 +296,7 @@ export const disputeService = {
         data: {
           status: resolvedStatus!,
           resolution: input.note,
+          decisionReason: input.note,
           fraudulent: input.fraudulent ?? false,
           refundAmount: input.refundAmount ?? null,
           resolvedById: adminId,
@@ -259,6 +311,14 @@ export const disputeService = {
           data: { trustScore: { decrement: 20 } },
         });
       }
+    });
+
+    // The transaction above only ran for a dispute that was OPEN when read; eventKey lets consumers dedupe a replay.
+    eventsService.emit({
+      name: EVENT_NAMES.dispute_resolved, actorType: "admin", actorId: adminId, entityType: "Dispute", entityId: disputeId,
+      secondaryEntities: { orderId: dispute.orderId }, source: "admin_resolve",
+      amountMinor: input.refundAmount ?? null, currency: dispute.order.currency,
+      payload: { eventKey: `dispute_resolved:${disputeId}`, resolution: input.resolution, resultStatus: resolvedStatus!, fraudulent: input.fraudulent === true },
     });
 
     // If resolved in vendor's favour, release wallet earnings and initiate payout

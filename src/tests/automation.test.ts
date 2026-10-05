@@ -37,6 +37,16 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+function expectOnlySuppressed(reason: string) {
+  expect(m.automationRun.create).toHaveBeenCalledTimes(1);
+  const data = (m.automationRun.create.mock.calls[0][0] as { data: Record<string, unknown> }).data;
+  expect(data.status).toBe("SUPPRESSED");
+  expect(data.suppressedReason).toBe(reason);
+  // Never the real dedupeKey: the automation must still be able to run later.
+  expect(String(data.dedupeKey)).toContain(":suppressed:" + reason + ":");
+  expect(data.dedupeKey).not.toBe(data.type + ":" + baseInput.subjectKey);
+}
+
 const baseInput = {
   type: "CART_RECOVERY" as const,
   recipientUserId: "buyer-1",
@@ -75,11 +85,11 @@ describe("Automation cron schedule — must never fall inside quiet hours", () =
 });
 
 describe("automationService.scheduleAutomation", () => {
-  it("suppresses during quiet hours without touching the database", async () => {
+  it("records quiet hours as a SUPPRESSED run under a distinct key (never the real dedupeKey)", async () => {
     vi.setSystemTime(new Date("2026-06-15T23:30:00.000Z")); // 23:30 UTC — quiet hours
     await automationService.scheduleAutomation(baseInput);
     expect(m.user.findUnique).not.toHaveBeenCalled();
-    expect(m.automationRun.create).not.toHaveBeenCalled();
+    expectOnlySuppressed("quiet_hours");
     expect(mSend).not.toHaveBeenCalled();
   });
 
@@ -96,13 +106,13 @@ describe("automationService.scheduleAutomation", () => {
   it("quiet-hours boundary: exactly 22:00:00 UTC suppresses", async () => {
     vi.setSystemTime(new Date("2026-06-15T22:00:00.000Z"));
     await automationService.scheduleAutomation(baseInput);
-    expect(m.automationRun.create).not.toHaveBeenCalled();
+    expectOnlySuppressed("quiet_hours");
   });
 
   it("quiet-hours boundary: exactly 06:59:59 UTC still suppresses", async () => {
     vi.setSystemTime(new Date("2026-06-15T06:59:59.000Z"));
     await automationService.scheduleAutomation(baseInput);
-    expect(m.automationRun.create).not.toHaveBeenCalled();
+    expectOnlySuppressed("quiet_hours");
   });
 
   it("quiet-hours boundary: exactly 07:00:00 UTC proceeds again", async () => {
@@ -204,7 +214,7 @@ describe("automationService.scheduleAutomation", () => {
   it("skips a recipient without marketing consent for consent-gated types", async () => {
     m.user.findUnique.mockResolvedValue({ isSuspended: false, marketingConsentAt: null } as never);
     await automationService.scheduleAutomation(baseInput);
-    expect(m.automationRun.create).not.toHaveBeenCalled();
+    expectOnlySuppressed("no_marketing_consent");
     expect(mSend).not.toHaveBeenCalled();
   });
 
@@ -233,14 +243,14 @@ describe("automationService.scheduleAutomation", () => {
       subjectKey: "vendor-1:2026-06-15",
       requiresMarketingConsent: false,
     });
-    expect(m.automationRun.create).not.toHaveBeenCalled();
+    expectOnlySuppressed("vendor_disabled_automation");
   });
 
   it("respects the frequency cap — skips if a SENT run exists within the window", async () => {
     m.user.findUnique.mockResolvedValue({ isSuspended: false, marketingConsentAt: new Date() } as never);
     m.automationRun.findFirst.mockResolvedValue({ id: "prior-run" } as never);
     await automationService.scheduleAutomation({ ...baseInput, frequencyCapDays: 30 });
-    expect(m.automationRun.create).not.toHaveBeenCalled();
+    expectOnlySuppressed("frequency_capped");
     expect(mSend).not.toHaveBeenCalled();
   });
 

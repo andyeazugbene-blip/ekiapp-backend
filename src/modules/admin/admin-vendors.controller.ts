@@ -3,6 +3,7 @@ import type { Request, Response } from "express";
 import { AppError } from "../../shared/errors/app-error";
 import { vendorMarketsService } from "../vendors/vendor-markets.service";
 import { adminVendorsService } from "./admin-vendors.service";
+import { adminSuspensionService, parseSuspendInput, parseUnsuspendInput } from "./admin-suspension.service";
 
 function requireUserId(request: Request): string {
   if (!request.user) {
@@ -20,33 +21,23 @@ function requireIdParam(request: Request): string {
 }
 
 export async function suspendVendor(request: Request, response: Response): Promise<void> {
-  const reason =
-    request.body && typeof request.body === "object" && typeof request.body.reason === "string"
-      ? request.body.reason.trim()
-      : undefined;
-
-  const vendor = await adminVendorsService.suspendVendor(
-    requireUserId(request),
-    requireIdParam(request),
-    reason,
+  const result = await adminSuspensionService.suspendVendor({
+    adminId: requireUserId(request),
+    vendorId: requireIdParam(request),
+    input: parseSuspendInput(request.body),
     request,
-  );
-  response.status(200).json({ vendor });
+  });
+  response.status(200).json({ vendor: result.vendor, notified: result.notified });
 }
 
 export async function unsuspendVendor(request: Request, response: Response): Promise<void> {
-  const reason =
-    request.body && typeof request.body === "object" && typeof request.body.reason === "string"
-      ? request.body.reason.trim()
-      : undefined;
-
-  const vendor = await adminVendorsService.unsuspendVendor(
-    requireUserId(request),
-    requireIdParam(request),
-    reason,
+  const result = await adminSuspensionService.unsuspendVendor({
+    adminId: requireUserId(request),
+    vendorId: requireIdParam(request),
+    input: parseUnsuspendInput(request.body),
     request,
-  );
-  response.status(200).json({ vendor });
+  });
+  response.status(200).json({ vendor: result.vendor, notified: result.notified });
 }
 
 export async function inviteVendor(request: Request, response: Response): Promise<void> {

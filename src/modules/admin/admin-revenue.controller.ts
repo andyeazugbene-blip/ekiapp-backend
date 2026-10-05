@@ -1,6 +1,7 @@
 import type { Request, Response } from "express";
 import { env } from "../../config/env";
 import { prisma } from "../../lib/prisma";
+import { notTest, notTestOf } from "../../shared/utils/test-records";
 import { AppError } from "../../shared/errors/app-error";
 
 const VALID_RANGES = new Set(["7d", "30d", "90d"]);
@@ -37,11 +38,11 @@ export async function getAdminRevenue(request: Request, response: Response): Pro
   since.setUTCDate(since.getUTCDate() - (days - 1));
 
   const stripePayments = await prisma.payment.findMany({
-    where: { status: "SUCCEEDED", provider: "stripe", processedAt: { gte: since } },
+    where: { status: "SUCCEEDED", provider: "stripe", processedAt: { gte: since }, ...notTest() },
     select: { amount: true, processedAt: true, orderId: true },
   });
   const paystackTxs = await prisma.paystackTransaction.findMany({
-    where: { status: "SUCCESS", updatedAt: { gte: since } },
+    where: { status: "SUCCESS", updatedAt: { gte: since }, ...notTestOf("order") },
     select: { amount: true, updatedAt: true, orderId: true },
   });
 
@@ -78,10 +79,10 @@ export async function getAdminRevenue(request: Request, response: Response): Pro
   const averageOrderValue = orderCount > 0 ? Math.round(totalRevenue / orderCount) : 0;
 
   // Platform net calculations
-  const feeAgg = await prisma.payment.aggregate({ where: { status: "SUCCEEDED", processedAt: { gte: since } }, _sum: { platformFeeAmount: true, vendorEarningsAmount: true } });
+  const feeAgg = await prisma.payment.aggregate({ where: { status: "SUCCEEDED", processedAt: { gte: since }, ...notTest() }, _sum: { platformFeeAmount: true, vendorEarningsAmount: true } });
   const totalPlatformFees = feeAgg._sum.platformFeeAmount ?? 0;
   const totalVendorEarnings = feeAgg._sum.vendorEarningsAmount ?? 0;
-  const payoutAgg = await prisma.payoutRequest.aggregate({ where: { status: "PAID", paidAt: { gte: since } }, _sum: { amount: true } });
+  const payoutAgg = await prisma.payoutRequest.aggregate({ where: { status: "PAID", paidAt: { gte: since }, ...notTestOf("vendor") }, _sum: { amount: true } });
   const totalPayouts = payoutAgg._sum.amount ?? 0;
   const netRevenue = totalPlatformFees - totalPayouts;
 

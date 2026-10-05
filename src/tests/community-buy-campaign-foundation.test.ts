@@ -133,7 +133,7 @@ describe("communityCampaignsService.update — resumable draft persistence (B)",
   it("the Supply step can be set via update() while still a draft (not only at create time)", async () => {
     m.communityCampaign.findUnique.mockResolvedValue({ id: "camp-1", organiserId: "org-1", status: "DRAFT", termsLockedAt: null, supplierId: null, country: "GB" } as never);
     m.organiserProfile.findUnique.mockResolvedValue({ id: "org-1", userId: "u1" });
-    m.supplierProfile.findUnique.mockResolvedValue({ id: "sup-1", isVerified: true, isRestricted: false, country: "GB", vendor: { userId: "vendor-user-1" } } as never);
+    m.supplierProfile.findUnique.mockResolvedValue({ id: "sup-1", isVerified: true, isRestricted: false, country: "GB", vendor: { userId: "vendor-user-1", stripeChargesEnabled: true, stripePayoutsEnabled: true } } as never);
     m.communityCampaign.update.mockResolvedValue({ id: "camp-1", fulfilmentOwner: "SUPPLIER", supplierId: "sup-1", minimumShares: null, maximumShares: null, title: "T" });
 
     const result = await communityCampaignsService.update("u1", "camp-1", { fulfilmentOwner: "SUPPLIER", supplierId: "sup-1" });
@@ -218,7 +218,7 @@ describe("communityCampaignsService.submit — the authoritative gate (C, D, H)"
       ...validDraftFields, deadline: new Date(validDraftFields.deadline),
     } as never);
     m.organiserProfile.findUnique.mockResolvedValue({ id: "org-1", isVerified: true, isRestricted: false });
-    m.supplierAccount.findUnique.mockResolvedValue({ id: "acct-1", supplierState: "APPROVED" } as never);
+    m.supplierAccount.findUnique.mockResolvedValue({ id: "acct-1", supplierState: "APPROVED", payoutsEnabled: true, chargesEnabled: true } as never);
     m.marketConfiguration.findUnique.mockResolvedValue({ countryCode: "GB", communityBuyEnabled: true } as never);
     m.communityCampaign.update.mockResolvedValue({ id: "camp-1", status: "UNDER_REVIEW" });
 

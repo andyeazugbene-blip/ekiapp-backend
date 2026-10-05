@@ -11,6 +11,14 @@ vi.mock("../lib/prisma", () => ({
     order: { findUnique: vi.fn(), update: vi.fn() },
     paystackTransaction: { update: vi.fn() },
     auditLog: { create: vi.fn() },
+    refund: {
+      aggregate: vi.fn().mockResolvedValue({ _sum: { amountMinor: 0 } }),
+      count: vi.fn().mockResolvedValue(0),
+      create: vi.fn().mockResolvedValue({ id: "refund-row-1" }),
+      update: vi.fn().mockResolvedValue({}),
+      findUnique: vi.fn().mockResolvedValue(null),
+      findMany: vi.fn().mockResolvedValue([]),
+    },
     // Four-eyes gate (admin-approvals.service.ts) checks for a configured
     // rule before every refund now — null (no rule) means it stays
     // ungated, exactly matching this file's pre-four-eyes behavior.
@@ -54,8 +62,9 @@ function createMockReq(orderId: string, body: Record<string, unknown> = {}): Req
   return {
     user: { id: "admin-1", role: "ADMIN", email: "admin@test.com" },
     params: { id: orderId },
-    body,
+    body: { reason: "Customer requested a refund (test)", ...body },
     headers: {},
+    header: () => undefined,
   } as unknown as Request;
 }
 
@@ -109,7 +118,7 @@ describe("adminRefundOrder — provider branching", () => {
       status: "succeeded",
     } as never);
 
-    const req = createMockReq("ord-1", { amount: 10000, reason: "duplicate" });
+    const req = createMockReq("ord-1", { amount: 10000, reason: "Duplicate charge reported by customer" });
     const res = createMockRes();
 
     await adminRefundOrder(req, res as unknown as Response);
@@ -119,7 +128,7 @@ describe("adminRefundOrder — provider branching", () => {
 
     // Confirm idempotency key shape
     const [, options] = mockedStripeRefundCreate.mock.calls[0];
-    expect(options).toEqual(expect.objectContaining({ idempotencyKey: "refund:ord-1:10000" }));
+    expect(options).toEqual(expect.objectContaining({ idempotencyKey: "refund:ord-1:10000:0" }));
 
     // Confirm payload
     const [payload] = mockedStripeRefundCreate.mock.calls[0];
@@ -173,7 +182,7 @@ describe("adminRefundOrder — provider branching", () => {
     // same checkout, so an omitted Stripe amount would refund ALL of them.
     const [payload, options] = mockedStripeRefundCreate.mock.calls[0];
     expect(payload).toEqual(expect.objectContaining({ amount: 5000 }));
-    expect(options).toEqual(expect.objectContaining({ idempotencyKey: "refund:ord-2:5000" }));
+    expect(options).toEqual(expect.objectContaining({ idempotencyKey: "refund:ord-2:5000:0" }));
   });
 
   it("STRIPE: a normalized order (native currency differs from the checkout/PaymentIntent currency) refunds the amount actually charged, using the stored rate — never the native number taken at face value", async () => {

@@ -3,6 +3,10 @@ import type { AutomationType } from "@prisma/client";
 import { prisma } from "../../lib/prisma";
 import { logger } from "../../lib/logger";
 import { communicationService } from "../communications/communication.service";
+import { commsPauseService } from "../communications/comms-pause.service";
+import { eventsService, EVENT_NAMES } from "../events/events.service";
+import { AppError } from "../../shared/errors/app-error";
+import { getRuleGate, noteRuleRan, noteRuleSkipped } from "./automation-rule-gate";
 import { MARKETING_AUTOMATION_TYPES, VENDOR_TOGGLEABLE_AUTOMATION_TYPES, EKI_MANAGED_AUTOMATION_TYPES, type ScheduleAutomationInput } from "./automation.types";
 
 // Server-time quiet hours (UTC). A per-user-timezone version would need a
@@ -25,7 +29,7 @@ import { MARKETING_AUTOMATION_TYPES, VENDOR_TOGGLEABLE_AUTOMATION_TYPES, EKI_MAN
 const QUIET_HOUR_START_UTC = 22;
 const QUIET_HOUR_END_UTC = 7;
 
-function isQuietHoursNow(): boolean {
+export function isQuietHoursNow(): boolean {
   const hour = new Date().getUTCHours();
   return hour >= QUIET_HOUR_START_UTC || hour < QUIET_HOUR_END_UTC;
 }
@@ -37,7 +41,7 @@ function automationEventKey(type: AutomationType): string {
 // Default templates for each automation type. Seeded into the existing
 // CommunicationTemplate table (admin-editable) on first use — same
 // bootstrap pattern as ensureDefaultPlanConfigs() in subscriptions.service.ts.
-const DEFAULT_TEMPLATES: Record<AutomationType, { title: string; body: string; channels: ("email" | "push" | "in_app")[]; recipientType: "BUYER" | "VENDOR" }> = {
+export const DEFAULT_TEMPLATES: Record<AutomationType, { title: string; body: string; channels: ("email" | "push" | "in_app")[]; recipientType: "BUYER" | "VENDOR" }> = {
   FIRST_SALE: {
     title: "Get your first order",
     body: "Hi {{name}}, your store {{store_name}} is live. Share your store link and add a few more products to attract your first buyer.",
@@ -93,14 +97,14 @@ const DEFAULT_TEMPLATES: Record<AutomationType, { title: string; body: string; c
     recipientType: "BUYER",
   },
   RENEWAL_REMINDER: {
-    title: "Upcoming Regular Delivery",
-    body: "Hi {{name}}, your Regular Delivery from {{store_name}} renews on {{renewal_date}}.",
+    title: "Upcoming Foodstuffs Subscription",
+    body: "Hi {{name}}, your Foodstuffs Subscription from {{store_name}} renews on {{renewal_date}}.",
     channels: ["push", "in_app"],
     recipientType: "BUYER",
   },
   PRICE_APPROVAL_REMINDER: {
     title: "Price change needs your approval",
-    body: "Hi {{name}}, {{store_name}} changed a price on your upcoming Regular Delivery. Review and approve to continue.",
+    body: "Hi {{name}}, {{store_name}} changed a price on your upcoming Foodstuffs Subscription delivery. Review and approve to continue.",
     channels: ["push", "in_app"],
     recipientType: "BUYER",
   },
@@ -121,6 +125,12 @@ const DEFAULT_TEMPLATES: Record<AutomationType, { title: string; body: string; c
     body: "Your refund for {{campaign_title}} is {{refund_status}}.",
     channels: ["push", "in_app"],
     recipientType: "BUYER",
+  },
+  VENDOR_TRIAL_ENDING: {
+    title: "Your Eki free trial ends soon",
+    body: "Hi {{name}}, your free trial ends on {{trial_end_date}}. After that your {{plan_name}} plan ({{plan_price}}) is billed automatically. Manage your plan in the app before then.",
+    channels: ["push", "in_app", "email"],
+    recipientType: "VENDOR",
   },
 };
 
@@ -146,7 +156,16 @@ async function ensureTemplate(type: AutomationType): Promise<void> {
   });
 }
 
-async function isEligible(input: ScheduleAutomationInput): Promise<{ eligible: boolean; reason?: string }> {
+type Timing = { frequencyCapDays?: number; quietHoursStartUtc?: number; quietHoursEndUtc?: number } | null;
+
+function isQuietHoursWith(timing: Timing): boolean {
+  const start = timing?.quietHoursStartUtc ?? QUIET_HOUR_START_UTC;
+  const end = timing?.quietHoursEndUtc ?? QUIET_HOUR_END_UTC;
+  const hour = new Date().getUTCHours();
+  return start > end ? hour >= start || hour < end : hour >= start && hour < end;
+}
+
+async function isEligible(input: ScheduleAutomationInput, timing: Timing = null): Promise<{ eligible: boolean; reason?: string }> {
   const recipient = await prisma.user.findUnique({
     where: { id: input.recipientUserId },
     select: { isSuspended: true, marketingConsentAt: true },
@@ -167,13 +186,15 @@ async function isEligible(input: ScheduleAutomationInput): Promise<{ eligible: b
     if (setting && !setting.enabled) return { eligible: false, reason: "vendor_disabled_automation" };
   }
 
-  if (input.frequencyCapDays) {
-    const since = new Date(Date.now() - input.frequencyCapDays * 24 * 60 * 60 * 1000);
+  const capDays = timing?.frequencyCapDays ?? input.frequencyCapDays;
+  if (capDays) {
+    const since = new Date(Date.now() - capDays * 24 * 60 * 60 * 1000);
     const recent = await prisma.automationRun.findFirst({
       where: {
         type: input.type,
         recipientUserId: input.recipientUserId,
         status: "SENT",
+        isTest: false,
         createdAt: { gte: since },
       },
       select: { id: true },
@@ -184,26 +205,189 @@ async function isEligible(input: ScheduleAutomationInput): Promise<{ eligible: b
   return { eligible: true };
 }
 
+export interface ChannelResult {
+  channel: string;
+  communicationLogId: string;
+  status: string;
+  providerRef: string | null;
+  statusDetail: string | null;
+  deliveredAt: string | null;
+}
+
+/**
+ * Reads the CommunicationLog rows communicationService.send() just wrote for
+ * this recipient/event (send() does not return per-channel detail). Best
+ * effort — an empty list just means "no channel detail recorded".
+ */
+async function collectChannelResults(recipientId: string, eventKey: string, since: Date): Promise<ChannelResult[]> {
+  try {
+    const rows = await prisma.communicationLog.findMany({
+      where: { recipientId, eventKey, createdAt: { gte: since } },
+      orderBy: { createdAt: "asc" },
+      select: { id: true, channel: true, status: true, providerRef: true, statusDetail: true, deliveredAt: true },
+    });
+    return rows.map((r) => ({
+      channel: r.channel,
+      communicationLogId: r.id,
+      status: r.status,
+      providerRef: r.providerRef ?? null,
+      statusDetail: r.statusDetail ?? null,
+      deliveredAt: r.deliveredAt ? r.deliveredAt.toISOString() : null,
+    }));
+  } catch {
+    return [];
+  }
+}
+
+function dayBucket(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function isUniqueViolation(error: unknown): boolean {
+  return (error as { code?: string } | null)?.code === "P2002";
+}
+
+/**
+ * Records a suppression as a visible AutomationRun (handbook 14.10/15.3).
+ * The row uses its own suffixed dedupeKey (type:subject:suppressed:reason:day)
+ * so it NEVER consumes the real `type:subject` key — the automation can still
+ * run later once the condition clears — and at most one row per
+ * subject/reason/day is written. Never throws.
+ */
+async function recordSuppression(input: ScheduleAutomationInput, reason: string, extra?: Record<string, unknown>): Promise<void> {
+  eventsService.emit({
+    name: EVENT_NAMES.automation_suppressed,
+    actorType: "system",
+    entityType: "AutomationRun",
+    secondaryEntities: { recipientUserId: input.recipientUserId, vendorId: input.vendorId ?? null },
+    source: "automation_engine",
+    payload: { type: input.type, subjectKey: input.subjectKey, reason },
+  });
+  try {
+    await prisma.automationRun.create({
+      data: {
+        type: input.type,
+        vendorId: input.vendorId ?? null,
+        recipientUserId: input.recipientUserId,
+        status: "SUPPRESSED",
+        suppressedReason: reason,
+        dedupeKey: `${input.type}:${input.subjectKey}:suppressed:${reason}:${dayBucket()}`,
+        ruleKey: input.type,
+        data: { ...(input.data ?? {}), ...(extra ?? {}) } as any,
+      },
+    });
+  } catch (error) {
+    // P2002 = already recorded today. Anything else (e.g. FK for a recipient
+    // that no longer exists) is logged only: suppression bookkeeping must
+    // never break the caller.
+    if (!isUniqueViolation(error)) {
+      logger.warn("Could not record automation suppression", { type: input.type, reason, error: error instanceof Error ? error.message : String(error) });
+    }
+  }
+}
+
+/**
+ * Sends for an already-created run and writes the honest outcome back:
+ * channel-level results + CommunicationLog link, SENT only when
+ * communicationService actually dispatched (== "handed to provider"; a
+ * provider delivery receipt is shown separately, never assumed).
+ */
+async function dispatchRun(
+  run: { id: string; dedupeKey: string },
+  params: { type: AutomationType; recipientUserId: string; data?: Record<string, unknown> | null },
+): Promise<"SENT" | "SUPPRESSED" | "FAILED"> {
+  const recipient = await prisma.user.findUnique({
+    where: { id: params.recipientUserId },
+    select: { name: true, email: true },
+  });
+  const startedAt = new Date(Date.now() - 1000);
+  const eventKey = automationEventKey(params.type);
+  try {
+    const result = await communicationService.send({
+      eventKey,
+      recipientId: params.recipientUserId,
+      recipientEmail: recipient?.email,
+      variables: { name: recipient?.name ?? "there", ...(params.data as Record<string, string> | undefined) },
+      notificationType: "AUTOMATION_MESSAGE",
+      // NAV-10: forward entity ids so push/in-app taps can deep-link.
+      data: params.data ?? undefined,
+      // Same key as this run's dedupeKey so a caller that already wrote its own
+      // in-app Notification for this event doesn't get a second one.
+      dedupeKey: run.dedupeKey,
+    });
+    const channelResults = await collectChannelResults(params.recipientUserId, eventKey, startedAt);
+    const communicationLogId = channelResults[0]?.communicationLogId ?? null;
+
+    if (result.outcome === "SENT") {
+      await prisma.automationRun.update({
+        where: { id: run.id },
+        data: { status: "SENT", sentAt: new Date(), channelResults: channelResults as any, communicationLogId },
+      });
+      eventsService.emit({
+        name: EVENT_NAMES.automation_actioned,
+        actorType: "system",
+        entityType: "AutomationRun",
+        entityId: run.id,
+        source: "automation_engine",
+        payload: { type: params.type, channels: channelResults.map((c) => c.channel) },
+      });
+    } else if (result.outcome === "SUPPRESSED") {
+      await prisma.automationRun.update({
+        where: { id: run.id },
+        data: { status: "SUPPRESSED", suppressedReason: result.reason ?? "Suppressed", channelResults: channelResults as any, communicationLogId },
+      });
+    } else {
+      await prisma.automationRun.update({
+        where: { id: run.id },
+        data: { status: "FAILED", failureReason: result.reason ?? "Every channel failed to dispatch", channelResults: channelResults as any, communicationLogId },
+      });
+    }
+    return result.outcome;
+  } catch (error) {
+    await prisma.automationRun.update({
+      where: { id: run.id },
+      data: { status: "FAILED", failureReason: error instanceof Error ? error.message : String(error) },
+    });
+    return "FAILED";
+  }
+}
+
 export const automationService = {
   /**
-   * The single entry point every trigger/detector calls. Performs
-   * eligibility checks (consent, vendor toggle, frequency cap, quiet
-   * hours), then — only if eligible — records an AutomationRun and sends
-   * via the existing communicationService. Never throws; automation
-   * failures must never break the caller's real business logic.
+   * The single entry point every trigger/detector calls. Order of checks:
+   * emergency pause -> rule state -> quiet hours -> eligibility (recipient,
+   * consent, vendor toggle, frequency cap). EVERY suppression is recorded as
+   * an AutomationRun with an explicit suppressedReason. Only an eligible
+   * attempt consumes the real `type:subject` dedupeKey. Never throws.
    */
   async scheduleAutomation(input: ScheduleAutomationInput): Promise<void> {
     try {
-      // Quiet hours are transient — don't consume the dedupe key, just skip
-      // this pass. The next sweep will re-detect and retry later.
-      if (isQuietHoursNow()) {
-        logger.info("Automation suppressed: quiet hours", { type: input.type, subjectKey: input.subjectKey });
+      // Emergency pause (Communications page, Super Admin): transient — no real
+      // dedupe key consumed, the next sweep after resume retries.
+      if (await commsPauseService.isAutomationsPaused()) {
+        logger.info("Automation suppressed: emergency_pause", { type: input.type, subjectKey: input.subjectKey, reason: "emergency_pause" });
+        await recordSuppression(input, "emergency_pause");
         return;
       }
 
-      const eligibility = await isEligible(input);
+      const gate = await getRuleGate(input.type);
+      if (!gate.runnable) {
+        await recordSuppression(input, gate.reason ?? "rule_paused");
+        await noteRuleSkipped(input.type, gate.reason ?? "rule_paused");
+        return;
+      }
+
+      // Quiet hours are transient — recorded, but under a distinct key.
+      if (!input.bypassQuietHours && isQuietHoursWith(gate.timing)) {
+        logger.info("Automation suppressed: quiet hours", { type: input.type, subjectKey: input.subjectKey });
+        await recordSuppression(input, "quiet_hours");
+        return;
+      }
+
+      const eligibility = await isEligible(input, gate.timing);
       if (!eligibility.eligible) {
         logger.info("Automation not eligible", { type: input.type, subjectKey: input.subjectKey, reason: eligibility.reason });
+        await recordSuppression(input, eligibility.reason ?? "ineligible");
         return;
       }
 
@@ -218,78 +402,31 @@ export const automationService = {
             recipientUserId: input.recipientUserId,
             status: "ELIGIBILITY_CHECK",
             dedupeKey: `${input.type}:${input.subjectKey}`,
+            ruleKey: input.type,
             data: input.data as any,
           },
         });
       } catch (error) {
-        if ((error as any)?.code === "P2002") {
-          // Already scheduled/sent for this exact subject — this is the
-          // primary duplicate-message guard, enforced at the DB level.
+        if (isUniqueViolation(error)) {
+          // Already scheduled/sent for this exact subject — the primary
+          // duplicate-message guard (DB-level). Recorded, not silent.
+          await recordSuppression(input, "duplicate_key");
           return;
         }
         throw error;
       }
 
-      const recipient = await prisma.user.findUnique({
-        where: { id: input.recipientUserId },
-        select: { name: true, email: true },
+      eventsService.emit({
+        name: EVENT_NAMES.automation_triggered,
+        actorType: "system",
+        entityType: "AutomationRun",
+        entityId: run.id,
+        secondaryEntities: { recipientUserId: input.recipientUserId, vendorId: input.vendorId ?? null },
+        source: "automation_engine",
+        payload: { type: input.type, subjectKey: input.subjectKey },
       });
-
-      try {
-        const result = await communicationService.send({
-          eventKey: automationEventKey(input.type),
-          recipientId: input.recipientUserId,
-          recipientEmail: recipient?.email,
-          variables: { name: recipient?.name ?? "there", ...(input.data as Record<string, string> | undefined) },
-          notificationType: "AUTOMATION_MESSAGE",
-          // NAV-10 fix: input.data was only ever merged into `variables`
-          // (template text interpolation) — it never reached the push/
-          // in-app `data` payload the frontend's tap-router reads, so even
-          // a caller that supplied an entity id (e.g. campaignId) had no
-          // way to make a resulting notification deep-link anywhere.
-          // Additive only: every automation type's push previously carried
-          // exactly `{ type: eventKey }` and nothing else, so merging this
-          // in only adds fields, never changes or removes an existing one.
-          data: input.data,
-          // Same key as this run's own dedupeKey (below). If a caller already
-          // created its own in-app Notification for this exact event (e.g.
-          // renewals.service.ts calling notificationsService.enqueue()
-          // directly before scheduling this automation, using the identical
-          // `${type}:${subjectKey}` key), this second in-app write collides
-          // and is silently skipped instead of double-notifying the user.
-          dedupeKey: run.dedupeKey,
-        });
-
-        // Status truth: SENT must mean the communication layer actually
-        // accepted and dispatched it on at least one channel. Previously
-        // this branch always wrote "SENT" as long as send() didn't throw —
-        // but send() never throws for a disabled/missing template, so a
-        // fully suppressed communication (e.g. an admin disabled
-        // "automation_renewal_reminder" from the Communications page)
-        // showed as a normal successful run on the admin Automation
-        // Activity page, indistinguishable from a real delivery.
-        if (result.outcome === "SENT") {
-          await prisma.automationRun.update({
-            where: { id: run.id },
-            data: { status: "SENT", sentAt: new Date() },
-          });
-        } else if (result.outcome === "SUPPRESSED") {
-          await prisma.automationRun.update({
-            where: { id: run.id },
-            data: { status: "SUPPRESSED", suppressedReason: result.reason ?? "Suppressed" },
-          });
-        } else {
-          await prisma.automationRun.update({
-            where: { id: run.id },
-            data: { status: "FAILED", failureReason: result.reason ?? "Every channel failed to dispatch" },
-          });
-        }
-      } catch (error) {
-        await prisma.automationRun.update({
-          where: { id: run.id },
-          data: { status: "FAILED", failureReason: error instanceof Error ? error.message : String(error) },
-        });
-      }
+      await noteRuleRan(input.type);
+      await dispatchRun(run, { type: input.type, recipientUserId: input.recipientUserId, data: input.data });
     } catch (error) {
       // Automation must never break the caller's real business logic.
       logger.error("Automation scheduling failed", {
@@ -299,6 +436,69 @@ export const automationService = {
       });
     }
   },
+
+  /**
+   * Admin retry of a FAILED run. Creates a NEW run with a fresh attempt key
+   * (`<root>:retry:<n>`, unique) so the consumed original key doesn't block it
+   * and a double-click/concurrent retry hits the unique key (409) instead of
+   * sending twice. Refuses if an earlier retry already succeeded or is in
+   * flight. Eligibility is re-checked at retry time.
+   */
+  async retryRun(runId: string): Promise<{ id: string; status: string }> {
+    const original = await prisma.automationRun.findUnique({ where: { id: runId } });
+    if (!original) throw new AppError("Run not found", 404);
+    if (original.status !== "FAILED") throw new AppError("Only FAILED runs can be retried", 409);
+    const children = await prisma.automationRun.findMany({ where: { retryOfId: original.id }, select: { id: true, status: true } });
+    if (children.some((c) => c.status !== "FAILED")) {
+      throw new AppError("This run has already been retried", 409);
+    }
+    const attempt = original.attempt + 1;
+    const rootKey = original.dedupeKey.replace(/:retry:\d+$/, "");
+    let run;
+    try {
+      run = await prisma.automationRun.create({
+        data: {
+          type: original.type,
+          vendorId: original.vendorId,
+          recipientUserId: original.recipientUserId,
+          status: "ELIGIBILITY_CHECK",
+          dedupeKey: `${rootKey}:retry:${attempt}`,
+          ruleKey: original.ruleKey ?? original.type,
+          attempt,
+          retryOfId: original.id,
+          data: original.data as any,
+        },
+      });
+    } catch (error) {
+      if (isUniqueViolation(error)) throw new AppError("This run is already being retried", 409);
+      throw error;
+    }
+    const input: ScheduleAutomationInput = {
+      type: original.type,
+      recipientUserId: original.recipientUserId,
+      vendorId: original.vendorId,
+      subjectKey: rootKey,
+      requiresMarketingConsent: MARKETING_AUTOMATION_TYPES.includes(original.type),
+      title: "",
+      body: "",
+      data: (original.data as Record<string, unknown> | null) ?? undefined,
+    };
+    if (await commsPauseService.isAutomationsPaused()) {
+      await prisma.automationRun.update({ where: { id: run.id }, data: { status: "SUPPRESSED", suppressedReason: "emergency_pause" } });
+      return { id: run.id, status: "SUPPRESSED" };
+    }
+    const eligibility = await isEligible(input);
+    if (!eligibility.eligible) {
+      await prisma.automationRun.update({ where: { id: run.id }, data: { status: "SUPPRESSED", suppressedReason: eligibility.reason ?? "ineligible" } });
+      return { id: run.id, status: "SUPPRESSED" };
+    }
+    await ensureTemplate(original.type);
+    const outcome = await dispatchRun(run, { type: original.type, recipientUserId: original.recipientUserId, data: input.data });
+    return { id: run.id, status: outcome };
+  },
+
+  dispatchRun,
+  isEligible,
 
   // ─── Vendor-facing ────────────────────────────────────────────────────
 

@@ -1,3 +1,5 @@
+import { deriveVendorSubscriptionState } from "./vendor-subscription-state";
+import { Prisma } from "@prisma/client";
 import type {
   CommissionTier,
   SellerPlan,
@@ -183,6 +185,12 @@ function formatSubscriptionResponse(subscription: VendorSubscriptionWithPlan) {
     currentPeriodStart: subscription.currentPeriodStart,
     currentPeriodEnd: subscription.currentPeriodEnd,
     cancelledAt: subscription.cancelledAt,
+    trialStartedAt: subscription.trialStartedAt,
+    trialEndsAt: subscription.trialEndsAt,
+    ...(() => {
+      const st = deriveVendorSubscriptionState(subscription);
+      return { lifecycle: st.lifecycle, inTrial: st.inTrial, trialDaysRemaining: st.trialDaysRemaining, billingStarted: st.billingStarted };
+    })(),
     stripeSubscriptionId: subscription.stripeSubscriptionId,
     stripeCustomerId: subscription.stripeCustomerId,
     platformFeeBps: plan?.defaultPlatformFeeBps,
@@ -489,7 +497,7 @@ export const subscriptionsService = {
     return plans.map(formatPlanResponse);
   },
 
-  async upsertPlanConfig(adminId: string, input: SubscriptionPlanConfigInput) {
+  async upsertPlanConfig(adminId: string, input: SubscriptionPlanConfigInput, reason?: string) {
     await ensureDefaultPlanConfigs();
 
     const existing = input.id
@@ -549,6 +557,9 @@ export const subscriptionsService = {
         action: "SELLER_PLAN_UPSERTED",
         entityType: "SellerPlan",
         entityId: plan.id,
+        reason: reason ?? null,
+        beforeState: existing ? { slug: existing.slug, isActive: existing.isActive, monthlyPriceCents: existing.monthlyPriceCents, defaultPlatformFeeBps: existing.defaultPlatformFeeBps } : Prisma.JsonNull,
+        afterState: { slug: plan.slug, isActive: plan.isActive, monthlyPriceCents: plan.monthlyPriceCents, defaultPlatformFeeBps: plan.defaultPlatformFeeBps },
         metadata: {
           slug: plan.slug,
           isActive: plan.isActive,
@@ -562,7 +573,7 @@ export const subscriptionsService = {
     return formatPlanResponse(withTiers);
   },
 
-  async deletePlanConfig(adminId: string, planId: string) {
+  async deletePlanConfig(adminId: string, planId: string, reason?: string) {
     const plan = await prisma.sellerPlan.findUnique({ where: { id: planId } });
     if (!plan || plan.deletedAt) {
       throw new AppError("Seller plan not found", 404);
@@ -585,6 +596,8 @@ export const subscriptionsService = {
         action: "SELLER_PLAN_DELETED",
         entityType: "SellerPlan",
         entityId: planId,
+        reason: reason ?? null,
+        beforeState: { slug: plan.slug, isActive: plan.isActive },
         metadata: { slug: plan.slug },
       },
     });
@@ -592,13 +605,14 @@ export const subscriptionsService = {
     return formatPlanResponse(updated);
   },
 
-  async assignVendorPlan(adminId: string, vendorId: string, input: AssignVendorPlanInput) {
+  async assignVendorPlan(adminId: string, vendorId: string, input: AssignVendorPlanInput, reason?: string) {
     const [vendor, sellerPlan] = await Promise.all([
       prisma.vendor.findUnique({ where: { id: vendorId }, select: { id: true } }),
       findSellerPlan(input.plan, true),
     ]);
     if (!vendor) throw new AppError("Vendor not found", 404);
     if (!sellerPlan || sellerPlan.deletedAt) throw new AppError("Seller plan not found", 404);
+    const previousSubscription = await prisma.vendorSubscription.findUnique({ where: { vendorId }, select: { status: true, sellerPlan: { select: { slug: true } } } });
 
     const subscription = await prisma.vendorSubscription.upsert({
       where: { vendorId },
@@ -623,6 +637,9 @@ export const subscriptionsService = {
         action: "VENDOR_SELLER_PLAN_ASSIGNED",
         entityType: "Vendor",
         entityId: vendorId,
+        reason: reason ?? null,
+        beforeState: previousSubscription ? { planSlug: previousSubscription.sellerPlan?.slug ?? null, status: previousSubscription.status } : Prisma.JsonNull,
+        afterState: { planSlug: sellerPlan.slug, status: "ACTIVE" },
         metadata: { sellerPlanId: sellerPlan.id, slug: sellerPlan.slug },
       },
     });

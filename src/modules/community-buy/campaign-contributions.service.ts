@@ -1,3 +1,4 @@
+import { eventsService, EVENT_NAMES } from "../events/events.service";
 import { LedgerAccountType, LedgerDirection, LedgerOwnerType, Prisma } from "@prisma/client";
 import type Stripe from "stripe";
 
@@ -17,6 +18,7 @@ import { createDeliveryReferenceForContribution } from "./community-buy-privacy.
 import { organiserFeeService } from "./organiser-fee.service";
 import { upsertParticipantWithAttribution } from "./campaign-participant-attribution.service";
 import { buyerCountryService } from "./buyer-country.service";
+import { notifyProgressMilestone } from "./campaign-notifications";
 
 /**
  * Client decision (2026-09-22, buyer-country acceptance fix) — a buyer may
@@ -292,6 +294,7 @@ async function createPledge(
   }
 
   const contribution = await prisma.campaignContribution.findUniqueOrThrow({ where: { id: claimed.id }, include: { participant: true } });
+  void notifyProgressMilestone(campaignId);
   await notificationsService.enqueue({
     userId: contribution.participant.userId,
     type: "COMMUNITY_CAMPAIGN_UPDATE",
@@ -300,6 +303,10 @@ async function createPledge(
     data: { type: "community_campaign_update", event: "pledge_recorded", campaignId },
   });
 
+  eventsService.emit({
+    name: EVENT_NAMES.community_buy_joined, actorType: "user", entityType: "CampaignContribution", entityId: claimed.id,
+    source: "api", secondaryEntities: { campaignId }, amountMinor: amount, currency: campaign.currency,
+  });
   return { contributionId: claimed.id, quantity, amount, currency: campaign.currency, status: "PLEDGED" };
 }
 

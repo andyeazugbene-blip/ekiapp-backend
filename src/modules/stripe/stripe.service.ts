@@ -1,3 +1,4 @@
+import { eventsService, EVENT_NAMES } from "../events/events.service";
 import { NotificationType, OrderStatus, PaymentStatus, Prisma, SubscriptionPlan, SubscriptionStatus } from "@prisma/client";
 import type Stripe from "stripe";
 
@@ -8,6 +9,8 @@ import { stripe } from "../../lib/stripe";
 import { notificationsService } from "../notifications/notifications.service";
 import { referralsService } from "../referrals/referrals.service";
 import { rewardsService } from "../rewards/rewards.service";
+import { giftCardsService } from "../gift-cards/gift-cards.service";
+import { deliverPaidGiftCard } from "../gift-cards/gift-cards.notify";
 import { enqueueEmail } from "../../lib/email-queue";
 import { emailTemplates } from "../../lib/email-templates";
 import { stripeIdentityService } from "../verification/stripe-identity.service";
@@ -19,8 +22,10 @@ import { campaignAuthorisationService } from "../community-buy/campaign-authoris
 import { campaignPayoutService } from "../community-buy/campaign-payout.service";
 import { organiserFeeService } from "../community-buy/organiser-fee.service";
 import { organiserStripeConnectService } from "../community-buy/organiser-stripe-connect.service";
+import { stripeConnectService as vendorStripeConnect } from "../vendors/stripe-connect.service";
 import { LedgerAccountType, LedgerDirection, LedgerOwnerType } from "@prisma/client";
 import { AppError } from "../../shared/errors/app-error";
+import { notifyVendorTrialEnding } from "../automation/vendor-trial-ending";
 import type { StripeWebhookInput, StripeWebhookResult } from "./stripe.types";
 
 /**
@@ -73,7 +78,14 @@ class StripeWebhookService {
       return this.handleDisputeClosed(event);
     }
 
-    if (event.type === "charge.refunded" || event.type === "charge.refund.updated") {
+    // charge.refund.updated carries a Refund object (not a Charge): it only
+    // advances the status of the Refund row we created - it must never be
+    // treated as a charge-level refund of the whole checkout.
+    if (event.type === "charge.refund.updated") {
+      return this.handleRefundUpdated(event);
+    }
+
+    if (event.type === "charge.refunded") {
       return this.handleChargeRefunded(event);
     }
 
@@ -127,11 +139,29 @@ class StripeWebhookService {
       return this.handleVendorSubscriptionDeleted(event);
     }
 
+    // Vendor trial ending (Stripe sends this 3 days before the 14-day trial ends).
+    // Idempotent: WebhookEvent claim + the run deterministic dedupeKey.
+    if (event.type === "customer.subscription.trial_will_end") {
+      return this.runIdempotentWebhook(event, () => notifyVendorTrialEnding(event.data.object as Stripe.Subscription));
+    }
+
     if (
       event.type === "identity.verification_session.verified" ||
-      event.type === "identity.verification_session.requires_input"
+      event.type === "identity.verification_session.requires_input" ||
+      event.type === "identity.verification_session.processing" ||
+      event.type === "identity.verification_session.canceled" ||
+      event.type === "identity.verification_session.redacted"
     ) {
       return this.handleIdentityVerification(event);
+    }
+
+    // Vendor disconnected their Stripe account from Eki: switch off
+    // charges/payouts (account id kept for history + webhook lookup).
+    if (event.type === "account.application.deauthorized") {
+      return this.runIdempotentWebhook(event, async () => {
+        const accountId = event.account ?? (event.data.object as { id?: string }).id;
+        if (accountId) await vendorStripeConnect.handleAccountDeauthorized(accountId);
+      });
     }
 
     if (event.type !== "payment_intent.succeeded") {
@@ -264,7 +294,13 @@ class StripeWebhookService {
 
           await tx.payment.updateMany({
             where: { id: order.payment.id, status: PaymentStatus.PENDING },
-            data: { status: "SUCCEEDED", processedAt: new Date(), stripePaymentIntentId: paymentIntent.id },
+            data: {
+            status: "SUCCEEDED",
+            processedAt: new Date(),
+            stripePaymentIntentId: paymentIntent.id,
+            // This branch only runs for payment_intent.succeeded.
+            providerStatus: "succeeded",
+          },
           });
 
           await tx.order.updateMany({
@@ -332,6 +368,14 @@ class StripeWebhookService {
     // Fire notifications AFTER transaction commits
     if (paidOrders.length > 0) {
       this.sendSuccessNotifications(buyerId, paidOrders);
+      for (const o of paidOrders) {
+        // At-least-once: consumers dedupe on payload.stripeEventId.
+        eventsService.emit({
+          name: EVENT_NAMES.payment_succeeded, actorType: "stripe", entityType: "Order", entityId: o.id,
+          source: "stripe_webhook", secondaryEntities: { buyerId, vendorId: o.vendorId },
+          payload: { stripeEventId: event.id },
+        });
+      }
     }
     referralsService.creditReferralBonusOnFirstOrder(buyerId).catch((err) => {
       logger.error("Referral bonus credit failed", { buyerId, error: String(err) });
@@ -418,21 +462,33 @@ class StripeWebhookService {
     }
 
     try {
-      return await prisma.$transaction(async (tx) => {
+      let activated: Awaited<ReturnType<typeof giftCardsService.activatePaidGiftCard>> | null = null;
+      const result: StripeWebhookResult = await prisma.$transaction(async (tx): Promise<StripeWebhookResult> => {
         if (await this.isDuplicate(tx, event.id, event.type, { orderId: purchasedGiftCardId })) {
           return { received: true, duplicate: true, eventId: event.id, type: event.type };
         }
 
-        // Mark the purchased gift card as completed (payment confirmed)
-        const existing = await tx.purchasedGiftCard.findUnique({
-          where: { id: purchasedGiftCardId },
-          select: { stripePaymentIntentId: true },
+        // Handbook 14.4: payment confirmed -> paidAt, ACTIVE, full balance,
+        // unguessable redemption code, expiry. Idempotent on paidAt, so a
+        // replayed event can never regenerate the code or reset the balance.
+        activated = await giftCardsService.activatePaidGiftCard(tx, {
+          purchasedGiftCardId,
+          paymentIntentId: paymentIntent.id,
+          amount: paymentIntent.amount_received || paymentIntent.amount,
+          currency: paymentIntent.currency,
         });
 
-        if (!existing) {
+        if (activated.outcome === "NOT_FOUND") {
           logger.error("Gift card purchase: purchased record not found", { purchasedGiftCardId, eventId: event.id });
           await this.markEventIgnored(tx, event.id);
           return { received: true, ignored: true, eventId: event.id, type: event.type };
+        }
+        if (activated.outcome === "MISMATCH" || activated.outcome === "CLOSED") {
+          // Not activated: needs a human (amount/currency mismatch, or an admin
+          // already cancelled this purchase). Event is recorded, never lost.
+          logger.error("Gift card purchase: payment not applied", {
+            eventId: event.id, purchasedGiftCardId, outcome: activated.outcome,
+          });
         }
 
         await tx.webhookEvent.update({
@@ -441,11 +497,18 @@ class StripeWebhookService {
         });
 
         logger.info("Webhook processed: gift_card_purchase succeeded", {
-          eventId: event.id, buyerId, purchasedGiftCardId,
+          eventId: event.id, buyerId, purchasedGiftCardId, outcome: activated.outcome,
         });
 
         return { received: true, eventId: event.id, type: event.type };
       }, { isolationLevel: "Serializable" });
+
+      // After commit: code email to recipient + buyer confirmation (best effort).
+      const done = activated as Awaited<ReturnType<typeof giftCardsService.activatePaidGiftCard>> | null;
+      if (done && done.outcome === "ACTIVATED") {
+        await deliverPaidGiftCard(done.info);
+      }
+      return result;
     } catch (error) {
       if (this.isUniqueConstraintError(error)) {
         return { received: true, duplicate: true, eventId: event.id, type: event.type };
@@ -623,27 +686,20 @@ class StripeWebhookService {
   private async handleOrganiserConnectAccountUpdated(event: Stripe.Event): Promise<StripeWebhookResult> {
     const account = event.data.object as Stripe.Account;
 
-    try {
-      const isDup = await prisma.$transaction(async (tx) => {
-        if (await this.isDuplicate(tx, event.id, event.type, {})) return true;
-        await tx.webhookEvent.update({ where: { stripeEventId: event.id }, data: { status: "PROCESSED", processedAt: new Date() } });
-        return false;
-      }, { isolationLevel: "Serializable" });
-
-      if (isDup) {
-        return { received: true, duplicate: true, eventId: event.id, type: event.type };
+    // Every connected account shares this one event type: resolve organiser
+    // first, then vendor (Handbook 5.1 - vendor Connect state must follow
+    // Stripe automatically). Claimed only AFTER success so a failed update is
+    // retried by Stripe instead of being swallowed as a duplicate.
+    return this.runIdempotentWebhook(event, async () => {
+      const organiser = await organiserStripeConnectService.handleAccountUpdated(account);
+      let vendorHandled = false;
+      if (!organiser.handled) {
+        vendorHandled = (await vendorStripeConnect.handleAccountUpdated(account as never)).handled;
       }
-
-      const outcome = await organiserStripeConnectService.handleAccountUpdated(account);
-      logger.info("Webhook processed: account.updated", { eventId: event.id, accountId: account.id, handled: outcome.handled });
-      return { received: true, eventId: event.id, type: event.type };
-    } catch (error) {
-      if (this.isUniqueConstraintError(error)) {
-        return { received: true, duplicate: true, eventId: event.id, type: event.type };
-      }
-      logger.error("Webhook failed: account.updated resolution", { eventId: event.id, ...serializeError(error) });
-      throw error;
-    }
+      logger.info("Webhook processed: account.updated", {
+        eventId: event.id, accountId: account.id, organiserHandled: organiser.handled, vendorHandled,
+      });
+    });
   }
 
   // ─── Vendor subscription billing lifecycle (Defect D) ──────────────────
@@ -760,6 +816,17 @@ class StripeWebhookService {
           eventId: event.id, stripeSubscriptionId: stripeSubscription.id,
         });
         return { received: true, ignored: true, eventId: event.id, type: event.type };
+      }
+
+      // Trial window is provider truth regardless of whether the status maps.
+      if (stripeSubscription.trial_start && stripeSubscription.trial_end) {
+        await prisma.vendorSubscription.update({
+          where: { id: subscription.id },
+          data: {
+            trialStartedAt: new Date(stripeSubscription.trial_start * 1000),
+            trialEndsAt: new Date(stripeSubscription.trial_end * 1000),
+          },
+        });
       }
 
       if (mappedStatus === null) {
@@ -939,8 +1006,15 @@ class StripeWebhookService {
         let periodStart = now;
         let periodEnd = new Date(now);
         periodEnd.setMonth(periodEnd.getMonth() + 1);
+        let trialStartedAt: Date | null = null;
+        let trialEndsAt: Date | null = null;
         try {
           const stripeSubscription = await stripe.subscriptions.retrieve(stripeSubscriptionId);
+          // 14-day full-access trial: persist Stripe's own trial window.
+          if (stripeSubscription.trial_start && stripeSubscription.trial_end) {
+            trialStartedAt = new Date(stripeSubscription.trial_start * 1000);
+            trialEndsAt = new Date(stripeSubscription.trial_end * 1000);
+          }
           // Billing-period dates live on the subscription item, not the
           // subscription itself, as of the "basil" API version. During a
           // trial, the item's current_period_end is the trial end date.
@@ -994,6 +1068,7 @@ class StripeWebhookService {
             currentPeriodStart: periodStart,
             currentPeriodEnd: periodEnd,
             cancelledAt: null,
+            ...(trialStartedAt && trialEndsAt ? { trialStartedAt, trialEndsAt } : {}),
           },
           create: {
             vendorId,
@@ -1003,6 +1078,7 @@ class StripeWebhookService {
             stripeSubscriptionId,
             currentPeriodStart: periodStart,
             currentPeriodEnd: periodEnd,
+            ...(trialStartedAt && trialEndsAt ? { trialStartedAt, trialEndsAt } : {}),
           },
         });
 
@@ -1074,6 +1150,15 @@ class StripeWebhookService {
       return this.handleCommunityBuyHoldEvent(event);
     }
 
+    if (event.type === "payment_intent.payment_failed" && kind !== "wallet_topup" && kind !== "gift_card_purchase" && kind !== "community_buy_hold") {
+      const failure = this.paymentFailureFields(paymentIntent);
+      eventsService.emit({
+        name: EVENT_NAMES.payment_failed, actorType: "stripe", entityType: checkoutId ? "Checkout" : "PaymentIntent",
+        entityId: checkoutId ?? paymentIntent.id, source: "stripe_webhook",
+        payload: { stripeEventId: event.id, failureCode: failure.failureCode, paymentMethodType: failure.paymentMethodType },
+      });
+    }
+
     // Gift card purchase canceled/failed: nothing to reverse (payment never completed)
     if (kind === "gift_card_purchase") {
       try {
@@ -1082,6 +1167,19 @@ class StripeWebhookService {
             return { received: true, duplicate: true, eventId: event.id, type: event.type };
           }
           await tx.webhookEvent.update({ where: { stripeEventId: event.id }, data: { status: "PROCESSED", processedAt: new Date() } });
+          // Handbook 14.4: keep the row for the audit trail, mark it cancelled
+          // (only while still unpaid). Never hard-deleted.
+          const gcId = paymentIntent.metadata?.purchasedGiftCardId;
+          if (gcId) {
+            await tx.purchasedGiftCard.updateMany({
+              where: { id: gcId, paidAt: null, status: "PENDING_PAYMENT" },
+              data: {
+                status: "CANCELLED",
+                statusReason: event.type === "payment_intent.canceled" ? "Payment canceled" : "Payment failed",
+                statusChangedAt: new Date(),
+              },
+            });
+          }
           logger.info(`Webhook processed: gift_card_purchase ${event.type}`, { eventId: event.id });
           return { received: true, eventId: event.id, type: event.type };
         }, { isolationLevel: "Serializable" });
@@ -1106,7 +1204,7 @@ class StripeWebhookService {
             select: { id: true, orderId: true, status: true },
           });
           if (payment && payment.status === PaymentStatus.PENDING) {
-            await this.failSingleOrder(tx, payment.id, payment.orderId);
+            await this.failSingleOrder(tx, payment.id, payment.orderId, this.paymentFailureFields(paymentIntent));
           }
           await tx.webhookEvent.update({ where: { stripeEventId: event.id }, data: { status: "PROCESSED", processedAt: new Date() } });
           return { received: true, eventId: event.id, type: event.type };
@@ -1137,7 +1235,7 @@ class StripeWebhookService {
 
           await tx.payment.updateMany({
             where: { orderId: order.id, status: PaymentStatus.PENDING },
-            data: { status: PaymentStatus.FAILED, processedAt: new Date() },
+            data: { status: PaymentStatus.FAILED, processedAt: new Date(), ...this.paymentFailureFields(paymentIntent) },
           });
 
           // Restore stock (batched)
@@ -1176,21 +1274,42 @@ class StripeWebhookService {
   private async handleIdentityVerification(event: Stripe.Event): Promise<StripeWebhookResult> {
     const session = event.data.object as any;
 
-    try {
-      await stripeIdentityService.handleVerificationCompleted({
+    // Handbook 5.1 / 14.3: provider state changes must be applied exactly once
+    // and a failed update must surface as non-2xx so Stripe retries it (this
+    // handler used to swallow every error and always answer 200).
+    return this.runIdempotentWebhook(event, () =>
+      stripeIdentityService.handleVerificationCompleted({
         id: session.id,
         status: session.status,
         last_error: session.last_error ?? null,
         metadata: session.metadata ?? null,
-      });
-    } catch (error) {
-      logger.error("Stripe Identity webhook handler failed", {
-        eventId: event.id,
-        sessionId: session.id,
-        error: error instanceof Error ? error.message : String(error),
-      });
-    }
+      }),
+    );
+  }
 
+  /**
+   * Claim the event (WebhookEvent unique id), run `work`, then mark PROCESSED.
+   * If `work` throws the claim is released so Stripe's retry is not mistaken
+   * for a duplicate, and the error is rethrown (-> non-2xx -> retry).
+   */
+  private async runIdempotentWebhook(event: Stripe.Event, work: () => Promise<unknown>): Promise<StripeWebhookResult> {
+    const isDup = await prisma.$transaction(
+      async (tx) => this.isDuplicate(tx, event.id, event.type, {}),
+      { isolationLevel: "Serializable" },
+    ).catch((error) => {
+      if (this.isUniqueConstraintError(error)) return true;
+      throw error;
+    });
+    if (isDup) return { received: true, duplicate: true, eventId: event.id, type: event.type };
+
+    try {
+      await work();
+    } catch (error) {
+      logger.error("Webhook handler failed; releasing claim so Stripe can retry", { eventId: event.id, type: event.type, ...serializeError(error) });
+      await prisma.webhookEvent.deleteMany({ where: { stripeEventId: event.id, status: "PROCESSING" } }).catch(() => undefined);
+      throw error;
+    }
+    await prisma.webhookEvent.updateMany({ where: { stripeEventId: event.id }, data: { status: "PROCESSED", processedAt: new Date() } });
     return { received: true, eventId: event.id, type: event.type };
   }
 
@@ -1226,8 +1345,27 @@ class StripeWebhookService {
     });
   }
 
-  private async failSingleOrder(tx: Prisma.TransactionClient, paymentId: string, orderId: string): Promise<void> {
-    await tx.payment.updateMany({ where: { id: paymentId, status: PaymentStatus.PENDING }, data: { status: PaymentStatus.FAILED, processedAt: new Date() } });
+  /**
+   * Handbook 5.2 / 14.8: keep the provider's own truth next to Eki's status.
+   * Only ever stores Stripe's machine code + message (never card data).
+   */
+  private paymentFailureFields(paymentIntent: Stripe.PaymentIntent) {
+    const err = paymentIntent.last_payment_error;
+    return {
+      providerStatus: paymentIntent.status,
+      failureCode: err?.decline_code ?? err?.code ?? (paymentIntent.status === "canceled" ? "canceled" : null),
+      failureMessage: err?.message ?? (paymentIntent.cancellation_reason ? `Canceled: ${paymentIntent.cancellation_reason}` : null),
+      paymentMethodType: err?.payment_method?.type ?? paymentIntent.payment_method_types?.[0] ?? null,
+    };
+  }
+
+  private async failSingleOrder(
+    tx: Prisma.TransactionClient,
+    paymentId: string,
+    orderId: string,
+    failure: ReturnType<StripeWebhookService["paymentFailureFields"]> | Record<string, never> = {},
+  ): Promise<void> {
+    await tx.payment.updateMany({ where: { id: paymentId, status: PaymentStatus.PENDING }, data: { status: PaymentStatus.FAILED, processedAt: new Date(), ...failure } });
     await tx.order.updateMany({ where: { id: orderId, status: "PENDING" }, data: { status: "FAILED" } });
     const items = await tx.orderItem.findMany({ where: { orderId }, select: { productId: true, quantity: true } });
     for (const item of items) {
@@ -1379,6 +1517,34 @@ class StripeWebhookService {
 
   // ─── Charge Refunded Handler ──────────────────────────────────────────
 
+  private async handleRefundUpdated(event: Stripe.Event): Promise<StripeWebhookResult> {
+    const refund = event.data.object as Stripe.Refund;
+    return this.runIdempotentWebhook(event, async () => {
+      const status =
+        refund.status === "succeeded" ? "COMPLETED"
+        : refund.status === "failed" || refund.status === "canceled" ? "FAILED"
+        : "PROCESSING";
+      const res = await prisma.refund.updateMany({
+        where: { providerRefundId: refund.id },
+        data: {
+          status,
+          failureReason: status === "FAILED" ? (refund.failure_reason ?? refund.status ?? "failed") : null,
+        },
+      });
+      if (status === "COMPLETED" && res.count > 0) {
+        // eventKey matches the synchronous path in admin-refunds.controller, so duplicates dedupe.
+        eventsService.emit({
+          name: EVENT_NAMES.refund_completed, actorType: "stripe", entityType: "Refund", entityId: refund.id,
+          source: "stripe_webhook", amountMinor: refund.amount, currency: refund.currency?.toUpperCase(),
+          payload: { eventKey: `refund_completed:${refund.id}`, provider: "stripe", providerRefundId: refund.id, stripeEventId: event.id },
+        });
+      }
+      if (status === "FAILED") {
+        logger.error("Stripe refund failed after acceptance - needs manual follow-up", { refundId: refund.id, matchedRows: res.count });
+      }
+    });
+  }
+
   private async handleChargeRefunded(event: Stripe.Event): Promise<StripeWebhookResult> {
     const charge = event.data.object as Stripe.Charge;
     const paymentIntentId = typeof charge.payment_intent === "string" ? charge.payment_intent : charge.payment_intent?.id;
@@ -1412,7 +1578,8 @@ class StripeWebhookService {
             where: { stripePaymentIntentId: paymentIntentId },
             select: { orderId: true },
           });
-          if (payment) {
+          // A partial charge refund must not close the order (B4).
+          if (payment && charge.amount > 0 && charge.amount_refunded >= charge.amount) {
             await tx.order.updateMany({
               where: { id: payment.orderId, status: { notIn: ["REFUNDED", "CANCELLED"] } },
               data: { status: "REFUNDED" },
@@ -1429,8 +1596,39 @@ class StripeWebhookService {
           return { received: true, eventId: event.id, type: event.type, communityBuyCampaignId: communityBuyHold?.campaignId };
         }
 
+        // B4 (Handbook 14.8): only orders that are actually refunded are touched.
+        // A full-charge refund covers every order in the checkout; otherwise an
+        // order is affected only when its own recorded (non-failed) refunds reach
+        // its total. A PARTIAL refund of one vendor's order must never refund,
+        // reverse or restock the other vendors' orders in the same checkout.
+        const fullChargeRefund = charge.amount > 0 && charge.amount_refunded >= charge.amount;
+        const refundSums = await tx.refund.groupBy({
+          by: ["orderId"],
+          where: { orderId: { in: checkout.orders.map((o) => o.id) }, status: { in: ["REQUESTED", "PROCESSING", "COMPLETED"] } },
+          _sum: { amountMinor: true },
+        });
+        const refundedByOrder = new Map(refundSums.map((r) => [r.orderId, r._sum.amountMinor ?? 0]));
+        const affectedOrders = checkout.orders.filter(
+          (o) => fullChargeRefund || (refundedByOrder.get(o.id) ?? 0) >= o.totalAmount,
+        );
+        if (affectedOrders.length < checkout.orders.length) {
+          logger.info("charge.refunded: partial refund - only fully refunded orders are reversed", {
+            eventId: event.id, paymentIntentId, affected: affectedOrders.length, total: checkout.orders.length,
+          });
+        }
+
         // Reverse vendor wallet credits and mark orders refunded
-        for (const order of checkout.orders) {
+        for (const order of affectedOrders) {
+          // Exactly-once per order: a later charge.refunded (for another
+          // vendor's refund in the same checkout) must not re-reverse this one.
+          try {
+            await tx.webhookEvent.create({
+              data: { stripeEventId: `refund-reversal:${order.id}`, eventType: "order.refund_reversal", orderId: order.id, status: "PROCESSED", processedAt: new Date() },
+            });
+          } catch (error) {
+            if (this.isUniqueConstraintError(error)) continue;
+            throw error;
+          }
           // Mark order refunded (conditional — don't re-refund)
           await tx.order.updateMany({
             where: { id: order.id, status: { notIn: ["REFUNDED", "CANCELLED"] } },
@@ -1495,7 +1693,7 @@ class StripeWebhookService {
         await tx.webhookEvent.update({ where: { stripeEventId: event.id }, data: { status: "PROCESSED", processedAt: new Date() } });
 
         logger.info("Webhook processed: charge.refunded", {
-          eventId: event.id, paymentIntentId, orderCount: checkout.orders.length,
+          eventId: event.id, paymentIntentId, orderCount: checkout.orders.length, affected: affectedOrders.length,
         });
 
         return {
@@ -1503,7 +1701,7 @@ class StripeWebhookService {
           eventId: event.id,
           type: event.type,
           refundedBuyerId: checkout.buyerId,
-          refundedOrderIds: checkout.orders.map((o) => o.id),
+          refundedOrderIds: affectedOrders.map((o) => o.id),
         };
       }, { isolationLevel: "Serializable" });
 
@@ -1513,6 +1711,12 @@ class StripeWebhookService {
       // correctly, but the buyer had no way to learn their refund actually
       // happened short of manually reopening the order later.
       if (result.refundedBuyerId && result.refundedOrderIds && result.refundedOrderIds.length > 0) {
+        for (const orderId of result.refundedOrderIds) {
+          eventsService.emit({
+            name: EVENT_NAMES.order_refunded, actorType: "stripe", entityType: "Order", entityId: orderId,
+            source: "stripe_webhook", secondaryEntities: { buyerId: result.refundedBuyerId }, payload: { stripeEventId: event.id },
+          });
+        }
         notificationsService.enqueue({
           userId: result.refundedBuyerId,
           type: NotificationType.ADMIN_BROADCAST,

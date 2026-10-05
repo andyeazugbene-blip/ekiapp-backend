@@ -2,11 +2,14 @@ import type { Request, Response } from "express";
 
 import { AppError } from "../../shared/errors/app-error";
 import { messagesService } from "./messages.service";
+import { supportInboxService } from "./support-inbox.service";
 import {
   validateCreateConversationInput,
   validateListConversationsQuery,
   validateListMessagesQuery,
-  validateListSupportConversationsQuery,
+  validateAdminReplyInput,
+  validateAdminSupportListQuery,
+  validateSupportLifecycleInput,
   validateSendMessageInput,
   validateStartSupportConversationInput,
 } from "./messages.validation";
@@ -70,14 +73,41 @@ export async function startSupportConversation(request: Request, response: Respo
   response.status(201).json({ conversation });
 }
 
-/** Admin-only — see admin.routes.ts (requireAdminPermission("support.read")); this file, not admin's own controller, to stay next to the service functions it wraps. */
+// ─── Admin shared support inbox (routes: admin.routes.ts, support.read / support.mutate) ───
+
+function requireAdminId(request: Request): string {
+  return requireUserId(request);
+}
+
 export async function adminListSupportConversations(request: Request, response: Response): Promise<void> {
-  const query = validateListSupportConversationsQuery(request.query as Record<string, unknown>);
-  const result = await messagesService.listSupportConversationsForAdmin(query);
-  response.status(200).json(result);
+  const query = validateAdminSupportListQuery(request.query as Record<string, unknown>);
+  response.status(200).json(await supportInboxService.list(query));
 }
 
 export async function adminGetSupportConversation(request: Request, response: Response): Promise<void> {
-  const conversation = await messagesService.getSupportConversationForAdmin(requireIdParam(request));
-  response.status(200).json({ conversation });
+  response.status(200).json({ conversation: await supportInboxService.get(requireIdParam(request)) });
 }
+
+export async function adminListSupportMessages(request: Request, response: Response): Promise<void> {
+  const query = validateListMessagesQuery(request.query as Record<string, unknown>);
+  response.status(200).json(await supportInboxService.listMessages(requireIdParam(request), query));
+}
+
+export async function adminReplySupportConversation(request: Request, response: Response): Promise<void> {
+  const input = validateAdminReplyInput(request.body);
+  const message = await supportInboxService.sendReply(requireAdminId(request), requireIdParam(request), input, request);
+  response.status(201).json({ message });
+}
+
+function lifecycleHandler(action: "close" | "reopen" | "escalate" | "deescalate") {
+  return async (request: Request, response: Response): Promise<void> => {
+    const { reason } = validateSupportLifecycleInput(request.body);
+    const conversation = await supportInboxService.transition(action, requireAdminId(request), requireIdParam(request), reason, request);
+    response.status(200).json({ conversation });
+  };
+}
+
+export const adminCloseSupportConversation = lifecycleHandler("close");
+export const adminReopenSupportConversation = lifecycleHandler("reopen");
+export const adminEscalateSupportConversation = lifecycleHandler("escalate");
+export const adminDeescalateSupportConversation = lifecycleHandler("deescalate");

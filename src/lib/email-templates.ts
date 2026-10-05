@@ -41,15 +41,30 @@ export function formatAmountDisplay(cents: number, currency: string): string {
 }
 
 export const emailTemplates = {
+  adminInvite(params: { name: string; inviterName: string; roleName: string; setPasswordUrl: string; expiresHours: number }): { subject: string; html: string } {
+    return {
+      subject: "You have been invited to the Eki admin panel",
+      html: baseLayout(`
+        <h2 style="color: #111827; margin: 0 0 16px;">Welcome to the Eki admin panel</h2>
+        <p style="color: #374151;">Hi ${escapeHtml(params.name)},</p>
+        <p style="color: #374151;">${escapeHtml(params.inviterName)} invited you as <strong>${escapeHtml(params.roleName)}</strong>. Set your password to get started. You will also be asked to set up two-factor authentication on first sign-in.</p>
+        <a href="${params.setPasswordUrl}" style="display: inline-block; background: #096B4A; color: #ffffff; padding: 12px 24px; border-radius: 8px; text-decoration: none; font-weight: 600; margin: 16px 0;">Set your password</a>
+        <p style="color: #6b7280; font-size: 14px;">This link expires in ${params.expiresHours} hours and can be used once. If you were not expecting this invitation, ignore this email.</p>
+      `),
+    };
+  },
+
   // Phase 3 fix: admin broadcast previously had no email channel at all
   // (in_app/push/sms only) — this is the missing template, subject/body are
   // free-text admin input so both are escaped before interpolation.
-  adminBroadcast(params: { subject: string; body: string }): { subject: string; html: string } {
+  // footerHtml is trusted, server-built markup (the marketing unsubscribe link).
+  adminBroadcast(params: { subject: string; body: string; footerHtml?: string }): { subject: string; html: string } {
     return {
       subject: params.subject,
       html: baseLayout(`
         <h2 style="color: #111827; margin: 0 0 16px;">${escapeHtml(params.subject)}</h2>
         <p style="color: #374151; white-space: pre-wrap;">${escapeHtml(params.body)}</p>
+        ${params.footerHtml ?? ""}
       `),
     };
   },

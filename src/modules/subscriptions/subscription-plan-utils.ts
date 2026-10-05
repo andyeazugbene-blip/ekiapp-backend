@@ -77,7 +77,34 @@ async function findStarterPlan(client: SellerPlanLookupClient): Promise<SellerPl
   });
 }
 
+/**
+ * Product decision (Handbook 14.8 L587): vendor monetization is SUBSCRIPTION, not a sales
+ * commission. The commission machinery (seller-plan tiers) is kept for history/reporting,
+ * but it only ever produces a fee when SALES_COMMISSION_ENABLED=true is set explicitly
+ * (an owner-approved exception). Default: platform fee is 0 for every new order.
+ * Withdrawal fees are a separate payout concept and are not changed here.
+ */
+export function salesCommissionEnabled(envVars: Record<string, string | undefined> = process.env): boolean {
+  return (envVars.SALES_COMMISSION_ENABLED ?? "").trim().toLowerCase() === "true";
+}
+
+export function applyCommissionPolicy(
+  resolution: VendorCommissionResolution,
+  enabled: boolean = salesCommissionEnabled(),
+): VendorCommissionResolution {
+  if (enabled) return resolution;
+  return { ...resolution, platformFeeBps: 0, commissionTierId: null, commissionTierLabel: null };
+}
+
 export async function resolveVendorCommission(
+  vendorId: string,
+  subtotalAmount = 0,
+  client: SellerPlanLookupClient = prisma as unknown as SellerPlanLookupClient,
+): Promise<VendorCommissionResolution> {
+  return applyCommissionPolicy(await resolveVendorCommissionRaw(vendorId, subtotalAmount, client));
+}
+
+async function resolveVendorCommissionRaw(
   vendorId: string,
   subtotalAmount = 0,
   client: SellerPlanLookupClient = prisma as unknown as SellerPlanLookupClient,

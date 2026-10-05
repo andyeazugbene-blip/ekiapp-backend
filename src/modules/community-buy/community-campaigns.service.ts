@@ -1,3 +1,5 @@
+import { eventsService, EVENT_NAMES } from "../events/events.service";
+import { emitCampaignLifecycleEvent } from "./community-buy-events";
 import { prisma } from "../../lib/prisma";
 import { logger } from "../../lib/logger";
 import { AppError } from "../../shared/errors/app-error";
@@ -11,6 +13,11 @@ import { organiserPayoutService } from "./organiser-payout.service";
 import { recordAudit } from "../../shared/utils/audit";
 import { isIndividualDeliveryEnabled, revokeDeliveryReferencesForCampaign, recordDataAccess } from "./community-buy-privacy.service";
 import { buyerCountryService } from "./buyer-country.service";
+import { slugify } from "../../shared/utils/slug";
+import { isSupplierPayoutReady } from "./supplier-account.service";
+import { assertCampaignTransition } from "./campaign-transitions";
+import { notifyUserInAppAndEmail } from "./community-buy-notices";
+import { notifyCampaignLiveDiscovery, notifyClosingSoonDiscovery } from "./campaign-notifications";
 
 // Community Buy Workstream 2: only `title` and `country` are hard
 // requirements to start a draft (spec §7 — "any authenticated user can
@@ -78,6 +85,28 @@ export interface CreateCampaignInput {
   // Phase 2 (organiser controls) — optional scheduled opening. See
   // CommunityCampaign.scheduledOpenAt's own doc comment.
   scheduledOpenAt?: string;
+  // Handbook 10.1 - timing with timezone. All optional; null means not set.
+  timezone?: string;
+  paymentDeadline?: string;
+  fulfilmentDeadline?: string;
+}
+
+/** IANA timezone (e.g. Europe/London) or undefined; rejects anything Intl does not recognise. */
+function parseTimezone(value: string | undefined): string | undefined {
+  if (value === undefined) return undefined;
+  try {
+    new Intl.DateTimeFormat("en-GB", { timeZone: value });
+    return value;
+  } catch {
+    throw new AppError("timezone must be a valid IANA timezone, e.g. Europe/London", 400);
+  }
+}
+
+function parseOptionalDate(value: string | undefined, field: string): Date | undefined {
+  if (value === undefined) return undefined;
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) throw new AppError(`${field} must be a valid date`, 400);
+  return d;
 }
 
 type SupplyRoute = {
@@ -104,6 +133,8 @@ async function resolveSupplierChoice(
   if (supplierAccountId) {
     const account = await prisma.supplierAccount.findUnique({ where: { id: supplierAccountId } });
     if (!account || account.supplierState !== "APPROVED") throw new AppError("Supplier not found or not approved", 404);
+    // Handbook 14.11: no paid assignment before the supplier is payout-ready.
+    if (!isSupplierPayoutReady(account)) throw new AppError("This supplier has not completed payout setup yet and cannot be assigned to a campaign", 409, null, "SUPPLIER_PAYOUT_NOT_READY");
     if (country && !account.coverageRegions.includes(country)) {
       // spec §8.2: campaigns operate as a local-market feature only — no
       // cross-border organiser/supplier pairing in this version.
@@ -112,9 +143,12 @@ async function resolveSupplierChoice(
     return { fulfilmentOwner: "SUPPLIER", supplierId: account.legacySupplierProfileId ?? null, supplierAccountId: account.id, notifyUserId: account.userId };
   }
   if (!supplierId) throw new AppError("supplierId is required when choosing a supplier", 400);
-  const supplier = await prisma.supplierProfile.findUnique({ where: { id: supplierId }, include: { vendor: { select: { userId: true } } } });
+  const supplier = await prisma.supplierProfile.findUnique({ where: { id: supplierId }, include: { vendor: { select: { userId: true, stripeChargesEnabled: true, stripePayoutsEnabled: true } } } });
   if (!supplier || !supplier.isVerified) throw new AppError("Supplier not found or not verified", 404);
   if (supplier.isRestricted) throw new AppError("This supplier is currently restricted and cannot take on new campaigns", 403);
+  if (!supplier.vendor.stripePayoutsEnabled || !supplier.vendor.stripeChargesEnabled) {
+    throw new AppError("This supplier has not completed payout setup yet and cannot be assigned to a campaign", 409, null, "SUPPLIER_PAYOUT_NOT_READY");
+  }
   if (country && supplier.country !== country) {
     // spec §8.2: campaigns operate as a local-market feature only — no
     // cross-border organiser/supplier pairing in this version.
@@ -447,6 +481,24 @@ export async function notifyCampaign(
   }
 }
 
+/** Handbook 10.3 - recorded review criteria: each key is a checklist item, true = passed. */
+export type ReviewCriteria = Record<string, boolean>;
+
+export const REVIEW_CRITERIA_KEYS = ["productAccurate", "priceFair", "termsClear", "supplierOrSelfSupplyVerified", "deliveryPlanValid", "contentAppropriate"] as const;
+
+/** Validates the criteria object from an admin request: only known keys, boolean values. */
+export function parseReviewCriteria(raw: unknown): ReviewCriteria | undefined {
+  if (raw === undefined || raw === null) return undefined;
+  if (typeof raw !== "object" || Array.isArray(raw)) throw new AppError("criteria must be an object of booleans", 400);
+  const out: ReviewCriteria = {};
+  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (!(REVIEW_CRITERIA_KEYS as readonly string[]).includes(key)) throw new AppError(`Unknown review criterion: ${key}`, 400);
+    if (typeof value !== "boolean") throw new AppError(`Criterion ${key} must be true or false`, 400);
+    out[key] = value;
+  }
+  return out;
+}
+
 export const communityCampaignsService = {
   async create(userId: string, input: CreateCampaignInput) {
     if (!input.title?.trim()) throw new AppError("Title is required", 400);
@@ -531,8 +583,15 @@ export const communityCampaignsService = {
         rescueDurationMinutes: input.rescueDurationMinutes ?? 2880,
         deadline,
         scheduledOpenAt,
+        timezone: parseTimezone(input.timezone),
+        paymentDeadline: parseOptionalDate(input.paymentDeadline, "paymentDeadline"),
+        fulfilmentDeadline: parseOptionalDate(input.fulfilmentDeadline, "fulfilmentDeadline"),
         status: "DRAFT",
       },
+    });
+    eventsService.emit({
+      name: EVENT_NAMES.community_buy_created, actorType: "user", actorId: userId, entityType: "CommunityCampaign", entityId: campaign.id,
+      source: "api", payload: { country: (campaign as { country?: string | null }).country ?? null },
     });
     // Real supplier invitation — fires exactly when the commitment state
     // actually comes into existence (supplierId assigned, supplierCommitted:
@@ -635,6 +694,9 @@ export const communityCampaignsService = {
         ...(input.deliveryResponsibility !== undefined && { deliveryResponsibility: input.deliveryResponsibility }),
         ...(deadline !== undefined && { deadline }),
         ...(scheduledOpenAt !== undefined && { scheduledOpenAt }),
+        ...(input.timezone !== undefined && { timezone: parseTimezone(input.timezone) }),
+        ...(input.paymentDeadline !== undefined && { paymentDeadline: parseOptionalDate(input.paymentDeadline, "paymentDeadline") }),
+        ...(input.fulfilmentDeadline !== undefined && { fulfilmentDeadline: parseOptionalDate(input.fulfilmentDeadline, "fulfilmentDeadline") }),
         ...(authorisationSchedule.holdWindowStartsAt !== undefined && { holdWindowStartsAt: authorisationSchedule.holdWindowStartsAt }),
         ...(authorisationSchedule.decisionDeadline !== undefined && { decisionDeadline: authorisationSchedule.decisionDeadline }),
         ...(input.images !== undefined && { images: input.images }),
@@ -995,6 +1057,7 @@ export const communityCampaignsService = {
       } else if (campaign.supplierAccountId) {
         const account = await prisma.supplierAccount.findUnique({ where: { id: campaign.supplierAccountId } });
         if (!account || account.supplierState !== "APPROVED") missing.push("supplier_eligibility");
+        else if (!isSupplierPayoutReady(account)) missing.push("supplier_payout_not_ready");
       } else {
         missing.push("supplierId");
       }
@@ -1164,20 +1227,29 @@ export const communityCampaignsService = {
       // RESCUE_WINDOW/DECISION_REQUIRED above: invisible here would make it
       // impossible for admin to find and act on a pending cancellation
       // request via the campaign detail page.
-      where: { status: { in: ["SUCCEEDED", "FAILED", "FULFILLING", "CANCELLED", "LIVE", "PAUSED", "RESCUE_WINDOW", "HOLD_WINDOW", "DECISION_REQUIRED", "AWAITING_SUPPLIER_RECONFIRMATION", "PAYMENT_CAPTURE", "CANCELLATION_UNDER_REVIEW"] } },
+      where: { status: { in: ["SUCCEEDED", "FAILED", "FULFILLING", "COMPLETED", "REFUNDING", "FINANCIALLY_CLOSED", "CANCELLED", "LIVE", "PAUSED", "RESCUE_WINDOW", "HOLD_WINDOW", "DECISION_REQUIRED", "AWAITING_SUPPLIER_RECONFIRMATION", "PAYMENT_CAPTURE", "CANCELLATION_UNDER_REVIEW"] } },
       include: { organiser: { include: { user: { select: { name: true, email: true } } } }, supplier: { include: { vendor: { select: { storeName: true } } } } },
       orderBy: { updatedAt: "desc" },
       take: limit,
     });
   },
 
-  async approve(adminId: string, campaignId: string) {
+  async approve(adminId: string, campaignId: string, criteria?: ReviewCriteria) {
     const campaign = await prisma.communityCampaign.findUnique({ where: { id: campaignId }, include: { organiser: true } });
     if (!campaign) throw new AppError("Campaign not found", 404);
     if (campaign.status !== "UNDER_REVIEW") throw new AppError("Campaign is not under review", 409);
+    assertCampaignTransition(campaign.status, "APPROVED");
+    // Handbook 10.3: approval is made against recorded criteria - every item must pass.
+    if (criteria) {
+      const failed = Object.entries(criteria).filter(([, passed]) => !passed).map(([key]) => key);
+      if (failed.length > 0) throw new AppError(`Cannot approve while review criteria fail: ${failed.join(", ")}`, 400, { failed }, "REVIEW_CRITERIA_FAILED");
+    }
     const updated = await prisma.communityCampaign.update({
       where: { id: campaignId },
-      data: { status: "APPROVED", reviewedById: adminId, reviewedAt: new Date() },
+      data: { status: "APPROVED", reviewedById: adminId, reviewedAt: new Date(), ...(criteria ? { reviewCriteria: criteria } : {}) },
+    });
+    eventsService.emit({
+      name: EVENT_NAMES.community_buy_approved, actorType: "admin", actorId: adminId, entityType: "CommunityCampaign", entityId: campaignId, source: "admin_panel",
     });
     await notifyCampaign(campaign.organiser.userId, "approved", "Campaign approved", `${campaign.title} has been approved.`, campaignId);
     return updated;
@@ -1228,22 +1300,32 @@ export const communityCampaignsService = {
     return updated;
   },
 
-  async reject(adminId: string, campaignId: string, notes?: string) {
+  async reject(adminId: string, campaignId: string, notes?: string, criteria?: ReviewCriteria) {
     const campaign = await prisma.communityCampaign.findUnique({ where: { id: campaignId }, include: { organiser: true } });
     if (!campaign) throw new AppError("Campaign not found", 404);
     if (campaign.status !== "UNDER_REVIEW") throw new AppError("Campaign is not under review", 409);
+    assertCampaignTransition(campaign.status, "REJECTED");
     const updated = await prisma.communityCampaign.update({
       where: { id: campaignId },
-      data: { status: "REJECTED", reviewNotes: notes, reviewedById: adminId, reviewedAt: new Date() },
+      data: { status: "REJECTED", reviewNotes: notes, reviewedById: adminId, reviewedAt: new Date(), ...(criteria ? { reviewCriteria: criteria } : {}) },
     });
     await notifyCampaign(campaign.organiser.userId, "rejected", "Campaign rejected", notes ?? "Your campaign was not approved.", campaignId);
     return updated;
   },
 
-  async pause(adminId: string, campaignId: string) {
-    const campaign = await prisma.communityCampaign.findUnique({ where: { id: campaignId }, include: { organiser: true } });
+  async pause(adminId: string, campaignId: string, reason?: string) {
+    const campaign = await prisma.communityCampaign.findUnique({
+      where: { id: campaignId },
+      include: {
+        organiser: true,
+        participants: { select: { userId: true } },
+        supplierAccount: { select: { userId: true } },
+        supplier: { select: { vendor: { select: { userId: true } } } },
+      },
+    });
     if (!campaign) throw new AppError("Campaign not found", 404);
     if (campaign.status !== "LIVE") throw new AppError("Only a live campaign can be paused", 409);
+    assertCampaignTransition(campaign.status, "PAUSED");
     // Phase 8 — guarded claim: LIVE is also what closeDueCampaigns() sweeps
     // out of (LIVE -> FULFILLING/RESCUE_WINDOW) on a real success/rescue
     // determination. Without this, a concurrent sweep win could still be
@@ -1256,7 +1338,16 @@ export const communityCampaignsService = {
     // (approve/reject/changes-requested/cancel), pause()/resume() never
     // notified the organiser at all — they'd have no explanation for why
     // their live campaign suddenly stopped accepting pledges.
-    await notifyCampaign(campaign.organiser.userId, "admin_paused", "Campaign paused by admin", `${campaign.title} has been paused by an administrator. Pledging is temporarily unavailable.`, campaignId, undefined, "organiser");
+    const reasonSuffix = reason ? ` Reason: ${reason}` : "";
+    await notifyCampaign(campaign.organiser.userId, "admin_paused", "Campaign paused by admin", `${campaign.title} has been paused by an administrator. Pledging is temporarily unavailable.${reasonSuffix}`, campaignId, undefined, "organiser");
+    // Handbook 10.3: pausing must notify every affected party, not only the organiser.
+    const supplierUserId = campaign.supplierAccount?.userId ?? campaign.supplier?.vendor.userId ?? null;
+    if (supplierUserId) {
+      await notifyCampaign(supplierUserId, "admin_paused", "Campaign paused by admin", `${campaign.title} has been paused by an administrator.${reasonSuffix}`, campaignId);
+    }
+    for (const p of (campaign.participants ?? [])) {
+      await notifyCampaign(p.userId, "admin_paused", "Campaign paused", `${campaign.title} has been paused while we review it. Your commitment is unchanged.`, campaignId);
+    }
     return updated;
   },
 
@@ -1264,9 +1355,151 @@ export const communityCampaignsService = {
     const campaign = await prisma.communityCampaign.findUnique({ where: { id: campaignId }, include: { organiser: true } });
     if (!campaign) throw new AppError("Campaign not found", 404);
     if (campaign.status !== "PAUSED") throw new AppError("Only a paused campaign can be resumed", 409);
+    assertCampaignTransition(campaign.status, "LIVE");
     const updated = await prisma.communityCampaign.update({ where: { id: campaignId }, data: { status: "LIVE" } });
     await notifyCampaign(campaign.organiser.userId, "admin_resumed", "Campaign resumed by admin", `${campaign.title} has been resumed by an administrator. Pledging is available again.`, campaignId, undefined, "organiser");
     return updated;
+  },
+
+  /**
+   * Handbook 10.3 - admin-initiated deadline extension with explicit
+   * authority (community_buy.mutate + 2FA at the route), a reason, and
+   * participant communication. Works for any LIVE or RESCUE_WINDOW campaign
+   * (a RESCUE_WINDOW campaign re-opens as LIVE, exactly like an approved
+   * organiser extension request).
+   */
+  async extendDeadlineByAdmin(adminId: string, campaignId: string, input: { newDeadline: string; reason: string }) {
+    const reason = input.reason?.trim();
+    if (!reason || reason.length < 5) throw new AppError("A reason of at least 5 characters is required", 400);
+    const newDeadline = new Date(input.newDeadline);
+    if (Number.isNaN(newDeadline.getTime()) || newDeadline <= new Date()) throw new AppError("The new deadline must be a valid future date", 400);
+    const campaign = await prisma.communityCampaign.findUnique({
+      where: { id: campaignId },
+      include: { organiser: true, participants: { select: { userId: true } }, supplierAccount: { select: { userId: true } }, supplier: { select: { vendor: { select: { userId: true } } } } },
+    });
+    if (!campaign) throw new AppError("Campaign not found", 404);
+    if (campaign.status !== "LIVE" && campaign.status !== "RESCUE_WINDOW") {
+      throw new AppError("Only a live campaign or one in its rescue window can have its deadline extended", 409);
+    }
+    if (campaign.status === "RESCUE_WINDOW") assertCampaignTransition("RESCUE_WINDOW", "LIVE");
+    if (campaign.status === "LIVE" && campaign.deadline && newDeadline <= campaign.deadline) {
+      throw new AppError("The new deadline must be later than the current deadline", 400);
+    }
+    const claim = await prisma.communityCampaign.updateMany({
+      where: { id: campaignId, status: campaign.status },
+      data: campaign.status === "RESCUE_WINDOW"
+        ? { status: "LIVE", deadline: newDeadline, rescueEndsAt: null, extensionCount: { increment: 1 } }
+        : { deadline: newDeadline, extensionCount: { increment: 1 } },
+    });
+    if (claim.count !== 1) throw new AppError("The campaign changed state while extending - refresh and try again", 409);
+    const updated = await prisma.communityCampaign.findUniqueOrThrow({ where: { id: campaignId } });
+    const body = `${campaign.title}'s deadline has been extended to ${newDeadline.toISOString()}. Reason: ${reason}`;
+    const supplierUserId = campaign.supplierAccount?.userId ?? campaign.supplier?.vendor.userId ?? null;
+    await notifyCampaign(campaign.organiser.userId, "extension_approved", "Campaign deadline extended", body, campaignId, undefined, "organiser");
+    if (supplierUserId) await notifyCampaign(supplierUserId, "extension_approved", "Campaign deadline extended", body, campaignId);
+    for (const p of campaign.participants) {
+      await notifyCampaign(p.userId, "extension_approved", "Campaign deadline extended", `${campaign.title}'s deadline has been extended to ${newDeadline.toISOString()}.`, campaignId);
+    }
+    return { campaign: updated, previousDeadline: campaign.deadline, previousStatus: campaign.status };
+  },
+
+  /**
+   * Handbook 10.3 - audited admin communication to all participants, the
+   * organiser, the supplier, or all of them. Reason required (audited by the
+   * controller); rate limited to 3 messages per campaign per 10 minutes so a
+   * mis-click or compromised session cannot spam participants.
+   */
+  async messageAudience(adminId: string, campaignId: string, input: { audience: "participants" | "organiser" | "supplier" | "all"; title: string; message: string }) {
+    const title = input.title?.trim();
+    const message = input.message?.trim();
+    if (!title || title.length > 140) throw new AppError("Title is required and must be 140 characters or fewer", 400);
+    if (!message || message.length > 2000) throw new AppError("Message is required and must be 2000 characters or fewer", 400);
+    if (!["participants", "organiser", "supplier", "all"].includes(input.audience)) throw new AppError("audience must be participants, organiser, supplier or all", 400);
+    const recent = await prisma.auditLog.count({
+      where: { action: "community_campaign.admin_message", entityId: campaignId, createdAt: { gte: new Date(Date.now() - 10 * 60 * 1000) } },
+    });
+    if (recent >= 3) throw new AppError("Too many messages sent for this campaign recently. Please wait a few minutes.", 429, null, "RATE_LIMITED");
+    const campaign = await prisma.communityCampaign.findUnique({
+      where: { id: campaignId },
+      include: { organiser: true, participants: { select: { userId: true }, take: 5000 }, supplierAccount: { select: { userId: true } }, supplier: { select: { vendor: { select: { userId: true } } } } },
+    });
+    if (!campaign) throw new AppError("Campaign not found", 404);
+    const supplierUserId = campaign.supplierAccount?.userId ?? campaign.supplier?.vendor.userId ?? null;
+    const counts = { participants: 0, organiser: 0, supplier: 0 };
+    const batch = Date.now();
+    if (input.audience === "participants" || input.audience === "all") {
+      for (const p of campaign.participants) {
+        await notifyCampaign(p.userId, "admin_message", title, message, campaignId, `admin_message:${campaignId}:${batch}:${p.userId}`);
+        counts.participants++;
+      }
+    }
+    if (input.audience === "organiser" || input.audience === "all") {
+      await notifyUserInAppAndEmail({ userId: campaign.organiser.userId, title, body: message, event: "admin_message", data: { campaignId, audience: "organiser" } });
+      counts.organiser = 1;
+    }
+    if ((input.audience === "supplier" || input.audience === "all") && supplierUserId) {
+      await notifyUserInAppAndEmail({ userId: supplierUserId, title, body: message, event: "admin_message", data: { campaignId } });
+      counts.supplier = 1;
+    }
+    if (input.audience === "supplier" && !supplierUserId) throw new AppError("This campaign has no supplier assigned", 409);
+    return { sent: counts, campaignTitle: campaign.title };
+  },
+
+  /** Handbook 10.1/10.3 - one admin view: identity, terms, timing, progress, money, operations and timeline. */
+  async getAdminDetail(campaignId: string) {
+    const campaign = await prisma.communityCampaign.findUnique({
+      where: { id: campaignId },
+      include: {
+        organiser: { include: { user: { select: { id: true, name: true, email: true } } } },
+        supplier: { include: { vendor: { select: { storeName: true } } } },
+        supplierAccount: { include: { user: { select: { name: true, email: true } } } },
+        fulfilment: { select: { status: true, method: true, estimatedReadyAt: true } },
+        supplierPayment: { select: { status: true, amount: true, currency: true } },
+        organiserPayout: { select: { status: true, amount: true } },
+      },
+    });
+    if (!campaign) throw new AppError("Campaign not found", 404);
+    const [contributions, alerts, supportCases, audit, events, refunds] = await Promise.all([
+      prisma.campaignContribution.groupBy({ by: ["status"], where: { campaignId }, _sum: { amount: true, quantity: true }, _count: { _all: true } }),
+      prisma.supplierFulfilmentAlert.findMany({ where: { campaignId }, select: { id: true, reason: true, status: true, createdAt: true }, orderBy: { createdAt: "desc" }, take: 20 }),
+      prisma.communityBuySupportCase.findMany({ where: { campaignId }, select: { id: true, caseType: true, status: true, createdAt: true }, orderBy: { createdAt: "desc" }, take: 20 }),
+      prisma.auditLog.findMany({ where: { entityType: "CommunityCampaign", entityId: campaignId }, orderBy: { createdAt: "desc" }, take: 50 }),
+      prisma.campaignFulfilmentEvent.findMany({ where: { campaignId }, orderBy: { createdAt: "desc" }, take: 50, select: { id: true, eventType: true, actorRole: true, note: true, createdAt: true } }),
+      prisma.campaignRefund.aggregate({ where: { contribution: { campaignId } }, _sum: { amount: true }, _count: { _all: true } }),
+    ]);
+    const sum = (statuses: string[], key: "amount" | "quantity") => contributions.filter((c) => statuses.includes(c.status)).reduce((acc, c) => acc + (c._sum[key] ?? 0), 0);
+    const goal = campaign.goalShares ?? campaign.minimumShares ?? 0;
+    const progress = {
+      confirmedShares: campaign.confirmedShares,
+      goalShares: campaign.goalShares,
+      minimumShares: campaign.minimumShares,
+      maximumShares: campaign.maximumShares,
+      percentOfGoal: goal > 0 ? Math.min(100, Math.round((campaign.confirmedShares / goal) * 100)) : null,
+      participantCount: await prisma.campaignParticipant.count({ where: { campaignId } }),
+      committedQuantity: sum(["PLEDGED", "PAID", "PAYMENT_PROCESSING", "CHARGE_FAILED"], "quantity"),
+      paidQuantity: sum(["PAID"], "quantity"),
+    };
+    const money = {
+      currency: campaign.currency,
+      pledgedAmount: sum(["PLEDGED", "PAYMENT_PROCESSING", "CHARGE_FAILED"], "amount"),
+      paidAmount: sum(["PAID"], "amount"),
+      refundedAmount: refunds._sum.amount ?? 0,
+      refundCount: refunds._count._all,
+      paymentFailures: contributions.filter((c) => c.status === "PAYMENT_FAILED" || c.status === "CHARGE_FAILED").reduce((acc, c) => acc + c._count._all, 0),
+      supplierPayment: campaign.supplierPayment,
+      organiserPayout: campaign.organiserPayout,
+    };
+    const timeline = [
+      ...audit.map((a) => ({ at: a.createdAt, kind: "admin" as const, label: a.action.replace("community_campaign.", "").replace(/_/g, " "), detail: a.reason })),
+      ...events.map((e) => ({ at: e.createdAt, kind: "fulfilment" as const, label: `Fulfilment: ${e.eventType.toLowerCase().replace(/_/g, " ")}`, detail: e.note })),
+    ].sort((a, b) => b.at.getTime() - a.at.getTime());
+    return {
+      campaign,
+      progress,
+      money,
+      operations: { adminIssueNotes: campaign.adminIssueNotes, fulfilment: campaign.fulfilment, alerts, supportCases },
+      timeline,
+    };
   },
 
   /**
@@ -1303,6 +1536,7 @@ export const communityCampaignsService = {
     if (!cancellable.includes(campaign.status)) {
       throw new AppError("This campaign can no longer be cancelled — it has already succeeded, failed, or ended", 409);
     }
+    assertCampaignTransition(campaign.status, "CANCELLED");
     // Phase 8 — atomic claim, same guarded-transition pattern every sibling
     // admin decision in this file uses (approveCancellation/rejectCancellation
     // above, evaluateRescueExpiry()/closeDueCampaigns() in this same
@@ -1565,6 +1799,7 @@ export const communityCampaignsService = {
   async publish(userId: string, campaignId: string) {
     const campaign = await this.requireOwnedByOrganiserForWrite(userId, campaignId);
     if (campaign.status !== "APPROVED") throw new AppError("Campaign must be approved before it can be published", 409);
+    assertCampaignTransition(campaign.status, "LIVE");
     // Non-null: reaching APPROVED requires having passed submit()'s full
     // requirement check, which never lets country stay unset.
     if (!campaign.country) throw new AppError("Campaign is missing its market configuration", 409);
@@ -1576,10 +1811,21 @@ export const communityCampaignsService = {
     // below) flips it to LIVE once that time passes. No scheduledOpenAt (or
     // one already in the past) is exactly today's behavior: immediate LIVE.
     const opensLater = campaign.scheduledOpenAt && campaign.scheduledOpenAt > new Date();
-    return prisma.communityCampaign.update({
+    const published = await prisma.communityCampaign.update({
       where: { id: campaignId },
-      data: opensLater ? { publishedAt: new Date() } : { status: "LIVE", publishedAt: new Date() },
+      data: {
+        ...(opensLater ? { publishedAt: new Date() } : { status: "LIVE" as const, publishedAt: new Date() }),
+        // Handbook 10.1: stable public URL identity, assigned once at publish.
+        ...(campaign.slug || typeof campaign.title !== "string" ? {} : { slug: `${slugify(campaign.title).slice(0, 60) || "campaign"}-${campaign.id.slice(-6)}` }),
+      },
     });
+    if (!opensLater) {
+      eventsService.emit({
+        name: EVENT_NAMES.community_buy_published, actorType: "user", actorId: userId, entityType: "CommunityCampaign", entityId: campaignId, source: "api",
+      });
+      void notifyCampaignLiveDiscovery(campaignId);
+    }
+    return published;
   },
 
   /**
@@ -1603,6 +1849,7 @@ export const communityCampaignsService = {
       });
       if (claim.count !== 1) continue;
       opened++;
+      void notifyCampaignLiveDiscovery(campaign.id);
       await notifyCampaign(
         campaign.organiser.userId,
         "scheduled_open",
@@ -1932,6 +2179,7 @@ export const communityCampaignsService = {
         });
         if (claim.count !== 1) continue;
         succeeded++;
+        emitCampaignLifecycleEvent(EVENT_NAMES.community_buy_target_reached, campaign.id, "close_due_campaigns", { fundingOutcome: outcome, confirmedShares: campaign.confirmedShares });
         await this.notifyOutcome(campaign.id, "succeeded");
         await this.createSupplierOrder(campaign);
         await this.chargePledgesAfterSuccess(campaign.id);
@@ -2092,6 +2340,7 @@ export const communityCampaignsService = {
         });
         if (claim.count !== 1) continue;
         rescued++;
+        emitCampaignLifecycleEvent(EVENT_NAMES.community_buy_target_reached, campaign.id, "evaluate_rescue_expiry", { fundingOutcome: outcome, confirmedShares: campaign.confirmedShares });
         await this.notifyOutcome(campaign.id, "succeeded");
         await this.createSupplierOrder(campaign);
         await this.chargePledgesAfterSuccess(campaign.id);
@@ -2102,6 +2351,7 @@ export const communityCampaignsService = {
         });
         if (claim.count !== 1) continue;
         failed++;
+        emitCampaignLifecycleEvent(EVENT_NAMES.community_buy_target_failed, campaign.id, "evaluate_rescue_expiry", { fundingOutcome: "BELOW_MINIMUM", confirmedShares: campaign.confirmedShares });
         await this.notifyOutcome(campaign.id, "failed");
         await this.createRefundRecordsForFailedCampaign(campaign.id);
         await this.cancelPledgesForFailedCampaign(campaign.id);
@@ -2160,6 +2410,7 @@ export const communityCampaignsService = {
     if (claim.count !== 1) {
       throw new AppError("Only a campaign in its rescue window can be ended this way", 409);
     }
+    emitCampaignLifecycleEvent(EVENT_NAMES.community_buy_target_failed, campaignId, "organiser_end_rescue", { fundingOutcome: "BELOW_MINIMUM" });
     const updated = await prisma.communityCampaign.findUniqueOrThrow({ where: { id: campaignId } });
     // Under PLEDGE_THEN_CHARGE, a campaign can only reach FAILED before it
     // was ever charged (charging happens exclusively on success — see
@@ -2305,6 +2556,10 @@ export const communityCampaignsService = {
         }
       }
     }
+    // Handbook 10: refund records exist => refunds have started. Only the call
+    // that actually created records emits; the eventKey lets consumers dedupe
+    // if a later call (e.g. admin cancel after failure) creates more.
+    if (created > 0) emitCampaignLifecycleEvent(EVENT_NAMES.community_buy_refund_started, campaignId, "refund_records_created", { refundCount: created });
     return created;
   },
 
@@ -2318,7 +2573,7 @@ export const communityCampaignsService = {
     const title = outcome === "succeeded" ? "Campaign succeeded!" : "Campaign did not reach its target";
     // "failed" here is neutral on purpose — no refund is promised until the
     // organiser actually decides to cancel (see cancelAfterFailure above).
-    const body = outcome === "succeeded" ? `${campaign.title} reached its target.` : `${campaign.title} did not reach its target. The organiser will decide what happens next.`;
+    const body = outcome === "succeeded" ? `${campaign.title} reached its target.` : `${campaign.title} did not reach its target. You have not been charged for a pledge, and if you paid anything it will be refunded to your original payment method. The organiser will decide what happens next.`;
 
     await notifyCampaign(campaign.organiser.userId, outcome, title, body, campaignId, undefined, "organiser");
     if (outcome === "succeeded") {
@@ -2346,6 +2601,7 @@ export const communityCampaignsService = {
     });
     let notified = 0;
     for (const campaign of campaigns) {
+      void notifyClosingSoonDiscovery(campaign.id);
       for (const participant of campaign.participants) {
         await automationService.scheduleAutomation({
           type: "CAMPAIGN_DEADLINE",

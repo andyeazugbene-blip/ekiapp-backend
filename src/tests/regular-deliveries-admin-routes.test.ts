@@ -32,7 +32,7 @@ vi.mock("../lib/prisma", async () => {
   return {
     prisma: new Proxy(actual.prisma, {
       get(target, prop) {
-        if (prop === "renewal") return { findMany: (...a: unknown[]) => mockRenewalFindMany(...a) };
+        if (prop === "renewal") return { findMany: (...a: unknown[]) => mockRenewalFindMany(...a), groupBy: async () => [] };
         return (target as any)[prop];
       },
     }),
@@ -99,9 +99,9 @@ describe("Admin Regular Delivery exception queue — real route path", () => {
     expect(res.status).toBe(401);
   });
 
-  it("GET /api/admin/subscriptions/exceptions checks the real admin permission (orders.read) — asserted before the handler runs", async () => {
+  it("GET /api/admin/subscriptions/exceptions checks the real admin permission (subscriptions.read) — asserted before the handler runs", async () => {
     await request(app).get("/api/admin/subscriptions/exceptions").set("Authorization", `Bearer ${adminToken()}`);
-    expect(mockAssertPermission).toHaveBeenCalledWith("admin-1", "orders.read");
+    expect(mockAssertPermission).toHaveBeenCalledWith("admin-1", "subscriptions.read");
   });
 
   it("GET /api/admin/subscriptions/exceptions returns 403, not the handler's data, when the admin lacks the permission", async () => {
@@ -116,11 +116,11 @@ describe("Admin Regular Delivery exception queue — real route path", () => {
     expect(res.status).toBe(404);
   });
 
-  it("POST /api/admin/subscriptions/:id/retry-payment requires the orders.mutate permission", async () => {
+  it("POST /api/admin/subscriptions/:id/retry-payment requires the subscriptions.mutate permission", async () => {
     mockAssertPermission.mockRejectedValue(new AppError("Forbidden", 403));
     const res = await request(app).post("/api/admin/subscriptions/renewal-1/retry-payment").set("Authorization", `Bearer ${adminToken()}`).send({});
     expect(res.status).toBe(403);
-    expect(mockAssertPermission).toHaveBeenCalledWith("admin-1", "orders.mutate");
+    expect(mockAssertPermission).toHaveBeenCalledWith("admin-1", "subscriptions.mutate");
   });
 
   it("a non-admin role (VENDOR) is rejected before reaching the permission check at all", async () => {
@@ -129,4 +129,24 @@ describe("Admin Regular Delivery exception queue — real route path", () => {
     expect(res.status).toBe(403);
     expect(mockAssertPermission).not.toHaveBeenCalled();
   });
+});
+
+describe("Foodstuffs Subscription admin module — permission gating", () => {
+  it("GET /api/admin/subscriptions and /:id are gated by subscriptions.read", async () => {
+    mockAssertPermission.mockRejectedValue(new AppError("Forbidden", 403));
+    const list = await request(app).get("/api/admin/subscriptions").set("Authorization", `Bearer ${adminToken()}`);
+    const detail = await request(app).get("/api/admin/subscriptions/sub-1").set("Authorization", `Bearer ${adminToken()}`);
+    expect(list.status).toBe(403);
+    expect(detail.status).toBe(403);
+    expect(mockAssertPermission).toHaveBeenCalledWith("admin-1", "subscriptions.read");
+  });
+
+  for (const action of ["pause", "resume", "skip-next", "set-next-date", "force-cancel", "change-frequency", "retry-payment"]) {
+    it(`POST /api/admin/subscriptions/:id/${action} is gated by subscriptions.mutate before anything runs`, async () => {
+      mockAssertPermission.mockRejectedValue(new AppError("Forbidden", 403));
+      const res = await request(app).post(`/api/admin/subscriptions/sub-1/${action}`).set("Authorization", `Bearer ${adminToken()}`).send({ reason: "support request" });
+      expect(res.status).toBe(403);
+      expect(mockAssertPermission).toHaveBeenCalledWith("admin-1", "subscriptions.mutate");
+    });
+  }
 });

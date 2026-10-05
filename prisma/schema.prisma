@@ -113,6 +113,8 @@ enum SupplierAccountState {
   RESTRICTED
   SUSPENDED
   CLOSED
+  // Handbook 14.11 - an application declined by Eki (distinct from SUSPENDED/CLOSED, which are post-approval controls).
+  REJECTED
 }
 
 enum PayoutMethodType {
@@ -304,7 +306,7 @@ model Vendor {
   stripeReminderSentAt            DateTime?
   verifiedAt                      DateTime?
   verificationFailureReason       String?
-  user                           User                      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user                            User                      @relation(fields: [userId], references: [id], onDelete: Cascade)
   wallet                          Wallet?
   products                        Product[]
   orderItems                      OrderItem[]
@@ -416,6 +418,11 @@ model Product {
   stock                     Int                        @default(0)
   weightGrams               Int?
   isActive                  Boolean                    @default(true)
+  // Handbook 14.6: when an admin unpublishes a product the record is retained
+  // (isActive=false) with who/when/why; cleared on restore.
+  adminUnpublishedAt        DateTime?
+  adminUnpublishedReason    String?
+  adminUnpublishedById      String?
   vendor                    Vendor                     @relation(fields: [vendorId], references: [id], onDelete: Restrict)
   orderItems                OrderItem[]
   cartItems                 CartItem[]
@@ -512,6 +519,7 @@ model Order {
   paystackTransaction   PaystackTransaction?
   deliveryOtp           DeliveryOtp?
   dispute               Dispute?
+  evidence              OrderEvidence[]
   walletTransactions    WalletTransaction[]
   renewal               Renewal?
   createdAt             DateTime             @default(now())
@@ -1229,6 +1237,10 @@ model Reward {
   maxClaims      Int?
   claimedCount   Int        @default(0)
   expiresAt      DateTime?
+  // Handbook 14.4: rewards / hot deals are never hard-deleted. Pause =
+  // isActive=false; Archive = archivedAt set (hidden from default lists,
+  // history and claims retained).
+  archivedAt     DateTime?
   createdAt      DateTime   @default(now())
   updatedAt      DateTime   @updatedAt
 
@@ -1263,6 +1275,8 @@ model GiftCard {
   currency    String              @default("EUR")
   imageUrl    String?
   isActive    Boolean             @default(true)
+  // Archive (never hard delete): hidden from the catalogue, purchases kept.
+  archivedAt  DateTime?
   purchases   PurchasedGiftCard[]
   createdAt   DateTime            @default(now())
   updatedAt   DateTime            @updatedAt
@@ -1270,25 +1284,69 @@ model GiftCard {
   @@index([isActive])
 }
 
+// Handbook 14.4: lifecycle of a purchased gift card. PENDING_PAYMENT rows are
+// never shown to buyers or redeemable; only the verified Stripe webhook moves
+// a row to ACTIVE (and generates the redemption code).
+enum GiftCardStatus {
+  PENDING_PAYMENT
+  ACTIVE
+  PAUSED
+  REDEEMED
+  EXPIRED
+  CANCELLED
+}
+
 model PurchasedGiftCard {
-  id                    String    @id @default(cuid())
+  id                    String         @id @default(cuid())
   buyerId               String
   giftCardId            String
   recipientEmail        String?
   recipientName         String?
   message               String?
   amount                Int
-  currency              String    @default("EUR")
+  currency              String         @default("EUR")
   stripePaymentIntentId String?
-  isRedeemed            Boolean   @default(false)
+  isRedeemed            Boolean        @default(false)
   redeemedAt            DateTime?
-  createdAt             DateTime  @default(now())
+  // Redemption code: 16 unguessable base32 characters (stored without
+  // dashes, shown as XXXX-XXXX-XXXX-XXXX). Null until payment is confirmed.
+  code                  String?        @unique
+  // Remaining redeemable balance in minor units. Set to `amount` on payment.
+  remainingBalance      Int            @default(0)
+  status                GiftCardStatus @default(PENDING_PAYMENT)
+  paidAt                DateTime?
+  expiresAt             DateTime?
+  statusReason          String?
+  statusChangedAt       DateTime?
+  statusChangedById     String?
+  createdAt             DateTime       @default(now())
 
-  buyer    User     @relation(fields: [buyerId], references: [id], onDelete: Restrict)
-  giftCard GiftCard @relation(fields: [giftCardId], references: [id], onDelete: Restrict)
+  buyer       User                 @relation(fields: [buyerId], references: [id], onDelete: Restrict)
+  giftCard    GiftCard             @relation(fields: [giftCardId], references: [id], onDelete: Restrict)
+  redemptions GiftCardRedemption[]
 
   @@index([buyerId])
   @@index([isRedeemed])
+  @@index([status, createdAt])
+  @@index([stripePaymentIntentId])
+}
+
+// Append-only ledger of every redemption (credit to the redeemer's wallet).
+model GiftCardRedemption {
+  id                  String   @id @default(cuid())
+  purchasedGiftCardId String
+  redeemerId          String
+  amountMinor         Int
+  currency            String
+  orderId             String?
+  walletTransactionId String?
+  balanceAfter        Int
+  createdAt           DateTime @default(now())
+
+  purchasedGiftCard PurchasedGiftCard @relation(fields: [purchasedGiftCardId], references: [id], onDelete: Restrict)
+
+  @@index([purchasedGiftCardId, createdAt])
+  @@index([redeemerId])
 }
 
 // ─── Phase 8: Subscriptions ─────────────────────────────────────────────────
@@ -1319,6 +1377,10 @@ model VendorSubscription {
   currentPeriodStart   DateTime?
   currentPeriodEnd     DateTime?
   cancelledAt          DateTime?
+  // 14-day full-access trial (Stripe trial_period_days). Written from the
+  // Stripe subscription (trial_start / trial_end) so admin + vendor see real dates.
+  trialStartedAt       DateTime?
+  trialEndsAt          DateTime?
   sellerPlan           SellerPlan?        @relation(fields: [sellerPlanId], references: [id], onDelete: SetNull)
   createdAt            DateTime           @default(now())
   updatedAt            DateTime           @updatedAt
@@ -1531,9 +1593,12 @@ model PushTicket {
   ticketId  String   @unique
   token     String
   userId    String
+  // CommunicationLog.id this ticket belongs to (broadcast push receipts).
+  logId     String?
   createdAt DateTime @default(now())
 
   @@index([createdAt])
+  @@index([logId])
 }
 
 // ─── Domestic Africa Escrow ─────────────────────────────────────────────────
@@ -1605,13 +1670,111 @@ model Dispute {
   refundAmount Int?
   resolvedById String?
   resolvedAt   DateTime?
+  // Handbook 11 L454: issue type, claim, evidence, deadlines, communication, decision, appeal.
+  type           DisputeType   @default(OTHER)
+  claim          String?
+  respondByAt    DateTime?
+  appealStatus   DisputeAppealStatus @default(NONE)
+  appealReason   String?
+  appealRequestedById String?
+  appealRequestedAt   DateTime?
+  appealDecidedById   String?
+  appealDecidedAt     DateTime?
+  appealDecisionReason String?
+  decisionReason String?
+  evidenceRequestedAt DateTime?
+  evidenceRequestedFrom String?
   order        Order         @relation(fields: [orderId], references: [id], onDelete: Restrict)
+  evidence     DisputeEvidence[]
+  messages     DisputeMessage[]
   createdAt    DateTime      @default(now())
   updatedAt    DateTime      @updatedAt
 
   @@index([status, createdAt])
   @@index([buyerId])
   @@index([vendorId])
+}
+
+enum DisputeType {
+  NOT_RECEIVED
+  DAMAGED
+  WRONG_ITEM
+  QUALITY
+  OTHER
+}
+
+enum DisputeAppealStatus {
+  NONE
+  REQUESTED
+  UPHELD
+  OVERTURNED
+}
+
+enum DisputeParty {
+  BUYER
+  VENDOR
+  ADMIN
+}
+
+enum DisputeEvidenceKind {
+  PHOTO
+  DOCUMENT
+  TEXT
+}
+
+model DisputeEvidence {
+  id             String              @id @default(cuid())
+  disputeId      String
+  submittedById  String
+  submitterRole  DisputeParty
+  kind           DisputeEvidenceKind
+  uploadAssetId  String?
+  text           String?
+  note           String?
+  dispute        Dispute             @relation(fields: [disputeId], references: [id], onDelete: Cascade)
+  createdAt      DateTime            @default(now())
+
+  @@index([disputeId, createdAt])
+}
+
+model DisputeMessage {
+  id        String       @id @default(cuid())
+  disputeId String
+  authorId  String
+  authorRole DisputeParty
+  body      String
+  internal  Boolean      @default(false)
+  dispute   Dispute      @relation(fields: [disputeId], references: [id], onDelete: Cascade)
+  createdAt DateTime     @default(now())
+
+  @@index([disputeId, createdAt])
+}
+
+enum OrderEvidenceKind {
+  DELIVERY_PHOTO
+  PICKUP_CONFIRMATION
+  SIGNATURE
+  NOTE
+}
+
+enum OrderEvidenceRole {
+  VENDOR
+  COURIER
+  ADMIN
+}
+
+model OrderEvidence {
+  id            String            @id @default(cuid())
+  orderId       String
+  kind          OrderEvidenceKind
+  uploadAssetId String?
+  note          String?
+  submittedById String
+  submitterRole OrderEvidenceRole
+  order         Order             @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  createdAt     DateTime          @default(now())
+
+  @@index([orderId, createdAt])
 }
 
 /**
@@ -1710,17 +1873,26 @@ model Campaign {
 
 // ─── Communication Log ──────────────────────────────────────────────────────
 model CommunicationLog {
-  id            String   @id @default(cuid())
+  id            String    @id @default(cuid())
   recipientId   String
   recipientType String // BUYER, VENDOR, ADMIN
   eventKey      String
   channel       String // email, push, in_app, sms
   title         String
-  body          String   @db.Text
-  status        String   @default("SENT")
+  body          String    @db.Text
+  // QUEUED -> SENT (handed to provider) -> DELIVERED (provider receipt OK) | FAILED
+  status        String    @default("SENT")
   metadata      Json?
-  createdAt     DateTime @default(now())
+  // W5 communications: link a per-recipient row back to its Broadcast, the
+  // provider reference (Expo ticket id / Resend message id) and the real
+  // receipt outcome.
+  broadcastId   String?
+  providerRef   String?
+  statusDetail  String?
+  deliveredAt   DateTime?
+  createdAt     DateTime  @default(now())
 
+  @@index([broadcastId])
   @@index([recipientId])
   @@index([eventKey])
   @@index([createdAt])
@@ -1742,19 +1914,26 @@ model CommunicationTemplate {
 
 // ─── Scheduled Communications ───────────────────────────────────────────────
 model ScheduledCommunication {
-  id           String    @id @default(cuid())
-  audience     String
-  channel      String
-  templateKey  String?
-  subject      String
-  body         String    @db.Text
-  status       String    @default("SCHEDULED") // SCHEDULED, SENT, FAILED, CANCELLED
-  scheduledFor DateTime
-  sentAt       DateTime?
-  createdBy    String
-  error        String?
-  createdAt    DateTime  @default(now())
-  updatedAt    DateTime  @updatedAt
+  id             String    @id @default(cuid())
+  audience       String
+  channel        String
+  templateKey    String?
+  subject        String
+  body           String    @db.Text
+  status         String    @default("SCHEDULED") // SCHEDULED, SENT, FAILED, CANCELLED
+  scheduledFor   DateTime
+  sentAt         DateTime?
+  createdBy      String
+  error          String?
+  // W5: richer payload so a scheduled send can carry email, category, deep link
+  channels       String[]  @default([])
+  category       String    @default("marketing")
+  deepLink       String?
+  audienceParams Json?
+  reason         String?
+  broadcastId    String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
 
   @@index([status, scheduledFor])
   @@index([createdBy])
@@ -1763,17 +1942,18 @@ model ScheduledCommunication {
 // ─── Content Reports & User Blocks ─────────────────────────────────────────
 
 model ContentReport {
-  id         String    @id @default(cuid())
-  reporterId String
-  targetType String // "review" | "message" | "product" | "store"
-  targetId   String
-  reason     String // "inappropriate" | "spam" | "harassment" | "fraud" | "other"
-  details    String?
-  status     String    @default("PENDING") // PENDING | REVIEWED | DISMISSED
-  reviewedBy String?
-  reviewedAt DateTime?
-  createdAt  DateTime  @default(now())
-  updatedAt  DateTime  @updatedAt
+  id             String    @id @default(cuid())
+  reporterId     String
+  targetType     String // "review" | "message" | "product" | "store"
+  targetId       String
+  reason         String // "inappropriate" | "spam" | "harassment" | "fraud" | "other"
+  details        String?
+  status         String    @default("PENDING") // PENDING | REVIEWED | DISMISSED
+  reviewedBy     String?
+  reviewedAt     DateTime?
+  decisionReason String?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
 
   @@index([reporterId])
   @@index([targetType, targetId])
@@ -1885,6 +2065,8 @@ enum AutomationType {
   CAMPAIGN_MILESTONE
   CAMPAIGN_DEADLINE
   CAMPAIGN_REFUND_UPDATE
+  // Eki-managed: vendor free trial ending soon (Stripe customer.subscription.trial_will_end).
+  VENDOR_TRIAL_ENDING
 }
 
 enum AutomationRunStatus {
@@ -1895,6 +2077,72 @@ enum AutomationRunStatus {
   SUPPRESSED
   FAILED
   CANCELLED
+}
+
+enum AutomationRuleState {
+  DRAFT
+  TEST
+  ACTIVE
+  PAUSED
+  FAILED
+  ARCHIVED
+}
+
+// Automation Centre rule (handbook 8.4). `state` + `timing` (frequencyCapDays,
+// quietHoursStartUtc/EndUtc) + `channels` are ENFORCED by the engine; the other
+// descriptive fields document the rule for admins and are not executable.
+model AutomationRule {
+  id                 String               @id @default(cuid())
+  key                String               @unique
+  name               String
+  purpose            String               @db.Text
+  owner              String               @default("Eki Operations")
+  version            Int                  @default(1)
+  relatedFeature     String?
+  automationType     AutomationType?
+  triggerDescription String               @db.Text
+  conditions         Json?
+  exclusions         Json?
+  audience           String?              @db.Text
+  timing             Json?
+  channels           Json?
+  state              AutomationRuleState  @default(ACTIVE)
+  stateBeforeStop    AutomationRuleState?
+  stateReason        String?
+  lastRunAt          DateTime?
+  lastSkippedAt      DateTime?
+  lastSkipReason     String?
+  updatedById        String?
+  createdAt          DateTime             @default(now())
+  updatedAt          DateTime             @updatedAt
+
+  @@index([state])
+  @@index([automationType])
+}
+
+// Canonical business event (handbook 12). Written fire-and-forget by
+// eventsService.emit(); never read by business flows.
+model Event {
+  id                String   @id @default(cuid())
+  name              String
+  occurredAt        DateTime @default(now())
+  timezone          String   @default("UTC")
+  actorType         String?
+  actorId           String?
+  entityType        String?
+  entityId          String?
+  secondaryEntities Json?
+  source            String?
+  consentContext    Json?
+  amountMinor       Int?
+  currency          String?
+  payload           Json?
+  createdAt         DateTime @default(now())
+
+  @@index([name, occurredAt])
+  @@index([entityType, entityId])
+  @@index([actorId, occurredAt])
+  @@index([occurredAt])
 }
 
 model VendorAutomationSetting {
@@ -1932,11 +2180,22 @@ model AutomationRun {
   // and the CommunicationLog row that actually delivered it.
   communicationLogId String?
   data               Json?
+  // Automation Centre: rule that governed this run, per-channel outcome
+  // (channel, communicationLogId, status, providerRef), retry lineage and
+  // whether this was an admin dry-run/test.
+  ruleKey            String?
+  channelResults     Json?
+  attempt            Int                 @default(1)
+  retryOfId          String?
+  isTest             Boolean             @default(false)
   vendor             Vendor?             @relation(fields: [vendorId], references: [id], onDelete: Cascade)
   recipient          User                @relation(fields: [recipientUserId], references: [id], onDelete: Cascade)
   createdAt          DateTime            @default(now())
   updatedAt          DateTime            @updatedAt
 
+  @@index([retryOfId])
+  @@index([ruleKey, createdAt])
+  @@index([createdAt])
   @@index([type, status])
   @@index([recipientUserId, type])
   @@index([vendorId, type, createdAt])
@@ -2085,6 +2344,12 @@ model BuyerSubscription {
   priceChangeApprovalLimitBps Int                         @default(500)
   nextRenewalAt               DateTime?
   pausedUntil                 DateTime?
+  // Foodstuffs Subscription recovery/admin: why the subscription is paused
+  // ("payment_failed" | "buyer" | "admin") and since when; cancelReason is the
+  // optional reason (chip/free text) captured when the buyer or an admin cancels.
+  pausedReason                String?
+  pausedAt                    DateTime?
+  cancelReason                String?
   cancelledAt                 DateTime?
   buyer                       User                        @relation(fields: [buyerId], references: [id], onDelete: Cascade)
   offer                       SubscriptionOffer           @relation(fields: [offerId], references: [id], onDelete: Restrict)
@@ -2138,6 +2403,11 @@ model Renewal {
   currency             String                       @default("GBP")
   orderId              String?                      @unique
   failureReason        String?
+  // Automatic payment-recovery schedule: when the sweep should next retry a
+  // PAYMENT_FAILED renewal (or finalise it once MAX attempts are used).
+  nextRetryAt          DateTime?
+  // When the renewal entered AWAITING_STOCK (stock-confirmation timeout clock).
+  awaitingStockSince   DateTime?
   cancelledAt          DateTime?
   // Regular Delivery Admin Escalation — mirrors CampaignRefund's escalation
   // fields (same idempotency-marker pattern, not a new case system). There is
@@ -2160,6 +2430,7 @@ model Renewal {
   @@unique([subscriptionId, cycleDate])
   @@index([status])
   @@index([subscriptionId, status])
+  @@index([status, nextRetryAt])
 }
 
 model RenewalItem {
@@ -2421,6 +2692,12 @@ model SupplierAccount {
   // Additive timestamps, mirroring approvedAt/pausedAt's existing pattern.
   suspendedAt                DateTime?
   closedAt                   DateTime?
+  // Handbook 14.11: rejection timestamp, terms-acceptance evidence (set when
+  // the supplier submits the application) and who last decided it.
+  rejectedAt                 DateTime?
+  termsAcceptedAt            DateTime?
+  reviewedById               String?
+  reviewedAt                 DateTime?
   controlScope               String?
   reasonCode                 String?
   createdAt                  DateTime             @default(now())
@@ -2663,6 +2940,14 @@ model CommunityCampaign {
   // to the organiser) — this is admin-internal-only and never surfaced to
   // the organiser or participants.
   adminIssueNotes           String?
+  // Handbook 10.1: public URL identity and timing with timezone. All
+  // optional - existing campaigns keep working with nulls.
+  slug                      String?                            @unique
+  timezone                  String?
+  paymentDeadline           DateTime?
+  fulfilmentDeadline        DateTime?
+  // Handbook 10.3: recorded review criteria checklist (JSON).
+  reviewCriteria            Json?
   confirmedShares           Int                                @default(0)
   fundingOutcome            FundingOutcome                     @default(PENDING)
   supplierCommitted         Boolean                            @default(false)
@@ -3560,6 +3845,21 @@ model MarketConfiguration {
   // treated as unsupported, same as null.
   communityBuyPaymentMode CommunityBuyPaymentMode?
 
+  // Handbook 14.9 - verified payment readiness, distinct from the feature
+  // availability toggles above. Community Buy PAYMENTS may only be enabled
+  // (Super Administrator only) once every item here is satisfied.
+  providerSupported     Boolean   @default(false)
+  providerConfigChecked Boolean   @default(false)
+  legalApprovalRef      String?
+  refundTested          Boolean   @default(false)
+  testTransactionAt     DateTime?
+  readinessApprovedById String?
+  readinessApprovedAt   DateTime?
+  enablementReason      String?
+  // true = payments were already enabled before readiness evidence existed
+  // (safe backfill) - surfaced as a warning, never silently trusted.
+  readinessUnverified   Boolean   @default(false)
+
   // Diaspora final V1 settlement doc §N item 4 — "supplier-side Eki platform
   // commission": 8% of the agreed wholesale settlement, taken at
   // releaseSupplierPayment() time. Originally "Community Buy processing fee"
@@ -3739,6 +4039,8 @@ model AdminPlatformSetting {
   id          String   @id @default(cuid())
   key         String   @unique
   value       Float
+  // Handbook admin settings: human description for FLAG_* feature flags.
+  description String?
   updatedById String?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
@@ -3805,6 +4107,8 @@ model ContentDecision {
   decision   UploadModerationStatus
   reason     String
   reportId   String?
+  // approve | reject | remove | flag | contact_owner
+  action     String?
   createdAt  DateTime               @default(now())
 
   @@index([assetId, createdAt])
@@ -3821,4 +4125,96 @@ model AdminNote {
   createdAt  DateTime @default(now())
 
   @@index([entityType, entityId, createdAt])
+}
+
+// ─── Refunds (handbook 5.2 L214 / 14.8) ─────────────────────────────────────
+// One row per refund request so cumulative refunds, provider status and the
+// actor are queryable (the refund list used to be reconstructed from audit
+// metadata, and a partial refund wrongly closed the order to further refunds).
+
+enum RefundStatus {
+  REQUESTED
+  PROCESSING
+  COMPLETED
+  FAILED
+}
+
+model Refund {
+  id               String       @id @default(cuid())
+  orderId          String
+  // Amount in the ORDER's own currency, minor units (what the admin entered).
+  amountMinor      Int
+  currency         String
+  status           RefundStatus @default(REQUESTED)
+  provider         String       @default("stripe")
+  providerRefundId String?      @unique
+  reason           String
+  idempotencyKey   String       @unique
+  actorId          String
+  failureReason    String?
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+
+  @@index([orderId, status])
+  @@index([status, createdAt])
+}
+
+// ─── W5: Communication Center (handbook 6.2) ────────────────────────────────
+
+enum BroadcastStatus {
+  DRAFT
+  SCHEDULED
+  SENDING
+  SENT
+  PARTIALLY_DELIVERED
+  FAILED
+  CANCELLED
+}
+
+model Broadcast {
+  id             String          @id @default(cuid())
+  createdById    String
+  status         BroadcastStatus @default(SENDING)
+  // marketing | operational
+  category       String          @default("marketing")
+  title          String
+  body           String          @db.Text
+  deepLink       String?
+  templateKey    String?
+  audience       String
+  audienceParams Json?
+  channels       String[]        @default([])
+  reason         String
+  // Client-generated per compose session; unique => no double send.
+  idempotencyKey String?         @unique
+  scheduledFor   DateTime?
+  startedAt      DateTime?
+  completedAt    DateTime?
+  audienceTotal  Int             @default(0)
+  // { in_app: {eligible, reasons:{...}}, push: {...}, email: {...} }
+  eligibility    Json?
+  // { email: "not_configured" | "ok" | ... }
+  channelResults Json?
+  error          String?
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+
+  @@index([status, createdAt])
+  @@index([createdById])
+}
+
+model CommunicationTemplateVersion {
+  id          String   @id @default(cuid())
+  templateKey String
+  version     Int
+  title       String
+  body        String   @db.Text
+  channels    String[] @default([])
+  enabled     Boolean  @default(true)
+  changedById String?
+  reason      String?
+  createdAt   DateTime @default(now())
+
+  @@unique([templateKey, version])
+  @@index([templateKey, createdAt])
 }

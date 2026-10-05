@@ -364,3 +364,32 @@ describe("getFulfilmentEvents* — evidence timeline read, ownership-scoped", ()
     expect(m.campaignFulfilmentEvent.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: { campaignId: "camp-1" } }));
   });
 });
+
+// ─── Canonical lifecycle events ─────────────────────────────────────────────
+import { eventsService as fulfilmentEvents } from "../modules/events/events.service";
+
+describe("fulfilment completion canonical events", () => {
+  const emit = vi.spyOn(fulfilmentEvents, "emit").mockImplementation(() => undefined);
+  beforeEach(() => emit.mockClear());
+
+  it("organiser confirmation emits community_buy_fulfilled, and community_buy_completed only when the campaign claim FULFILLING->COMPLETED wins", async () => {
+    ownedByOrganiser("DISPATCHED");
+    m.campaignFulfilment.findUniqueOrThrow.mockResolvedValue({ status: "COMPLETED" } as never);
+    (m as any).communityCampaign.updateMany = vi.fn().mockResolvedValue({ count: 1 });
+    await campaignFulfilmentService.organiserConfirmCompletion("organiser-user-1", "camp-1");
+    expect(emit.mock.calls.map((c) => c[0].name)).toEqual(["community_buy_fulfilled", "community_buy_completed"]);
+    expect(emit.mock.calls[1][0]).toMatchObject({ entityType: "CommunityCampaign", entityId: "camp-1", payload: { eventKey: "community_buy_completed:camp-1" } });
+
+    emit.mockClear();
+    ownedByOrganiser("COLLECTED");
+    (m as any).communityCampaign.updateMany = vi.fn().mockResolvedValue({ count: 0 }); // campaign not FULFILLING (e.g. cancelled)
+    await campaignFulfilmentService.organiserConfirmCompletion("organiser-user-1", "camp-1");
+    expect(emit.mock.calls.map((c) => c[0].name)).toEqual(["community_buy_fulfilled"]);
+  });
+
+  it("a rejected confirmation (wrong state) emits nothing", async () => {
+    ownedByOrganiser("PACKING");
+    await expect(campaignFulfilmentService.organiserConfirmCompletion("organiser-user-1", "camp-1")).rejects.toMatchObject({ statusCode: 409 });
+    expect(emit).not.toHaveBeenCalled();
+  });
+});

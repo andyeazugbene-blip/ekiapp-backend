@@ -1,7 +1,8 @@
 import type { Request, Response } from "express";
 
+import { prisma } from "../../lib/prisma";
 import { AppError } from "../../shared/errors/app-error";
-import { recordAudit } from "../../shared/utils/audit";
+import { recordAudit, requireAuditReason } from "../../shared/utils/audit";
 import * as reportsService from "./reports.service";
 
 const VALID_TARGET_TYPES = ["review", "message", "product", "store"] as const;
@@ -66,29 +67,39 @@ export async function listBlockedUsers(request: Request, response: Response): Pr
 
 // Admin
 export async function adminListReports(request: Request, response: Response): Promise<void> {
-  const status = request.query.status as string | undefined;
-  const reports = await reportsService.listReports(status);
-  response.json({ reports });
+  const status = typeof request.query.status === "string" && request.query.status ? request.query.status : undefined;
+  const cursor = typeof request.query.cursor === "string" && request.query.cursor ? request.query.cursor : undefined;
+  const targetType = typeof request.query.targetType === "string" && request.query.targetType ? request.query.targetType : undefined;
+  const limit = request.query.limit ? Number(request.query.limit) : undefined;
+  const result = await reportsService.listReports(status, { cursor, targetType, limit: Number.isFinite(limit) ? limit : undefined });
+  response.json(result);
 }
 
 export async function adminReviewReport(request: Request, response: Response): Promise<void> {
   const userId = requireUserId(request);
   const id = String(request.params.id ?? "");
   if (!id) throw new AppError("Report id is required", 400);
-  const { status } = request.body;
+  const { status, reason } = request.body ?? {};
 
   if (!["REVIEWED", "DISMISSED"].includes(status)) {
     throw new AppError("status must be REVIEWED or DISMISSED", 400);
   }
+  const trimmed = typeof reason === "string" ? reason.trim() : "";
+  if (trimmed.length < 5) throw new AppError("A reason of at least 5 characters is required", 400);
 
-  const report = await reportsService.reviewReport(id, status, userId);
+  const existing = await prisma.contentReport.findUnique({ where: { id } });
+  if (!existing) throw new AppError("Report not found", 404);
+  const report = await reportsService.reviewReport(id, status, userId, trimmed);
 
   await recordAudit({
     actorId: userId,
     action: "report.reviewed",
     entityType: "ContentReport",
     entityId: id,
-    metadata: { status },
+    reason: trimmed,
+    beforeState: { status: existing.status },
+    afterState: { status },
+    metadata: { status, targetType: existing.targetType, targetId: existing.targetId },
     request,
   });
 

@@ -2,6 +2,7 @@ import { OrderStatus, UserRole } from "@prisma/client";
 
 import { env } from "../../config/env";
 import { prisma } from "../../lib/prisma";
+import { notTest, notTestOf } from "../../shared/utils/test-records";
 
 const PAID_STATUSES: OrderStatus[] = [
   "PAID", "CONFIRMED", "PROCESSING", "DISPATCHED", "IN_TRANSIT", "DELIVERED", "COMPLETED",
@@ -89,21 +90,21 @@ export const adminAnalyticsService = {
       pendingVerifications,
     ] = await Promise.all([
       prisma.order.aggregate({
-        where: { status: { in: PAID_STATUSES } },
+        where: { status: { in: PAID_STATUSES }, ...notTest() },
         _sum: { totalAmount: true },
         _count: { _all: true },
       }),
       prisma.payment.aggregate({
-        where: { status: "SUCCEEDED" },
+        where: { status: "SUCCEEDED", ...notTest() },
         _sum: { platformFeeAmount: true },
       }),
       prisma.order.count({
-        where: { status: { notIn: ["FAILED", "CANCELLED"] } },
+        where: { status: { notIn: ["FAILED", "CANCELLED"] }, ...notTest() },
       }),
-      prisma.user.count({ where: { role: UserRole.BUYER } }),
-      prisma.vendor.count(),
+      prisma.user.count({ where: { role: UserRole.BUYER, ...notTest() } }),
+      prisma.vendor.count({ where: notTest() }),
       prisma.order.findMany({
-        where: { status: { in: PAID_STATUSES }, createdAt: { gte: thirtyDaysAgo } },
+        where: { status: { in: PAID_STATUSES }, createdAt: { gte: thirtyDaysAgo }, ...notTest() },
         select: { buyerId: true },
         distinct: ["buyerId"],
       }),
@@ -112,23 +113,24 @@ export const adminAnalyticsService = {
           status: { in: PAID_STATUSES },
           createdAt: { gte: thirtyDaysAgo },
           vendorId: { not: null },
+          ...notTest(),
         },
         select: { vendorId: true },
         distinct: ["vendorId"],
       }),
-      prisma.user.count({ where: { role: UserRole.BUYER, createdAt: { gte: thirtyDaysAgo } } }),
-      prisma.vendor.count({ where: { createdAt: { gte: thirtyDaysAgo } } }),
+      prisma.user.count({ where: { role: UserRole.BUYER, createdAt: { gte: thirtyDaysAgo }, ...notTest() } }),
+      prisma.vendor.count({ where: { createdAt: { gte: thirtyDaysAgo }, ...notTest() } }),
       prisma.vendorSubscription.findMany({
         where: { status: "ACTIVE", sellerPlanId: { not: null } },
         select: { sellerPlanId: true },
       }),
       prisma.wallet.aggregate({ _sum: { pendingBalance: true } }),
       prisma.payoutRequest.aggregate({
-        where: { status: "PENDING" },
+        where: { status: "PENDING", ...notTestOf("vendor") },
         _sum: { amount: true },
       }),
-      prisma.dispute.count({ where: { status: "OPEN" } }),
-      prisma.vendor.count({ where: { verificationStatus: "PENDING" } }),
+      prisma.dispute.count({ where: { status: "OPEN", ...notTestOf("order") } }),
+      prisma.vendor.count({ where: { verificationStatus: "PENDING", ...notTest() } }),
     ]);
 
     // Subscription MRR: sum plan prices for active subscriptions
@@ -152,7 +154,7 @@ export const adminAnalyticsService = {
     // Buyer retention: % of buyers with >1 paid order out of all buyers with >=1
     const buyerOrderCounts = await prisma.order.groupBy({
       by: ["buyerId"],
-      where: { status: { in: PAID_STATUSES } },
+      where: { status: { in: PAID_STATUSES }, ...notTest() },
       _count: { _all: true },
     });
     const totalActiveBuyers = buyerOrderCounts.length;
@@ -167,6 +169,7 @@ export const adminAnalyticsService = {
         status: { in: PAID_STATUSES },
         vendorId: { not: null },
         createdAt: { gte: sixtyDaysAgo, lt: thirtyDaysAgo },
+        ...notTest(),
       },
       select: { vendorId: true },
       distinct: ["vendorId"],
@@ -212,19 +215,19 @@ export const adminAnalyticsService = {
 
     const [orders, payments, newBuyerRows, newVendorRows] = await Promise.all([
       prisma.order.findMany({
-        where: { status: { in: PAID_STATUSES }, createdAt: { gte: since } },
+        where: { status: { in: PAID_STATUSES }, createdAt: { gte: since }, ...notTest() },
         select: { totalAmount: true, createdAt: true },
       }),
       prisma.payment.findMany({
-        where: { status: "SUCCEEDED", processedAt: { gte: since } },
+        where: { status: "SUCCEEDED", processedAt: { gte: since }, ...notTest() },
         select: { platformFeeAmount: true, processedAt: true },
       }),
       prisma.user.findMany({
-        where: { role: UserRole.BUYER, createdAt: { gte: since } },
+        where: { role: UserRole.BUYER, createdAt: { gte: since }, ...notTest() },
         select: { createdAt: true },
       }),
       prisma.vendor.findMany({
-        where: { createdAt: { gte: since } },
+        where: { createdAt: { gte: since }, ...notTest() },
         select: { createdAt: true },
       }),
     ]);

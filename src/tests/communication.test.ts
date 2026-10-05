@@ -334,3 +334,51 @@ describe("communicationService.send — NOTIF-DUP-01: push must not re-fire when
     expect(mockSendPush).toHaveBeenCalled();
   });
 });
+
+// ─── Canonical message events ───────────────────────────────────────────────
+import { eventsService as commEvents } from "../modules/events/events.service";
+
+describe("communicationService.send -> canonical message events", () => {
+  const emit = vi.spyOn(commEvents, "emit").mockImplementation(() => undefined);
+  const byName = (n: string) => emit.mock.calls.map((c) => c[0]).filter((e) => e.name === n);
+
+  beforeEach(async () => {
+    emit.mockClear();
+    mockEnqueueEmail.mockClear().mockResolvedValue(undefined);
+    mockSendPush.mockClear().mockResolvedValue(undefined);
+    mockNotificationCreate.mockClear().mockResolvedValue({ id: "notif-1" });
+    const { prisma } = await import("../lib/prisma");
+    vi.mocked(prisma.communicationLog.create).mockReset().mockResolvedValue({ id: "log-9" } as never);
+  });
+
+  it("email accepted -> message_queued; in-app stored -> message_delivered; both carry the log id as a dedupe key", async () => {
+    await communicationService.send({ eventKey: "welcome_buyer", recipientId: "buyer-1", recipientEmail: "b@example.com", variables: { name: "A" } });
+    expect(byName("message_queued")).toHaveLength(1);
+    expect(byName("message_queued")[0]).toMatchObject({ entityType: "CommunicationLog", entityId: "log-9", payload: { channel: "email", eventKey: "message_queued:log-9" } });
+    expect(byName("message_delivered")).toHaveLength(1);
+    expect(byName("message_delivered")[0].payload).toMatchObject({ channel: "in_app" });
+    expect(byName("message_failed")).toHaveLength(0);
+    // opened / clicked are never emitted: there is no tracking path.
+    expect(emit.mock.calls.some((c) => ["message_opened", "message_clicked"].includes(c[0].name))).toBe(false);
+  });
+
+  it("a failing channel emits message_failed with the reason and never message_delivered", async () => {
+    mockEnqueueEmail.mockRejectedValue(new Error("SMTP down"));
+    mockNotificationCreate.mockRejectedValue(new Error("DB unavailable"));
+    await communicationService.send({ eventKey: "welcome_buyer", recipientId: "buyer-1", recipientEmail: "b@example.com", variables: { name: "A" } });
+    expect(byName("message_failed").length).toBeGreaterThanOrEqual(1);
+    expect(byName("message_failed")[0].payload).toMatchObject({ reason: expect.stringContaining("SMTP down") });
+    expect(byName("message_delivered")).toHaveLength(0);
+  });
+
+  it("a disabled template / suppressed send emits nothing", async () => {
+    await communicationService.send({ eventKey: "no_such_template_key", recipientId: "buyer-1", variables: {} });
+    expect(emit).not.toHaveBeenCalled();
+  });
+
+  it("an event-layer failure never breaks the send", async () => {
+    emit.mockImplementation(() => { throw new Error("events down"); });
+    await expect(communicationService.send({ eventKey: "welcome_buyer", recipientId: "buyer-1", variables: { name: "A" } })).resolves.toMatchObject({ outcome: "SENT" });
+    emit.mockImplementation(() => undefined);
+  });
+});
