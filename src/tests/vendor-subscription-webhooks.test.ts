@@ -255,3 +255,42 @@ describe("customer.subscription.deleted — vendor subscription", () => {
     expect(m.vendorSubscription.update).not.toHaveBeenCalled();
   });
 });
+
+describe("customer.subscription.updated - 14-day trial window", () => {
+  it("persists Stripe's trial_start / trial_end on the VendorSubscription", async () => {
+    mockClaimSucceeds();
+    const start = 1_790_000_000;
+    const end = start + 14 * 86_400;
+    constructEvent.mockReturnValue({
+      id: "evt_trial_1",
+      type: "customer.subscription.updated",
+      data: { object: { id: "sub_1", status: "trialing", trial_start: start, trial_end: end, items: { data: [{ current_period_start: start, current_period_end: end }] } } },
+    });
+    m.vendorSubscription.findUnique.mockResolvedValue({ id: "vs-1", vendorId: "v-1", status: "ACTIVE" });
+    m.vendorSubscription.update.mockResolvedValue({});
+    m.vendor.findUnique.mockResolvedValue({ userId: "u-1" });
+
+    await stripeWebhookService.handleWebhook({ signature: "sig", rawBody: Buffer.from("x") });
+
+    const trialCall = m.vendorSubscription.update.mock.calls.find((c: any[]) => c[0].data.trialEndsAt);
+    expect(trialCall).toBeTruthy();
+    expect(trialCall[0].data.trialStartedAt).toEqual(new Date(start * 1000));
+    expect(trialCall[0].data.trialEndsAt).toEqual(new Date(end * 1000));
+    // exactly 14 days
+    expect((trialCall[0].data.trialEndsAt.getTime() - trialCall[0].data.trialStartedAt.getTime()) / 86_400_000).toBe(14);
+  });
+
+  it("a non-trial subscription update does not invent trial dates", async () => {
+    mockClaimSucceeds();
+    constructEvent.mockReturnValue({
+      id: "evt_trial_2",
+      type: "customer.subscription.updated",
+      data: { object: { id: "sub_1", status: "active", trial_start: null, trial_end: null, items: { data: [{}] } } },
+    });
+    m.vendorSubscription.findUnique.mockResolvedValue({ id: "vs-1", vendorId: "v-1", status: "ACTIVE" });
+    m.vendorSubscription.update.mockResolvedValue({});
+    m.vendor.findUnique.mockResolvedValue({ userId: "u-1" });
+    await stripeWebhookService.handleWebhook({ signature: "sig", rawBody: Buffer.from("x") });
+    expect(m.vendorSubscription.update.mock.calls.some((c: any[]) => "trialEndsAt" in c[0].data)).toBe(false);
+  });
+});

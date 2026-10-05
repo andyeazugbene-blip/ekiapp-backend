@@ -25,10 +25,6 @@
     {
       "path": "/api/internal/jobs/daily-sweep",
       "schedule": "0 12 * * *"
-    },
-    {
-      "path": "/api/internal/jobs/run-scheduled-communications",
-      "schedule": "*/5 * * * *"
     }
   ]
 }

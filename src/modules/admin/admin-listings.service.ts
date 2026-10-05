@@ -259,7 +259,7 @@ export const adminListingsService = {
       // back to "free".
       prisma.vendorSubscription.findUnique({
         where: { vendorId },
-        select: { plan: true, status: true, currentPeriodStart: true, currentPeriodEnd: true, cancelledAt: true, stripeSubscriptionId: true },
+        select: { plan: true, status: true, currentPeriodStart: true, currentPeriodEnd: true, cancelledAt: true, stripeSubscriptionId: true, trialStartedAt: true, trialEndsAt: true },
       }),
       prisma.order.count({ where: { vendorId, status: paidOrderStatuses } }),
       prisma.order.count({ where: { vendorId, status: "COMPLETED" as never } }),
@@ -465,7 +465,7 @@ export const adminListingsService = {
       }),
       prisma.vendorSubscription.findMany({
         where: { vendorId: { in: vendorIds } },
-        select: { vendorId: true, plan: true, status: true, currentPeriodEnd: true },
+        select: { vendorId: true, plan: true, status: true, currentPeriodEnd: true, trialEndsAt: true },
       }),
     ]);
 
@@ -485,6 +485,7 @@ export const adminListingsService = {
         subscriptionPlan: sub?.plan ?? null,
         subscriptionStatus: sub?.status ?? null,
         subscriptionPeriodEnd: sub?.currentPeriodEnd ?? null,
+        trialEndsAt: sub?.trialEndsAt ?? null,
         provider: {
           stage: readiness.stage,
           identityState: readiness.identity.state,

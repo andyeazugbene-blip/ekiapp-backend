@@ -809,6 +809,17 @@ class StripeWebhookService {
         return { received: true, ignored: true, eventId: event.id, type: event.type };
       }
 
+      // Trial window is provider truth regardless of whether the status maps.
+      if (stripeSubscription.trial_start && stripeSubscription.trial_end) {
+        await prisma.vendorSubscription.update({
+          where: { id: subscription.id },
+          data: {
+            trialStartedAt: new Date(stripeSubscription.trial_start * 1000),
+            trialEndsAt: new Date(stripeSubscription.trial_end * 1000),
+          },
+        });
+      }
+
       if (mappedStatus === null) {
         logger.info("customer.subscription.updated with unmapped Stripe status — left unchanged", {
           eventId: event.id, stripeStatus: stripeSubscription.status, vendorSubscriptionId: subscription.id,
@@ -986,8 +997,15 @@ class StripeWebhookService {
         let periodStart = now;
         let periodEnd = new Date(now);
         periodEnd.setMonth(periodEnd.getMonth() + 1);
+        let trialStartedAt: Date | null = null;
+        let trialEndsAt: Date | null = null;
         try {
           const stripeSubscription = await stripe.subscriptions.retrieve(stripeSubscriptionId);
+          // 14-day full-access trial: persist Stripe's own trial window.
+          if (stripeSubscription.trial_start && stripeSubscription.trial_end) {
+            trialStartedAt = new Date(stripeSubscription.trial_start * 1000);
+            trialEndsAt = new Date(stripeSubscription.trial_end * 1000);
+          }
           // Billing-period dates live on the subscription item, not the
           // subscription itself, as of the "basil" API version. During a
           // trial, the item's current_period_end is the trial end date.
@@ -1041,6 +1059,7 @@ class StripeWebhookService {
             currentPeriodStart: periodStart,
             currentPeriodEnd: periodEnd,
             cancelledAt: null,
+            ...(trialStartedAt && trialEndsAt ? { trialStartedAt, trialEndsAt } : {}),
           },
           create: {
             vendorId,
@@ -1050,6 +1069,7 @@ class StripeWebhookService {
             stripeSubscriptionId,
             currentPeriodStart: periodStart,
             currentPeriodEnd: periodEnd,
+            ...(trialStartedAt && trialEndsAt ? { trialStartedAt, trialEndsAt } : {}),
           },
         });
 

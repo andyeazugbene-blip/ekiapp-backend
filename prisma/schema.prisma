@@ -1376,6 +1376,10 @@ model VendorSubscription {
   currentPeriodStart   DateTime?
   currentPeriodEnd     DateTime?
   cancelledAt          DateTime?
+  // 14-day full-access trial (Stripe trial_period_days). Written from the
+  // Stripe subscription (trial_start / trial_end) so admin + vendor see real dates.
+  trialStartedAt       DateTime?
+  trialEndsAt          DateTime?
   sellerPlan           SellerPlan?        @relation(fields: [sellerPlanId], references: [id], onDelete: SetNull)
   createdAt            DateTime           @default(now())
   updatedAt            DateTime           @updatedAt
@@ -1770,15 +1774,15 @@ model Campaign {
 
 // ─── Communication Log ──────────────────────────────────────────────────────
 model CommunicationLog {
-  id            String   @id @default(cuid())
+  id            String    @id @default(cuid())
   recipientId   String
   recipientType String // BUYER, VENDOR, ADMIN
   eventKey      String
   channel       String // email, push, in_app, sms
   title         String
-  body          String   @db.Text
+  body          String    @db.Text
   // QUEUED -> SENT (handed to provider) -> DELIVERED (provider receipt OK) | FAILED
-  status        String   @default("SENT")
+  status        String    @default("SENT")
   metadata      Json?
   // W5 communications: link a per-recipient row back to its Broadcast, the
   // provider reference (Expo ticket id / Resend message id) and the real
@@ -1787,7 +1791,7 @@ model CommunicationLog {
   providerRef   String?
   statusDetail  String?
   deliveredAt   DateTime?
-  createdAt     DateTime @default(now())
+  createdAt     DateTime  @default(now())
 
   @@index([broadcastId])
   @@index([recipientId])
@@ -1811,26 +1815,26 @@ model CommunicationTemplate {
 
 // ─── Scheduled Communications ───────────────────────────────────────────────
 model ScheduledCommunication {
-  id           String    @id @default(cuid())
-  audience     String
-  channel      String
-  templateKey  String?
-  subject      String
-  body         String    @db.Text
-  status       String    @default("SCHEDULED") // SCHEDULED, SENT, FAILED, CANCELLED
-  scheduledFor DateTime
-  sentAt       DateTime?
-  createdBy    String
-  error        String?
+  id             String    @id @default(cuid())
+  audience       String
+  channel        String
+  templateKey    String?
+  subject        String
+  body           String    @db.Text
+  status         String    @default("SCHEDULED") // SCHEDULED, SENT, FAILED, CANCELLED
+  scheduledFor   DateTime
+  sentAt         DateTime?
+  createdBy      String
+  error          String?
   // W5: richer payload so a scheduled send can carry email, category, deep link
-  channels       String[] @default([])
-  category       String   @default("marketing")
+  channels       String[]  @default([])
+  category       String    @default("marketing")
   deepLink       String?
   audienceParams Json?
   reason         String?
   broadcastId    String?
-  createdAt    DateTime  @default(now())
-  updatedAt    DateTime  @updatedAt
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
 
   @@index([status, scheduledFor])
   @@index([createdBy])
@@ -1839,18 +1843,18 @@ model ScheduledCommunication {
 // ─── Content Reports & User Blocks ─────────────────────────────────────────
 
 model ContentReport {
-  id         String    @id @default(cuid())
-  reporterId String
-  targetType String // "review" | "message" | "product" | "store"
-  targetId   String
-  reason     String // "inappropriate" | "spam" | "harassment" | "fraud" | "other"
-  details    String?
-  status     String    @default("PENDING") // PENDING | REVIEWED | DISMISSED
-  reviewedBy String?
-  reviewedAt DateTime?
+  id             String    @id @default(cuid())
+  reporterId     String
+  targetType     String // "review" | "message" | "product" | "store"
+  targetId       String
+  reason         String // "inappropriate" | "spam" | "harassment" | "fraud" | "other"
+  details        String?
+  status         String    @default("PENDING") // PENDING | REVIEWED | DISMISSED
+  reviewedBy     String?
+  reviewedAt     DateTime?
   decisionReason String?
-  createdAt  DateTime  @default(now())
-  updatedAt  DateTime  @updatedAt
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
 
   @@index([reporterId])
   @@index([targetType, targetId])

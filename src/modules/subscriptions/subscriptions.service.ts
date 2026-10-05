@@ -184,6 +184,13 @@ function formatSubscriptionResponse(subscription: VendorSubscriptionWithPlan) {
     currentPeriodStart: subscription.currentPeriodStart,
     currentPeriodEnd: subscription.currentPeriodEnd,
     cancelledAt: subscription.cancelledAt,
+    trialStartedAt: subscription.trialStartedAt,
+    trialEndsAt: subscription.trialEndsAt,
+    inTrial: Boolean(subscription.trialEndsAt && subscription.trialEndsAt.getTime() > Date.now() && subscription.status === "ACTIVE"),
+    trialDaysRemaining:
+      subscription.trialEndsAt && subscription.trialEndsAt.getTime() > Date.now()
+        ? Math.ceil((subscription.trialEndsAt.getTime() - Date.now()) / 86_400_000)
+        : 0,
     stripeSubscriptionId: subscription.stripeSubscriptionId,
     stripeCustomerId: subscription.stripeCustomerId,
     platformFeeBps: plan?.defaultPlatformFeeBps,
