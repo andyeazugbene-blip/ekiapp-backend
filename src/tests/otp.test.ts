@@ -17,7 +17,7 @@ vi.mock("../lib/prisma", () => ({
 }));
 
 vi.mock("../lib/email", () => ({
-  sendEmail: vi.fn().mockResolvedValue(true),
+  sendEmailDetailed: vi.fn().mockResolvedValue({ ok: true, id: "mock-id" }),
 }));
 
 vi.mock("../lib/email-templates", () => ({
@@ -27,7 +27,7 @@ vi.mock("../lib/email-templates", () => ({
 }));
 
 import { prisma } from "../lib/prisma";
-import { sendEmail } from "../lib/email";
+import { sendEmailDetailed } from "../lib/email";
 import { emailTemplates } from "../lib/email-templates";
 import { otpService } from "../modules/auth/otp.service";
 
@@ -36,7 +36,7 @@ const otpCreate = prisma.emailOtp.create as unknown as ReturnType<typeof vi.fn>;
 const otpFindFirst = prisma.emailOtp.findFirst as unknown as ReturnType<typeof vi.fn>;
 const otpUpdate = prisma.emailOtp.update as unknown as ReturnType<typeof vi.fn>;
 const userUpdateMany = prisma.user.updateMany as unknown as ReturnType<typeof vi.fn>;
-const sendEmailMock = sendEmail as unknown as ReturnType<typeof vi.fn>;
+const sendEmailMock = sendEmailDetailed as unknown as ReturnType<typeof vi.fn>;
 const otpTemplateMock = emailTemplates.otpVerification as unknown as ReturnType<typeof vi.fn>;
 
 function hashCode(code: string): string {
@@ -49,7 +49,7 @@ describe("OTP Service — sendOtp", () => {
   it("invalidates old OTPs before creating a new one", async () => {
     otpUpdateMany.mockResolvedValue({ count: 1 });
     otpCreate.mockResolvedValue({ id: "otp-1" });
-    sendEmailMock.mockResolvedValue(true);
+    sendEmailMock.mockResolvedValue({ ok: true, id: "mock-id" });
 
     await otpService.sendOtp("test@example.com", "vendor_onboarding_email");
 
@@ -67,7 +67,7 @@ describe("OTP Service — sendOtp", () => {
   it("creates a hashed OTP (never stores plaintext)", async () => {
     otpUpdateMany.mockResolvedValue({ count: 0 });
     otpCreate.mockResolvedValue({ id: "otp-1" });
-    sendEmailMock.mockResolvedValue(true);
+    sendEmailMock.mockResolvedValue({ ok: true, id: "mock-id" });
 
     await otpService.sendOtp("test@example.com", "vendor_onboarding_email");
 
@@ -89,7 +89,7 @@ describe("OTP Service — sendOtp", () => {
   it("sends email via Resend", async () => {
     otpUpdateMany.mockResolvedValue({ count: 0 });
     otpCreate.mockResolvedValue({ id: "otp-1" });
-    sendEmailMock.mockResolvedValue(true);
+    sendEmailMock.mockResolvedValue({ ok: true, id: "mock-id" });
 
     await otpService.sendOtp("test@example.com", "vendor_onboarding_email");
 
@@ -103,7 +103,7 @@ describe("OTP Service — sendOtp", () => {
   it("OTP code is never logged (template receives code, but service does not log it)", async () => {
     otpUpdateMany.mockResolvedValue({ count: 0 });
     otpCreate.mockResolvedValue({ id: "otp-1" });
-    sendEmailMock.mockResolvedValue(true);
+    sendEmailMock.mockResolvedValue({ ok: true, id: "mock-id" });
 
     await otpService.sendOtp("test@example.com", "vendor_onboarding_email");
 
@@ -199,7 +199,7 @@ describe("OTP Service — verifyOtp", () => {
   it("new OTP invalidates old OTP (verified via sendOtp flow)", async () => {
     otpUpdateMany.mockResolvedValue({ count: 1 });
     otpCreate.mockResolvedValue({ id: "otp-2" });
-    sendEmailMock.mockResolvedValue(true);
+    sendEmailMock.mockResolvedValue({ ok: true, id: "mock-id" });
 
     await otpService.sendOtp("test@example.com", "vendor_onboarding_email");
 
@@ -210,6 +210,18 @@ describe("OTP Service — verifyOtp", () => {
         data: expect.objectContaining({ consumedAt: expect.any(Date) }),
       }),
     );
+  });
+
+  it("bug fix (2026-10-05): a failed Resend send is logged loudly instead of silently disappearing (still never thrown to the caller)", async () => {
+    otpUpdateMany.mockResolvedValue({ count: 0 });
+    otpCreate.mockResolvedValue({ id: "otp-3" });
+    sendEmailMock.mockResolvedValue({ ok: false, error: "not_configured" });
+    const errorSpy = vi.spyOn((await import("../lib/logger")).logger, "error").mockImplementation(() => undefined as never);
+
+    await expect(otpService.sendOtp("test@example.com", "vendor_onboarding_email")).resolves.toBeUndefined();
+
+    expect(errorSpy).toHaveBeenCalledWith("OTP email was not delivered", expect.objectContaining({ error: "not_configured" }));
+    errorSpy.mockRestore();
   });
 
   it("successful verification updates user emailVerifiedAt", async () => {

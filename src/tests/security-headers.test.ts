@@ -102,4 +102,20 @@ describe("Phase 9 — CORS allowlist", () => {
       .set("Access-Control-Request-Method", "POST");
     expect(res.headers["access-control-allow-origin"]).toBe("https://www.culinarytales.app");
   });
+
+  // Bug fix 2026-10-05: admin-web's apiClient (lib/api.ts) automatically
+  // retries any 2FA-gated admin action with an `x-2fa-code` header once the
+  // server first reports 2FA_REQUIRED. If the browser's preflight for that
+  // retry doesn't see this header in Access-Control-Allow-Headers, it never
+  // sends the real request at all — the admin just sees "Network error",
+  // with nothing reaching the server to log. Covers every 2FA-gated admin
+  // route (invite, role change, payout approval, etc), not only invite.
+  it("preflight for a 2FA-gated retry allows the x-2fa-code header", async () => {
+    const res = await request(app)
+      .options("/api/admin/admins/invite")
+      .set("Origin", "https://culinarytales.app")
+      .set("Access-Control-Request-Method", "POST")
+      .set("Access-Control-Request-Headers", "content-type, authorization, x-2fa-code");
+    expect(res.headers["access-control-allow-headers"]?.toLowerCase()).toContain("x-2fa-code");
+  });
 });

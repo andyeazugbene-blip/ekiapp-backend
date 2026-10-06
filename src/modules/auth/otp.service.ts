@@ -2,8 +2,9 @@ import crypto from "crypto";
 
 import { prisma } from "../../lib/prisma";
 import { CURSOR_ORDER_BY } from "../../shared/constants";
-import { sendEmail } from "../../lib/email";
+import { sendEmailDetailed } from "../../lib/email";
 import { emailTemplates } from "../../lib/email-templates";
+import { logger } from "../../lib/logger";
 import { AppError } from "../../shared/errors/app-error";
 
 const OTP_EXPIRY_MINUTES = 10;
@@ -64,14 +65,24 @@ export const otpService = {
       },
     });
 
-    // Send email via Resend (never log the code)
+    // Send email via Resend (never log the code). The caller (otp.controller)
+    // deliberately swallows a throw from this function to avoid revealing
+    // which emails have an account — but that means a send failure here was
+    // previously invisible everywhere, including the server logs, since
+    // sendEmail() never throws by design. Bug report 2026-10-05: "the
+    // confirmation code won't send" was undiagnosable because nothing ever
+    // recorded that it hadn't. sendEmailDetailed() is logged loudly here
+    // (ops can act on it); the response to the client is unchanged.
     const template = emailTemplates.otpVerification({ code });
-    await sendEmail({
+    const result = await sendEmailDetailed({
       to: email,
       subject: template.subject,
       html: template.html,
       text: template.text,
     });
+    if (!result.ok) {
+      logger.error("OTP email was not delivered", { purpose, error: result.error });
+    }
   },
 
   /**

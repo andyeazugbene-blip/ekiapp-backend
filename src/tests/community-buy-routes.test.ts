@@ -66,6 +66,19 @@ vi.mock("../modules/community-buy/supplier-account.service", () => ({
   },
 }));
 
+// Bug fix regression (2026-10-06): GET /api/supplier/profile must trigger a
+// live Stripe re-sync when the cached account has a connected Stripe
+// account that isn't fully enabled yet — see community-buy.controller.ts
+// getMySupplierProfile.
+const mockSupplierStripeConnectGetStatus = vi.fn();
+vi.mock("../modules/community-buy/supplier-stripe-connect.service", () => ({
+  supplierStripeConnectService: {
+    onboard: vi.fn(),
+    refresh: vi.fn(),
+    getStatus: (...a: unknown[]) => mockSupplierStripeConnectGetStatus(...a),
+  },
+}));
+
 // M4 — new supplier data-access surface (manifest/contact/emergency-contact)
 // and the privacy service backing both it and the new admin controls.
 // Mocked here at the service layer, same as every other Community Buy
@@ -812,6 +825,31 @@ describe("Supplier routes — Centre landing/apply open to any authenticated use
     expect(res.status).toBe(200);
     expect(res.body.account.supplierState).toBe("NOT_STARTED");
     expect(res.body.profile).toBeNull();
+    expect(mockSupplierStripeConnectGetStatus).not.toHaveBeenCalled();
+  });
+
+  it("GET /api/supplier/profile — bug fix: a connected-but-not-yet-enabled Stripe account triggers a live re-sync and returns the refreshed data", async () => {
+    mockGetSupplierAccountView
+      .mockResolvedValueOnce({ id: "acct-1", supplierState: "APPROVED", providerConnectedAccountId: "acct_stripe_1", chargesEnabled: false, payoutsEnabled: false })
+      .mockResolvedValueOnce({ id: "acct-1", supplierState: "APPROVED", providerConnectedAccountId: "acct_stripe_1", chargesEnabled: true, payoutsEnabled: true });
+    mockSupplierStripeConnectGetStatus.mockResolvedValue({ providerConnectedAccountId: "acct_stripe_1", chargesEnabled: true, payoutsEnabled: true, detailsSubmitted: true });
+
+    const res = await request(app).get("/api/supplier/profile").set("Authorization", `Bearer ${buyerToken()}`);
+
+    expect(res.status).toBe(200);
+    expect(mockSupplierStripeConnectGetStatus).toHaveBeenCalledWith("buyer-1");
+    expect(res.body.account.chargesEnabled).toBe(true);
+    expect(res.body.account.payoutsEnabled).toBe(true);
+    expect(mockGetSupplierAccountView).toHaveBeenCalledTimes(2);
+  });
+
+  it("GET /api/supplier/profile — an already-enabled account does not re-call Stripe on every page load", async () => {
+    mockGetSupplierAccountView.mockResolvedValue({ id: "acct-1", supplierState: "APPROVED", providerConnectedAccountId: "acct_stripe_1", chargesEnabled: true, payoutsEnabled: true });
+
+    const res = await request(app).get("/api/supplier/profile").set("Authorization", `Bearer ${buyerToken()}`);
+
+    expect(res.status).toBe(200);
+    expect(mockSupplierStripeConnectGetStatus).not.toHaveBeenCalled();
   });
 
   it("GET /api/supplier/campaigns — 403 for a buyer token", async () => {

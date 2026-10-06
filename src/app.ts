@@ -23,6 +23,7 @@ import {
   getPublicHomePage,
   getPublicSellPage,
   getPublicInvitePage,
+  getStripeConnectReturnPage,
   getPublicPrivacyPage,
   getPublicTermsPage,
   getPublicRefundPolicyPage,
@@ -98,7 +99,13 @@ app.use(
     // missing from this list meant any browser-origin caller failed CORS
     // preflight outright (native app requests aren't subject to browser
     // CORS, so this only ever affected web).
-    allowedHeaders: ["Content-Type", "Authorization", "X-Request-ID", "x-job-secret", "X-Client-App", "X-Client-Platform"],
+    // x-2fa-code is sent by admin-web (lib/api.ts) on the automatic retry
+    // of any 2FA-gated admin action (e.g. POST /admin/admins/invite) —
+    // missing from this list meant the browser blocked that retry at the
+    // CORS preflight stage, before it ever reached the server, which
+    // surfaced to the admin as a bare "Network error" with no server log
+    // at all (bug report 2026-10-05: "super admin can't invite by email").
+    allowedHeaders: ["Content-Type", "Authorization", "X-Request-ID", "x-job-secret", "X-Client-App", "X-Client-Platform", "x-2fa-code"],
   }),
 );
 
@@ -173,6 +180,14 @@ app.get("/vendor-agreement", (req, res, next) => {
 });
 app.get("/invite/:code", (req, res, next) => {
   Promise.resolve(getPublicInvitePage(req, res)).catch(next);
+});
+// Stripe Connect refresh_url/return_url targets (vendor + Community Buy
+// supplier onboarding) — see getStripeConnectReturnPage's doc comment.
+app.get("/vendor/stripe-connect", (req, res, next) => {
+  Promise.resolve(getStripeConnectReturnPage(req, res)).catch(next);
+});
+app.get("/supplier/stripe-connect", (req, res, next) => {
+  Promise.resolve(getStripeConnectReturnPage(req, res)).catch(next);
 });
 app.get("/vendor/subscription", (req, res, next) => {
   Promise.resolve(getPublicVendorSubscriptionPage(req, res)).catch(next);
