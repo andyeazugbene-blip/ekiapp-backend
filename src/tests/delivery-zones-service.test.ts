@@ -12,9 +12,15 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 vi.mock("../lib/prisma", () => ({
   prisma: {
     vendor: { findUnique: vi.fn() },
-    deliveryZone: { findUnique: vi.fn(), create: vi.fn(), update: vi.fn(), delete: vi.fn(), findMany: vi.fn() },
+    deliveryZone: { findUnique: vi.fn(), create: vi.fn(), update: vi.fn(), delete: vi.fn(), findMany: vi.fn(), count: vi.fn() },
     deliveryMethod: { findUnique: vi.fn(), create: vi.fn(), update: vi.fn(), delete: vi.fn() },
   },
+}));
+
+const mockEmit = vi.fn();
+vi.mock("../modules/events/events.service", () => ({
+  eventsService: { emit: (...a: unknown[]) => mockEmit(...a) },
+  EVENT_NAMES: { delivery_configured: "delivery_configured" },
 }));
 
 import { prisma } from "../lib/prisma";
@@ -23,7 +29,10 @@ import { deliveryZonesService } from "../modules/delivery/delivery-zones.service
 const m = vi.mocked(prisma, true) as any;
 const VENDOR = { id: "vendor-1" };
 
-beforeEach(() => vi.clearAllMocks());
+beforeEach(() => {
+  vi.clearAllMocks();
+  m.deliveryZone.count.mockResolvedValue(0);
+});
 
 describe("createVendorZone — currency is always derived from country server-side", () => {
   it("derives GBP for United Kingdom regardless of what the client might have sent", async () => {
@@ -45,6 +54,32 @@ describe("createVendorZone — currency is always derived from country server-si
       deliveryZonesService.createVendorZone("user-1", { name: "x", country: "United Kingdom", flag: "x", baseFeeAmount: 1, feePerKgAmount: 1 } as any),
     ).rejects.toMatchObject({ statusCode: 403 });
     expect(m.deliveryZone.create).not.toHaveBeenCalled();
+  });
+});
+
+describe("createVendorZone — onboarding-funnel event (bug fix 2026-10-11, vendor funnel analytics)", () => {
+  it("emits delivery_configured for a vendor's first zone", async () => {
+    m.vendor.findUnique.mockResolvedValue(VENDOR);
+    m.deliveryZone.count.mockResolvedValue(0);
+    m.deliveryZone.create.mockResolvedValue({ id: "zone-1", currency: "GBP" });
+
+    await deliveryZonesService.createVendorZone("user-1", {
+      name: "UK zone", country: "United Kingdom", flag: "🇬🇧", baseFeeAmount: 500, feePerKgAmount: 100,
+    } as any);
+
+    expect(mockEmit).toHaveBeenCalledWith(expect.objectContaining({ name: "delivery_configured", entityType: "Vendor", entityId: "vendor-1" }));
+  });
+
+  it("does NOT re-emit delivery_configured for a vendor's second zone", async () => {
+    m.vendor.findUnique.mockResolvedValue(VENDOR);
+    m.deliveryZone.count.mockResolvedValue(1);
+    m.deliveryZone.create.mockResolvedValue({ id: "zone-2", currency: "GBP" });
+
+    await deliveryZonesService.createVendorZone("user-1", {
+      name: "Second zone", country: "France", flag: "🇫🇷", baseFeeAmount: 500, feePerKgAmount: 100,
+    } as any);
+
+    expect(mockEmit).not.toHaveBeenCalled();
   });
 });
 

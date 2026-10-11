@@ -3,6 +3,7 @@ import type { DeliveryMethod, DeliveryZone } from "@prisma/client";
 import { prisma } from "../../lib/prisma";
 import { currencyFromCountry } from "../../shared/currency";
 import { AppError } from "../../shared/errors/app-error";
+import { eventsService, EVENT_NAMES } from "../events/events.service";
 import type {
   CreateDeliveryMethodInput,
   CreateDeliveryZoneInput,
@@ -40,7 +41,15 @@ export const deliveryZonesService = {
     const vendor = await prisma.vendor.findUnique({ where: { userId }, select: { id: true } });
     if (!vendor) throw new AppError("Vendor profile required", 403);
 
-    return prisma.deliveryZone.create({
+    // Onboarding-funnel instrumentation (2026-10-11): this is the exact
+    // backend-side moment the vendor app's own activation checklist
+    // ("Set delivery" step, app/(vendor)/activation.tsx) considers done —
+    // listZones().length > 0. Only the FIRST zone counts as reaching this
+    // funnel step; a vendor adding a second zone later must not look like
+    // a second "delivery configured" event to the drop-off dashboard.
+    const hadZoneBefore = (await prisma.deliveryZone.count({ where: { vendorId: vendor.id } })) > 0;
+
+    const zone = await prisma.deliveryZone.create({
       data: {
         vendorId: vendor.id,
         name: input.name,
@@ -56,6 +65,15 @@ export const deliveryZonesService = {
         isActive: input.isActive ?? true,
       },
     });
+
+    if (!hadZoneBefore) {
+      eventsService.emit({
+        name: EVENT_NAMES.delivery_configured, actorType: "vendor", actorId: userId, entityType: "Vendor", entityId: vendor.id,
+        source: "vendor_app",
+      });
+    }
+
+    return zone;
   },
 
   async updateVendorZone(

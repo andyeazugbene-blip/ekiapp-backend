@@ -58,7 +58,26 @@ async function runVerificationProofCleanup() {
 // Due Now" in the admin panel — "Schedule Later" silently did nothing
 // unless someone remembered to come back and click that button.
 // Also pulls real Expo push receipts and refreshes broadcast statuses (Sent ->
-// Delivered / Partially delivered). Scheduled by vercel.json every 5 minutes.
+// Delivered / Partially delivered).
+//
+// Correction (2026-10-11, "automation timing is inconsistent" bug report):
+// this comment used to claim vercel.json runs this "every 5 minutes" — it
+// never did. vercel.json has exactly ONE cron, the combined daily sweep at
+// 12:00 UTC (see handleDailySweep's own doc comment on the Hobby-plan cron
+// count limit). That means every time-windowed job here — this one, and
+// automation-sweep below (cart recovery, low-stock alerts, the first-sale
+// nudge, etc.) — only ever runs once a day at a fixed clock time, so a
+// real-world trigger can sit unactioned for up to ~24h, and lands at a
+// different local-time offset for every vendor, which is exactly what
+// reads as "delayed and inconsistent" from the receiving end. The fix
+// needs no new app release and no code change here: each job already has
+// its own authenticated route (GET/POST /api/internal/jobs/<path>, same
+// CRON_SECRET bearer auth as the combined endpoint) specifically so an
+// external scheduler (a paid Vercel plan's own more-frequent cron, or any
+// third-party pinger like cron-job.org / GitHub Actions) can hit the
+// time-sensitive ones — run-scheduled-communications and automation-sweep
+// are the two that matter here — every 5-15 minutes without touching the
+// heavier daily-only jobs at all. See docs/AUTOMATION_TIMING.md.
 async function runScheduledCommunications() {
   return scheduledCommunicationService.sweep();
 }
