@@ -161,7 +161,12 @@ export const adminVendorFunnelService = {
     // created after the cohort's registration window), same convention as
     // other admin funnel/cohort reports in this codebase.
     const [firstProducts, firstZones, firstStoreViews, firstOrders] = await Promise.all([
-      prisma.product.groupBy({ by: ["vendorId"], where: { vendorId: { in: cohortIds }, ...notTest() }, _min: { createdAt: true } }),
+      // Product has no isTest column of its own (unlike Vendor/Order) —
+      // scoping to cohortIds (already notTest()-filtered vendors above) is
+      // sufficient; a bare notTest() here is a Prisma validation error
+      // (production bug found 2026-10-11, first real deploy of this route:
+      // "Unknown argument `isTest`. Available options are marked with ?.").
+      prisma.product.groupBy({ by: ["vendorId"], where: { vendorId: { in: cohortIds } }, _min: { createdAt: true } }),
       prisma.deliveryZone.groupBy({ by: ["vendorId"], where: { vendorId: { in: cohortIds } }, _min: { createdAt: true } }),
       prisma.event.groupBy({
         by: ["entityId"],
