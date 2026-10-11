@@ -96,6 +96,7 @@ describe("role boundaries on money / settings / roles / audit export", () => {
     { name: "assign a role", method: "post", path: "/api/admin/roles/r1/assignments", allowed: ["super"] },
     { name: "write a platform flag", method: "put", path: "/api/admin/settings/flags/FLAG_X", allowed: ["super"] },
     { name: "export audit log", method: "get", path: "/api/admin/audit-logs/export", allowed: ["super", "finance"] },
+    { name: "view vendor onboarding funnel", method: "get", path: "/api/admin/analytics/vendor-funnel", allowed: ["super", "ops", "finance"], denyOnly: true },
     { name: "broadcast a message", method: "post", path: "/api/admin/broadcasts", allowed: ["support", "ops", "super"] },
     { name: "automation emergency stop", method: "post", path: "/api/admin/automation/emergency-stop", allowed: ["super"] },
     { name: "subscription admin cancel", method: "post", path: "/api/admin/subscriptions/s1/force-cancel", allowed: ["ops", "super"] },

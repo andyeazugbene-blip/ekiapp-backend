@@ -1,0 +1,68 @@
+name: Automation Scheduler
+
+# Bug fix 2026-10-11 ("implement an actual recurring scheduler... do not
+# stop at documentation"). vercel.json's only cron fires once a day
+# (12:00 UTC) — Vercel's Hobby plan caps cron job count and frequency to
+# once/day, so every time-windowed automation (low-stock alerts, onboarding
+# nudges, admin-scheduled broadcasts) only ever got evaluated once daily,
+# landing at a different local-time offset for every vendor. This workflow
+# hits the SAME authenticated, idempotent, per-job endpoints the daily
+# sweep already uses (internal.routes.ts), every 10 minutes, for exactly
+# the two time-sensitive jobs — leaving the heavier/non-urgent jobs
+# (renewals, reconciliation, cleanup) on the existing once-daily combined
+# sweep so they aren't hit more than necessary.
+#
+# GitHub Actions schedule caveats (stated here, not hidden): the shortest
+# interval GitHub allows is 5 minutes, and scheduled runs are "best effort"
+# — GitHub explicitly does not guarantee the exact minute, and delays of
+# several minutes are more likely during periods of high load across
+# GitHub's infrastructure. This is still a large, real improvement over a
+# single fixed daily tick, not a claim of real-time delivery.
+#
+# REQUIRED MANUAL SETUP (this workflow does nothing useful until done):
+#   Settings -> Secrets and variables -> Actions -> New repository secret
+#     Name:  CRON_SECRET
+#     Value: the SAME value already set as CRON_SECRET in the backend's
+#            Vercel project environment variables. Copy it from there --
+#            never type a new one here, or every call will 401.
+#   Optionally also add a repository VARIABLE (not secret) named
+#   BACKEND_BASE_URL if the production backend URL is ever not
+#   https://ekiapp-backend.vercel.app.
+#
+# Until CRON_SECRET is set, every run of this workflow will fail at the
+# curl step with a 401 -- visible in the Actions tab, and GitHub emails the
+# repo's watchers on a scheduled-workflow failure by default. That failure
+# is the verification signal that the secret still needs to be added.
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch: {}
+
+jobs:
+  trigger-time-sensitive-jobs:
+    runs-on: ubuntu-latest
+    env:
+      BASE_URL: ${{ vars.BACKEND_BASE_URL || 'https://ekiapp-backend.vercel.app' }}
+    steps:
+      - name: Automation sweep (cart recovery, low-stock alerts, onboarding nudges, win-back, referrals, reorder/checkout reminders)
+        continue-on-error: true
+        run: |
+          code=$(curl -sS -X POST "$BASE_URL/api/internal/jobs/automation-sweep" \
+            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
+            -o /tmp/automation-sweep.json -w "%{http_code}")
+          echo "HTTP $code"
+          cat /tmp/automation-sweep.json
+          echo ""
+          if [ "$code" -ge 300 ]; then echo "::error::automation-sweep returned HTTP $code"; exit 1; fi
+
+      - name: Scheduled communications (admin "Schedule Later" broadcasts + push receipt refresh)
+        continue-on-error: true
+        run: |
+          code=$(curl -sS -X POST "$BASE_URL/api/internal/jobs/run-scheduled-communications" \
+            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
+            -o /tmp/scheduled-comms.json -w "%{http_code}")
+          echo "HTTP $code"
+          cat /tmp/scheduled-comms.json
+          echo ""
+          if [ "$code" -ge 300 ]; then echo "::error::run-scheduled-communications returned HTTP $code"; exit 1; fi

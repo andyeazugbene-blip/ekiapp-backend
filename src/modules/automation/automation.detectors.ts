@@ -1,8 +1,11 @@
+import crypto from "crypto";
+
 import { prisma } from "../../lib/prisma";
 import { logger } from "../../lib/logger";
 import { automationService } from "./automation.service";
 import { getRuleGate, noteRuleSkipped } from "./automation-rule-gate";
 import { eventsService, EVENT_NAMES } from "../events/events.service";
+import { runWithCoalesceScope } from "./automation-coalesce-scope";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -17,31 +20,71 @@ function isoWeek(d: Date): string {
 
 export const FIRST_SALE_PAID_STATUSES = ["PAID", "CONFIRMED", "PROCESSING", "DISPATCHED", "IN_TRANSIT", "DELIVERED", "COMPLETED", "PAYMENT_SECURED", "VENDOR_CONFIRMED", "AUTO_RELEASED", "DISPUTED"] as const;
 
-/** FIRST_SALE: verified vendor, has an active product, has never sold anything. */
+/**
+ * FIRST_SALE onboarding nudge — bug fix 2026-10-11 ("onboarding reminders
+ * depend on the vendor's actual next incomplete step"). Previously this
+ * fired a fixed "Get your first order" message for ANY unsuspended
+ * verified vendor with a product and no sale yet, regardless of whether
+ * they'd even set up delivery — telling someone to go get an order when
+ * buyers can't check out with them yet. Now the candidate pool is widened
+ * to every vendor who hasn't sold anything (verification included), and
+ * the message is computed from whichever of the exact same checklist
+ * steps the vendor app's own activation screen (app/(vendor)/
+ * activation.tsx) shows is still not done: add a product -> set up
+ * delivery -> verify the account -> (all done) go get that first order.
+ * Stays one automation TYPE (FIRST_SALE) with one stop condition (first
+ * qualifying paid order) — only the copy changes per stage, so frequency
+ * capping/dedupe/coalescing all still apply to the whole onboarding
+ * journey as one thing, not a notification per checklist item.
+ */
 async function detectFirstSale(): Promise<number> {
   const vendors = await prisma.vendor.findMany({
     where: {
       isSuspended: false,
-      verificationStatus: "VERIFIED",
-      products: { some: { isActive: true } },
       // Only a PAID (non-failed/non-cancelled) order counts as a first sale. An
-      // unpaid/failed/cancelled order must not stop the First Sale nudge.
+      // unpaid/failed/cancelled order must not stop the onboarding nudge.
       orderItems: { none: { order: { status: { in: [...FIRST_SALE_PAID_STATUSES] } } } },
     },
-    select: { id: true, userId: true, storeName: true },
+    select: {
+      id: true, userId: true, storeName: true, verificationStatus: true,
+      _count: { select: { products: { where: { isActive: true } } } },
+    },
     take: 200,
   });
+  // DeliveryZone has no back-relation declared on Vendor (plain vendorId FK
+  // only, same as everywhere else that queries it) -- one grouped query for
+  // the whole candidate batch rather than N+1 per-vendor lookups.
+  const zoneCounts = vendors.length
+    ? await prisma.deliveryZone.groupBy({ by: ["vendorId"], where: { vendorId: { in: vendors.map((v) => v.id) } }, _count: { _all: true } })
+    : [];
+  const hasDeliveryZone = new Set(zoneCounts.filter((z) => z._count._all > 0).map((z) => z.vendorId));
+
   for (const vendor of vendors) {
+    const hasProduct = vendor._count.products > 0;
+    const hasDelivery = hasDeliveryZone.has(vendor.id);
+    const isVerified = vendor.verificationStatus === "VERIFIED";
+
+    const stage = !hasProduct
+      ? { key: "add_product", title: "Add your first foodstuff", body: `Add a product to ${vendor.storeName} so buyers have something to order.` }
+      : !hasDelivery
+        ? { key: "set_delivery", title: "Set up delivery", body: `${vendor.storeName} has products but no delivery zone yet — buyers can't check out without one.` }
+        : !isVerified
+          ? { key: "verify", title: "Verify your account", body: `Verify ${vendor.storeName} so buyers can actually place orders with you.` }
+          : { key: "get_first_order", title: "Get your first order", body: `Your store ${vendor.storeName} is ready — share your store link to get your first order.` };
+
     await automationService.scheduleAutomation({
       type: "FIRST_SALE",
       recipientUserId: vendor.userId,
       vendorId: vendor.id,
-      subjectKey: `${vendor.id}:${isoWeek(new Date())}`,
+      // The stage key is part of the dedupe subject: moving to a NEW stage
+      // (e.g. finally adding a product) resets the weekly cap immediately
+      // instead of waiting out the old stage's cooldown with stale advice.
+      subjectKey: `${vendor.id}:${stage.key}:${isoWeek(new Date())}`,
       frequencyCapDays: 7,
       requiresMarketingConsent: false,
-      title: "Get your first order",
-      body: `Your store ${vendor.storeName} is live.`,
-      data: { store_name: vendor.storeName },
+      title: stage.title,
+      body: stage.body,
+      data: { store_name: vendor.storeName, onboarding_stage: stage.key },
     });
   }
   return vendors.length;
@@ -177,30 +220,58 @@ async function detectReviewRequest(): Promise<number> {
   return orders.length;
 }
 
-/** LOW_STOCK_ALERT: reuses the threshold from the existing stock-alerts worker, routed through the new engine (push + in-app + email, not email-only). */
+const LOW_STOCK_REMINDER_COOLDOWN_DAYS = 3;
+
+/**
+ * LOW_STOCK_ALERT — bug fix 2026-10-11 ("make low-stock alerts idempotent
+ * and state-based"). Previously this was purely time-bucketed
+ * (`${vendorId}:${today}`, capped at once/day): it re-alerted every single
+ * day the SAME products stayed low, which is exactly the "invasive"
+ * behaviour the vendor complained about, and told a vendor nothing had
+ * changed when nothing had. Now the dedupe key is the exact SET of
+ * currently-low product ids, hashed, plus a coarse multi-day cooldown
+ * bucket:
+ *   - a genuinely NEW product crossing into low stock changes the hash
+ *     immediately -> always alerts right away, regardless of cooldown.
+ *   - the identical set of low-stock products re-evaluated tomorrow
+ *     produces the identical hash -> naturally deduped by the unique
+ *     dedupeKey until the cooldown bucket rolls over (at most once every
+ *     LOW_STOCK_REMINDER_COOLDOWN_DAYS while truly unchanged).
+ *   - a product restocking (leaving the low set) also changes the hash,
+ *     so the vendor sees an accurate "still low: X" list immediately
+ *     rather than a stale count.
+ * No per-call frequencyCapDays here on purpose — the hash+bucket key IS
+ * the cooldown; a separate cap would just fight it.
+ */
 async function detectLowStockAlert(): Promise<number> {
   const LOW_STOCK_THRESHOLD = 5;
   const products = await prisma.product.findMany({
     where: { isActive: true, stock: { lte: LOW_STOCK_THRESHOLD } },
-    select: { vendorId: true },
+    select: { id: true, vendorId: true },
     take: 1000,
   });
-  const byVendor = new Map<string, number>();
-  for (const p of products) byVendor.set(p.vendorId, (byVendor.get(p.vendorId) ?? 0) + 1);
+  const byVendor = new Map<string, string[]>();
+  for (const p of products) {
+    const list = byVendor.get(p.vendorId) ?? [];
+    list.push(p.id);
+    byVendor.set(p.vendorId, list);
+  }
 
-  for (const [vendorId, count] of byVendor) {
+  const cooldownBucket = Math.floor(Date.now() / (LOW_STOCK_REMINDER_COOLDOWN_DAYS * DAY_MS));
+
+  for (const [vendorId, productIds] of byVendor) {
     const vendor = await prisma.vendor.findUnique({ where: { id: vendorId }, select: { userId: true } });
     if (!vendor) continue;
+    const contentHash = crypto.createHash("sha1").update([...productIds].sort().join(",")).digest("hex").slice(0, 10);
     await automationService.scheduleAutomation({
       type: "LOW_STOCK_ALERT",
       recipientUserId: vendor.userId,
       vendorId,
-      subjectKey: `${vendorId}:${isoDate(new Date())}`,
-      frequencyCapDays: 1,
+      subjectKey: `${vendorId}:${contentHash}:${cooldownBucket}`,
       requiresMarketingConsent: false,
       title: "Low stock alert",
-      body: `${count} product(s) are running low.`,
-      data: { product_count: String(count) },
+      body: `${productIds.length} product(s) are running low.`,
+      data: { product_count: String(productIds.length) },
     });
   }
   return byVendor.size;
@@ -446,42 +517,50 @@ export const automationDetectors = {
    */
   async runSweep(): Promise<Record<string, number>> {
     const results: Record<string, number> = {};
+    // Order IS the coalescing priority (bug fix 2026-10-11): transactional
+    // types (PAYMENT_RECOVERY, CHECKOUT_PAYMENT_FOLLOW_UP) bypass coalescing
+    // entirely and their position doesn't matter; among the rest, whichever
+    // detector runs first claims a given recipient for this sweep, so the
+    // most time/business-critical non-urgent nudge goes first: a vendor's
+    // own low-stock situation outranks an onboarding nudge, which outranks
+    // a buyer-facing cart/review/win-back/referral prompt.
     const jobs: [string, () => Promise<number>][] = [
+      ["LOW_STOCK_ALERT", detectLowStockAlert],
       ["FIRST_SALE", detectFirstSale],
       ["CART_RECOVERY", detectCartRecovery],
-      ["BUYER_WIN_BACK", detectBuyerWinBack],
+      ["REORDER_REMINDER", detectReorderReminder],
       ["REVIEW_REQUEST", detectReviewRequest],
-      ["LOW_STOCK_ALERT", detectLowStockAlert],
+      ["BUYER_WIN_BACK", detectBuyerWinBack],
       ["BUYER_REFERRAL", detectBuyerReferral],
       ["PAYMENT_RECOVERY", detectPaymentRecovery],
-      // Final Client Decision 4 — new automation types:
-      ["REORDER_REMINDER", detectReorderReminder],
       ["CHECKOUT_PAYMENT_FOLLOW_UP", detectCheckoutPaymentFollowUp],
     ];
-    for (const [name, job] of jobs) {
-      // Admin-paused / archived / draft rule: skip the whole detector and record why.
-      const gate = await getRuleGate(name);
-      if (!gate.runnable) {
-        results[name] = 0;
-        await noteRuleSkipped(name, gate.reason ?? "rule_paused");
-        eventsService.emit({
-          name: EVENT_NAMES.automation_suppressed,
-          actorType: "system",
-          entityType: "AutomationRule",
-          entityId: name,
-          source: "automation_sweep",
-          payload: { ruleKey: name, reason: gate.reason ?? "rule_paused", state: gate.state },
-        });
-        logger.info("Automation detector skipped: rule not active", { detector: name, reason: gate.reason });
-        continue;
+    await runWithCoalesceScope(async () => {
+      for (const [name, job] of jobs) {
+        // Admin-paused / archived / draft rule: skip the whole detector and record why.
+        const gate = await getRuleGate(name);
+        if (!gate.runnable) {
+          results[name] = 0;
+          await noteRuleSkipped(name, gate.reason ?? "rule_paused");
+          eventsService.emit({
+            name: EVENT_NAMES.automation_suppressed,
+            actorType: "system",
+            entityType: "AutomationRule",
+            entityId: name,
+            source: "automation_sweep",
+            payload: { ruleKey: name, reason: gate.reason ?? "rule_paused", state: gate.state },
+          });
+          logger.info("Automation detector skipped: rule not active", { detector: name, reason: gate.reason });
+          continue;
+        }
+        try {
+          results[name] = await job();
+        } catch (error) {
+          logger.error("Automation detector failed", { detector: name, error: error instanceof Error ? error.message : String(error) });
+          results[name] = -1;
+        }
       }
-      try {
-        results[name] = await job();
-      } catch (error) {
-        logger.error("Automation detector failed", { detector: name, error: error instanceof Error ? error.message : String(error) });
-        results[name] = -1;
-      }
-    }
+    });
     return results;
   },
 };
