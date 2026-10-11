@@ -249,3 +249,51 @@ export function validateCurrency(currency: string | undefined | null, fallback?:
   }
   return upper as SupportedCurrency;
 }
+
+/**
+ * Approximate standard-time UTC offset (hours, no DST) per approved launch
+ * market code. Deliberately a coarse, documented approximation rather than
+ * a real timezone database (none is a dependency of this project) — good
+ * enough to turn a vendor's "do not message me at 2am" expectation into a
+ * real per-country shift instead of one global UTC window for every
+ * market, which was the actual bug (handbook/automation-timing fix
+ * 2026-10-11: "local-time quiet hours"). DST is NOT modeled: a UK/EU
+ * vendor's quiet hours may be off by up to an hour for part of the year.
+ * One representative offset per country, same keys as
+ * MARKET_CODE_COUNTRY_NAMES above.
+ */
+const MARKET_UTC_OFFSET_HOURS: Record<string, number> = {
+  gb: 0, ie: 0, pt: 0, is: 0,
+  fr: 1, es: 1, ch: 1, be: 1, it: 1, hr: 1, de: 1, nl: 1, at: 1, lu: 1, pl: 1, cz: 1, hu: 1, dk: 1, se: 1, no: 1,
+  li: 1, mc: 1, ad: 1, sm: 1, ba: 1, rs: 1, me: 1, mk: 1, al: 1,
+  gr: 2, cy: 2, mt: 2, si: 2, sk: 2, ee: 2, lv: 2, lt: 2, fi: 2, ro: 2, bg: 2, md: 2,
+  us: -5, // one representative US offset (Eastern) — a genuinely per-timezone US model is out of scope here.
+  ca: -5, // same caveat (Eastern).
+};
+
+/** Resolve any raw country representation to its approximate standard-time UTC offset in hours, or null if unmapped (callers must fall back to a global UTC window, never guess). */
+export function utcOffsetHoursForCountry(rawCountry: string | null | undefined): number | null {
+  const code = resolveMarketCode(rawCountry);
+  if (!code) return null;
+  const offset = MARKET_UTC_OFFSET_HOURS[code.toLowerCase()];
+  return typeof offset === "number" ? offset : null;
+}
+
+/**
+ * Converts a desired LOCAL quiet-hour window (e.g. 21:00-08:00 in the
+ * recipient's own approximate local time) into the equivalent UTC hour
+ * window, given that recipient's country. Returns null when the country
+ * doesn't resolve to a known market — caller should fall back to its
+ * existing global UTC default rather than silently using no quiet hours
+ * at all.
+ */
+export function localQuietHoursToUtc(
+  rawCountry: string | null | undefined,
+  localStartHour: number,
+  localEndHour: number,
+): { startUtc: number; endUtc: number } | null {
+  const offset = utcOffsetHoursForCountry(rawCountry);
+  if (offset === null) return null;
+  const wrap = (h: number) => ((h - offset) % 24 + 24) % 24;
+  return { startUtc: wrap(localStartHour), endUtc: wrap(localEndHour) };
+}

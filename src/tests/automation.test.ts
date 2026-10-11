@@ -88,7 +88,12 @@ describe("automationService.scheduleAutomation", () => {
   it("records quiet hours as a SUPPRESSED run under a distinct key (never the real dedupeKey)", async () => {
     vi.setSystemTime(new Date("2026-06-15T23:30:00.000Z")); // 23:30 UTC — quiet hours
     await automationService.scheduleAutomation(baseInput);
-    expect(m.user.findUnique).not.toHaveBeenCalled();
+    // Bug fix 2026-10-11 (local-time quiet hours): the recipient is now
+    // loaded BEFORE the quiet-hours check so their country can localize the
+    // window — this is the one DB read that's now expected here, not a
+    // leak into the eligibility path (automationRun.create below still
+    // never runs for a suppressed send).
+    expect(m.user.findUnique).toHaveBeenCalledTimes(1);
     expectOnlySuppressed("quiet_hours");
     expect(mSend).not.toHaveBeenCalled();
   });
@@ -412,5 +417,80 @@ describe("automationService — per-vendor tunable config (CART_RECOVERY, BUYER_
     expect(m.vendorAutomationSetting.upsert).toHaveBeenCalledWith(
       expect.objectContaining({ update: { enabled: true }, create: expect.objectContaining({ enabled: true }) }),
     );
+  });
+});
+
+describe("local-time quiet hours (bug fix 2026-10-11)", () => {
+  it("a Romania vendor (UTC+2) is already in quiet hours at 22:30 UTC (00:30 local)", async () => {
+    vi.setSystemTime(new Date("2026-06-15T22:30:00.000Z"));
+    m.user.findUnique.mockResolvedValue({ isSuspended: false, marketingConsentAt: new Date(), country: "Romania" } as never);
+    await automationService.scheduleAutomation({ ...baseInput, recipientUserId: "buyer-ro" });
+    expectOnlySuppressed("quiet_hours");
+  });
+
+  it("an unmapped/unknown country falls back to the literal global UTC default, not an error", async () => {
+    vi.setSystemTime(new Date("2026-06-15T23:00:00.000Z"));
+    m.user.findUnique.mockResolvedValue({ isSuspended: false, marketingConsentAt: new Date(), country: "Atlantis" } as never);
+    await automationService.scheduleAutomation({ ...baseInput, recipientUserId: "buyer-unknown" });
+    expectOnlySuppressed("quiet_hours"); // still 23:00 UTC, still inside the global default window
+  });
+
+  it("a US (UTC-5) vendor is NOT in quiet hours at 02:00 UTC (21:00 local, before the 22:00 local cutoff)", async () => {
+    vi.setSystemTime(new Date("2026-06-15T02:00:00.000Z")); // 21:00 the previous day, US Eastern
+    m.user.findUnique
+      .mockResolvedValueOnce({ isSuspended: false, marketingConsentAt: new Date(), country: "United States" } as never)
+      .mockResolvedValueOnce({ name: "Buyer", email: "b@eki.app" } as never);
+    m.automationRun.create.mockResolvedValue({ id: "run-us-1" } as never);
+    mSend.mockResolvedValue([{ channel: "push", status: "SENT" }] as never);
+    await automationService.scheduleAutomation({ ...baseInput, recipientUserId: "buyer-us" });
+    // Not suppressed for quiet hours — a real (non-suppressed) run was created.
+    const calls = m.automationRun.create.mock.calls.map((c: any) => c[0].data);
+    expect(calls.some((d: any) => d.status === "SUPPRESSED" && d.suppressedReason === "quiet_hours")).toBe(false);
+  });
+
+});
+
+describe("coalescing — at most one non-urgent automation per recipient per sweep (bug fix 2026-10-11)", () => {
+  beforeEach(() => {
+    m.user.findUnique.mockResolvedValue({ isSuspended: false, marketingConsentAt: new Date(), country: null } as never);
+    m.automationRun.create.mockResolvedValue({ id: "run-coalesce-1" } as never);
+    mSend.mockResolvedValue([{ channel: "push", status: "SENT" }] as never);
+  });
+
+  it("a second non-urgent type for the SAME recipient within one runWithCoalesceScope is suppressed as coalesced_same_run", async () => {
+    const { runWithCoalesceScope } = await import("../modules/automation/automation-coalesce-scope");
+    await runWithCoalesceScope(async () => {
+      await automationService.scheduleAutomation({ ...baseInput, type: "LOW_STOCK_ALERT" as any, recipientUserId: "buyer-coalesce-1", subjectKey: "a" });
+      await automationService.scheduleAutomation({ ...baseInput, type: "FIRST_SALE" as any, recipientUserId: "buyer-coalesce-1", subjectKey: "b" });
+    });
+    const suppressed = m.automationRun.create.mock.calls.map((c: any) => c[0].data).filter((d: any) => d.status === "SUPPRESSED");
+    expect(suppressed.some((d: any) => d.suppressedReason === "coalesced_same_run")).toBe(true);
+  });
+
+  it("different recipients in the same scope are NOT coalesced against each other", async () => {
+    const { runWithCoalesceScope } = await import("../modules/automation/automation-coalesce-scope");
+    await runWithCoalesceScope(async () => {
+      await automationService.scheduleAutomation({ ...baseInput, type: "LOW_STOCK_ALERT" as any, recipientUserId: "buyer-a", subjectKey: "a" });
+      await automationService.scheduleAutomation({ ...baseInput, type: "FIRST_SALE" as any, recipientUserId: "buyer-b", subjectKey: "b" });
+    });
+    const suppressed = m.automationRun.create.mock.calls.map((c: any) => c[0].data).filter((d: any) => d.status === "SUPPRESSED" && d.suppressedReason === "coalesced_same_run");
+    expect(suppressed).toHaveLength(0);
+  });
+
+  it("transactional types (PAYMENT_RECOVERY) are NEVER coalesced, even after a non-urgent claim for the same recipient", async () => {
+    const { runWithCoalesceScope } = await import("../modules/automation/automation-coalesce-scope");
+    await runWithCoalesceScope(async () => {
+      await automationService.scheduleAutomation({ ...baseInput, type: "LOW_STOCK_ALERT" as any, recipientUserId: "buyer-tx", subjectKey: "a" });
+      await automationService.scheduleAutomation({ ...baseInput, type: "PAYMENT_RECOVERY" as any, recipientUserId: "buyer-tx", subjectKey: "b" });
+    });
+    const suppressed = m.automationRun.create.mock.calls.map((c: any) => c[0].data).filter((d: any) => d.status === "SUPPRESSED" && d.suppressedReason === "coalesced_same_run");
+    expect(suppressed.some((d: any) => d.type === "PAYMENT_RECOVERY")).toBe(false);
+  });
+
+  it("outside any runWithCoalesceScope (e.g. a manual single-job trigger), coalescing never applies", async () => {
+    await automationService.scheduleAutomation({ ...baseInput, type: "LOW_STOCK_ALERT" as any, recipientUserId: "buyer-standalone", subjectKey: "a" });
+    await automationService.scheduleAutomation({ ...baseInput, type: "FIRST_SALE" as any, recipientUserId: "buyer-standalone", subjectKey: "b" });
+    const suppressed = m.automationRun.create.mock.calls.map((c: any) => c[0].data).filter((d: any) => d.status === "SUPPRESSED" && d.suppressedReason === "coalesced_same_run");
+    expect(suppressed).toHaveLength(0);
   });
 });

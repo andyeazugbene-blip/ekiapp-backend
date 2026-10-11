@@ -336,11 +336,50 @@ async function runPushReceiptCheck() {
 // GET for Vercel Cron (which only issues GET requests); POST kept for any
 // external/manual trigger using the original x-job-secret header.
 
+/**
+ * Bug fix 2026-10-11 ("prevent duplicate notifications across repeated
+ * scheduler runs and overlapping jobs"): a job triggered externally every
+ * few minutes (see .github/workflows/automation-scheduler.yml) can, in
+ * theory, still be running when the next tick fires — or collide with the
+ * combined daily-sweep cron hitting the same job name at the same moment.
+ * A real Postgres session advisory lock (pg_try_advisory_lock), one per
+ * job NAME, makes a second concurrent call to the SAME job a no-op
+ * (`{skipped: true}`) instead of running the detector logic twice in
+ * parallel. This is on top of, not instead of, the per-automation DB-level
+ * dedupe (AutomationRun.dedupeKey unique constraint) — that one stops a
+ * duplicate SEND; this one stops duplicate WORK (two detector passes
+ * racing the same eligibility reads) from happening at all.
+ *
+ * Uses an interactive $transaction specifically so the lock-acquire and
+ * lock-release queries are guaranteed to run on the SAME underlying
+ * connection — Postgres advisory locks are session-scoped, and two
+ * separate pooled queries are not guaranteed to share a session. The job
+ * function itself still uses the normal shared `prisma` client for its
+ * own work; only the advisory lock pair is pinned to this one connection.
+ */
+export async function withJobLock(name: string, fn: () => Promise<Record<string, unknown>>): Promise<Record<string, unknown>> {
+  return prisma.$transaction(
+    async (tx) => {
+      const rows = await tx.$queryRaw<{ locked: boolean }[]>`SELECT pg_try_advisory_lock(hashtext(${name})) AS locked`;
+      if (!rows[0]?.locked) {
+        logger.warn(`Cron: ${name} skipped — already running elsewhere (advisory lock held)`);
+        return { skipped: true, reason: "already_running" };
+      }
+      try {
+        return await fn();
+      } finally {
+        await tx.$queryRaw`SELECT pg_advisory_unlock(hashtext(${name}))`;
+      }
+    },
+    { timeout: 120_000, maxWait: 10_000 },
+  );
+}
+
 function makeJobHandler(name: string, run: () => Promise<Record<string, unknown>>) {
   return async (req: Request, res: Response): Promise<void> => {
     if (!requireCronSecret(req, res)) return;
     try {
-      const result = await run();
+      const result = await withJobLock(name, run);
       logger.info(`Cron: ${name} completed`, result);
       res.json({ ok: true, ...result });
     } catch (err) {
@@ -396,7 +435,11 @@ async function handleDailySweep(req: Request, res: Response): Promise<void> {
   const results: Record<string, unknown> = {};
   for (const [path, name, run] of jobs) {
     try {
-      results[path] = await run();
+      // Same per-job-name advisory lock as the individual endpoints below —
+      // if an external scheduler's own hit to /jobs/automation-sweep (or
+      // another daily-sweep invocation) is already running this exact job,
+      // this one skips it rather than racing it.
+      results[path] = await withJobLock(name, run);
     } catch (err) {
       logger.error(`Cron: ${name} failed (daily sweep)`, { error: String(err) });
       results[path] = { error: String(err) };

@@ -8,6 +8,8 @@ import { eventsService, EVENT_NAMES } from "../events/events.service";
 import { AppError } from "../../shared/errors/app-error";
 import { getRuleGate, noteRuleRan, noteRuleSkipped } from "./automation-rule-gate";
 import { MARKETING_AUTOMATION_TYPES, VENDOR_TOGGLEABLE_AUTOMATION_TYPES, EKI_MANAGED_AUTOMATION_TYPES, type ScheduleAutomationInput } from "./automation.types";
+import { claimRecipientForNonUrgentSend, TRANSACTIONAL_AUTOMATION_TYPES } from "./automation-coalesce-scope";
+import { localQuietHoursToUtc } from "../../shared/currency";
 
 // Server-time quiet hours (UTC). A per-user-timezone version would need a
 // timezone field on User, which doesn't exist yet — documented limitation,
@@ -158,18 +160,47 @@ async function ensureTemplate(type: AutomationType): Promise<void> {
 
 type Timing = { frequencyCapDays?: number; quietHoursStartUtc?: number; quietHoursEndUtc?: number } | null;
 
-function isQuietHoursWith(timing: Timing): boolean {
-  const start = timing?.quietHoursStartUtc ?? QUIET_HOUR_START_UTC;
-  const end = timing?.quietHoursEndUtc ?? QUIET_HOUR_END_UTC;
+type RecipientForEligibility = { isSuspended: boolean; marketingConsentAt: Date | null; country: string | null };
+
+async function loadRecipientForEligibility(userId: string): Promise<RecipientForEligibility | null> {
+  return prisma.user.findUnique({
+    where: { id: userId },
+    select: { isSuspended: true, marketingConsentAt: true, country: true },
+  });
+}
+
+/**
+ * Local-time quiet hours (bug fix 2026-10-11): an admin-set per-rule
+ * override (timing.quietHoursStartUtc/End) is explicit and always wins
+ * unchanged. Otherwise the default window (22:00-07:00) is treated as a
+ * LOCAL desired window and converted to that recipient's approximate
+ * country UTC offset — a single shared UTC window meant every market
+ * except whichever one it was tuned for got woken up at the wrong hour.
+ * Falls back to the literal UTC default when the country is unmapped.
+ */
+function isQuietHoursWith(timing: Timing, recipientCountry?: string | null): boolean {
+  let start = QUIET_HOUR_START_UTC;
+  let end = QUIET_HOUR_END_UTC;
+  if (timing?.quietHoursStartUtc !== undefined || timing?.quietHoursEndUtc !== undefined) {
+    start = timing?.quietHoursStartUtc ?? QUIET_HOUR_START_UTC;
+    end = timing?.quietHoursEndUtc ?? QUIET_HOUR_END_UTC;
+  } else {
+    const local = localQuietHoursToUtc(recipientCountry, QUIET_HOUR_START_UTC, QUIET_HOUR_END_UTC);
+    if (local) {
+      start = local.startUtc;
+      end = local.endUtc;
+    }
+  }
   const hour = new Date().getUTCHours();
   return start > end ? hour >= start || hour < end : hour >= start && hour < end;
 }
 
-async function isEligible(input: ScheduleAutomationInput, timing: Timing = null): Promise<{ eligible: boolean; reason?: string }> {
-  const recipient = await prisma.user.findUnique({
-    where: { id: input.recipientUserId },
-    select: { isSuspended: true, marketingConsentAt: true },
-  });
+async function isEligible(
+  input: ScheduleAutomationInput,
+  timing: Timing = null,
+  preloadedRecipient?: RecipientForEligibility | null,
+): Promise<{ eligible: boolean; reason?: string }> {
+  const recipient = preloadedRecipient !== undefined ? preloadedRecipient : await loadRecipientForEligibility(input.recipientUserId);
   if (!recipient) return { eligible: false, reason: "recipient_not_found" };
   if (recipient.isSuspended) return { eligible: false, reason: "recipient_suspended" };
 
@@ -200,6 +231,14 @@ async function isEligible(input: ScheduleAutomationInput, timing: Timing = null)
       select: { id: true },
     });
     if (recent) return { eligible: false, reason: "frequency_capped" };
+  }
+
+  // Bug fix 2026-10-11 ("do not send multiple non-urgent... together"):
+  // transactional types always bypass this; everything else gets at most
+  // one send per recipient per sweep invocation — see
+  // automation-coalesce-scope.ts's doc comment for the full rationale.
+  if (!TRANSACTIONAL_AUTOMATION_TYPES.has(input.type) && !claimRecipientForNonUrgentSend(input.recipientUserId)) {
+    return { eligible: false, reason: "coalesced_same_run" };
   }
 
   return { eligible: true };
@@ -377,14 +416,19 @@ export const automationService = {
         return;
       }
 
+      // Loaded once, reused for both the local-quiet-hours check below and
+      // isEligible() further down — was previously two separate lookups
+      // (quiet hours had none at all; it just used a global UTC window).
+      const recipient = await loadRecipientForEligibility(input.recipientUserId);
+
       // Quiet hours are transient — recorded, but under a distinct key.
-      if (!input.bypassQuietHours && isQuietHoursWith(gate.timing)) {
+      if (!input.bypassQuietHours && isQuietHoursWith(gate.timing, recipient?.country)) {
         logger.info("Automation suppressed: quiet hours", { type: input.type, subjectKey: input.subjectKey });
         await recordSuppression(input, "quiet_hours");
         return;
       }
 
-      const eligibility = await isEligible(input, gate.timing);
+      const eligibility = await isEligible(input, gate.timing, recipient);
       if (!eligibility.eligible) {
         logger.info("Automation not eligible", { type: input.type, subjectKey: input.subjectKey, reason: eligibility.reason });
         await recordSuppression(input, eligibility.reason ?? "ineligible");
