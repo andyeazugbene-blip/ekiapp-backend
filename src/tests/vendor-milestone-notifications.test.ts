@@ -7,9 +7,10 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 vi.mock("../lib/prisma", () => ({
   prisma: {
-    vendor: { findUnique: vi.fn() },
+    vendor: { findUnique: vi.fn(), findMany: vi.fn() },
     product: { count: vi.fn() },
-    deliveryZone: { count: vi.fn() },
+    deliveryZone: { count: vi.fn(), groupBy: vi.fn() },
+    event: { count: vi.fn() },
   },
 }));
 
@@ -79,5 +80,76 @@ describe("vendorMilestoneNotificationsService.maybeSendStoreReady", () => {
     await vendorMilestoneNotificationsService.maybeSendStoreReady("vendor-1");
     expect(mockSend).toHaveBeenCalledTimes(2);
     expect(mockSend.mock.calls[0][0].dedupeKey).toBe(mockSend.mock.calls[1][0].dedupeKey);
+  });
+});
+
+describe("vendorMilestoneNotificationsService.sendWelcome (handoff V-01)", () => {
+  it("sends the welcome notification for an existing vendor", async () => {
+    await vendorMilestoneNotificationsService.sendWelcome("vendor-1");
+    expect(mockSend).toHaveBeenCalledWith(expect.objectContaining({
+      eventKey: "vendor_welcome", recipientId: "user-1", dedupeKey: "VENDOR_WELCOME:vendor-1",
+    }));
+  });
+
+  it("does nothing (no throw) when the vendor doesn't exist", async () => {
+    m.vendor.findUnique.mockResolvedValue(null);
+    await expect(vendorMilestoneNotificationsService.sendWelcome("vendor-x")).resolves.toBeUndefined();
+    expect(mockSend).not.toHaveBeenCalled();
+  });
+});
+
+describe("vendorMilestoneNotificationsService.maybeSendFirstVisit (handoff V-07)", () => {
+  it("sends when priorViewCount is 0 (this view is the first ever)", async () => {
+    await vendorMilestoneNotificationsService.maybeSendFirstVisit("vendor-1", 0);
+    expect(mockSend).toHaveBeenCalledWith(expect.objectContaining({
+      eventKey: "vendor_store_first_visit", recipientId: "user-1", dedupeKey: "STORE_FIRST_VISIT:vendor-1",
+    }));
+  });
+
+  it("does not send when priorViewCount is already > 0 (not the first visit)", async () => {
+    await vendorMilestoneNotificationsService.maybeSendFirstVisit("vendor-1", 3);
+    expect(mockSend).not.toHaveBeenCalled();
+  });
+});
+
+describe("vendorMilestoneNotificationsService.runShareReminderSweep (handoff V-06)", () => {
+  it("reminds a ready vendor who has never had a store_viewed event", async () => {
+    m.vendor.findMany.mockResolvedValue([{ id: "vendor-1", userId: "user-1", storeName: "Mama Eki" }]);
+    m.deliveryZone.groupBy.mockResolvedValue([{ vendorId: "vendor-1", _count: { _all: 1 } }]);
+    m.event.count.mockResolvedValue(0);
+
+    const sent = await vendorMilestoneNotificationsService.runShareReminderSweep();
+
+    expect(sent).toBe(1);
+    expect(mockSend).toHaveBeenCalledWith(expect.objectContaining({ eventKey: "vendor_store_not_shared", recipientId: "user-1" }));
+  });
+
+  it("does not remind a vendor who has already had at least one view (stop condition)", async () => {
+    m.vendor.findMany.mockResolvedValue([{ id: "vendor-1", userId: "user-1", storeName: "Mama Eki" }]);
+    m.deliveryZone.groupBy.mockResolvedValue([{ vendorId: "vendor-1", _count: { _all: 1 } }]);
+    m.event.count.mockResolvedValue(1);
+
+    const sent = await vendorMilestoneNotificationsService.runShareReminderSweep();
+
+    expect(sent).toBe(0);
+    expect(mockSend).not.toHaveBeenCalled();
+  });
+
+  it("does not remind a vendor with no delivery zone — not actually 'ready' yet", async () => {
+    m.vendor.findMany.mockResolvedValue([{ id: "vendor-1", userId: "user-1", storeName: "Mama Eki" }]);
+    m.deliveryZone.groupBy.mockResolvedValue([]);
+
+    const sent = await vendorMilestoneNotificationsService.runShareReminderSweep();
+
+    expect(sent).toBe(0);
+    expect(mockSend).not.toHaveBeenCalled();
+    expect(m.event.count).not.toHaveBeenCalled();
+  });
+
+  it("returns 0 immediately when there are no candidate vendors (no N+1 delivery-zone query)", async () => {
+    m.vendor.findMany.mockResolvedValue([]);
+    const sent = await vendorMilestoneNotificationsService.runShareReminderSweep();
+    expect(sent).toBe(0);
+    expect(m.deliveryZone.groupBy).not.toHaveBeenCalled();
   });
 });

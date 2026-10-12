@@ -32,6 +32,11 @@ vi.mock("../modules/notifications/notifications.service", () => ({
   notificationsService: { enqueue: vi.fn().mockResolvedValue(undefined) },
 }));
 
+const mockCommunicationSend = vi.fn().mockResolvedValue({ outcome: "SENT" });
+vi.mock("../modules/communications/communication.service", () => ({
+  communicationService: { send: (...a: unknown[]) => mockCommunicationSend(...a) },
+}));
+
 import { prisma } from "../lib/prisma";
 import { stripe } from "../lib/stripe";
 import { stripeWebhookService } from "../modules/stripe/stripe.service";
@@ -41,7 +46,10 @@ const m = vi.mocked(prisma, true) as any;
 const constructEvent = stripe.webhooks.constructEvent as unknown as ReturnType<typeof vi.fn>;
 const enqueue = notificationsService.enqueue as unknown as ReturnType<typeof vi.fn>;
 
-beforeEach(() => vi.clearAllMocks());
+beforeEach(() => {
+  vi.clearAllMocks();
+  mockCommunicationSend.mockResolvedValue({ outcome: "SENT" });
+});
 
 /** Drives $transaction exactly the way claimWebhookEventOrSkip() uses it:
  * calls the callback with a tx whose webhookEvent.create succeeds (or, for
@@ -118,6 +126,73 @@ describe("invoice.payment_failed — vendor subscription", () => {
 
     expect(result.duplicate).toBe(true);
     expect(m.vendorSubscription.update).not.toHaveBeenCalled();
+  });
+});
+
+describe("invoice.payment_succeeded — M-03 'membership.first_payment.succeeded'", () => {
+  it("sends the first-payment notification when billing_reason is subscription_create", async () => {
+    mockClaimSucceeds();
+    constructEvent.mockReturnValue({
+      id: "evt_inv_first_1",
+      type: "invoice.payment_succeeded",
+      data: { object: { billing_reason: "subscription_create", parent: { subscription_details: { subscription: "sub_1" } } } },
+    });
+    m.vendorSubscription.findUnique.mockResolvedValue({ id: "vs-1", vendorId: "vendor-1" });
+    m.vendor.findUnique.mockResolvedValue({ userId: "user-1", storeName: "Mama Eki", contactEmail: "a@x.com" });
+
+    const result = await stripeWebhookService.handleWebhook({ signature: "valid-sig", rawBody: Buffer.from("body") });
+
+    expect(result.received).toBe(true);
+    expect(result.ignored).toBeUndefined();
+    expect(mockCommunicationSend).toHaveBeenCalledWith(expect.objectContaining({
+      eventKey: "vendor_membership_first_payment",
+      recipientId: "user-1",
+      dedupeKey: "MEMBERSHIP_FIRST_PAYMENT:vs-1",
+    }));
+  });
+
+  it("is a no-op for an ordinary renewal (billing_reason: subscription_cycle) — never sends 'first payment' again", async () => {
+    mockClaimSucceeds();
+    constructEvent.mockReturnValue({
+      id: "evt_inv_renewal_1",
+      type: "invoice.payment_succeeded",
+      data: { object: { billing_reason: "subscription_cycle", parent: { subscription_details: { subscription: "sub_1" } } } },
+    });
+
+    const result = await stripeWebhookService.handleWebhook({ signature: "valid-sig", rawBody: Buffer.from("body") });
+
+    expect(result.ignored).toBe(true);
+    expect(mockCommunicationSend).not.toHaveBeenCalled();
+    expect(m.vendorSubscription.findUnique).not.toHaveBeenCalled();
+  });
+
+  it("is a no-op when the invoice's subscription isn't a known vendor subscription", async () => {
+    mockClaimSucceeds();
+    constructEvent.mockReturnValue({
+      id: "evt_inv_first_unknown",
+      type: "invoice.payment_succeeded",
+      data: { object: { billing_reason: "subscription_create", parent: { subscription_details: { subscription: "sub_unknown" } } } },
+    });
+    m.vendorSubscription.findUnique.mockResolvedValue(null);
+
+    const result = await stripeWebhookService.handleWebhook({ signature: "valid-sig", rawBody: Buffer.from("body") });
+
+    expect(result.ignored).toBe(true);
+    expect(mockCommunicationSend).not.toHaveBeenCalled();
+  });
+
+  it("returns duplicate on a repeated event and never sends twice", async () => {
+    mockClaimIsDuplicate();
+    constructEvent.mockReturnValue({
+      id: "evt_inv_first_dup",
+      type: "invoice.payment_succeeded",
+      data: { object: { billing_reason: "subscription_create", parent: { subscription_details: { subscription: "sub_1" } } } },
+    });
+
+    const result = await stripeWebhookService.handleWebhook({ signature: "valid-sig", rawBody: Buffer.from("body") });
+
+    expect(result.duplicate).toBe(true);
+    expect(mockCommunicationSend).not.toHaveBeenCalled();
   });
 });
 

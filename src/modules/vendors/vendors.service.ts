@@ -7,6 +7,7 @@ import { AppError } from "../../shared/errors/app-error";
 import { resolveMarketCode } from "../../shared/currency";
 import { resolveUniqueSlug } from "../../shared/utils/slug";
 import { resolveCurrencyForMarket, vendorMarketsService } from "./vendor-markets.service";
+import { vendorMilestoneNotificationsService } from "./vendor-milestone-notifications.service";
 import type {
   CreatePayoutMethodInput,
   CreateVendorInput,
@@ -249,6 +250,16 @@ export const vendorsService = {
           // middlewares/require-capability.ts) gate vendor-portal routes on
           // this Vendor row directly, not on role.
 
+          return vendor;
+        }).then((vendor) => {
+          // Handoff V-01 "account.created" (Eki Notification & Automation
+          // Engine, 12 Oct 2026): welcome notification. Fired after the
+          // transaction commits, outside it, non-blocking — this is the
+          // real "vendor account created" moment in this codebase (a bare
+          // User.role=VENDOR carries no storeName/storeSlug yet; createVendor()
+          // is the step that actually brings a usable vendor account into
+          // existence, so it's the correct trigger point for this rule).
+          void vendorMilestoneNotificationsService.sendWelcome(vendor.id);
           return vendor;
         });
       } catch (error) {

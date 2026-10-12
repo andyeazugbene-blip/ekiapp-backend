@@ -21,6 +21,7 @@ import { fulfilmentDelayService } from "../community-buy/fulfilment-delay.servic
 import { enqueueEmail } from "../../lib/email-queue";
 import { checkPushReceipts } from "../../lib/expo-push";
 import { supportRetentionService } from "../messages/support-retention.service";
+import { vendorMilestoneNotificationsService } from "../vendors/vendor-milestone-notifications.service";
 
 export const internalRouter = Router();
 
@@ -332,6 +333,14 @@ async function runPushReceiptCheck() {
   return checkPushReceipts();
 }
 
+// Handoff V-06 "store.link.not.shared" (Eki Notification & Automation
+// Engine, 12 Oct 2026): a repeating reminder for a ready-but-never-visited
+// store, stopping once any real view is recorded.
+async function runVendorShareReminderSweep() {
+  const sent = await vendorMilestoneNotificationsService.runShareReminderSweep();
+  return { sent };
+}
+
 // ─── HTTP handlers ──────────────────────────────────────────────────────
 // GET for Vercel Cron (which only issues GET requests); POST kept for any
 // external/manual trigger using the original x-job-secret header.
@@ -411,6 +420,7 @@ const jobs: [string, string, () => Promise<Record<string, unknown>>][] = [
   ["reconciliation-sweep", "daily Stripe reconciliation", runReconciliationSweep],
   ["payment-anomaly-scan", "duplicate-payment / financial-inconsistency scan", runPaymentAnomalyScan],
   ["fulfilment-delay-scan", "supplier-fulfilment delay scan", runFulfilmentDelayScan],
+  ["vendor-share-reminder-sweep", "vendor store-not-shared reminder sweep", runVendorShareReminderSweep],
   ["push-receipt-check", "Expo push receipt check", runPushReceiptCheck],
   // Dry-run by default; purges only when SUPPORT_RETENTION_ENABLED (see support-retention.service.ts).
   ["support-retention-sweep", "support conversation retention sweep", () => supportRetentionService.sweep()],

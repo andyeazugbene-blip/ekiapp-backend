@@ -131,6 +131,13 @@ class StripeWebhookService {
       return this.handleVendorSubscriptionPaymentFailed(event);
     }
 
+    // Handoff M-03 "membership.first_payment.succeeded" — see that
+    // handler's own doc comment, including the MANUAL STRIPE ACTION this
+    // needs (subscribing to this event type) before it's live.
+    if (event.type === "invoice.payment_succeeded") {
+      return this.handleVendorSubscriptionFirstPaymentSucceeded(event);
+    }
+
     if (event.type === "customer.subscription.updated") {
       return this.handleVendorSubscriptionUpdated(event);
     }
@@ -798,6 +805,74 @@ class StripeWebhookService {
     }
   }
 
+  /**
+   * Handoff M-03 "membership.first_payment.succeeded" (Eki Notification &
+   * Automation Engine, 12 Oct 2026): "Immediately after provider
+   * confirmation ... Payment confirmed -> Once per payment" but
+   * specifically the FIRST one, distinct from any later renewal. Stripe's
+   * own `billing_reason` on the invoice distinguishes this:
+   * "subscription_create" (first invoice, including the one that ends a
+   * trial) vs "subscription_cycle" (an ordinary renewal, already covered
+   * elsewhere) -- using Stripe's own field rather than counting invoices
+   * ourselves avoids a race with webhook delivery order.
+   *
+   * MANUAL STRIPE ACTION REQUIRED: this handler only ever runs if
+   * `invoice.payment_succeeded` is added to the webhook endpoint's
+   * subscribed events in the Stripe dashboard -- it is not implied by the
+   * other subscription events already configured. Until that's done this
+   * code is correct but dormant in production.
+   */
+  private async handleVendorSubscriptionFirstPaymentSucceeded(event: Stripe.Event): Promise<StripeWebhookResult> {
+    const invoice = event.data.object as Stripe.Invoice;
+    if (invoice.billing_reason !== "subscription_create") {
+      // A renewal or other invoice type — not the first payment. Not an
+      // error, just not this rule's concern.
+      return { received: true, ignored: true, eventId: event.id, type: event.type };
+    }
+    const invoiceSubscription = invoice.parent?.subscription_details?.subscription;
+    const stripeSubscriptionId = typeof invoiceSubscription === "string" ? invoiceSubscription : invoiceSubscription?.id;
+    if (!stripeSubscriptionId) {
+      return { received: true, ignored: true, eventId: event.id, type: event.type };
+    }
+
+    try {
+      if (await this.claimWebhookEventOrSkip(event)) {
+        return { received: true, duplicate: true, eventId: event.id, type: event.type };
+      }
+
+      const subscription = await prisma.vendorSubscription.findUnique({
+        where: { stripeSubscriptionId },
+        select: { id: true, vendorId: true },
+      });
+      if (!subscription) {
+        logger.warn("invoice.payment_succeeded (first payment) for unknown vendor subscription", { eventId: event.id, stripeSubscriptionId });
+        return { received: true, ignored: true, eventId: event.id, type: event.type };
+      }
+
+      const vendor = await prisma.vendor.findUnique({ where: { id: subscription.vendorId }, select: { userId: true, storeName: true, contactEmail: true } });
+      if (vendor) {
+        await communicationService.send({
+          eventKey: "vendor_membership_first_payment",
+          recipientId: vendor.userId,
+          recipientEmail: vendor.contactEmail ?? undefined,
+          variables: { store_name: vendor.storeName ?? "Your store" },
+          dedupeKey: `MEMBERSHIP_FIRST_PAYMENT:${subscription.id}`,
+        }).catch((err) => logger.warn("Membership first-payment notification failed", { eventId: event.id, error: String(err) }));
+      }
+
+      logger.info("Webhook processed: invoice.payment_succeeded (vendor subscription first payment)", {
+        eventId: event.id, stripeSubscriptionId, vendorId: subscription.vendorId,
+      });
+      return { received: true, eventId: event.id, type: event.type };
+    } catch (error) {
+      if (this.isUniqueConstraintError(error)) {
+        return { received: true, duplicate: true, eventId: event.id, type: event.type };
+      }
+      logger.error("Webhook failed: invoice.payment_succeeded (first payment)", { eventId: event.id, ...serializeError(error) });
+      throw error;
+    }
+  }
+
   private async handleVendorSubscriptionUpdated(event: Stripe.Event): Promise<StripeWebhookResult> {
     const stripeSubscription = event.data.object as Stripe.Subscription;
     const mappedStatus = this.mapStripeSubscriptionStatus(stripeSubscription.status);
@@ -996,8 +1071,12 @@ class StripeWebhookService {
       return { received: true, ignored: true, eventId: event.id, type: event.type };
     }
 
+    // Captured inside the transaction below, read after it commits — see
+    // the M-01 trial-started notification after the transaction.
+    let trialJustStarted: Date | null = null;
+
     try {
-      return await prisma.$transaction(async (tx) => {
+      const result: StripeWebhookResult = await prisma.$transaction(async (tx) => {
         if (await this.isDuplicate(tx, event.id, event.type, { orderId: vendorId })) {
           return { received: true, duplicate: true, eventId: event.id, type: event.type };
         }
@@ -1014,6 +1093,7 @@ class StripeWebhookService {
           if (stripeSubscription.trial_start && stripeSubscription.trial_end) {
             trialStartedAt = new Date(stripeSubscription.trial_start * 1000);
             trialEndsAt = new Date(stripeSubscription.trial_end * 1000);
+            trialJustStarted = trialStartedAt;
           }
           // Billing-period dates live on the subscription item, not the
           // subscription itself, as of the "basil" API version. During a
@@ -1097,6 +1177,25 @@ class StripeWebhookService {
 
         return { received: true, eventId: event.id, type: event.type };
       }, { isolationLevel: "Serializable" });
+
+      // Handoff M-01 "trial.started" — fired after the transaction commits,
+      // non-blocking; dedupeKey makes a re-delivered webhook a no-op.
+      if (trialJustStarted) {
+        prisma.vendor.findUnique({ where: { id: vendorId }, select: { userId: true, storeName: true, contactEmail: true } })
+          .then((vendor) => {
+            if (!vendor) return;
+            return communicationService.send({
+              eventKey: "vendor_membership_trial_started",
+              recipientId: vendor.userId,
+              recipientEmail: vendor.contactEmail ?? undefined,
+              variables: { store_name: vendor.storeName ?? "Your store" },
+              dedupeKey: `MEMBERSHIP_TRIAL_STARTED:${vendorId}`,
+            });
+          })
+          .catch((err) => logger.warn("Membership trial-started notification failed", { eventId: event.id, error: String(err) }));
+      }
+
+      return result;
     } catch (error) {
       if (this.isUniqueConstraintError(error)) {
         return { received: true, duplicate: true, eventId: event.id, type: event.type };

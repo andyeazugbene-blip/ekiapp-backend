@@ -13,7 +13,7 @@ vi.mock("../lib/prisma", () => ({
     user: { updateMany: vi.fn() },
     vendor: { findUnique: vi.fn() },
     auditLog: { create: vi.fn().mockResolvedValue({}) },
-    event: { findMany: vi.fn(), groupBy: vi.fn(), create: vi.fn().mockResolvedValue({}) },
+    event: { findMany: vi.fn(), groupBy: vi.fn(), create: vi.fn().mockResolvedValue({}), count: vi.fn().mockResolvedValue(0) },
     refund: { updateMany: vi.fn() },
   },
 }));
@@ -29,6 +29,10 @@ vi.mock("../modules/community-buy/campaign-payout.service", () => ({ campaignPay
 vi.mock("../modules/community-buy/campaign-authorisation.service", () => ({ campaignAuthorisationService: {} }));
 vi.mock("../modules/community-buy/organiser-stripe-connect.service", () => ({ organiserStripeConnectService: {} }));
 vi.mock("../modules/vendors/stripe-connect.service", () => ({ stripeConnectService: {} }));
+const mockMaybeSendFirstVisit = vi.fn();
+vi.mock("../modules/vendors/vendor-milestone-notifications.service", () => ({
+  vendorMilestoneNotificationsService: { maybeSendFirstVisit: (...a: unknown[]) => mockMaybeSendFirstVisit(...a) },
+}));
 vi.mock("../shared/utils/audit", async () => {
   const actual = await vi.importActual<typeof import("../shared/utils/audit")>("../shared/utils/audit");
   return { ...actual, recordAudit: recordAuditMock };
@@ -104,6 +108,23 @@ describe("store_viewed", () => {
     // anonymous viewer
     await publicStoresService.recordEvent("s", { event: "open" } as never);
     expect(emit.mock.calls[0][0]).toMatchObject({ actorType: "anonymous", actorId: null });
+  });
+
+  it("handoff V-07: counts PRIOR store_viewed events before emitting this one, and passes that count to maybeSendFirstVisit (emit() doesn't await its own write)", async () => {
+    m.event.count.mockResolvedValue(0);
+    await publicStoresService.recordEvent("s", { event: "open" } as never, "viewer-1");
+    expect(m.event.count).toHaveBeenCalledWith({ where: { name: "store_viewed", entityType: "Vendor", entityId: "v1" } });
+    expect(mockMaybeSendFirstVisit).toHaveBeenCalledWith("v1", 0);
+    // The count call must happen before emit() — otherwise it would race emit()'s un-awaited write.
+    const countOrder = m.event.count.mock.invocationCallOrder[0];
+    const emitOrder = emit.mock.invocationCallOrder[0];
+    expect(countOrder).toBeLessThan(emitOrder);
+  });
+
+  it("a third-or-later view does not re-trigger the first-visit notification", async () => {
+    m.event.count.mockResolvedValue(5);
+    await publicStoresService.recordEvent("s", { event: "open" } as never, "viewer-1");
+    expect(mockMaybeSendFirstVisit).toHaveBeenCalledWith("v1", 5);
   });
 });
 

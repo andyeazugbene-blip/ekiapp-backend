@@ -75,6 +75,56 @@ const TEMPLATES: Record<string, CommunicationTemplate> = {
     enabled: true,
     recipientType: "VENDOR",
   },
+  // Handoff V-01 "account.created": "Welcome to Eki. Set up your store."
+  vendor_welcome: {
+    key: "vendor_welcome",
+    title: "Welcome to Eki",
+    body: "Welcome to Eki, {{store_name}}. Add your first foodstuff and set up delivery to get started.",
+    channels: ["email", "in_app"],
+    enabled: true,
+    recipientType: "VENDOR",
+  },
+  // Handoff V-07 "store.link.first.visit": fires once, the first real
+  // store_viewed event recorded for this vendor's store.
+  vendor_store_first_visit: {
+    key: "vendor_store_first_visit",
+    title: "You had your first visitor",
+    body: "Your store link brought in its first visitor. Keep sharing it to reach more buyers.",
+    channels: ["in_app"],
+    enabled: true,
+    recipientType: "VENDOR",
+  },
+  // Handoff M-01 "trial.started": fires once, when a vendor's Eki
+  // Membership trial begins (see stripe.service.ts checkout.session.completed).
+  vendor_membership_trial_started: {
+    key: "vendor_membership_trial_started",
+    title: "Your Eki Membership trial has started",
+    body: "{{store_name}}, your Eki Membership trial has started.",
+    channels: ["email", "in_app"],
+    enabled: true,
+    recipientType: "VENDOR",
+  },
+  // Handoff M-03 "membership.first_payment.succeeded": fires once, on the
+  // FIRST successful membership invoice (not a renewal) — see
+  // stripe.service.ts handleVendorSubscriptionFirstPaymentSucceeded.
+  vendor_membership_first_payment: {
+    key: "vendor_membership_first_payment",
+    title: "Your Eki Membership payment is complete",
+    body: "{{store_name}}, your Eki Membership payment is complete.",
+    channels: ["email", "in_app"],
+    enabled: true,
+    recipientType: "VENDOR",
+  },
+  // Handoff V-06 "store.link.not.shared": a repeating reminder, stops once
+  // any store_viewed event has ever been recorded (see the sweep job).
+  vendor_store_not_shared: {
+    key: "vendor_store_not_shared",
+    title: "Share your store link",
+    body: "{{store_name}} is ready but hasn't had a visitor yet. Share your store link with buyers.",
+    channels: ["in_app", "push"],
+    enabled: true,
+    recipientType: "VENDOR",
+  },
   buyer_order_confirmed: {
     key: "buyer_order_confirmed",
     title: "Order confirmed: {{order_number}}",

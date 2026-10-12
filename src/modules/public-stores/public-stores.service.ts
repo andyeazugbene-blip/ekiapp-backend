@@ -13,6 +13,7 @@ import { calculatePlatformFee as calcPlatformFee } from "../../shared/pricing";
 import { otpService } from "../auth/otp.service";
 import { resolveVendorCommission } from "../subscriptions/subscription-plan-utils";
 import { buildVendorShareUrl } from "../vendors/vendors.service";
+import { vendorMilestoneNotificationsService } from "../vendors/vendor-milestone-notifications.service";
 import type {
   ListPublicProductsQuery,
   PublicProduct,
@@ -1293,6 +1294,12 @@ export const publicStoresService = {
     // The public storefront's "open" beacon is the only store-view signal in the
     // platform: client-reported, one per page open (NOT unique visitors).
     if (input.event === "open") {
+      // Handoff V-07 "store.link.first.visit" — counted BEFORE emit() below,
+      // since emit() doesn't await its own DB write (see that function's
+      // doc comment for why counting after would race it).
+      const priorViewCount = await prisma.event.count({ where: { name: "store_viewed", entityType: "Vendor", entityId: vendor.id } });
+      void vendorMilestoneNotificationsService.maybeSendFirstVisit(vendor.id, priorViewCount);
+
       eventsService.emit({
         name: EVENT_NAMES.store_viewed, actorType: viewerId ? "user" : "anonymous", actorId: viewerId ?? null,
         entityType: "Vendor", entityId: vendor.id, source, payload: { storeSlug: vendor.storeSlug, clientReported: true },
