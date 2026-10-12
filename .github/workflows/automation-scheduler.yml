@@ -66,3 +66,29 @@ jobs:
           cat /tmp/scheduled-comms.json
           echo ""
           if [ "$code" -ge 300 ]; then echo "::error::run-scheduled-communications returned HTTP $code"; exit 1; fi
+
+      # Handoff O-02 "order.unacknowledged" (P1) — a paid order a vendor
+      # hasn't accepted yet.
+      - name: Unacknowledged order reminders
+        continue-on-error: true
+        run: |
+          code=$(curl -sS -X POST "$BASE_URL/api/internal/jobs/order-unacknowledged-sweep" \
+            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
+            -o /tmp/order-unack.json -w "%{http_code}")
+          echo "HTTP $code"
+          cat /tmp/order-unack.json
+          echo ""
+          if [ "$code" -ge 300 ]; then echo "::error::order-unacknowledged-sweep returned HTTP $code"; exit 1; fi
+
+      # Handoff O-04 "order.dispatch.due" (P1) — an accepted order
+      # approaching or past its assumed dispatch window.
+      - name: Dispatch-due reminders
+        continue-on-error: true
+        run: |
+          code=$(curl -sS -X POST "$BASE_URL/api/internal/jobs/order-dispatch-due-sweep" \
+            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
+            -o /tmp/dispatch-due.json -w "%{http_code}")
+          echo "HTTP $code"
+          cat /tmp/dispatch-due.json
+          echo ""
+          if [ "$code" -ge 300 ]; then echo "::error::order-dispatch-due-sweep returned HTTP $code"; exit 1; fi

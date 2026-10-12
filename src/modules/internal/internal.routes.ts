@@ -22,6 +22,7 @@ import { enqueueEmail } from "../../lib/email-queue";
 import { checkPushReceipts } from "../../lib/expo-push";
 import { supportRetentionService } from "../messages/support-retention.service";
 import { vendorMilestoneNotificationsService } from "../vendors/vendor-milestone-notifications.service";
+import { orderAcceptanceNotificationsService } from "../orders/order-acceptance-notifications.service";
 
 export const internalRouter = Router();
 
@@ -341,6 +342,16 @@ async function runVendorShareReminderSweep() {
   return { sent };
 }
 
+// Handoff O-02 "order.unacknowledged" / O-04 "order.dispatch.due" — P1,
+// time-sensitive (see .github/workflows/automation-scheduler.yml, which
+// calls these every 10 minutes once CRON_SECRET is configured).
+async function runOrderUnacknowledgedSweep() {
+  return orderAcceptanceNotificationsService.runUnacknowledgedOrderSweep();
+}
+async function runOrderDispatchDueSweep() {
+  return orderAcceptanceNotificationsService.runDispatchDueSweep();
+}
+
 // ─── HTTP handlers ──────────────────────────────────────────────────────
 // GET for Vercel Cron (which only issues GET requests); POST kept for any
 // external/manual trigger using the original x-job-secret header.
@@ -421,6 +432,8 @@ const jobs: [string, string, () => Promise<Record<string, unknown>>][] = [
   ["payment-anomaly-scan", "duplicate-payment / financial-inconsistency scan", runPaymentAnomalyScan],
   ["fulfilment-delay-scan", "supplier-fulfilment delay scan", runFulfilmentDelayScan],
   ["vendor-share-reminder-sweep", "vendor store-not-shared reminder sweep", runVendorShareReminderSweep],
+  ["order-unacknowledged-sweep", "unacknowledged paid-order reminder sweep", runOrderUnacknowledgedSweep],
+  ["order-dispatch-due-sweep", "dispatch-due reminder sweep", runOrderDispatchDueSweep],
   ["push-receipt-check", "Expo push receipt check", runPushReceiptCheck],
   // Dry-run by default; purges only when SUPPORT_RETENTION_ENABLED (see support-retention.service.ts).
   ["support-retention-sweep", "support conversation retention sweep", () => supportRetentionService.sweep()],

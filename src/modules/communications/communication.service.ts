@@ -115,6 +115,27 @@ const TEMPLATES: Record<string, CommunicationTemplate> = {
     enabled: true,
     recipientType: "VENDOR",
   },
+  // Handoff O-02 "order.unacknowledged": elapsed-time default, not a real
+  // business-hours calendar — see order-acceptance-notifications.service.ts's
+  // doc comment for why. Same copy for both the 15-minute first reminder
+  // and the 24h escalation; dedupeKey distinguishes them so each fires once.
+  vendor_order_unacknowledged: {
+    key: "vendor_order_unacknowledged",
+    title: "A paid order needs your response",
+    body: "Order {{order_number}} is still waiting for you to accept it.",
+    channels: ["push", "in_app"],
+    enabled: true,
+    recipientType: "VENDOR",
+  },
+  // Handoff O-04 "order.dispatch.due": same elapsed-time caveat.
+  vendor_order_dispatch_due: {
+    key: "vendor_order_dispatch_due",
+    title: "Delivery preparation needs attention",
+    body: "Order {{order_number}} hasn't been dispatched yet.",
+    channels: ["push", "in_app"],
+    enabled: true,
+    recipientType: "VENDOR",
+  },
   // Handoff V-06 "store.link.not.shared": a repeating reminder, stops once
   // any store_viewed event has ever been recorded (see the sweep job).
   vendor_store_not_shared: {
