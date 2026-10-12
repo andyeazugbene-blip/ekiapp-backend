@@ -1,4 +1,5 @@
 import { eventsService, EVENT_NAMES } from "../events/events.service";
+import { vendorMilestoneNotificationsService } from "../vendors/vendor-milestone-notifications.service";
 import type { Product } from "@prisma/client";
 
 import { prisma } from "../../lib/prisma";
@@ -110,6 +111,11 @@ export const productsService = {
             name: EVENT_NAMES.product_published, actorType: "vendor", actorId: userId, entityType: "Product", entityId: created.id,
             source: "vendor_app", secondaryEntities: { vendorId: vendor.id },
           });
+          // Handoff V-05 "store.ready" — the product-side half of the
+          // product+delivery-zone pair; see vendor-milestone-notifications
+          // .service.ts for why this call site and delivery-zones.service.ts
+          // both call it (idempotent either way).
+          void vendorMilestoneNotificationsService.maybeSendStoreReady(vendor.id);
         }
         return created;
       } catch (error: any) {

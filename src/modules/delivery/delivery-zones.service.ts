@@ -4,6 +4,7 @@ import { prisma } from "../../lib/prisma";
 import { currencyFromCountry } from "../../shared/currency";
 import { AppError } from "../../shared/errors/app-error";
 import { eventsService, EVENT_NAMES } from "../events/events.service";
+import { vendorMilestoneNotificationsService } from "../vendors/vendor-milestone-notifications.service";
 import type {
   CreateDeliveryMethodInput,
   CreateDeliveryZoneInput,
@@ -71,6 +72,11 @@ export const deliveryZonesService = {
         name: EVENT_NAMES.delivery_configured, actorType: "vendor", actorId: userId, entityType: "Vendor", entityId: vendor.id,
         source: "vendor_app",
       });
+      // Handoff V-05 "store.ready" — the delivery-side half of the
+      // product+delivery-zone pair; see products.service.ts for the other
+      // call site and vendor-milestone-notifications.service.ts for why
+      // calling it from both is safe (idempotent real-state check).
+      void vendorMilestoneNotificationsService.maybeSendStoreReady(vendor.id);
     }
 
     return zone;
