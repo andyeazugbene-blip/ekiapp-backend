@@ -872,6 +872,13 @@ class StripeWebhookService {
           variables: { store_name: vendor.storeName ?? "Your store" },
           dedupeKey: `MEMBERSHIP_FIRST_PAYMENT:${subscription.id}`,
         }).catch((err) => logger.warn("Membership first-payment notification failed", { eventId: event.id, error: String(err) }));
+
+        // Handoff M-08 "referral.credit.earned": the first vendor payment
+        // is the last link in the locked qualification chain (store setup +
+        // verified + trial + first payment) — check/credit here.
+        await referralsService
+          .creditVendorReferralOnMembershipQualified(subscription.vendorId)
+          .catch((err) => logger.warn("Vendor referral credit check failed", { eventId: event.id, error: String(err) }));
       }
 
       logger.info("Webhook processed: invoice.payment_succeeded (vendor subscription first payment)", {

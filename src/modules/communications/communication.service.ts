@@ -115,6 +115,19 @@ const TEMPLATES: Record<string, CommunicationTemplate> = {
     enabled: true,
     recipientType: "VENDOR",
   },
+  // Handoff M-08 "referral.credit.earned": fires once, when the vendor THEY
+  // referred clears the qualification chain (store setup + verified +
+  // trial + first payment) — see referrals.service.ts
+  // creditVendorReferralOnMembershipQualified(). The credit is recorded,
+  // not yet applied to Stripe billing — that part is manual.
+  vendor_referral_credit_earned: {
+    key: "vendor_referral_credit_earned",
+    title: "You earned a referral credit",
+    body: "{{store_name}} just completed their first Eki Membership payment — you've earned {{months}} month(s) of Eki Membership credit.",
+    channels: ["email", "push", "in_app"],
+    enabled: true,
+    recipientType: "VENDOR",
+  },
   // Handoff M-03 "membership.first_payment.succeeded": fires once, on the
   // FIRST successful membership invoice (not a renewal) — see
   // stripe.service.ts handleVendorSubscriptionFirstPaymentSucceeded.

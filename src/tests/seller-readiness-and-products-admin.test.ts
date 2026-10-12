@@ -23,6 +23,12 @@ vi.mock("../lib/prisma", () => ({
     user: { findUnique: m.userFindUnique },
     cart: { findUnique: m.cartFindUnique },
     deliveryZone: { findMany: vi.fn().mockResolvedValue([]) },
+    // M-06 membership-pause check (seller-readiness.ts) — unconfigured by
+    // default here, matching "never guess a value": pausedVendorIds()
+    // returns an empty set and existing readiness-only tests are
+    // unaffected unless a test explicitly configures a grace period.
+    adminPlatformSetting: { count: vi.fn().mockResolvedValue(5), findUnique: vi.fn().mockResolvedValue(null), findMany: vi.fn().mockResolvedValue([]), upsert: vi.fn() },
+    vendorSubscription: { findMany: vi.fn().mockResolvedValue([]) },
   },
 }));
 vi.mock("../lib/stripe", () => ({ stripe: { paymentIntents: { create: vi.fn() } } }));
@@ -36,12 +42,15 @@ vi.mock("../shared/utils/audit", async () => {
   return { ...actual, recordAudit: m.recordAudit };
 });
 
+import { prisma } from "../lib/prisma";
 import {
   assertVendorsPurchasable,
   assessSellerReadiness,
   isSellerReadinessGateEnabled,
   purchasableVendorWhere,
 } from "../modules/products/seller-readiness";
+
+const pm = vi.mocked(prisma, true) as any;
 import { paymentsService } from "../modules/payments/payments.service";
 import { cartService } from "../modules/cart/cart.service";
 import { adminProductsService } from "../modules/admin/admin-products.service";
@@ -124,6 +133,43 @@ describe("gate enforcement", () => {
     m.vendorFindMany.mockResolvedValue([{ id: "v1", ...READY, isSuspended: true, bankAccounts: [] }]);
     await expect(cartService.addItem("buyer-1", { productId: "p1", quantity: 1 } as any)).rejects.toMatchObject({ code: "SELLER_PAYMENT_NOT_READY" });
     expect(tx.cartItem.create).not.toHaveBeenCalled();
+  });
+
+  // M-06 "membership.capabilities.paused": a vendor otherwise READY gets
+  // blocked once their Eki Membership has been PAST_DUE longer than the
+  // admin-configured MEMBERSHIP_GRACE_PERIOD_DAYS grace period.
+  describe("M-06 membership grace enforcement", () => {
+    it("blocks a READY vendor whose subscription is PAST_DUE beyond the configured grace period", async () => {
+      pm.adminPlatformSetting.findUnique.mockResolvedValue({ value: 7 });
+      pm.vendorSubscription.findMany.mockResolvedValue([{ vendorId: "v1" }]);
+      m.vendorFindMany.mockResolvedValue([{ id: "v1", ...READY, bankAccounts: [] }]);
+
+      await expect(assertVendorsPurchasable(["v1"])).rejects.toMatchObject({
+        code: "SELLER_PAYMENT_NOT_READY",
+        details: { blocked: [{ vendorId: "v1", reason: "MEMBERSHIP_PAYMENT_PAST_DUE" }] },
+      });
+      expect(pm.vendorSubscription.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({ vendorId: { in: ["v1"] }, status: "PAST_DUE", updatedAt: { lt: expect.any(Date) } }),
+        }),
+      );
+    });
+
+    it("does not block a READY vendor whose subscription is PAST_DUE but still within the grace period", async () => {
+      pm.adminPlatformSetting.findUnique.mockResolvedValue({ value: 7 });
+      pm.vendorSubscription.findMany.mockResolvedValue([]); // within-grace rows never match the `updatedAt: { lt: cutoff }` filter
+      m.vendorFindMany.mockResolvedValue([{ id: "v1", ...READY, bankAccounts: [] }]);
+
+      await expect(assertVendorsPurchasable(["v1"])).resolves.toBeUndefined();
+    });
+
+    it("never blocks on membership when MEMBERSHIP_GRACE_PERIOD_DAYS isn't configured yet", async () => {
+      pm.adminPlatformSetting.findUnique.mockResolvedValue(null);
+      m.vendorFindMany.mockResolvedValue([{ id: "v1", ...READY, bankAccounts: [] }]);
+
+      await expect(assertVendorsPurchasable(["v1"])).resolves.toBeUndefined();
+      expect(pm.vendorSubscription.findMany).not.toHaveBeenCalled();
+    });
   });
 });
 

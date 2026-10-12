@@ -2,6 +2,9 @@ import type { Prisma, PrismaClient } from "@prisma/client";
 
 import { prisma } from "../../lib/prisma";
 import { AppError } from "../../shared/errors/app-error";
+import { adminPlatformSettingsService } from "../admin/admin-platform-settings.service";
+
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 /**
  * Handbook 14.6 / gap B15: a product is NOT purchasable when its seller cannot
@@ -34,7 +37,8 @@ export type SellerNotReadyReason =
   | "VENDOR_NOT_VERIFIED"
   | "VENDOR_SUSPENDED"
   | "VENDOR_CLOSED"
-  | "SELLER_PAYMENTS_NOT_ENABLED";
+  | "SELLER_PAYMENTS_NOT_ENABLED"
+  | "MEMBERSHIP_PAYMENT_PAST_DUE";
 
 export interface SellerReadinessInput {
   verificationStatus: string;
@@ -60,6 +64,7 @@ export const SELLER_REASON_MESSAGES: Record<SellerNotReadyReason, string> = {
   VENDOR_SUSPENDED: "Seller is suspended",
   VENDOR_CLOSED: "Seller account is closed",
   SELLER_PAYMENTS_NOT_ENABLED: "Seller payment setup incomplete",
+  MEMBERSHIP_PAYMENT_PAST_DUE: "Seller's Eki Membership payment is past due",
 };
 
 export function assessSellerReadiness(v: SellerReadinessInput): { ready: boolean; reason: SellerNotReadyReason | null } {
@@ -86,6 +91,32 @@ export function purchasableVendorWhere(): Prisma.VendorWhereInput {
   };
 }
 
+/**
+ * Handoff M-06 "membership.capabilities.paused" enforcement (Eki
+ * Notification & Automation Engine, 12 Oct 2026). Owner instruction
+ * ("make it 50/50 with default params") authorized a default for "which
+ * capabilities pause": new checkouts are blocked once a vendor's Eki
+ * Membership has been PAST_DUE for longer than the admin-configured grace
+ * period (MEMBERSHIP_GRACE_PERIOD_DAYS) — nothing else changes. Existing
+ * orders, the store listing itself, and all vendor data are untouched,
+ * per the handbook's own locked decision ("Never delete store/data") and
+ * the handoff's own required wording ("Your store data is safe").
+ * Gated behind the SAME SELLER_PAYMENT_READINESS_GATE toggle as the rest
+ * of this file (default OFF in production) — this has zero live behavior
+ * change until that gate is explicitly turned on, same safe-rollout
+ * convention as everything else here.
+ */
+async function pausedVendorIds(vendorIds: string[]): Promise<Set<string>> {
+  const graceDays = await adminPlatformSettingsService.getValue("MEMBERSHIP_GRACE_PERIOD_DAYS");
+  if (graceDays == null) return new Set(); // not configured — never guess, never block.
+  const cutoff = new Date(Date.now() - graceDays * DAY_MS);
+  const pastDue = await prisma.vendorSubscription.findMany({
+    where: { vendorId: { in: vendorIds }, status: "PAST_DUE", updatedAt: { lt: cutoff } },
+    select: { vendorId: true },
+  });
+  return new Set(pastDue.map((s) => s.vendorId));
+}
+
 /** Throws SELLER_PAYMENT_NOT_READY (409) if any vendor is not purchasable. No-op when the gate is off. */
 export async function assertVendorsPurchasable(
   vendorIds: string[],
@@ -93,7 +124,10 @@ export async function assertVendorsPurchasable(
 ): Promise<void> {
   if (!isSellerReadinessGateEnabled() || vendorIds.length === 0) return;
   const unique = Array.from(new Set(vendorIds));
-  const vendors = await client.vendor.findMany({ where: { id: { in: unique } }, select: SELLER_READINESS_SELECT });
+  const [vendors, paused] = await Promise.all([
+    client.vendor.findMany({ where: { id: { in: unique } }, select: SELLER_READINESS_SELECT }),
+    pausedVendorIds(unique),
+  ]);
   const byId = new Map(vendors.map((v) => [v.id, v]));
   const blocked: Array<{ vendorId: string; reason: SellerNotReadyReason }> = [];
   for (const id of unique) {
@@ -103,7 +137,11 @@ export async function assertVendorsPurchasable(
       continue;
     }
     const a = assessSellerReadiness(v);
-    if (!a.ready && a.reason) blocked.push({ vendorId: id, reason: a.reason });
+    if (!a.ready && a.reason) {
+      blocked.push({ vendorId: id, reason: a.reason });
+    } else if (paused.has(id)) {
+      blocked.push({ vendorId: id, reason: "MEMBERSHIP_PAYMENT_PAST_DUE" });
+    }
   }
   if (blocked.length > 0) {
     throw new AppError(

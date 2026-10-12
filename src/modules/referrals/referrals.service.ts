@@ -5,6 +5,9 @@ import { Prisma } from "@prisma/client";
 import { prisma } from "../../lib/prisma";
 import { logger } from "../../lib/logger";
 import { AppError } from "../../shared/errors/app-error";
+import { recordAudit } from "../../shared/utils/audit";
+import { adminPlatformSettingsService } from "../admin/admin-platform-settings.service";
+import { communicationService } from "../communications/communication.service";
 
 const REFERRAL_BONUS_AMOUNT = 500; // 500 cents = €5
 const REFERRAL_CURRENCY = "eur";
@@ -290,6 +293,108 @@ export const referralsService = {
         refereeAmount,
       });
     }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+  },
+
+  /**
+   * Handoff M-08 "referral.credit.earned" (vendor-to-vendor referral
+   * programme). Owner instruction ("make it 50/50 with default params")
+   * authorized building the programme itself on top of the existing
+   * generic Referral/referralCode infrastructure, with these defaults:
+   *
+   *  - Qualification chain (locked by the handoff: store setup +
+   *    verification + trial + first payment): checked here, at the moment
+   *    the referred vendor's FIRST Eki Membership payment succeeds
+   *    (called from stripe.service.ts's invoice.payment_succeeded
+   *    handler) — "first payment" is this function's trigger, "trial"
+   *    necessarily already happened to reach a first payment, and
+   *    "verified" + "store setup" (>=1 active product, >=1 active
+   *    delivery zone) are checked directly below. If the vendor hasn't
+   *    finished store setup yet at that exact moment, this does NOT
+   *    retry later — a documented simplification, not a silent gap, since
+   *    the handoff only locked the qualification chain, not a retry policy.
+   *  - Credit AMOUNT/length comes from the admin-configurable
+   *    VENDOR_REFERRAL_CREDIT_MONTHS setting, never a hardcoded number
+   *    (same convention as M-06's grace period).
+   *  - How the credit is APPLIED: recorded as a one-time ledger entry
+   *    (AuditLog + Referral.creditedAt as the dedupe marker) and the
+   *    referrer is notified — it does NOT mutate the vendor's
+   *    Stripe-synced subscription dates. Directly extending
+   *    VendorSubscription.currentPeriodEnd here would silently diverge
+   *    from Stripe's own billing truth (Stripe doesn't know about the
+   *    credit, so its next invoice would ignore it). Actually applying
+   *    the free month in Stripe (e.g. a coupon or an invoice credit) is
+   *    left as an explicit manual/future step — safer default than
+   *    guessing at a billing-mutation mechanism on a live-payments path.
+   */
+  async creditVendorReferralOnMembershipQualified(vendorId: string): Promise<{ credited: boolean }> {
+    const vendor = await prisma.vendor.findUnique({
+      where: { id: vendorId },
+      select: { id: true, userId: true, storeName: true, verificationStatus: true },
+    });
+    if (!vendor) return { credited: false };
+
+    const referral = await prisma.referral.findUnique({ where: { referredId: vendor.userId } });
+    if (!referral || referral.creditedAt || referral.referrerId === vendor.userId) {
+      return { credited: false };
+    }
+
+    if (vendor.verificationStatus !== "VERIFIED") {
+      logger.info("Vendor referral credit skipped: referred vendor not yet verified", { vendorId });
+      return { credited: false };
+    }
+
+    const [productCount, zoneCount] = await Promise.all([
+      prisma.product.count({ where: { vendorId, isActive: true } }),
+      prisma.deliveryZone.count({ where: { vendorId, isActive: true } }),
+    ]);
+    if (productCount < 1 || zoneCount < 1) {
+      logger.info("Vendor referral credit skipped: referred vendor's store setup is incomplete", { vendorId });
+      return { credited: false };
+    }
+
+    const creditMonths = await adminPlatformSettingsService.getValue("VENDOR_REFERRAL_CREDIT_MONTHS");
+    if (creditMonths == null) return { credited: false }; // not configured — never guess, never credit.
+
+    // Atomic claim: creditedAt doubles as the dedupe marker so a retried
+    // webhook (or a concurrent call) can never credit the same referral twice.
+    const claim = await prisma.referral.updateMany({
+      where: { id: referral.id, creditedAt: null },
+      data: { creditedAt: new Date() },
+    });
+    if (claim.count !== 1) return { credited: false };
+
+    await recordAudit({
+      actorId: "system:vendor-referral-credit",
+      action: "VENDOR_REFERRAL_CREDITED",
+      entityType: "Referral",
+      entityId: referral.id,
+      metadata: {
+        referrerId: referral.referrerId,
+        referredVendorId: vendor.id,
+        referredUserId: vendor.userId,
+        creditMonths,
+        note: "Recorded as owed; not auto-applied to Stripe billing. Apply manually (coupon/invoice credit) or via a future automated step.",
+      },
+    });
+
+    const referrer = await prisma.user.findUnique({ where: { id: referral.referrerId }, select: { email: true } });
+    await communicationService
+      .send({
+        eventKey: "vendor_referral_credit_earned",
+        recipientId: referral.referrerId,
+        recipientEmail: referrer?.email ?? undefined,
+        variables: { store_name: vendor.storeName ?? "Your referral", months: String(creditMonths) },
+        dedupeKey: `VENDOR_REFERRAL_CREDIT:${referral.id}`,
+      })
+      .catch((err) => logger.warn("Vendor referral credit notification failed", { referralId: referral.id, error: String(err) }));
+
+    logger.info("Vendor referral bonus credited (ledger only — Stripe application is manual)", {
+      referrerId: referral.referrerId,
+      referredVendorId: vendor.id,
+      creditMonths,
+    });
+
+    return { credited: true };
   },
 
   async getReferralStats(userId: string): Promise<{
