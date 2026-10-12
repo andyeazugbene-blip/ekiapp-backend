@@ -44,17 +44,22 @@ describe("ensureDefaults() — seeds 1 for any threshold with no row yet, called
 
     await adminPlatformSettingsService.list();
 
-    expect(m.adminPlatformSetting.upsert).toHaveBeenCalledTimes(3);
+    expect(m.adminPlatformSetting.upsert).toHaveBeenCalledTimes(OPERATIONAL_THRESHOLD_KEYS.length);
     for (const call of m.adminPlatformSetting.upsert.mock.calls) {
       expect(call[0].update).toEqual({});
-      expect(call[0].create.value).toBe(1);
+      // Every seeded value is a positive, finite default — the exact
+      // number differs per key (see DEFAULT_VALUE_OVERRIDES for the two
+      // keys added 2026-10-12: a 1-day/1-month default would be a
+      // meaninglessly short grace period / referral credit).
+      expect(Number.isFinite(call[0].create.value)).toBe(true);
+      expect(call[0].create.value).toBeGreaterThan(0);
     }
     const seededKeys = m.adminPlatformSetting.upsert.mock.calls.map((c: any) => c[0].create.key).sort();
     expect(seededKeys).toEqual([...OPERATIONAL_THRESHOLD_KEYS].sort());
   });
 
-  it("never re-seeds (and never overwrites) once all three keys already have a row — an admin's real configured value survives", async () => {
-    m.adminPlatformSetting.count.mockResolvedValue(3);
+  it("never re-seeds (and never overwrites) once every key already has a row — an admin's real configured value survives", async () => {
+    m.adminPlatformSetting.count.mockResolvedValue(OPERATIONAL_THRESHOLD_KEYS.length);
     m.adminPlatformSetting.findUnique.mockResolvedValue({ key: "PRICE_APPROVAL_TIMEOUT_HOURS", value: 48 });
 
     const value = await adminPlatformSettingsService.getValue("PRICE_APPROVAL_TIMEOUT_HOURS");
@@ -102,16 +107,18 @@ describe("adminPlatformSettingsService.getValue — defaults to 1, never invents
 });
 
 describe("adminPlatformSettingsService.list — admin-web settings page", () => {
-  it("returns all three keys in order, defaulting to 1 for any never explicitly configured", async () => {
+  it("returns every configured key in order, defaulting any never explicitly configured", async () => {
     m.adminPlatformSetting.findMany.mockResolvedValue([
       { key: "PRICE_APPROVAL_TIMEOUT_HOURS", value: 48, updatedById: "admin-1", updatedAt: new Date("2026-09-20") },
       { key: "FULFILMENT_STALE_THRESHOLD_HOURS", value: 1, updatedById: null, updatedAt: new Date("2026-09-22") },
       { key: "PAYOUT_STUCK_THRESHOLD_HOURS", value: 1, updatedById: null, updatedAt: new Date("2026-09-22") },
+      { key: "MEMBERSHIP_GRACE_PERIOD_DAYS", value: 7, updatedById: null, updatedAt: new Date("2026-10-12") },
+      { key: "VENDOR_REFERRAL_CREDIT_MONTHS", value: 1, updatedById: null, updatedAt: new Date("2026-10-12") },
     ]);
 
     const result = await adminPlatformSettingsService.list();
 
-    expect(result).toHaveLength(3);
+    expect(result).toHaveLength(OPERATIONAL_THRESHOLD_KEYS.length);
     expect(result.map((r) => r.key)).toEqual([...OPERATIONAL_THRESHOLD_KEYS]);
     const configured = result.find((r) => r.key === "PRICE_APPROVAL_TIMEOUT_HOURS");
     expect(configured?.value).toBe(48);
@@ -119,6 +126,8 @@ describe("adminPlatformSettingsService.list — admin-web settings page", () => 
     const defaulted = result.find((r) => r.key === "FULFILMENT_STALE_THRESHOLD_HOURS");
     expect(defaulted?.value).toBe(1);
     expect(defaulted?.updatedById).toBeNull();
+    const grace = result.find((r) => r.key === "MEMBERSHIP_GRACE_PERIOD_DAYS");
+    expect(grace?.value).toBe(7);
   });
 });
 

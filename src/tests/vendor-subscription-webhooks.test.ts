@@ -15,6 +15,7 @@ vi.mock("../lib/prisma", () => ({
     vendorSubscription: { findUnique: vi.fn(), update: vi.fn() },
     vendor: { findUnique: vi.fn() },
     webhookEvent: { create: vi.fn(), update: vi.fn(), updateMany: vi.fn() },
+    adminPlatformSetting: { findUnique: vi.fn(), count: vi.fn().mockResolvedValue(5), upsert: vi.fn() },
     $transaction: vi.fn(),
   },
 }));

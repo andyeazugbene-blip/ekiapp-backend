@@ -21,6 +21,16 @@ export const OPERATIONAL_THRESHOLD_KEYS = [
   "PRICE_APPROVAL_TIMEOUT_HOURS",
   "FULFILMENT_STALE_THRESHOLD_HOURS",
   "PAYOUT_STUCK_THRESHOLD_HOURS",
+  // Eki Notification & Automation Engine handoff (12 Oct 2026), §13 owner
+  // sign-off items — admin-configurable rather than hardcoded, per the
+  // owner's explicit instruction ("let admin panel configured make it
+  // flexible") instead of this codebase guessing a number. See
+  // membership-grace.service.ts for how MEMBERSHIP_GRACE_PERIOD_DAYS is
+  // used, and vendor-referral docs/OWNER_PRODUCT_DECISIONS.md §B for why
+  // VENDOR_REFERRAL_CREDIT_MONTHS alone does not yet activate a referral
+  // programme (the qualification/tracking system itself isn't built).
+  "MEMBERSHIP_GRACE_PERIOD_DAYS",
+  "VENDOR_REFERRAL_CREDIT_MONTHS",
 ] as const;
 
 /**
@@ -40,6 +50,19 @@ export const OPERATIONAL_THRESHOLD_KEYS = [
  * production database without waiting for its first read.
  */
 const DEFAULT_THRESHOLD_VALUE = 1;
+/**
+ * Per-key default overrides for the two keys added 2026-10-12 (grace
+ * period / referral credit) — the generic DEFAULT_THRESHOLD_VALUE (1) is
+ * right for hour-scale operational thresholds but would be a harshly
+ * short 1-DAY grace period or a trivial 1-month-worth-less-than-intended
+ * referral credit if left as-is. These are still just safe, neutral
+ * starting points — real values are an admin/owner decision made through
+ * the settings page, never hardcoded business policy.
+ */
+const DEFAULT_VALUE_OVERRIDES: Partial<Record<OperationalThresholdKey, number>> = {
+  MEMBERSHIP_GRACE_PERIOD_DAYS: 7,
+  VENDOR_REFERRAL_CREDIT_MONTHS: 1,
+};
 
 async function ensureDefaults(): Promise<void> {
   const existing = await prisma.adminPlatformSetting.count({
@@ -50,7 +73,7 @@ async function ensureDefaults(): Promise<void> {
     await prisma.adminPlatformSetting.upsert({
       where: { key },
       update: {},
-      create: { key, value: DEFAULT_THRESHOLD_VALUE },
+      create: { key, value: DEFAULT_VALUE_OVERRIDES[key] ?? DEFAULT_THRESHOLD_VALUE },
     });
   }
 }

@@ -24,6 +24,7 @@ import { supportRetentionService } from "../messages/support-retention.service";
 import { vendorMilestoneNotificationsService } from "../vendors/vendor-milestone-notifications.service";
 import { orderAcceptanceNotificationsService } from "../orders/order-acceptance-notifications.service";
 import { capturePendingReviewService } from "../community-buy/capture-pending-review.service";
+import { membershipGraceService } from "../subscriptions/membership-grace.service";
 
 export const internalRouter = Router();
 
@@ -360,6 +361,12 @@ async function runCapturePendingReviewSweep() {
   return capturePendingReviewService.runSweep();
 }
 
+// Handoff M-06 "membership.capabilities.paused" — see membership-grace
+// .service.ts's doc comment.
+async function runMembershipCapabilitiesPausedSweep() {
+  return membershipGraceService.runCapabilitiesPausedSweep();
+}
+
 // ─── HTTP handlers ──────────────────────────────────────────────────────
 // GET for Vercel Cron (which only issues GET requests); POST kept for any
 // external/manual trigger using the original x-job-secret header.
@@ -443,6 +450,7 @@ const jobs: [string, string, () => Promise<Record<string, unknown>>][] = [
   ["order-unacknowledged-sweep", "unacknowledged paid-order reminder sweep", runOrderUnacknowledgedSweep],
   ["order-dispatch-due-sweep", "dispatch-due reminder sweep", runOrderDispatchDueSweep],
   ["community-buy-capture-pending-review-sweep", "Community Buy stuck-capture review alert", runCapturePendingReviewSweep],
+  ["membership-capabilities-paused-sweep", "Eki Membership grace-expiry pause notification", runMembershipCapabilitiesPausedSweep],
   ["push-receipt-check", "Expo push receipt check", runPushReceiptCheck],
   // Dry-run by default; purges only when SUPPORT_RETENTION_ENABLED (see support-retention.service.ts).
   ["support-retention-sweep", "support conversation retention sweep", () => supportRetentionService.sweep()],

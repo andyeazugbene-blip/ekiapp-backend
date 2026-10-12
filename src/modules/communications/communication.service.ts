@@ -104,6 +104,17 @@ const TEMPLATES: Record<string, CommunicationTemplate> = {
     enabled: true,
     recipientType: "VENDOR",
   },
+  // Handoff M-06 "membership.capabilities.paused": fires once per PAST_DUE
+  // episode once the admin-configured grace period has elapsed — see
+  // membership-grace.service.ts. Notification-only; no enforcement wired.
+  vendor_membership_capabilities_paused: {
+    key: "vendor_membership_capabilities_paused",
+    title: "Your store capabilities are paused",
+    body: "{{store_name}}, your store capabilities are paused. Your store data is safe.",
+    channels: ["email", "push", "in_app"],
+    enabled: true,
+    recipientType: "VENDOR",
+  },
   // Handoff M-03 "membership.first_payment.succeeded": fires once, on the
   // FIRST successful membership invoice (not a renewal) — see
   // stripe.service.ts handleVendorSubscriptionFirstPaymentSucceeded.

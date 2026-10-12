@@ -7,6 +7,7 @@ import { logger, serializeError } from "../../lib/logger";
 import { prisma } from "../../lib/prisma";
 import { stripe } from "../../lib/stripe";
 import { notificationsService } from "../notifications/notifications.service";
+import { adminPlatformSettingsService } from "../admin/admin-platform-settings.service";
 import { referralsService } from "../referrals/referrals.service";
 import { rewardsService } from "../rewards/rewards.service";
 import { giftCardsService } from "../gift-cards/gift-cards.service";
@@ -782,12 +783,25 @@ class StripeWebhookService {
 
       const vendor = await prisma.vendor.findUnique({ where: { id: subscription.vendorId }, select: { userId: true } });
       if (vendor) {
+        // Handoff M-04 "membership.payment.failed" + M-05 "membership.grace
+        // .started" are the same real-world moment in this codebase (grace
+        // begins immediately on the failed payment, there's no separate
+        // retry-then-grace step) -- merged into one notification rather
+        // than sending two near-identical pushes back to back. The grace
+        // length is read live from the admin-configurable
+        // MEMBERSHIP_GRACE_PERIOD_DAYS setting (docs/OWNER_PRODUCT_
+        // DECISIONS.md / "let admin panel configured make it flexible"),
+        // never hardcoded.
+        const graceDays = await adminPlatformSettingsService.getValue("MEMBERSHIP_GRACE_PERIOD_DAYS");
         const copy = this.vendorSubscriptionNotificationCopy("PAST_DUE");
+        const body = graceDays != null
+          ? `${copy.body} You have ${graceDays} day${graceDays === 1 ? "" : "s"} to update it before your store's selling capabilities are paused. Your store and data are never deleted.`
+          : copy.body;
         notificationsService.enqueue({
           userId: vendor.userId,
           type: "SUBSCRIPTION_UPDATE",
           title: copy.title,
-          body: copy.body,
+          body,
           data: { type: "subscription_update", event: "vendor_subscription_payment_failed", vendorSubscriptionId: subscription.id },
         }).catch((err) => logger.warn("Vendor subscription payment-failed notification failed", { eventId: event.id, error: String(err) }));
       }
