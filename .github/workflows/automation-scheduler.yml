@@ -92,3 +92,17 @@ jobs:
           cat /tmp/dispatch-due.json
           echo ""
           if [ "$code" -ge 300 ]; then echo "::error::order-dispatch-due-sweep returned HTTP $code"; exit 1; fi
+
+      # Handoff CB-18 "capture.pending_review" — a stuck Community Buy
+      # capture means real money in an ambiguous state; this sweep only
+      # notifies the buyer and alerts ops, never retries/resolves it.
+      - name: Community Buy stuck-capture review alert
+        continue-on-error: true
+        run: |
+          code=$(curl -sS -X POST "$BASE_URL/api/internal/jobs/community-buy-capture-pending-review-sweep" \
+            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
+            -o /tmp/capture-pending.json -w "%{http_code}")
+          echo "HTTP $code"
+          cat /tmp/capture-pending.json
+          echo ""
+          if [ "$code" -ge 300 ]; then echo "::error::community-buy-capture-pending-review-sweep returned HTTP $code"; exit 1; fi

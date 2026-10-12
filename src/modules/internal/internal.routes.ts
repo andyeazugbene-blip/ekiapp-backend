@@ -23,6 +23,7 @@ import { checkPushReceipts } from "../../lib/expo-push";
 import { supportRetentionService } from "../messages/support-retention.service";
 import { vendorMilestoneNotificationsService } from "../vendors/vendor-milestone-notifications.service";
 import { orderAcceptanceNotificationsService } from "../orders/order-acceptance-notifications.service";
+import { capturePendingReviewService } from "../community-buy/capture-pending-review.service";
 
 export const internalRouter = Router();
 
@@ -352,6 +353,13 @@ async function runOrderDispatchDueSweep() {
   return orderAcceptanceNotificationsService.runDispatchDueSweep();
 }
 
+// Handoff CB-18 "capture.pending_review" — see capture-pending-review
+// .service.ts's doc comment for why this is notification-only, never a
+// retry/resolution of the underlying Stripe capture.
+async function runCapturePendingReviewSweep() {
+  return capturePendingReviewService.runSweep();
+}
+
 // ─── HTTP handlers ──────────────────────────────────────────────────────
 // GET for Vercel Cron (which only issues GET requests); POST kept for any
 // external/manual trigger using the original x-job-secret header.
@@ -434,6 +442,7 @@ const jobs: [string, string, () => Promise<Record<string, unknown>>][] = [
   ["vendor-share-reminder-sweep", "vendor store-not-shared reminder sweep", runVendorShareReminderSweep],
   ["order-unacknowledged-sweep", "unacknowledged paid-order reminder sweep", runOrderUnacknowledgedSweep],
   ["order-dispatch-due-sweep", "dispatch-due reminder sweep", runOrderDispatchDueSweep],
+  ["community-buy-capture-pending-review-sweep", "Community Buy stuck-capture review alert", runCapturePendingReviewSweep],
   ["push-receipt-check", "Expo push receipt check", runPushReceiptCheck],
   // Dry-run by default; purges only when SUPPORT_RETENTION_ENABLED (see support-retention.service.ts).
   ["support-retention-sweep", "support conversation retention sweep", () => supportRetentionService.sweep()],
