@@ -63,6 +63,18 @@ const TEMPLATES: Record<string, CommunicationTemplate> = {
     enabled: true,
     recipientType: "VENDOR",
   },
+  // Handoff V-05 "store.ready" (Eki Notification & Automation Engine,
+  // 12 Oct 2026): fires once, the first moment a vendor has both an
+  // active product and a delivery zone — see
+  // vendor-milestone-notifications.service.ts for the idempotent trigger.
+  vendor_store_ready: {
+    key: "vendor_store_ready",
+    title: "Your store is ready",
+    body: "{{store_name}} is ready for buyers. Share your store link to get your first order.",
+    channels: ["email", "in_app"],
+    enabled: true,
+    recipientType: "VENDOR",
+  },
   buyer_order_confirmed: {
     key: "buyer_order_confirmed",
     title: "Order confirmed: {{order_number}}",
