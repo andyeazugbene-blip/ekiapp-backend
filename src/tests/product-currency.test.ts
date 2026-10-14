@@ -23,6 +23,51 @@ beforeEach(() => {
   productFindFirst.mockResolvedValue(null);
 });
 
+describe("Onboarding order: verification never gates a vendor's first listing", () => {
+  it("an unverified vendor's complete product is created ACTIVE, not force-drafted", async () => {
+    vendorFindUnique.mockResolvedValue({
+      id: "vendor-unverified",
+      verificationStatus: "PENDING",
+      currency: "GBP",
+      country: "United Kingdom",
+    });
+    subscriptionFindUnique.mockResolvedValue({ plan: "FREE" });
+    productCount.mockResolvedValue(0);
+    productCreate.mockImplementation(({ data }: any) => Promise.resolve({ id: "p-unverified", ...data }));
+
+    const result = await productsService.createProduct("user-unverified", {
+      title: "Suya Skewers",
+      priceAmount: 800,
+      images: ["https://example.com/suya.jpg"],
+    });
+
+    expect(result.isActive).not.toBe(false);
+    expect(productCreate).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.not.objectContaining({ isActive: false }) }),
+    );
+  });
+
+  it("still force-drafts a genuinely incomplete product (no image), regardless of verification status", async () => {
+    vendorFindUnique.mockResolvedValue({
+      id: "vendor-verified",
+      verificationStatus: "VERIFIED",
+      currency: "GBP",
+      country: "United Kingdom",
+    });
+    subscriptionFindUnique.mockResolvedValue({ plan: "FREE" });
+    productCount.mockResolvedValue(0);
+    productCreate.mockImplementation(({ data }: any) => Promise.resolve({ id: "p-incomplete", ...data }));
+
+    const result = await productsService.createProduct("user-verified", {
+      title: "No Image Product",
+      priceAmount: 800,
+      images: [],
+    });
+
+    expect(result.isActive).toBe(false);
+  });
+});
+
 describe("Product currency inherits from vendor", () => {
   it("UK vendor creates product with input.currency=EUR → product.currency must be GBP", async () => {
     vendorFindUnique.mockResolvedValue({

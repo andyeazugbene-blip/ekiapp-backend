@@ -78,10 +78,14 @@ export const productsService = {
   async createProduct(userId: string, input: CreateProductInput): Promise<Product> {
     const vendor = await getVendorWithVerification(userId);
 
-    // Unverified vendors can only create draft (inactive) products
-    // Completeness gate (handbook 14.6): nothing goes live without at least
-    // one image and a price above zero.
-    const forceDraft = !vendor.isVerified || !isProductComplete({ images: input.images ?? [], priceInCents: input.priceAmount });
+    // Onboarding order decision: vendors set up their store — add
+    // foodstuff, configure delivery — BEFORE verification becomes a
+    // requirement. Verification is enforced later, at the point it
+    // actually matters (checkout/payout — see seller-readiness.ts's
+    // SELLER_PAYMENT_READINESS_GATE), never here. A product only force-
+    // drafts for genuine incompleteness (handbook 14.6: no image, or no
+    // price above zero) — never for the vendor's verification state.
+    const forceDraft = !isProductComplete({ images: input.images ?? [], priceInCents: input.priceAmount });
 
     // Enforce subscription product limit
     await subscriptionsService.enforceProductLimit(vendor.id);
