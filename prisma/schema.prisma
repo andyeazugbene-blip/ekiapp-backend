@@ -403,6 +403,22 @@ model PayoutRequest {
   @@index([status, createdAt])
 }
 
+// Vendor-activation spec (12 Oct 2026): the full lifecycle a listing can be
+// in. `Product.isActive` (below) stays the single boolean every existing
+// buyer-discoverability/checkout/cart/payments/automation query already
+// trusts — it is always kept in sync as `isActive = (status === PUBLISHED)`.
+// `status` is the richer source of truth everything NEW (vendor messaging,
+// auto-publish-on-verify, admin visibility) reads instead of re-deriving
+// state from isActive + adminUnpublishedAt the way admin-products.service.ts
+// used to.
+enum ProductStatus {
+  DRAFT // Incomplete (no image, or no price > 0), or intentionally unpublished by the vendor with no completed listing behind it.
+  PENDING_ACTIVATION // Complete and ready, but the vendor isn't VERIFIED yet — auto-publishes the moment they are.
+  PUBLISHED // Visible and orderable by buyers.
+  PAUSED // Vendor-initiated temporary unavailability (was isActive:false via disableProduct, no issue to resolve).
+  REJECTED // Admin-initiated unpublish with a reason — cannot go live again until that issue is resolved (was isActive:false + adminUnpublishedAt).
+}
+
 model Product {
   id                        String                     @id @default(cuid())
   productCode               String?                    @unique
@@ -418,6 +434,8 @@ model Product {
   stock                     Int                        @default(0)
   weightGrams               Int?
   isActive                  Boolean                    @default(true)
+  status                    ProductStatus              @default(DRAFT)
+  publishedAt               DateTime?
   // Handbook 14.6: when an admin unpublishes a product the record is retained
   // (isActive=false) with who/when/why; cleared on restore.
   adminUnpublishedAt        DateTime?
@@ -439,6 +457,8 @@ model Product {
   @@index([vendorId, isActive])
   @@index([isActive, category])
   @@index([createdAt])
+  @@index([vendorId, status])
+  @@index([status])
 }
 
 // One cart per buyer. A buyer may add products in different native

@@ -4,6 +4,7 @@ import { prisma } from "../../lib/prisma";
 import { currencyFromCountry } from "../../shared/currency";
 import { AppError } from "../../shared/errors/app-error";
 import { eventsService, EVENT_NAMES } from "../events/events.service";
+import { vendorActivationService } from "../vendors/vendor-activation.service";
 import { vendorMilestoneNotificationsService } from "../vendors/vendor-milestone-notifications.service";
 import type {
   CreateDeliveryMethodInput,
@@ -78,6 +79,12 @@ export const deliveryZonesService = {
       // calling it from both is safe (idempotent real-state check).
       void vendorMilestoneNotificationsService.maybeSendStoreReady(vendor.id);
     }
+
+    // Vendor-activation spec: store readiness = verified + >=1 active
+    // delivery zone. If verification already succeeded before delivery was
+    // configured, THIS is the moment any PENDING_ACTIVATION listings
+    // become eligible — publishEligibleProducts() is a no-op otherwise.
+    void vendorActivationService.publishEligibleProducts(vendor.id);
 
     return zone;
   },

@@ -1,6 +1,6 @@
 import { eventsService, EVENT_NAMES } from "../events/events.service";
 import { vendorMilestoneNotificationsService } from "../vendors/vendor-milestone-notifications.service";
-import type { Product } from "@prisma/client";
+import type { Product, ProductStatus } from "@prisma/client";
 
 import { prisma } from "../../lib/prisma";
 import { CURSOR_ORDER_BY } from "../../shared/constants";
@@ -48,15 +48,15 @@ async function getVendorIdForUser(userId: string): Promise<string> {
 
 // Acceptance audit fix: a suspended vendor must not be able to write —
 // same 404-as-not-found convention as promos/bundles/flash-sales.service.ts.
-async function getVendorIdForWrite(userId: string): Promise<string> {
+async function getVendorForWrite(userId: string): Promise<{ id: string; isVerified: boolean }> {
   const vendor = await prisma.vendor.findUnique({
     where: { userId },
-    select: { id: true, isSuspended: true },
+    select: { id: true, isSuspended: true, verificationStatus: true },
   });
   if (!vendor || vendor.isSuspended) {
     throw new AppError("Vendor profile not found", 404);
   }
-  return vendor.id;
+  return { id: vendor.id, isVerified: vendor.verificationStatus === "VERIFIED" };
 }
 
 async function nextProductCode(): Promise<string> {
@@ -74,18 +74,37 @@ export function isProductComplete(p: { images: string[] | null | undefined; pric
   return (p.images?.length ?? 0) > 0 && p.priceInCents > 0;
 }
 
+/**
+ * Vendor-activation spec (12 Oct 2026): a complete listing from an
+ * unverified vendor is PENDING_ACTIVATION — buyer-invisible, but the
+ * vendor's intent to publish is preserved and it auto-publishes the
+ * moment they verify (see verification-activation.service.ts). An
+ * incomplete listing is always DRAFT regardless of verification state —
+ * there's nothing to activate yet. isActive is kept in sync as a plain
+ * derived value: `isActive = (status === "PUBLISHED")`, since every other
+ * query in the codebase (cart, checkout, buyer feed, automations) still
+ * reads isActive as the one enforced visibility gate.
+ */
+export function computeProductStatus(params: { complete: boolean; vendorVerified: boolean }): ProductStatus {
+  if (!params.complete) return "DRAFT";
+  return params.vendorVerified ? "PUBLISHED" : "PENDING_ACTIVATION";
+}
+
 export const productsService = {
   async createProduct(userId: string, input: CreateProductInput): Promise<Product> {
     const vendor = await getVendorWithVerification(userId);
 
     // Onboarding order decision: vendors set up their store — add
     // foodstuff, configure delivery — BEFORE verification becomes a
-    // requirement. Verification is enforced later, at the point it
-    // actually matters (checkout/payout — see seller-readiness.ts's
-    // SELLER_PAYMENT_READINESS_GATE), never here. A product only force-
-    // drafts for genuine incompleteness (handbook 14.6: no image, or no
-    // price above zero) — never for the vendor's verification state.
-    const forceDraft = !isProductComplete({ images: input.images ?? [], priceInCents: input.priceAmount });
+    // requirement; creating a complete listing is never blocked by
+    // verification state. What the listing's status IS once created
+    // depends on both completeness (handbook 14.6: image + price > 0)
+    // and verification — see computeProductStatus(). Verification is
+    // enforced as a VISIBILITY gate here, not a creation gate, and
+    // separately at checkout/payout (seller-readiness.ts's
+    // SELLER_PAYMENT_READINESS_GATE).
+    const complete = isProductComplete({ images: input.images ?? [], priceInCents: input.priceAmount });
+    const status = computeProductStatus({ complete, vendorVerified: vendor.isVerified });
 
     // Enforce subscription product limit
     await subscriptionsService.enforceProductLimit(vendor.id);
@@ -107,7 +126,9 @@ export const productsService = {
             category: input.category,
             stock: input.stock ?? 0,
             weightGrams: input.weightGrams,
-            ...(forceDraft ? { isActive: false } : {}),
+            status,
+            isActive: status === "PUBLISHED",
+            publishedAt: status === "PUBLISHED" ? new Date() : null,
           },
         });
         if (created.isActive) {
@@ -134,12 +155,12 @@ export const productsService = {
     productId: string,
     input: UpdateProductInput,
   ): Promise<Product> {
-    const vendorId = await getVendorIdForWrite(userId);
+    const vendor = await getVendorForWrite(userId);
     const product = await prisma.product.findUnique({ where: { id: productId } });
     if (!product) {
       throw new AppError("Product not found", 404);
     }
-    if (product.vendorId !== vendorId) {
+    if (product.vendorId !== vendor.id) {
       throw new AppError("Forbidden", 403);
     }
 
@@ -155,6 +176,23 @@ export const productsService = {
       throw new AppError("Price must be greater than zero", 400, null, "PRODUCT_INCOMPLETE");
     }
 
+    // Re-evaluate status only from DRAFT/PENDING_ACTIVATION — those are the
+    // two "not yet live" states an edit can legitimately move forward (e.g.
+    // adding the missing image completes it). PUBLISHED is guarded above
+    // instead of silently downgraded, and PAUSED/REJECTED are deliberate
+    // vendor/admin decisions an ordinary content edit must never override.
+    const statusUpdate =
+      product.status === "DRAFT" || product.status === "PENDING_ACTIVATION"
+        ? (() => {
+            const complete = isProductComplete({
+              images: rest.images !== undefined ? rest.images : product.images,
+              priceInCents: priceAmount ?? product.priceInCents,
+            });
+            const status = computeProductStatus({ complete, vendorVerified: vendor.isVerified });
+            return { status, isActive: status === "PUBLISHED", ...(status === "PUBLISHED" ? { publishedAt: new Date() } : {}) };
+          })()
+        : {};
+
     return prisma.product.update({
       where: { id: productId },
       data: {
@@ -168,6 +206,7 @@ export const productsService = {
           : costCurrency !== undefined
             ? { costCurrency }
             : {}),
+        ...statusUpdate,
       },
     });
   },
@@ -201,7 +240,9 @@ export const productsService = {
 
     return prisma.product.update({
       where: { id: productId },
-      data: { isActive: false },
+      // Vendor-initiated pause: temporarily unavailable, no issue to
+      // resolve (distinct from admin REJECTED — see admin-products.service.ts).
+      data: { isActive: false, status: "PAUSED" },
     });
   },
 

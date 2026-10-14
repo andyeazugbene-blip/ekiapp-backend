@@ -7,7 +7,7 @@ import { prisma } from "../../lib/prisma";
 import { CURSOR_ORDER_BY } from "../../shared/constants";
 import { AppError } from "../../shared/errors/app-error";
 import { notificationsService } from "../notifications/notifications.service";
-import { isProductComplete } from "../products/products.service";
+import { computeProductStatus, isProductComplete } from "../products/products.service";
 import {
   SELLER_READINESS_SELECT,
   SELLER_REASON_MESSAGES,
@@ -258,7 +258,7 @@ export const adminProductsService = {
     };
   },
 
-  /** Unpublish: record retained, isActive=false, who/when/why stored. */
+  /** Unpublish: record retained, isActive=false, who/when/why stored. REJECTED — cannot go live again until the reason is resolved. */
   async unpublish(productId: string, reason: string, actorId: string) {
     const product = await prisma.product.findUnique({ where: { id: productId }, include: { vendor: { select: { userId: true, storeName: true } } } });
     if (!product) throw new AppError("Product not found", 404);
@@ -266,19 +266,22 @@ export const adminProductsService = {
     const now = new Date();
     const res = await prisma.product.updateMany({
       where: { id: productId, isActive: true },
-      data: { isActive: false, adminUnpublishedAt: now, adminUnpublishedReason: reason, adminUnpublishedById: actorId },
+      data: { isActive: false, status: "REJECTED", adminUnpublishedAt: now, adminUnpublishedReason: reason, adminUnpublishedById: actorId },
     });
     if (res.count !== 1) throw new AppError("Product changed while you were editing. Reload and retry.", 409);
     return {
       product,
-      before: { isActive: true, adminUnpublishedAt: null, adminUnpublishedReason: null },
-      after: { isActive: false, adminUnpublishedAt: now.toISOString(), adminUnpublishedReason: reason },
+      before: { isActive: true, adminUnpublishedAt: null, adminUnpublishedReason: null, status: product.status },
+      after: { isActive: false, adminUnpublishedAt: now.toISOString(), adminUnpublishedReason: reason, status: "REJECTED" },
     };
   },
 
-  /** Restore: completeness gate (image + price > 0), clears the unpublish markers. */
+  /** Restore: completeness gate (image + price > 0), clears the unpublish markers. Goes to PUBLISHED if the vendor is verified, otherwise PENDING_ACTIVATION (auto-publishes once they are — see verification-activation.service.ts). */
   async restore(productId: string, reason: string) {
-    const product = await prisma.product.findUnique({ where: { id: productId }, include: { vendor: { select: { userId: true, storeName: true } } } });
+    const product = await prisma.product.findUnique({
+      where: { id: productId },
+      include: { vendor: { select: { userId: true, storeName: true, verificationStatus: true } } },
+    });
     if (!product) throw new AppError("Product not found", 404);
     if (product.isActive) throw new AppError("Product is already live", 409, null, "ALREADY_ACTIVE");
     if (!isProductComplete(product)) {
@@ -289,9 +292,18 @@ export const adminProductsService = {
         "PRODUCT_INCOMPLETE",
       );
     }
+    const vendorVerified = product.vendor?.verificationStatus === "VERIFIED";
+    const status = computeProductStatus({ complete: true, vendorVerified });
     const res = await prisma.product.updateMany({
       where: { id: productId, isActive: false },
-      data: { isActive: true, adminUnpublishedAt: null, adminUnpublishedReason: null, adminUnpublishedById: null },
+      data: {
+        isActive: status === "PUBLISHED",
+        status,
+        publishedAt: status === "PUBLISHED" ? new Date() : null,
+        adminUnpublishedAt: null,
+        adminUnpublishedReason: null,
+        adminUnpublishedById: null,
+      },
     });
     if (res.count !== 1) throw new AppError("Product changed while you were editing. Reload and retry.", 409);
     return {
@@ -300,8 +312,9 @@ export const adminProductsService = {
         isActive: false,
         adminUnpublishedAt: product.adminUnpublishedAt ? product.adminUnpublishedAt.toISOString() : null,
         adminUnpublishedReason: product.adminUnpublishedReason,
+        status: product.status,
       },
-      after: { isActive: true, adminUnpublishedAt: null, adminUnpublishedReason: null, restoreReason: reason },
+      after: { isActive: status === "PUBLISHED", adminUnpublishedAt: null, adminUnpublishedReason: null, restoreReason: reason, status },
     };
   },
 

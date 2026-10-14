@@ -181,7 +181,7 @@ function fakeRes() {
 }
 const baseProduct = {
   id: "prod-1", title: "Egusi", vendorId: "v1", isActive: true, images: ["a.jpg"], priceInCents: 500,
-  adminUnpublishedAt: null, adminUnpublishedReason: null, vendor: { userId: "owner-1", storeName: "Shop" },
+  adminUnpublishedAt: null, adminUnpublishedReason: null, vendor: { userId: "owner-1", storeName: "Shop", verificationStatus: "VERIFIED" },
 };
 
 describe("admin unpublish / restore", () => {

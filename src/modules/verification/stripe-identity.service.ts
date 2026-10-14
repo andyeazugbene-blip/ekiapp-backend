@@ -6,7 +6,9 @@ import { logger } from "../../lib/logger";
 import { prisma } from "../../lib/prisma";
 import { stripe } from "../../lib/stripe";
 import { AppError } from "../../shared/errors/app-error";
+import { recordAudit } from "../../shared/utils/audit";
 import { communicationService } from "../communications/communication.service";
+import { vendorActivationService } from "../vendors/vendor-activation.service";
 
 export const stripeIdentityService = {
   async createVerificationSession(userId: string): Promise<{ url: string; sessionId: string }> {
@@ -97,6 +99,13 @@ export const stripeIdentityService = {
         name: EVENT_NAMES.verification_completed, actorType: "stripe", entityType: "Vendor", entityId: vendorId,
         source: "stripe_identity_webhook", payload: { sessionId: session.id },
       });
+      await recordAudit({
+        actorId: "system:stripe-identity-webhook",
+        action: "VENDOR_VERIFIED",
+        entityType: "Vendor",
+        entityId: vendorId,
+        metadata: { sessionId: session.id },
+      }).catch((err) => logger.warn("Verification audit write failed", { vendorId, error: String(err) }));
 
       communicationService.send({
         eventKey: "vendor_verification_approved",
@@ -104,6 +113,10 @@ export const stripeIdentityService = {
         recipientEmail: updatedVendor.user.email,
         variables: { store_name: updatedVendor.storeName },
       }).catch((err) => logger.warn("Stripe Identity verified communication failed", { vendorId, error: String(err) }));
+
+      // Vendor-activation spec: automatic verification must automatically
+      // publish eligible pending listings — never left as a manual step.
+      void vendorActivationService.publishEligibleProducts(vendorId);
 
       return;
     }
@@ -133,6 +146,14 @@ export const stripeIdentityService = {
         sessionId: session.id,
         reason,
       });
+      await recordAudit({
+        actorId: "system:stripe-identity-webhook",
+        action: "VENDOR_VERIFICATION_FAILED",
+        entityType: "Vendor",
+        entityId: vendorId,
+        reason,
+        metadata: { sessionId: session.id },
+      }).catch((err) => logger.warn("Verification-failure audit write failed", { vendorId, error: String(err) }));
 
       communicationService.send({
         eventKey: "vendor_verification_rejected",

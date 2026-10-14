@@ -23,8 +23,8 @@ beforeEach(() => {
   productFindFirst.mockResolvedValue(null);
 });
 
-describe("Onboarding order: verification never gates a vendor's first listing", () => {
-  it("an unverified vendor's complete product is created ACTIVE, not force-drafted", async () => {
+describe("Onboarding order: creating a listing is never blocked by verification status", () => {
+  it("an unverified vendor's complete product is created PENDING_ACTIVATION — not blocked, not force-drafted, not yet buyer-visible", async () => {
     vendorFindUnique.mockResolvedValue({
       id: "vendor-unverified",
       verificationStatus: "PENDING",
@@ -41,10 +41,29 @@ describe("Onboarding order: verification never gates a vendor's first listing", 
       images: ["https://example.com/suya.jpg"],
     });
 
-    expect(result.isActive).not.toBe(false);
-    expect(productCreate).toHaveBeenCalledWith(
-      expect.objectContaining({ data: expect.not.objectContaining({ isActive: false }) }),
-    );
+    expect(result.status).toBe("PENDING_ACTIVATION");
+    expect(result.isActive).toBe(false);
+  });
+
+  it("a verified vendor's complete product is created PUBLISHED and immediately buyer-visible", async () => {
+    vendorFindUnique.mockResolvedValue({
+      id: "vendor-verified-live",
+      verificationStatus: "VERIFIED",
+      currency: "GBP",
+      country: "United Kingdom",
+    });
+    subscriptionFindUnique.mockResolvedValue({ plan: "FREE" });
+    productCount.mockResolvedValue(0);
+    productCreate.mockImplementation(({ data }: any) => Promise.resolve({ id: "p-live", ...data }));
+
+    const result = await productsService.createProduct("user-verified-live", {
+      title: "Jollof Rice Deluxe",
+      priceAmount: 1200,
+      images: ["https://example.com/jollof.jpg"],
+    });
+
+    expect(result.status).toBe("PUBLISHED");
+    expect(result.isActive).toBe(true);
   });
 
   it("still force-drafts a genuinely incomplete product (no image), regardless of verification status", async () => {
@@ -64,6 +83,7 @@ describe("Onboarding order: verification never gates a vendor's first listing", 
       images: [],
     });
 
+    expect(result.status).toBe("DRAFT");
     expect(result.isActive).toBe(false);
   });
 });

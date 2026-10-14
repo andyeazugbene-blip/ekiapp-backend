@@ -47,6 +47,19 @@ const TEMPLATES: Record<string, CommunicationTemplate> = {
     enabled: true,
     recipientType: "VENDOR",
   },
+  // Vendor-activation spec: fires ONLY after vendor-activation.service.ts's
+  // publishEligibleProducts() has actually committed the publish — never
+  // speculatively, never just because verification succeeded (verification
+  // alone fires vendor_verification_approved above; this is the separate,
+  // later "your listings are genuinely live" confirmation).
+  vendor_store_and_products_live: {
+    key: "vendor_store_and_products_live",
+    title: "Your store is live!",
+    body: "{{store_name}}, your store and {{count}} foodstuff listing(s) are now live and visible to buyers.",
+    channels: ["email", "push", "in_app"],
+    enabled: true,
+    recipientType: "VENDOR",
+  },
   vendor_verification_rejected: {
     key: "vendor_verification_rejected",
     title: "Verification update",
