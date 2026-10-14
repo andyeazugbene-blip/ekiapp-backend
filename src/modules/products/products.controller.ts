@@ -48,6 +48,12 @@ export async function disableProduct(request: Request, response: Response): Prom
   response.status(200).json({ product });
 }
 
+export async function resumeProduct(request: Request, response: Response): Promise<void> {
+  const userId = requireUserId(request);
+  const product = await productsService.resumeProduct(userId, requireIdParam(request));
+  response.status(200).json({ product });
+}
+
 export async function listProducts(request: Request, response: Response): Promise<void> {
   const query = validateListProductsQuery(request.query as Record<string, unknown>);
   const result = await productsService.listActiveProducts(query);

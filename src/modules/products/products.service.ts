@@ -246,6 +246,28 @@ export const productsService = {
     });
   },
 
+  /** Symmetric to disableProduct — a vendor un-pausing their own listing. */
+  async resumeProduct(userId: string, productId: string): Promise<Product> {
+    const vendor = await getVendorForWrite(userId);
+    const product = await prisma.product.findUnique({ where: { id: productId } });
+    if (!product) {
+      throw new AppError("Product not found", 404);
+    }
+    if (product.vendorId !== vendor.id) {
+      throw new AppError("Forbidden", 403);
+    }
+    if (product.status !== "PAUSED") {
+      throw new AppError("Only a paused listing can be resumed this way.", 409, null, "NOT_PAUSED");
+    }
+
+    const complete = isProductComplete({ images: product.images, priceInCents: product.priceInCents });
+    const status = computeProductStatus({ complete, vendorVerified: vendor.isVerified });
+    return prisma.product.update({
+      where: { id: productId },
+      data: { status, isActive: status === "PUBLISHED", ...(status === "PUBLISHED" ? { publishedAt: new Date() } : {}) },
+    });
+  },
+
   async listActiveProducts(
     query: ListProductsQuery,
   ): Promise<{ items: Array<Product & { vendor: { storeName: string; city: string | null; userId: string } }>; nextCursor: string | null }> {

@@ -1,0 +1,62 @@
+/**
+ * Vendor-activation spec: PAUSED is vendor-resumable (symmetric to
+ * disableProduct). resumeProduct() recomputes the correct status from
+ * current completeness + current verification — never blindly re-publishes.
+ */
+import { describe, it, expect, vi, beforeEach } from "vitest";
+
+const m = vi.hoisted(() => ({
+  vendorFindUnique: vi.fn(),
+  productFindUnique: vi.fn(),
+  productUpdate: vi.fn(),
+}));
+
+vi.mock("../lib/prisma", () => ({
+  prisma: {
+    vendor: { findUnique: m.vendorFindUnique },
+    product: { findUnique: m.productFindUnique, update: m.productUpdate },
+  },
+}));
+
+import { productsService } from "../modules/products/products.service";
+
+const PAUSED_PRODUCT = {
+  id: "p1",
+  vendorId: "v1",
+  status: "PAUSED",
+  images: ["a.jpg"],
+  priceInCents: 500,
+};
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  m.vendorFindUnique.mockResolvedValue({ id: "v1", isSuspended: false, verificationStatus: "VERIFIED" });
+  m.productFindUnique.mockResolvedValue(PAUSED_PRODUCT);
+  m.productUpdate.mockImplementation(({ data }: any) => Promise.resolve({ ...PAUSED_PRODUCT, ...data }));
+});
+
+describe("productsService.resumeProduct", () => {
+  it("resumes a paused, complete listing from a verified vendor to PUBLISHED", async () => {
+    const result = await productsService.resumeProduct("user-1", "p1");
+    expect(result.status).toBe("PUBLISHED");
+    expect(result.isActive).toBe(true);
+  });
+
+  it("resumes to PENDING_ACTIVATION, not PUBLISHED, if the vendor is no longer verified", async () => {
+    m.vendorFindUnique.mockResolvedValue({ id: "v1", isSuspended: false, verificationStatus: "PENDING" });
+    const result = await productsService.resumeProduct("user-1", "p1");
+    expect(result.status).toBe("PENDING_ACTIVATION");
+    expect(result.isActive).toBe(false);
+  });
+
+  it("refuses to resume a product that isn't PAUSED", async () => {
+    m.productFindUnique.mockResolvedValue({ ...PAUSED_PRODUCT, status: "DRAFT" });
+    await expect(productsService.resumeProduct("user-1", "p1")).rejects.toMatchObject({ code: "NOT_PAUSED" });
+    expect(m.productUpdate).not.toHaveBeenCalled();
+  });
+
+  it("refuses a vendor resuming another vendor's product", async () => {
+    m.productFindUnique.mockResolvedValue({ ...PAUSED_PRODUCT, vendorId: "someone-else" });
+    await expect(productsService.resumeProduct("user-1", "p1")).rejects.toMatchObject({ statusCode: 403 });
+  });
+});

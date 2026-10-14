@@ -10,6 +10,7 @@ import {
   getProduct,
   listMyProducts,
   listProducts,
+  resumeProduct,
   updateProduct,
 } from "./products.controller";
 
@@ -23,3 +24,4 @@ productsRouter.get("/:id", asyncHandler(getProduct));
 productsRouter.post("/", authenticate, requireVendorProfile(), asyncHandler(createProduct));
 productsRouter.patch("/:id", authenticate, requireVendorProfile(), asyncHandler(updateProduct));
 productsRouter.delete("/:id", authenticate, requireVendorProfile(), asyncHandler(disableProduct));
+productsRouter.post("/:id/resume", authenticate, requireVendorProfile(), asyncHandler(resumeProduct));
