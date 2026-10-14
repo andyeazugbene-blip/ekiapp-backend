@@ -146,6 +146,14 @@ export const adminProductsService = {
         stock: p.stock,
         isActive: p.isActive,
         status: productStatus(p, p.vendor),
+        // Vendor-activation spec: the real 5-state lifecycle (DRAFT/
+        // PENDING_ACTIVATION/PUBLISHED/PAUSED/REJECTED), additive —
+        // `status` above stays the existing 3-state admin filter/tab
+        // value untouched, so nothing in admin-web's existing filtering
+        // breaks. This is what distinguishes "never touched verification"
+        // from "awaiting activation", and a vendor's own pause from an
+        // admin rejection, none of which the 3-state view can express.
+        realStatus: p.status,
         createdAt: p.createdAt,
         updatedAt: p.updatedAt,
         sellerReadiness: readiness,
@@ -223,6 +231,9 @@ export const adminProductsService = {
       costAmount: undefined,
       costCurrency: undefined,
       status: productStatus(product, vendor),
+      // See the matching comment in listProducts above — real 5-state
+      // lifecycle, additive next to the existing 3-state `status`.
+      realStatus: product.status,
       productType: (subscriptionOfferProducts.length > 0 ? "REGULAR_DELIVERY" : "STANDARD") as ProductType,
       vendorName: vendor?.storeName ?? null,
       vendor: vendor
