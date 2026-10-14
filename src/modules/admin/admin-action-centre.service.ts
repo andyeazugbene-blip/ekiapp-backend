@@ -272,7 +272,31 @@ async function disputes(): Promise<ActionSection> {
 }
 
 async function verificationQueue(): Promise<ActionSection> {
-  const where: Prisma.VendorWhereInput = { verificationStatus: "PENDING", ...notTest() };
+  // The review queue (verification.service.ts adminListReviewQueue) only
+  // shows a PENDING vendor once they've actually attempted verification
+  // (uploaded a legacy document OR started a Stripe Identity session) —
+  // there's nothing to review for a vendor who registered and never
+  // touched verification. This badge must count the SAME set, or it
+  // shows a number the admin can never find in the list ("8" with
+  // "No vendors match this view").
+  const pendingWhere: Prisma.VendorWhereInput = { verificationStatus: "PENDING", ...notTest() };
+  const pendingVendors = await prisma.vendor.findMany({
+    where: pendingWhere,
+    select: { id: true, stripeVerificationSessionId: true },
+  });
+  const pendingIds = pendingVendors.map((v) => v.id);
+  const vendorIdsWithDocs = pendingIds.length > 0
+    ? await prisma.verificationDocument.findMany({
+        where: { vendorId: { in: pendingIds } },
+        select: { vendorId: true },
+        distinct: ["vendorId"],
+      })
+    : [];
+  const attemptedIds = new Set<string>([
+    ...pendingVendors.filter((v) => v.stripeVerificationSessionId).map((v) => v.id),
+    ...vendorIdsWithDocs.map((d) => d.vendorId),
+  ]);
+  const where: Prisma.VendorWhereInput = { id: { in: Array.from(attemptedIds) } };
   const [groups, oldest] = await Promise.all([
     prisma.vendor.groupBy({ by: ["stripeIdentityStatus"], where, _count: { _all: true } }),
     prisma.vendor.aggregate({ where, _min: { createdAt: true } }),

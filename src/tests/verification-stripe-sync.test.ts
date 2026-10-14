@@ -92,6 +92,11 @@ describe("adminListReviewQueue — Stripe Identity attempts are visible, not jus
 
     expect((result.items[0] as any).verificationMethod).toBe("BOTH");
   });
+
+  it("excludes test-flagged vendors by default, same as the Action Centre badge that counts this queue", async () => {
+    await verificationService.adminListReviewQueue({});
+    expect(m.vendor.findMany.mock.calls[0][0].where).toMatchObject({ isTest: false });
+  });
 });
 
 describe("adminGetReviewDetails — Stripe Identity rejection reason is visible", () => {

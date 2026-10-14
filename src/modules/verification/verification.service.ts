@@ -6,6 +6,7 @@ import { prisma } from "../../lib/prisma";
 import { deleteStoredObject, generatePresignedRead } from "../../lib/storage";
 import { CURSOR_ORDER_BY } from "../../shared/constants";
 import { AppError } from "../../shared/errors/app-error";
+import { notTest } from "../../shared/utils/test-records";
 import { communicationService } from "../communications/communication.service";
 import type { ReviewVerificationInput, SubmitVerificationInput, VerificationMethod } from "./verification.types";
 
@@ -319,6 +320,7 @@ export const verificationService = {
 
     const where: Prisma.VendorWhereInput = {
       ...(status ? { verificationStatus: status } : {}),
+      ...notTest(),
       ...(search
         ? {
             OR: [

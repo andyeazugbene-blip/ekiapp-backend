@@ -7,7 +7,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 const { models, perms } = vi.hoisted(() => {
   const names = [
-    "payment", "payoutRequest", "order", "dispute", "vendor", "communityCampaign", "supplierFulfilmentAlert",
+    "payment", "payoutRequest", "order", "dispute", "vendor", "verificationDocument", "communityCampaign", "supplierFulfilmentAlert",
     "campaignRefund", "renewal", "automationRun", "scheduledCommunication", "message", "conversation", "user", "webhookEvent",
   ];
   const models: Record<string, Record<string, any>> = {};
@@ -85,6 +85,26 @@ describe("getActionCentre — honest aggregates", () => {
     expect(keys.indexOf("disputes")).toBeLessThan(keys.indexOf("verification"));
     expect(res.badges.verification).toBe(3);
     expect(res.badges.disputes).toBe(2);
+  });
+
+  it("verification badge only counts PENDING vendors who actually attempted verification (matches the review queue's own filter)", async () => {
+    // v1: Stripe Identity session started — counts. v2: uploaded a legacy
+    // document — counts. v3: registered, never touched verification — must
+    // NOT count, or the badge shows a number the admin can never find in
+    // the review queue (the bug this test guards against).
+    models.vendor.findMany.mockResolvedValue([
+      { id: "v1", stripeVerificationSessionId: "seti_1" },
+      { id: "v2", stripeVerificationSessionId: null },
+      { id: "v3", stripeVerificationSessionId: null },
+    ]);
+    models.verificationDocument.findMany.mockResolvedValue([{ vendorId: "v2" }]);
+    models.vendor.groupBy.mockResolvedValue([{ stripeIdentityStatus: null, _count: { _all: 2 } }]);
+
+    const res = await getActionCentre("admin1");
+
+    expect(res.badges.verification).toBe(2);
+    const groupByWhere = models.vendor.groupBy.mock.calls.at(-1)![0].where;
+    expect(groupByWhere.id.in.sort()).toEqual(["v1", "v2"]);
   });
 });
 
