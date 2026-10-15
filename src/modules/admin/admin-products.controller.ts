@@ -83,3 +83,31 @@ export async function adminRestoreProduct(request: Request, response: Response):
   }
   response.status(200).json({ product: await adminProductsService.getProduct(productId) });
 }
+
+export async function adminDeleteProduct(request: Request, response: Response): Promise<void> {
+  const reason = reasonFrom(request);
+  const actorId = requireUserId(request);
+  const productId = requireIdParam(request);
+  const { product, before, after } = await adminProductsService.deleteProduct(productId, reason);
+  await recordAudit({
+    request,
+    actorId,
+    action: "product.delete",
+    entityType: "Product",
+    entityId: productId,
+    reason,
+    beforeState: before,
+    afterState: after,
+    metadata: { vendorId: product.vendorId, title: product.title },
+  });
+  if (product.vendor?.userId) {
+    await adminProductsService.notifyVendor({
+      vendorUserId: product.vendor.userId,
+      productId,
+      productTitle: product.title,
+      action: "deleted",
+      reason,
+    });
+  }
+  response.status(200).json({ success: true, id: productId });
+}

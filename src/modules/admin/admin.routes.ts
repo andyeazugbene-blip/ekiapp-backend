@@ -295,7 +295,7 @@ import {
 } from "../uploads/uploads.controller";
 import { adminRewardsRouter } from "../rewards/rewards.routes";
 import { adminGiftCardsRouter } from "../gift-cards/gift-cards.routes";
-import { adminRestoreProduct, adminUnpublishProduct } from "./admin-products.controller";
+import { adminDeleteProduct, adminRestoreProduct, adminUnpublishProduct } from "./admin-products.controller";
 import { adminCampaignsRouter } from "../campaigns/campaigns.routes";
 import { adminResetUsers } from "./admin-reset.controller";
 
@@ -626,6 +626,7 @@ adminRouter.patch("/products/:id/approve", asyncHandler(requireAdminPermission("
 adminRouter.patch("/products/:id/disable", asyncHandler(requireAdminPermission("products.mutate")), asyncHandler(require2fa), asyncHandler(disableProduct));
 adminRouter.post("/products/:id/unpublish", asyncHandler(requireAdminPermission("products.mutate")), asyncHandler(require2fa), asyncHandler(adminUnpublishProduct));
 adminRouter.post("/products/:id/restore", asyncHandler(requireAdminPermission("products.mutate")), asyncHandler(adminRestoreProduct));
+adminRouter.delete("/products/:id", asyncHandler(requireAdminPermission("products.mutate")), asyncHandler(require2fa), asyncHandler(adminDeleteProduct));
 
 // Order management
 // 2FA-gated (acceptance audit fix): both mutate payment/order state and

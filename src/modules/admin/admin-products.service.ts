@@ -26,6 +26,7 @@ import {
  */
 export type ProductType = "STANDARD" | "COMMUNITY_BUY" | "REGULAR_DELIVERY";
 export type ProductStatus = "ACTIVE" | "DISABLED" | "DRAFT";
+export type RealProductStatus = "DRAFT" | "PENDING_ACTIVATION" | "PUBLISHED" | "PAUSED" | "REJECTED";
 
 const MAX_LIMIT = 100;
 const VENDOR_LIST_SELECT = {
@@ -36,9 +37,16 @@ const VENDOR_LIST_SELECT = {
   ...SELLER_READINESS_SELECT,
 } as const;
 
-function productStatus(p: { isActive: boolean; adminUnpublishedAt: Date | null }, vendor: { isSuspended: boolean } | null): ProductStatus {
-  if (p.isActive) return "ACTIVE";
-  if (p.adminUnpublishedAt || vendor?.isSuspended) return "DISABLED";
+// Coarse 3-state view, now DERIVED FROM the real 5-state status column
+// instead of re-computed from isActive+adminUnpublishedAt — the two used
+// to disagree (a PENDING_ACTIVATION row has isActive=false with no
+// adminUnpublishedAt, which the old formula also called "DRAFT", so admin
+// saw a product badged "Draft" AND "Awaiting activation" at once). Kept
+// only for API back-compat; admin-web now renders realStatus as the one
+// badge of truth.
+function productStatus(p: { status: RealProductStatus }): ProductStatus {
+  if (p.status === "PUBLISHED") return "ACTIVE";
+  if (p.status === "PAUSED" || p.status === "REJECTED") return "DISABLED";
   return "DRAFT";
 }
 
@@ -80,15 +88,21 @@ export const adminProductsService = {
       });
     }
 
-    // Legacy ?isActive=true|false still accepted.
+    // Real 5-state filter (preferred) — PUBLISHED/PENDING_ACTIVATION/PAUSED/
+    // REJECTED/DRAFT map straight to the status column. Legacy ACTIVE/
+    // DISABLED/DRAFT/INACTIVE/?isActive=true|false still accepted for
+    // back-compat, translated to the same real statuses so results stay
+    // honest (the old isActive-only formula is what caused the
+    // DRAFT/"Awaiting activation" double-badge bug).
+    const REAL_STATUSES = new Set<RealProductStatus>(["DRAFT", "PENDING_ACTIVATION", "PUBLISHED", "PAUSED", "REJECTED"]);
     let status = str(query.status)?.toUpperCase();
     if (!status && query.isActive === "true") status = "ACTIVE";
     if (!status && query.isActive === "false") status = "INACTIVE";
-    if (status === "ACTIVE") and.push({ isActive: true });
-    else if (status === "DISABLED") and.push({ isActive: false, OR: [{ adminUnpublishedAt: { not: null } }, { vendor: { isSuspended: true } }] });
-    else if (status === "DRAFT") and.push({ isActive: false, adminUnpublishedAt: null, vendor: { isSuspended: false } });
-    else if (status === "INACTIVE") and.push({ isActive: false });
-    else if (status && status !== "ALL") throw new AppError("Invalid status (active, disabled, draft)", 400);
+    if (status && REAL_STATUSES.has(status as RealProductStatus)) and.push({ status: status as RealProductStatus });
+    else if (status === "ACTIVE") and.push({ status: "PUBLISHED" });
+    else if (status === "DISABLED") and.push({ status: { in: ["PAUSED", "REJECTED"] } });
+    else if (status === "INACTIVE") and.push({ status: { not: "PUBLISHED" } });
+    else if (status && status !== "ALL") throw new AppError("Invalid status", 400);
 
     const category = str(query.category);
     if (category) and.push({ category: { equals: category, mode: "insensitive" } });
@@ -115,11 +129,14 @@ export const adminProductsService = {
     let nextCursor: string | null = null;
     if (rows.length > limit) nextCursor = rows.pop()?.id ?? null;
 
-    const [active, inactiveAdmin, inactiveOther] = await Promise.all([
-      prisma.product.count({ where: { isActive: true } }),
-      prisma.product.count({ where: { isActive: false, OR: [{ adminUnpublishedAt: { not: null } }, { vendor: { isSuspended: true } }] } }),
-      prisma.product.count({ where: { isActive: false, adminUnpublishedAt: null, vendor: { isSuspended: false } } }),
-    ]);
+    const statusCounts = await prisma.product.groupBy({ by: ["status"], _count: { _all: true } });
+    const countFor = (s: RealProductStatus) => statusCounts.find((c) => c.status === s)?._count._all ?? 0;
+    const published = countFor("PUBLISHED");
+    const pendingActivation = countFor("PENDING_ACTIVATION");
+    const paused = countFor("PAUSED");
+    const rejected = countFor("REJECTED");
+    const draft = countFor("DRAFT");
+    const total = published + pendingActivation + paused + rejected + draft;
 
     const categories = await prisma.product.findMany({
       where: { category: { not: null } },
@@ -145,14 +162,7 @@ export const adminProductsService = {
         currency: p.currency,
         stock: p.stock,
         isActive: p.isActive,
-        status: productStatus(p, p.vendor),
-        // Vendor-activation spec: the real 5-state lifecycle (DRAFT/
-        // PENDING_ACTIVATION/PUBLISHED/PAUSED/REJECTED), additive —
-        // `status` above stays the existing 3-state admin filter/tab
-        // value untouched, so nothing in admin-web's existing filtering
-        // breaks. This is what distinguishes "never touched verification"
-        // from "awaiting activation", and a vendor's own pause from an
-        // admin rejection, none of which the 3-state view can express.
+        status: productStatus(p),
         realStatus: p.status,
         createdAt: p.createdAt,
         updatedAt: p.updatedAt,
@@ -165,7 +175,7 @@ export const adminProductsService = {
     return {
       items,
       nextCursor,
-      counts: { active, disabled: inactiveAdmin, draft: inactiveOther, total: active + inactiveAdmin + inactiveOther },
+      counts: { published, pendingActivation, paused, rejected, draft, total },
       categories: categories.map((c) => c.category).filter((c): c is string => Boolean(c)),
     };
   },
@@ -230,7 +240,7 @@ export const adminProductsService = {
       ...rest,
       costAmount: undefined,
       costCurrency: undefined,
-      status: productStatus(product, vendor),
+      status: productStatus(product),
       // See the matching comment in listProducts above — real 5-state
       // lifecycle, additive next to the existing 3-state `status`.
       realStatus: product.status,
@@ -329,19 +339,62 @@ export const adminProductsService = {
     };
   },
 
+  /**
+   * Hard delete — genuinely removes the row, unlike unpublish (which keeps
+   * the record). Only permitted when nothing real is attached to it: no
+   * order ever referenced it (order history must never be erasable), no
+   * live subscription/renewal/bundle/flash-sale linkage. A product with
+   * any of that history gets a clear 409 pointing at Unpublish instead —
+   * this is for genuinely removing test/garbage listings, not for
+   * retroactively hiding something that was actually sold.
+   */
+  async deleteProduct(productId: string, reason: string) {
+    const product = await prisma.product.findUnique({ where: { id: productId }, include: { vendor: { select: { userId: true, storeName: true } } } });
+    if (!product) throw new AppError("Product not found", 404);
+
+    const [orderItems, subscriptionOfferProducts, subscriptionItems, renewalItems, bundleItems, flashSales] = await Promise.all([
+      prisma.orderItem.count({ where: { productId } }),
+      prisma.subscriptionOfferProduct.count({ where: { productId } }),
+      prisma.subscriptionItem.count({ where: { productId } }),
+      prisma.renewalItem.count({ where: { productId } }),
+      prisma.bundleItem.count({ where: { productId } }),
+      prisma.flashSale.count({ where: { productId } }),
+    ]);
+    const blockers = { orderItems, subscriptionOfferProducts, subscriptionItems, renewalItems, bundleItems, flashSales };
+    const hasHistory = Object.values(blockers).some((n) => n > 0);
+    if (hasHistory) {
+      throw new AppError(
+        "This product has real order or subscription history and can't be deleted — use Unpublish instead, which keeps the record and the history it's attached to.",
+        409,
+        blockers,
+        "PRODUCT_HAS_HISTORY",
+      );
+    }
+
+    // Cart items are transient/low-stakes (nobody has checked out with
+    // them) — safe to clear so the delete doesn't fail on the Restrict FK.
+    await prisma.cartItem.deleteMany({ where: { productId } });
+    await prisma.product.delete({ where: { id: productId } });
+
+    return { product, before: { title: product.title, status: product.status }, after: { deleted: true, reason } };
+  },
+
   /** In-app + email notice to the vendor owner. Best effort, never throws. */
   async notifyVendor(params: {
     vendorUserId: string;
     productId: string;
     productTitle: string;
-    action: "unpublished" | "restored";
+    action: "unpublished" | "restored" | "deleted";
     reason: string;
   }): Promise<void> {
-    const title = params.action === "unpublished" ? "A product was unpublished" : "Your product is live again";
+    const title =
+      params.action === "unpublished" ? "A product was unpublished" : params.action === "deleted" ? "A product was removed" : "Your product is live again";
     const body =
       params.action === "unpublished"
         ? `"${params.productTitle}" was unpublished by Eki support. Reason: ${params.reason}`
-        : `"${params.productTitle}" was restored and is visible to buyers again. Note: ${params.reason}`;
+        : params.action === "deleted"
+          ? `"${params.productTitle}" was removed from your store by Eki support. Reason: ${params.reason}`
+          : `"${params.productTitle}" was restored and is visible to buyers again. Note: ${params.reason}`;
     try {
       await notificationsService.enqueue({
         userId: params.vendorUserId,
