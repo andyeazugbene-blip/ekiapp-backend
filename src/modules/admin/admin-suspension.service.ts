@@ -494,6 +494,37 @@ export const adminSuspensionService = {
   },
 
   /**
+   * Bulk suspend/unsuspend users: same rules per user, one audit row each.
+   * A user that can't be touched (admin role, anonymised, already in that
+   * state) is reported per-row, not fatal to the rest of the batch.
+   */
+  async bulkSuspendUsers(params: { adminId: string; userIds: string[]; input: SuspendInput; request?: Request }) {
+    const results: Array<{ userId: string; ok: boolean; error?: string }> = [];
+    for (const userId of [...new Set(params.userIds)].slice(0, 100)) {
+      try {
+        await this.suspendUser({ adminId: params.adminId, userId, input: params.input, request: params.request });
+        results.push({ userId, ok: true });
+      } catch (error) {
+        results.push({ userId, ok: false, error: error instanceof Error ? error.message : String(error) });
+      }
+    }
+    return { affected: results.filter((r) => r.ok).length, results };
+  },
+
+  async bulkUnsuspendUsers(params: { adminId: string; userIds: string[]; input: UnsuspendInput; request?: Request }) {
+    const results: Array<{ userId: string; ok: boolean; error?: string }> = [];
+    for (const userId of [...new Set(params.userIds)].slice(0, 100)) {
+      try {
+        await this.unsuspendUser({ adminId: params.adminId, userId, input: params.input, request: params.request });
+        results.push({ userId, ok: true });
+      } catch (error) {
+        results.push({ userId, ok: false, error: error instanceof Error ? error.message : String(error) });
+      }
+    }
+    return { affected: results.filter((r) => r.ok).length, results };
+  },
+
+  /**
    * Lifts timed suspensions whose end date has passed. Run from the daily
    * sweep, so an expiry can lag by up to a day — the UI says so.
    */

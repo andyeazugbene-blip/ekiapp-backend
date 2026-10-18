@@ -249,3 +249,41 @@ export async function bulkSuspendVendors(request: Request, response: Response): 
   });
   response.status(200).json(result);
 }
+
+export async function bulkSuspendUsers(request: Request, response: Response): Promise<void> {
+  const ids = request.body?.userIds;
+  if (!Array.isArray(ids) || ids.length === 0) throw new AppError("userIds array required", 400);
+  const result = await adminSuspensionService.bulkSuspendUsers({
+    adminId: requireUserId(request),
+    userIds: ids.map(String),
+    input: parseSuspendInput(request.body),
+    request,
+  });
+  response.status(200).json(result);
+}
+
+export async function bulkUnsuspendUsers(request: Request, response: Response): Promise<void> {
+  const ids = request.body?.userIds;
+  if (!Array.isArray(ids) || ids.length === 0) throw new AppError("userIds array required", 400);
+  const result = await adminSuspensionService.bulkUnsuspendUsers({
+    adminId: requireUserId(request),
+    userIds: ids.map(String),
+    input: parseUnsuspendInput(request.body),
+    request,
+  });
+  response.status(200).json(result);
+}
+
+export async function bulkDeleteUsers(request: Request, response: Response): Promise<void> {
+  const ids = request.body?.userIds;
+  if (!Array.isArray(ids) || ids.length === 0) throw new AppError("userIds array required", 400);
+  const reason = typeof request.body?.reason === "string" && request.body.reason.trim() ? request.body.reason.trim() : undefined;
+  const result = await adminListingsService.bulkDeleteUsers(ids.map(String), reason);
+  await recordAudit({
+    actorId: requireUserId(request),
+    action: "user.bulk_delete",
+    entityType: "User",
+    metadata: { count: result.affected, reason: reason ?? null },
+  });
+  response.status(200).json(result);
+}

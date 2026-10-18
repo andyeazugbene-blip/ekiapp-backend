@@ -124,6 +124,9 @@ import {
   bulkApproveVendors,
   bulkRejectVendors,
   bulkSuspendVendors,
+  bulkSuspendUsers,
+  bulkUnsuspendUsers,
+  bulkDeleteUsers,
   deleteUser,
   deleteVendor,
   disableProduct,
@@ -706,6 +709,9 @@ adminRouter.patch("/users/:id/trust-score", asyncHandler(requireAdminPermission(
 adminRouter.patch("/users/:id/suspend", asyncHandler(requireAdminPermission("users.mutate")), asyncHandler(require2fa), asyncHandler(suspendUser));
 adminRouter.patch("/users/:id/unsuspend", asyncHandler(requireAdminPermission("users.mutate")), asyncHandler(require2fa), asyncHandler(unsuspendUser));
 adminRouter.delete("/users/:id", asyncHandler(requireAdminPermission("users.mutate")), asyncHandler(require2fa), asyncHandler(deleteUser));
+adminRouter.post("/users/bulk-suspend", asyncHandler(requireAdminPermission("users.mutate")), asyncHandler(require2fa), asyncHandler(bulkSuspendUsers));
+adminRouter.post("/users/bulk-unsuspend", asyncHandler(requireAdminPermission("users.mutate")), asyncHandler(require2fa), asyncHandler(bulkUnsuspendUsers));
+adminRouter.post("/users/bulk-delete", asyncHandler(requireAdminPermission("users.mutate")), asyncHandler(require2fa), asyncHandler(bulkDeleteUsers));
 adminRouter.post("/users/:id/demo-provision", asyncHandler(requireAdminPermission("users.mutate")), asyncHandler(require2fa), asyncHandler(adminProvisionDemoAccount));
 adminRouter.post("/users/demo-create", asyncHandler(requireAdminPermission("users.mutate")), asyncHandler(require2fa), asyncHandler(adminCreateDemoAccount));
 

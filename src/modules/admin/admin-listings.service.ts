@@ -1035,4 +1035,23 @@ export const adminListingsService = {
       return { ...anonymized, hardDeleted: false as const };
     });
   },
+
+  /**
+   * Bulk delete: same per-user rule as deleteUser() (hard delete when
+   * safe, anonymize-and-suspend fallback when real order/payment/review
+   * history exists) — one row at a time so a bad id never blocks the rest
+   * of the batch. Capped at 100 per call, same as the vendor bulk actions.
+   */
+  async bulkDeleteUsers(userIds: string[], reason?: string) {
+    const results: Array<{ userId: string; ok: boolean; hardDeleted?: boolean; error?: string }> = [];
+    for (const userId of [...new Set(userIds)].slice(0, 100)) {
+      try {
+        const result = await this.deleteUser(userId, reason);
+        results.push({ userId, ok: true, hardDeleted: result.hardDeleted });
+      } catch (error) {
+        results.push({ userId, ok: false, error: error instanceof Error ? error.message : String(error) });
+      }
+    }
+    return { affected: results.filter((r) => r.ok).length, results };
+  },
 };
