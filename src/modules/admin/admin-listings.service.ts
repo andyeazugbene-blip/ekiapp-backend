@@ -978,8 +978,20 @@ export const adminListingsService = {
         hardDeleted: true,
       };
     } catch (error) {
+      // P2003/P2014 are Prisma's own known-error codes for an insert/update
+      // FK violation. A DELETE blocked by an explicit `onDelete: Restrict`
+      // constraint (every relation this comment refers to) surfaces
+      // differently — Prisma wraps it as a PrismaClientUnknownRequestError
+      // with NO `.code` at all, carrying the raw Postgres error (code
+      // 23001, "violates RESTRICT setting") only in `.message`. Found via
+      // a real-Postgres check: the P2003/P2014-only version of this guard
+      // let that case escape as an unhandled 500 instead of falling
+      // through to anonymize, for every user who actually has real order
+      // history — exactly the case this fallback exists for.
       const code = (error as { code?: string } | null)?.code;
-      if (code !== "P2003" && code !== "P2014") {
+      const message = error instanceof Error ? error.message : String(error);
+      const isRestrictViolation = code === "P2003" || code === "P2014" || /violates RESTRICT setting|code: ["']23001["']/.test(message);
+      if (!isRestrictViolation) {
         throw error;
       }
       // Has order/payment/review history — cannot fully erase. Anonymize instead.
