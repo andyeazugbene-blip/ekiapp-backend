@@ -1,8 +1,12 @@
+import bcrypt from "bcryptjs";
+import { UserRole } from "@prisma/client";
+
 import { prisma } from "../../lib/prisma";
 import { AppError } from "../../shared/errors/app-error";
 
 const MAX_CREDIT_MINOR = 1_000_000; // €10,000 cap per call — a deliberate ceiling, not a guess at what's "enough".
 const DEFAULT_CREDIT_MINOR = 500_000; // €5,000 — generous for a marketing demo, never auto-applied silently (always an explicit admin action).
+const BCRYPT_ROUNDS = 12; // matches auth.service.ts's own constant — kept separate since this module never imports auth internals.
 
 /**
  * Marketing/demo accounts (12 Oct 2026 request): a real buyer account that
@@ -58,5 +62,74 @@ export const adminDemoAccountsService = {
     });
 
     return { userId, isTest: true, walletBalanceMinor: result.balance, currency: result.currency };
+  },
+
+  /**
+   * Admin-initiated demo buyer creation (18 Oct 2026 request): public
+   * registration is Turnstile-gated and cannot be scripted, so a demo
+   * account meant to hand to a client can only be created by a human
+   * typing it into the real signup form OR by an authenticated, 2FA'd
+   * admin creating it directly here. This is the latter — email is
+   * marked verified immediately (never leaves a demo account stuck
+   * behind an OTP step) and the wallet is credited in the same
+   * transaction as provision() above.
+   */
+  async createAndProvision(input: {
+    email: string;
+    password: string;
+    name: string;
+    reason: string;
+    creditMinor?: number;
+    currency?: string;
+  }): Promise<{ userId: string; email: string; isTest: boolean; walletBalanceMinor: number; currency: string }> {
+    const existing = await prisma.user.findUnique({ where: { email: input.email }, select: { id: true } });
+    if (existing) {
+      throw new AppError("Email already registered", 409);
+    }
+
+    const creditMinor = input.creditMinor ?? DEFAULT_CREDIT_MINOR;
+    if (!Number.isInteger(creditMinor) || creditMinor <= 0 || creditMinor > MAX_CREDIT_MINOR) {
+      throw new AppError(`creditMinor must be a positive integer up to ${MAX_CREDIT_MINOR}`, 400);
+    }
+    const currency = (input.currency ?? "EUR").toUpperCase();
+    const passwordHash = await bcrypt.hash(input.password, BCRYPT_ROUNDS);
+
+    const result = await prisma.$transaction(async (tx) => {
+      const user = await tx.user.create({
+        data: {
+          email: input.email,
+          name: input.name,
+          password: passwordHash,
+          role: UserRole.BUYER,
+          isTest: true,
+          emailVerifiedAt: new Date(),
+        },
+      });
+
+      const wallet = await tx.buyerWallet.create({
+        data: { buyerId: user.id, currency, balance: creditMinor },
+      });
+
+      await tx.buyerWalletTransaction.create({
+        data: {
+          walletId: wallet.id,
+          buyerId: user.id,
+          type: "TOP_UP",
+          amount: creditMinor,
+          currency,
+          description: `Demo account creation: ${input.reason}`,
+        },
+      });
+
+      return { userId: user.id, wallet };
+    });
+
+    return {
+      userId: result.userId,
+      email: input.email,
+      isTest: true,
+      walletBalanceMinor: result.wallet.balance,
+      currency: result.wallet.currency,
+    };
   },
 };

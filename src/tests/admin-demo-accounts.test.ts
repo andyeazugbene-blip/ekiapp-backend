@@ -8,16 +8,23 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 const m = vi.hoisted(() => ({
   userFindUnique: vi.fn(),
   userUpdate: vi.fn(),
+  userCreate: vi.fn(),
   buyerWalletUpsert: vi.fn(),
+  buyerWalletCreate: vi.fn(),
   buyerWalletTransactionCreate: vi.fn(),
 }));
 
 vi.mock("../lib/prisma", () => ({
   prisma: {
-    user: { findUnique: m.userFindUnique, update: m.userUpdate },
-    buyerWallet: { upsert: m.buyerWalletUpsert },
+    user: { findUnique: m.userFindUnique, update: m.userUpdate, create: m.userCreate },
+    buyerWallet: { upsert: m.buyerWalletUpsert, create: m.buyerWalletCreate },
     buyerWalletTransaction: { create: m.buyerWalletTransactionCreate },
-    $transaction: (fn: any) => fn({ user: { update: m.userUpdate }, buyerWallet: { upsert: m.buyerWalletUpsert }, buyerWalletTransaction: { create: m.buyerWalletTransactionCreate } }),
+    $transaction: (fn: any) =>
+      fn({
+        user: { update: m.userUpdate, create: m.userCreate },
+        buyerWallet: { upsert: m.buyerWalletUpsert, create: m.buyerWalletCreate },
+        buyerWalletTransaction: { create: m.buyerWalletTransactionCreate },
+      }),
   },
 }));
 
@@ -28,7 +35,9 @@ beforeEach(() => {
   m.userFindUnique.mockResolvedValue({ id: "buyer-1", role: "BUYER", isTest: false, email: "demo@test.local" });
   m.userUpdate.mockResolvedValue({});
   m.buyerWalletUpsert.mockResolvedValue({ id: "w1", balance: 500000, currency: "EUR" });
+  m.buyerWalletCreate.mockResolvedValue({ id: "w1", balance: 500000, currency: "EUR" });
   m.buyerWalletTransactionCreate.mockResolvedValue({});
+  m.userCreate.mockResolvedValue({ id: "new-buyer-1" });
 });
 
 describe("adminDemoAccountsService.provision", () => {
@@ -63,5 +72,44 @@ describe("adminDemoAccountsService.provision", () => {
   it("404s on a user that doesn't exist", async () => {
     m.userFindUnique.mockResolvedValue(null);
     await expect(adminDemoAccountsService.provision("ghost", { reason: "test" })).rejects.toMatchObject({ statusCode: 404 });
+  });
+});
+
+describe("adminDemoAccountsService.createAndProvision", () => {
+  beforeEach(() => {
+    m.userFindUnique.mockResolvedValue(null); // no existing account by that email
+  });
+
+  it("creates a verified, isTest buyer and credits a wallet", async () => {
+    const result = await adminDemoAccountsService.createAndProvision({
+      email: "demo-client@example.com",
+      password: "DemoPass123!",
+      name: "Client Demo",
+      reason: "Client marketing demo",
+    });
+
+    expect(m.userCreate.mock.calls[0][0].data).toMatchObject({
+      email: "demo-client@example.com",
+      role: "BUYER",
+      isTest: true,
+    });
+    expect(m.userCreate.mock.calls[0][0].data.emailVerifiedAt).toBeInstanceOf(Date);
+    expect(m.userCreate.mock.calls[0][0].data.password).not.toBe("DemoPass123!"); // hashed, not plaintext
+    expect(m.buyerWalletCreate.mock.calls[0][0].data).toMatchObject({ buyerId: "new-buyer-1", balance: 500000 });
+    expect(result).toMatchObject({ userId: "new-buyer-1", email: "demo-client@example.com", isTest: true, walletBalanceMinor: 500000 });
+  });
+
+  it("refuses an email that's already registered", async () => {
+    m.userFindUnique.mockResolvedValue({ id: "existing-1" });
+    await expect(
+      adminDemoAccountsService.createAndProvision({ email: "taken@example.com", password: "DemoPass123!", name: "x", reason: "test" }),
+    ).rejects.toMatchObject({ statusCode: 409 });
+    expect(m.userCreate).not.toHaveBeenCalled();
+  });
+
+  it("refuses a credit amount above the cap", async () => {
+    await expect(
+      adminDemoAccountsService.createAndProvision({ email: "x@example.com", password: "DemoPass123!", name: "x", reason: "test", creditMinor: 2_000_000 }),
+    ).rejects.toMatchObject({ statusCode: 400 });
   });
 });

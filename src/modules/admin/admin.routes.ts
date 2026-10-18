@@ -296,7 +296,7 @@ import {
 import { adminRewardsRouter } from "../rewards/rewards.routes";
 import { adminGiftCardsRouter } from "../gift-cards/gift-cards.routes";
 import { adminDeleteProduct, adminRestoreProduct, adminUnpublishProduct } from "./admin-products.controller";
-import { adminProvisionDemoAccount } from "./admin-demo-accounts.controller";
+import { adminProvisionDemoAccount, adminCreateDemoAccount } from "./admin-demo-accounts.controller";
 import { adminCampaignsRouter } from "../campaigns/campaigns.routes";
 import { adminResetUsers } from "./admin-reset.controller";
 
@@ -707,6 +707,7 @@ adminRouter.patch("/users/:id/suspend", asyncHandler(requireAdminPermission("use
 adminRouter.patch("/users/:id/unsuspend", asyncHandler(requireAdminPermission("users.mutate")), asyncHandler(require2fa), asyncHandler(unsuspendUser));
 adminRouter.delete("/users/:id", asyncHandler(requireAdminPermission("users.mutate")), asyncHandler(require2fa), asyncHandler(deleteUser));
 adminRouter.post("/users/:id/demo-provision", asyncHandler(requireAdminPermission("users.mutate")), asyncHandler(require2fa), asyncHandler(adminProvisionDemoAccount));
+adminRouter.post("/users/demo-create", asyncHandler(requireAdminPermission("users.mutate")), asyncHandler(require2fa), asyncHandler(adminCreateDemoAccount));
 
 // Escrow health monitoring
 adminRouter.get("/escrow/health", asyncHandler(requireAdminPermission("escrow.read")), asyncHandler(getEscrowHealth));
