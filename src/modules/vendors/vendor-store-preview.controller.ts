@@ -14,3 +14,8 @@ export async function getMyStorePreview(request: Request, response: Response): P
   const data = await vendorStorePreviewService.getPreview(requireUserId(request));
   response.status(200).json(data);
 }
+
+export async function getMyReadiness(request: Request, response: Response): Promise<void> {
+  const data = await vendorStorePreviewService.getReadiness(requireUserId(request));
+  response.status(200).json(data);
+}

@@ -1,6 +1,12 @@
 import { prisma } from "../../lib/prisma";
 import { CURSOR_ORDER_BY } from "../../shared/constants";
 import { AppError } from "../../shared/errors/app-error";
+import {
+  SELLER_READINESS_SELECT,
+  SELLER_REASON_MESSAGES,
+  assessSellerReadiness,
+  isSellerReadinessGateEnabled,
+} from "../products/seller-readiness";
 import { buildVendorShareUrl } from "./vendors.service";
 
 /**
@@ -96,6 +102,39 @@ export const vendorStorePreviewService = {
         status: p.status as "PUBLISHED" | "PENDING_ACTIVATION",
         visibleToBuyers: p.status === "PUBLISHED",
       })),
+    };
+  },
+
+  /**
+   * Found 15 Oct 2026: a vendor whose Stripe charges/payouts are off has
+   * every one of their PUBLISHED products silently hidden from buyers
+   * (see seller-readiness.ts's purchasableVendorWhere, used by
+   * listActiveProducts whenever SELLER_PAYMENT_READINESS_GATE is on) —
+   * but their own app shows those listings as plain "Published" with no
+   * indication buyers can't actually find them. This is the one call the
+   * vendor app needs to know whether to show that warning.
+   */
+  async getReadiness(userId: string): Promise<{
+    gateEnabled: boolean;
+    ready: boolean;
+    reason: string | null;
+    message: string | null;
+  }> {
+    const vendor = await prisma.vendor.findUnique({ where: { userId }, select: SELLER_READINESS_SELECT });
+    if (!vendor) {
+      throw new AppError("Vendor profile required", 403);
+    }
+    const gateEnabled = isSellerReadinessGateEnabled();
+    const a = assessSellerReadiness(vendor);
+    return {
+      gateEnabled,
+      // Not purchasable only MATTERS to a buyer while the gate is actually
+      // on — report true (nothing to warn about) when it's off, same
+      // convention admin-products.service.ts already uses for
+      // notPurchasableReason.
+      ready: !gateEnabled || a.ready,
+      reason: gateEnabled ? a.reason : null,
+      message: gateEnabled && a.reason ? SELLER_REASON_MESSAGES[a.reason] : null,
     };
   },
 };

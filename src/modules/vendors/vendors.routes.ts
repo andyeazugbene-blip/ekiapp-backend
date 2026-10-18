@@ -34,7 +34,7 @@ import {
   getVendorEarnings,
 } from "./vendors-dashboard.controller";
 import { getVendorAnalytics } from "./vendors-analytics.controller";
-import { getMyStorePreview } from "./vendor-store-preview.controller";
+import { getMyReadiness, getMyStorePreview } from "./vendor-store-preview.controller";
 import { getVendorRevenue } from "./vendors-revenue.controller";
 import {
   getVendorBuyer,
@@ -69,6 +69,7 @@ vendorsRouter.get("/me", requireVendorProfileOrAdmin(), asyncHandler(getOwnVendo
 vendorsRouter.patch("/me", requireVendorProfileOrAdmin(), asyncHandler(updateOwnVendor));
 vendorsRouter.get("/me/dashboard", requireVendorProfileOrAdmin(), asyncHandler(getVendorDashboard));
 vendorsRouter.get("/me/store-preview", requireVendorProfileOrAdmin(), asyncHandler(getMyStorePreview));
+vendorsRouter.get("/me/readiness", requireVendorProfileOrAdmin(), asyncHandler(getMyReadiness));
 vendorsRouter.get("/me/markets", requireVendorProfileOrAdmin(), asyncHandler(listOwnVendorMarkets));
 vendorsRouter.post("/me/markets", requireVendorProfileOrAdmin(), asyncHandler(addOwnVendorMarket));
 vendorsRouter.patch("/me/markets/:marketCode", requireVendorProfileOrAdmin(), asyncHandler(setOwnVendorMarketEnabled));
