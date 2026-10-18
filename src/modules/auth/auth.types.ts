@@ -54,6 +54,7 @@ export interface AuthUser {
   hasVendor: boolean;
   trustScore: number;
   createdAt: Date;
+  emailVerified: boolean;
   capabilities: AuthCapabilities;
   // A preference, never an authority (spec §3.1) — mobile is free to
   // override this locally based on actual navigation history (e.g.

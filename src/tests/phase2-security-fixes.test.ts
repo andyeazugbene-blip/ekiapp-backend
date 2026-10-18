@@ -28,6 +28,7 @@ vi.mock("../lib/prisma", () => ({
     orderItem: { findFirst: vi.fn() },
     reward: { findFirst: vi.fn() },
     emailVerificationToken: { create: vi.fn().mockResolvedValue({}), findUnique: vi.fn(), update: vi.fn() },
+    emailOtp: { findFirst: vi.fn().mockResolvedValue(null) },
     $transaction: vi.fn(),
     $executeRaw: vi.fn(),
   },

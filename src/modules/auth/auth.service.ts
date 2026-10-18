@@ -44,6 +44,8 @@ type AuthUserRecord = {
   role: UserRole;
   trustScore: number;
   createdAt: Date;
+  emailVerifiedAt: Date | null;
+  password: string | null;
   vendor?: {
     storeName: string;
     storeSlug: string;
@@ -145,6 +147,12 @@ export function toAuthUser(user: AuthUserRecord): AuthUser {
     hasVendor: user.vendor !== null && user.vendor !== undefined,
     trustScore: user.trustScore,
     createdAt: user.createdAt,
+    // Only meaningful for an email/password account — an OAuth account's
+    // email is pre-verified by the provider and never goes through OTP
+    // at all (see oauth.service.ts), so it's reported as already verified
+    // rather than permanently false for an account type that can never
+    // set this.
+    emailVerified: user.emailVerifiedAt !== null || !user.password,
     capabilities: deriveCapabilities(user),
     lastDestination: deriveLastDestination(user),
   };
@@ -179,6 +187,24 @@ export const authService = {
       await referralsService.validateReferralCode(input.referralCode);
     }
 
+    // Buyer signup verifies the OTP BEFORE the account exists (the buyer
+    // flow: send OTP -> verify OTP -> collect details -> register). At
+    // verify time, otp.service.ts's `updateMany({where:{email}})` can't
+    // mark a row that doesn't exist yet, so without this check a buyer
+    // who correctly completed OTP would still be created with
+    // emailVerifiedAt null — indistinguishable from never having
+    // verified at all. Only trusts a CONSUMED code for this exact email,
+    // scoped to the signup purpose, within the last 30 minutes (matching
+    // the registration form's own session length) — never a guess.
+    const recentlyVerifiedOtp = await prisma.emailOtp.findFirst({
+      where: {
+        email: input.email,
+        purpose: "buyer_signup_email",
+        consumedAt: { gte: new Date(Date.now() - 30 * 60 * 1000) },
+      },
+      orderBy: { consumedAt: "desc" },
+    });
+
     const passwordHash = await bcrypt.hash(input.password, BCRYPT_ROUNDS);
     let user;
     try {
@@ -190,6 +216,7 @@ export const authService = {
           phone: input.phone,
           country: input.country,
           role: input.role ?? UserRole.BUYER,
+          ...(recentlyVerifiedOtp ? { emailVerifiedAt: new Date() } : {}),
         },
       });
     } catch (error) {
