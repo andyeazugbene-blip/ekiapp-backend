@@ -93,14 +93,17 @@ export const adminListingsService = {
     const pagination = parsePagination(query);
     const search = typeof query.q === "string" && query.q.trim().length > 0 ? query.q.trim() : undefined;
     const status = typeof query.status === "string" ? query.status.toLowerCase() : undefined;
-    if (status && !["active", "suspended", "anonymised"].includes(status)) throw new AppError("Invalid status", 400);
+    if (status && !["active", "suspended"].includes(status)) throw new AppError("Invalid status", 400);
     const includeTest = query.includeTest === "true";
 
-    const where: Record<string, unknown> = {};
+    // A deleted/anonymised account is never shown in admin-web — scrubbed
+    // personal data rendering as endless "Anonymised user" placeholder rows
+    // was pure clutter, not something an admin ever needed to browse (the
+    // record itself is untouched; this is a display filter only).
+    const where: Record<string, unknown> = { anonymisedAt: null };
     if (role) where.role = role;
-    if (status === "anonymised") where.anonymisedAt = { not: null };
-    else if (status === "suspended") { where.isSuspended = true; where.anonymisedAt = null; }
-    else if (status === "active") { where.isSuspended = false; where.anonymisedAt = null; }
+    if (status === "suspended") where.isSuspended = true;
+    else if (status === "active") where.isSuspended = false;
     if (!includeTest) where.isTest = false;
     if (search) {
       where.OR = [
@@ -402,7 +405,11 @@ export const adminListingsService = {
       : typeof query.search === "string" && query.search.trim().length > 0 ? query.search.trim() : undefined;
 
     const and: Record<string, unknown>[] = [];
-    const where: Record<string, unknown> = {};
+    // A closed store (its owner was deleted/anonymised) is excluded from
+    // the default view for the same reason — it's not something an admin
+    // browses day to day. The "Suspended / closed" account filter still
+    // surfaces it explicitly when someone actually wants to see it.
+    const where: Record<string, unknown> = isSuspended === undefined ? { closedAt: null } : {};
     if (verificationStatus) where.verificationStatus = verificationStatus;
     if (isSuspended !== undefined) where.isSuspended = isSuspended;
     // Handbook 14.7: payment readiness is its own dimension, never implied by "verified".
