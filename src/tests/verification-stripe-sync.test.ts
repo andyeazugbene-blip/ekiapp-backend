@@ -12,7 +12,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 vi.mock("../lib/prisma", () => ({
   prisma: {
     vendor: { findMany: vi.fn(), findUnique: vi.fn(), update: vi.fn() },
-    verificationDocument: { findMany: vi.fn(), updateMany: vi.fn(), count: vi.fn() },
+    verificationDocument: { findMany: vi.fn(), updateMany: vi.fn(), count: vi.fn(), findFirst: vi.fn() },
     $transaction: vi.fn((ops: Promise<unknown>[]) => Promise.all(ops)),
   },
 }));
@@ -22,6 +22,10 @@ vi.mock("../lib/storage", () => ({
 }));
 vi.mock("../modules/communications/communication.service", () => ({
   communicationService: { send: vi.fn(async () => undefined) },
+}));
+const m2 = vi.hoisted(() => ({ publishEligibleProducts: vi.fn(async () => ({ published: 0 })) }));
+vi.mock("../modules/vendors/vendor-activation.service", () => ({
+  vendorActivationService: { publishEligibleProducts: m2.publishEligibleProducts },
 }));
 
 import { prisma } from "../lib/prisma";
@@ -134,6 +138,10 @@ describe("adminApproveVendorVerification / adminRejectVendorVerification — wri
     expect(m.vendor.update).toHaveBeenCalledWith(
       expect.objectContaining({ data: expect.objectContaining({ verificationStatus: "VERIFIED", verificationFailureReason: null }) }),
     );
+    // Found 18 Oct 2026: this manual-approval path never re-triggered
+    // auto-publish for a vendor's pending listings, unlike the Stripe
+    // Identity webhook path — a real vendor verified this way was stuck.
+    expect(m2.publishEligibleProducts).toHaveBeenCalledWith("v1");
   });
 
   it("reject writes verificationFailureReason on the Vendor row, not only the per-document rejectionReason", async () => {
@@ -149,6 +157,27 @@ describe("adminApproveVendorVerification / adminRejectVendorVerification — wri
     expect(m.vendor.update).toHaveBeenCalledWith(
       expect.objectContaining({ data: expect.objectContaining({ verificationStatus: "REJECTED", verificationFailureReason: "Blurry ID photo" }) }),
     );
+  });
+});
+
+describe("checkAndVerifyVendor — the per-document-review verification path", () => {
+  it("verifies and re-triggers auto-publish when a GOVERNMENT_ID document is approved", async () => {
+    m.verificationDocument.findFirst.mockResolvedValue({ id: "d1" } as never);
+    m.vendor.update.mockResolvedValue({} as never);
+
+    await verificationService.checkAndVerifyVendor("v1");
+
+    expect(m.vendor.update).toHaveBeenCalledWith({ where: { id: "v1" }, data: { verificationStatus: "VERIFIED" } });
+    expect(m2.publishEligibleProducts).toHaveBeenCalledWith("v1");
+  });
+
+  it("does nothing when no document is approved yet", async () => {
+    m.verificationDocument.findFirst.mockResolvedValue(null as never);
+
+    await verificationService.checkAndVerifyVendor("v1");
+
+    expect(m.vendor.update).not.toHaveBeenCalled();
+    expect(m2.publishEligibleProducts).not.toHaveBeenCalled();
   });
 });
 

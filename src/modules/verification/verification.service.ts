@@ -8,6 +8,7 @@ import { CURSOR_ORDER_BY } from "../../shared/constants";
 import { AppError } from "../../shared/errors/app-error";
 import { notTest } from "../../shared/utils/test-records";
 import { communicationService } from "../communications/communication.service";
+import { vendorActivationService } from "../vendors/vendor-activation.service";
 import type { ReviewVerificationInput, SubmitVerificationInput, VerificationMethod } from "./verification.types";
 
 const APPROVED_RETENTION_DAYS = 3;
@@ -513,6 +514,10 @@ export const verificationService = {
       variables: { store_name: vendor.storeName },
     }).catch((err) => logger.warn("Verification approved communication failed", { vendorId, error: String(err) }));
 
+    // Same gap as checkAndVerifyVendor above: this admin-approval path
+    // never re-triggered auto-publish either.
+    void vendorActivationService.publishEligibleProducts(vendorId);
+
     return this.adminGetReviewDetails(vendorId);
   },
 
@@ -651,6 +656,12 @@ export const verificationService = {
         where: { id: vendorId },
         data: { verificationStatus: "VERIFIED" },
       });
+      // Found 18 Oct 2026: unlike the Stripe Identity webhook, this manual-
+      // document-review verification path never re-triggered auto-publish
+      // — a vendor verified this way had their PENDING_ACTIVATION listings
+      // stuck forever with no further action from them. Same idempotent
+      // call, safe to run redundantly.
+      void vendorActivationService.publishEligibleProducts(vendorId);
     }
   },
 };
