@@ -1,3 +1,5 @@
+import type Stripe from "stripe";
+
 import { env } from "../../config/env";
 import { logger } from "../../lib/logger";
 import { prisma } from "../../lib/prisma";
@@ -19,10 +21,18 @@ const FRONTEND_URL = env.frontendUrl;
  * getStatus() re-sync) rather than inventing a new one — the only
  * differences are the owning model (SupplierAccount, userId-keyed, no
  * Vendor required) and using the User's own name in business_profile since
- * there is no store name here. No webhook wiring is added: the vendor path
- * this mirrors has none either (confirmed — handleAccountUpdated is never
- * called from anywhere), so getStatus()'s live Stripe re-sync is the only
- * mechanism either path has, and that's unchanged here.
+ * there is no store name here.
+ *
+ * handleAccountUpdated() below closes a real gap found 19 Oct 2026: without
+ * it, a SupplierAccount's status only ever re-synced from getStatus()'s
+ * live poll, which the controller stops calling once chargesEnabled/
+ * payoutsEnabled both go true (see community-buy.controller.ts
+ * getMySupplierProfile) — so a LATER Stripe-side change (fraud flag, bank
+ * account removed, compliance hold disabling payouts_enabled) had no path
+ * back into the DB at all, leaving assessPayoutEligibility() reading
+ * permanently-stale "enabled" flags. Wired into the account.updated webhook
+ * the same way organiser/vendor already are — see stripe.service.ts's
+ * handleOrganiserConnectAccountUpdated.
  */
 export const supplierStripeConnectService = {
   async onboard(userId: string): Promise<{ onboardingUrl: string }> {
@@ -116,5 +126,43 @@ export const supplierStripeConnectService = {
       payoutsEnabled: account.payoutsEnabled,
       detailsSubmitted: account.detailsSubmitted,
     };
+  },
+
+  /**
+   * Handle account.updated for a SUPPLIER connected account (webhook or
+   * admin refresh). Mirrors vendors/stripe-connect.service.ts's
+   * handleAccountUpdated exactly: returns { handled: false } when the
+   * account belongs to no SupplierAccount so the webhook router can treat
+   * it as a safe no-op; uses the account object delivered in the event
+   * (no extra API call); throws on DB failure so the webhook layer can
+   * release its idempotency claim and let Stripe retry.
+   */
+  async handleAccountUpdated(account: Stripe.Account): Promise<{ handled: boolean }> {
+    const supplierAccount = await prisma.supplierAccount.findFirst({
+      where: { providerConnectedAccountId: account.id },
+      select: { id: true },
+    });
+    if (!supplierAccount) {
+      logger.info("Stripe Connect webhook: no supplier account for account", { accountId: account.id });
+      return { handled: false };
+    }
+
+    const data = {
+      chargesEnabled: account.charges_enabled ?? false,
+      payoutsEnabled: account.payouts_enabled ?? false,
+      detailsSubmitted: account.details_submitted ?? false,
+    };
+    await prisma.supplierAccount.update({ where: { id: supplierAccount.id }, data });
+    // Same M5 sync used by getStatus()'s live poll — see that function's
+    // own comment for why this is kept separate from requirementsDue.
+    await supplierAccountService.syncStripeRequirements(supplierAccount.id, account.requirements?.currently_due ?? []);
+
+    logger.info("Supplier Stripe Connect account synced from webhook", {
+      supplierAccountId: supplierAccount.id,
+      accountId: account.id,
+      chargesEnabled: data.chargesEnabled,
+      payoutsEnabled: data.payoutsEnabled,
+    });
+    return { handled: true };
   },
 };

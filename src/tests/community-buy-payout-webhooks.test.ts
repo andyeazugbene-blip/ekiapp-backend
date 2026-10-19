@@ -52,12 +52,17 @@ vi.mock("../modules/vendors/stripe-connect.service", () => ({
   },
 }));
 
+vi.mock("../modules/community-buy/supplier-stripe-connect.service", () => ({
+  supplierStripeConnectService: { handleAccountUpdated: vi.fn().mockResolvedValue({ handled: false }) },
+}));
+
 import { prisma } from "../lib/prisma";
 import { stripe } from "../lib/stripe";
 import { stripeWebhookService } from "../modules/stripe/stripe.service";
 import { campaignPayoutService } from "../modules/community-buy/campaign-payout.service";
 import { campaignAuthorisationService } from "../modules/community-buy/campaign-authorisation.service";
 import { organiserStripeConnectService } from "../modules/community-buy/organiser-stripe-connect.service";
+import { supplierStripeConnectService } from "../modules/community-buy/supplier-stripe-connect.service";
 import { stripeConnectService as vendorStripeConnect } from "../modules/vendors/stripe-connect.service";
 
 const m = vi.mocked(prisma, true);
@@ -125,6 +130,27 @@ describe("account.updated — Stripe Connect production hardening", () => {
     const result = await stripeWebhookService.handleWebhook({ signature: "sig", rawBody: Buffer.from("x") });
     expect(result.received).toBe(true);
     expect(vendorStripeConnect.handleAccountUpdated).toHaveBeenCalledWith(expect.objectContaining({ id: "acct_vendor_1" }));
+  });
+
+  it("an account that is neither an organiser nor a vendor falls through to supplierStripeConnectService.handleAccountUpdated", async () => {
+    constructEvent.mockReturnValue({ id: "evt_acct_s", type: "account.updated", data: { object: { id: "acct_supplier_1", charges_enabled: true } } } as never);
+    mockDedupTransaction();
+    vi.mocked(organiserStripeConnectService.handleAccountUpdated).mockResolvedValueOnce({ handled: false });
+    vi.mocked(vendorStripeConnect.handleAccountUpdated).mockResolvedValueOnce({ handled: false });
+    vi.mocked(supplierStripeConnectService.handleAccountUpdated).mockResolvedValueOnce({ handled: true });
+
+    const result = await stripeWebhookService.handleWebhook({ signature: "sig", rawBody: Buffer.from("x") });
+    expect(result.received).toBe(true);
+    expect(supplierStripeConnectService.handleAccountUpdated).toHaveBeenCalledWith(expect.objectContaining({ id: "acct_supplier_1" }));
+  });
+
+  it("does not call the supplier handler when the organiser handler already claimed the event", async () => {
+    constructEvent.mockReturnValue({ id: "evt_acct_o2", type: "account.updated", data: { object: { id: "acct_org_2" } } } as never);
+    mockDedupTransaction();
+    vi.mocked(organiserStripeConnectService.handleAccountUpdated).mockResolvedValueOnce({ handled: true });
+
+    await stripeWebhookService.handleWebhook({ signature: "sig", rawBody: Buffer.from("x") });
+    expect(supplierStripeConnectService.handleAccountUpdated).not.toHaveBeenCalled();
   });
 
   it("an organiser account is NOT also treated as a vendor", async () => {

@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../lib/prisma", () => ({
   prisma: {
-    supplierAccount: { findUnique: vi.fn(), update: vi.fn() },
+    supplierAccount: { findUnique: vi.fn(), findFirst: vi.fn(), update: vi.fn() },
   },
 }));
 
@@ -90,5 +90,48 @@ describe("supplierStripeConnectService — Workstream 3 (no-Vendor SupplierAccou
 
     expect(result).toEqual({ providerConnectedAccountId: "acct_1", chargesEnabled: true, payoutsEnabled: false, detailsSubmitted: true });
     expect(m.supplierAccount.update).not.toHaveBeenCalled();
+  });
+
+  describe("handleAccountUpdated() — webhook sync (19 Oct 2026: previously had no webhook at all)", () => {
+    it("syncs charges/payouts/detailsSubmitted from the webhook's account object for a matching SupplierAccount", async () => {
+      m.supplierAccount.findFirst.mockResolvedValue({ id: "acct-1" } as never);
+      m.supplierAccount.findUnique.mockResolvedValue({ id: "acct-1", supplierState: "UNDER_REVIEW" } as never);
+
+      const result = await supplierStripeConnectService.handleAccountUpdated({
+        id: "acct_1", charges_enabled: true, payouts_enabled: false, details_submitted: true,
+        requirements: { currently_due: [] },
+      } as never);
+
+      expect(m.supplierAccount.findFirst).toHaveBeenCalledWith({ where: { providerConnectedAccountId: "acct_1" }, select: { id: true } });
+      expect(m.supplierAccount.update).toHaveBeenCalledWith({
+        where: { id: "acct-1" },
+        data: { chargesEnabled: true, payoutsEnabled: false, detailsSubmitted: true },
+      });
+      expect(result).toEqual({ handled: true });
+    });
+
+    it("is a safe no-op when the connected account belongs to no SupplierAccount", async () => {
+      m.supplierAccount.findFirst.mockResolvedValue(null as never);
+
+      const result = await supplierStripeConnectService.handleAccountUpdated({ id: "acct_unknown" } as never);
+
+      expect(result).toEqual({ handled: false });
+      expect(m.supplierAccount.update).not.toHaveBeenCalled();
+    });
+
+    it("catches a Stripe-side downgrade after onboarding — payouts_enabled flipping back to false updates the DB", async () => {
+      m.supplierAccount.findFirst.mockResolvedValue({ id: "acct-1" } as never);
+      m.supplierAccount.findUnique.mockResolvedValue({ id: "acct-1", supplierState: "VERIFICATION_REQUIRED" } as never);
+
+      await supplierStripeConnectService.handleAccountUpdated({
+        id: "acct_1", charges_enabled: true, payouts_enabled: false, details_submitted: true,
+        requirements: { currently_due: ["external_account"] },
+      } as never);
+
+      expect(m.supplierAccount.update).toHaveBeenCalledWith({
+        where: { id: "acct-1" },
+        data: { chargesEnabled: true, payoutsEnabled: false, detailsSubmitted: true },
+      });
+    });
   });
 });

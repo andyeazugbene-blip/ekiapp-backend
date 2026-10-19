@@ -23,6 +23,7 @@ import { campaignAuthorisationService } from "../community-buy/campaign-authoris
 import { campaignPayoutService } from "../community-buy/campaign-payout.service";
 import { organiserFeeService } from "../community-buy/organiser-fee.service";
 import { organiserStripeConnectService } from "../community-buy/organiser-stripe-connect.service";
+import { supplierStripeConnectService } from "../community-buy/supplier-stripe-connect.service";
 import { stripeConnectService as vendorStripeConnect } from "../vendors/stripe-connect.service";
 import { LedgerAccountType, LedgerDirection, LedgerOwnerType } from "@prisma/client";
 import { AppError } from "../../shared/errors/app-error";
@@ -694,18 +695,25 @@ class StripeWebhookService {
   private async handleOrganiserConnectAccountUpdated(event: Stripe.Event): Promise<StripeWebhookResult> {
     const account = event.data.object as Stripe.Account;
 
-    // Every connected account shares this one event type: resolve organiser
-    // first, then vendor (Handbook 5.1 - vendor Connect state must follow
-    // Stripe automatically). Claimed only AFTER success so a failed update is
-    // retried by Stripe instead of being swallowed as a duplicate.
+    // Every connected account shares this one event type: resolve organiser,
+    // then vendor, then supplier (Handbook 5.1 - vendor Connect state must
+    // follow Stripe automatically; supplier added 19 Oct 2026 — previously
+    // had no webhook at all, so a post-onboarding Stripe-side change like a
+    // compliance hold disabling payouts_enabled never reached the DB). Claimed
+    // only AFTER success so a failed update is retried by Stripe instead of
+    // being swallowed as a duplicate.
     return this.runIdempotentWebhook(event, async () => {
       const organiser = await organiserStripeConnectService.handleAccountUpdated(account);
       let vendorHandled = false;
+      let supplierHandled = false;
       if (!organiser.handled) {
         vendorHandled = (await vendorStripeConnect.handleAccountUpdated(account as never)).handled;
       }
+      if (!organiser.handled && !vendorHandled) {
+        supplierHandled = (await supplierStripeConnectService.handleAccountUpdated(account)).handled;
+      }
       logger.info("Webhook processed: account.updated", {
-        eventId: event.id, accountId: account.id, organiserHandled: organiser.handled, vendorHandled,
+        eventId: event.id, accountId: account.id, organiserHandled: organiser.handled, vendorHandled, supplierHandled,
       });
     });
   }
