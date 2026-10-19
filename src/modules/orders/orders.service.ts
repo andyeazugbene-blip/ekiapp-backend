@@ -220,6 +220,26 @@ export const ordersService = {
       throw new AppError("Order contains items outside this vendor and cannot be managed from the vendor app", 409);
     }
 
+    // VENDOR_STATUS_TRANSITIONS allows PENDING -> CONFIRMED/PROCESSING (the
+    // same as PAID) with no payment check — a card order starts PENDING and
+    // only moves to PAID once the Stripe webhook confirms it, so without
+    // this guard a vendor could walk a never-actually-paid order (card
+    // declined, 3-D Secure abandoned) all the way to DISPATCHED: the buyer
+    // gets a "your order has shipped" notification for an order that was
+    // never paid for, and releaseVendorEarnings() refusing to release
+    // (it already checks payment.status itself) only gets logged, not
+    // surfaced — the order is left stuck DISPATCHED either way. Cancelling
+    // an unpaid order is still always allowed; nothing else is, until the
+    // webhook actually confirms payment.
+    if (newStatus !== "CANCELLED" && order.payment && order.payment.status !== "SUCCEEDED") {
+      throw new AppError(
+        "This order's payment has not been confirmed yet, so it cannot be confirmed, processed, or dispatched.",
+        409,
+        null,
+        "PAYMENT_NOT_CONFIRMED",
+      );
+    }
+
     const allowedTransitions = VENDOR_STATUS_TRANSITIONS[order.status] ?? [];
     if (!allowedTransitions.includes(newStatus)) {
       throw new AppError(

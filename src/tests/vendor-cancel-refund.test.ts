@@ -131,3 +131,43 @@ describe("updateVendorOrderStatus — non-CANCELLED transitions are unaffected",
     expect(m.order.update).toHaveBeenCalled();
   });
 });
+
+describe("updateVendorOrderStatus — a vendor cannot advance an unpaid order (19 Oct 2026 fix)", () => {
+  it("refuses PENDING -> CONFIRMED when payment.status is still PENDING (card not yet confirmed)", async () => {
+    m.vendor.findUnique.mockResolvedValue(VENDOR);
+    m.order.findUnique.mockResolvedValue(baseOrder({ status: "PENDING", payment: { status: "PENDING" } }));
+
+    await expect(
+      ordersService.updateVendorOrderStatus("user-1", "order-1", "CONFIRMED" as any),
+    ).rejects.toMatchObject({ statusCode: 409, code: "PAYMENT_NOT_CONFIRMED" });
+    expect(m.order.update).not.toHaveBeenCalled();
+  });
+
+  it("refuses PROCESSING -> DISPATCHED when payment never succeeded — closes the 'vendor dispatches an unpaid order' gap", async () => {
+    m.vendor.findUnique.mockResolvedValue(VENDOR);
+    m.order.findUnique.mockResolvedValue(baseOrder({ status: "PROCESSING", payment: { status: "FAILED" } }));
+
+    await expect(
+      ordersService.updateVendorOrderStatus("user-1", "order-1", "DISPATCHED" as any),
+    ).rejects.toMatchObject({ statusCode: 409, code: "PAYMENT_NOT_CONFIRMED" });
+    expect(m.order.update).not.toHaveBeenCalled();
+  });
+
+  it("still allows CANCELLED on an unpaid order — only forward progress is blocked", async () => {
+    m.vendor.findUnique.mockResolvedValue(VENDOR);
+    m.order.findUnique.mockResolvedValue(baseOrder({ status: "PENDING", payment: { status: "PENDING" } }));
+    m.order.update.mockResolvedValue(baseOrder({ status: "CANCELLED" }));
+
+    const result = await ordersService.updateVendorOrderStatus("user-1", "order-1", "CANCELLED" as any);
+    expect(result.status).toBe("CANCELLED");
+  });
+
+  it("allows CONFIRMED once payment.status is SUCCEEDED", async () => {
+    m.vendor.findUnique.mockResolvedValue(VENDOR);
+    m.order.findUnique.mockResolvedValue(baseOrder({ status: "PAID", payment: { status: "SUCCEEDED" } }));
+    m.order.update.mockResolvedValue(baseOrder({ status: "CONFIRMED" }));
+
+    const result = await ordersService.updateVendorOrderStatus("user-1", "order-1", "CONFIRMED" as any);
+    expect(result.status).toBe("CONFIRMED");
+  });
+});
