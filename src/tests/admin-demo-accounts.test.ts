@@ -148,6 +148,19 @@ describe("adminDemoAccountsService.createAndProvision", () => {
     expect(result.vendor).toEqual({ id: "demo-vendor-1", storeName: "Demo Store", storeSlug: "demo-store" });
   });
 
+  it("defaults country to GB on the user and vendor when none is given", async () => {
+    await adminDemoAccountsService.createAndProvision({
+      email: "demo-no-country@example.com",
+      password: "DemoPass123!",
+      name: "Client Demo",
+      reason: "Client demo without a country field",
+      storeName: "Demo Store",
+    });
+
+    expect(m.userCreate.mock.calls[0][0].data).toMatchObject({ country: "GB" });
+    expect(m.vendorCreate.mock.calls[0][0].data).toMatchObject({ country: "GB" });
+  });
+
   it("without a storeName, creates no vendor at all — stays a plain buyer demo", async () => {
     const result = await adminDemoAccountsService.createAndProvision({
       email: "demo-buyer-only@example.com", password: "DemoPass123!", name: "x", reason: "test",
@@ -176,6 +189,18 @@ describe("adminDemoAccountsService.createAndProvision", () => {
       coverageRegions: ["GB"],
     });
     expect(result.supplierAccount).toEqual({ id: "demo-supplier-1" });
+  });
+
+  it("with supplier:true and no country given, defaults coverageRegions to GB", async () => {
+    await adminDemoAccountsService.createAndProvision({
+      email: "demo-supplier-no-country@example.com",
+      password: "DemoPass123!",
+      name: "Client Demo",
+      reason: "Client wants to demo supplier payouts without picking a country",
+      supplier: true,
+    });
+
+    expect(m.supplierAccountCreate.mock.calls[0][0].data).toMatchObject({ coverageRegions: ["GB"] });
   });
 
   it("without supplier:true, creates no SupplierAccount at all", async () => {

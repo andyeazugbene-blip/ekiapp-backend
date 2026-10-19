@@ -146,7 +146,7 @@ export const adminDemoAccountsService = {
           role: UserRole.BUYER,
           isTest: true,
           emailVerifiedAt: new Date(),
-          country: input.country,
+          country: input.country ?? "GB",
         },
       });
 
@@ -172,7 +172,7 @@ export const adminDemoAccountsService = {
             userId: user.id,
             storeName,
             storeSlug,
-            country: input.country,
+            country: input.country ?? "GB",
             currency,
             isTest: true,
             verificationStatus: "VERIFIED",
@@ -206,7 +206,7 @@ export const adminDemoAccountsService = {
             detailsSubmitted: true,
             approvedAt: now,
             termsAcceptedAt: now,
-            coverageRegions: input.country ? [input.country] : [],
+            coverageRegions: [input.country ?? "GB"],
           },
           select: { id: true },
         });
