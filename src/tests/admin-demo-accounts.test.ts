@@ -161,6 +161,42 @@ describe("adminDemoAccountsService.createAndProvision", () => {
     expect(m.vendorCreate.mock.calls[0][0].data).toMatchObject({ country: "GB" });
   });
 
+  it("defaults the wallet currency from country (GBP for GB) instead of a hardcoded EUR, so the demo buyer can actually pay for GBP-priced listings", async () => {
+    await adminDemoAccountsService.createAndProvision({
+      email: "demo-currency-default@example.com",
+      password: "DemoPass123!",
+      name: "Client Demo",
+      reason: "Client demo without an explicit currency field",
+    });
+
+    expect(m.buyerWalletCreate.mock.calls[0][0].data).toMatchObject({ currency: "GBP" });
+  });
+
+  it("derives the wallet currency from an explicit non-GB country", async () => {
+    await adminDemoAccountsService.createAndProvision({
+      email: "demo-currency-italy@example.com",
+      password: "DemoPass123!",
+      name: "Client Demo",
+      reason: "Client demo for an Italy-based walkthrough",
+      country: "Italy",
+    });
+
+    expect(m.buyerWalletCreate.mock.calls[0][0].data).toMatchObject({ currency: "EUR" });
+  });
+
+  it("an explicit currency still overrides the country-derived default", async () => {
+    await adminDemoAccountsService.createAndProvision({
+      email: "demo-currency-override@example.com",
+      password: "DemoPass123!",
+      name: "Client Demo",
+      reason: "Client demo with an explicit currency override",
+      country: "Italy",
+      currency: "usd",
+    });
+
+    expect(m.buyerWalletCreate.mock.calls[0][0].data).toMatchObject({ currency: "USD" });
+  });
+
   it("dedupes storeName (not just the slug) when the default collides with an existing vendor", async () => {
     m.vendorFindUnique
       .mockResolvedValueOnce({ id: "existing-vendor" }) // storeName "Demo Store" taken

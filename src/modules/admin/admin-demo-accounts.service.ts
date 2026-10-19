@@ -3,6 +3,7 @@ import { UserRole } from "@prisma/client";
 
 import { prisma } from "../../lib/prisma";
 import { AppError } from "../../shared/errors/app-error";
+import { currencyFromCountry } from "../../shared/currency";
 import { resolveUniqueSlug, resolveUniqueText } from "../../shared/utils/slug";
 
 const MAX_CREDIT_MINOR = 1_000_000; // €10,000 cap per call — a deliberate ceiling, not a guess at what's "enough".
@@ -125,7 +126,15 @@ export const adminDemoAccountsService = {
     if (!Number.isInteger(creditMinor) || creditMinor <= 0 || creditMinor > MAX_CREDIT_MINOR) {
       throw new AppError(`creditMinor must be a positive integer up to ${MAX_CREDIT_MINOR}`, 400);
     }
-    const currency = (input.currency ?? "EUR").toUpperCase();
+    const country = input.country?.trim() || "GB";
+    // Wallet currency must match what the demo account will actually be
+    // checking out in. Checkout currency is the VENDOR's currency (whoever
+    // it's buying from), not the demo account's own country — but
+    // defaulting from country here is still right: GB is the core launch
+    // market, so a wallet that defaults to GBP (not a hardcoded EUR) is
+    // able to pay for the vast majority of real, already-published listings
+    // a demo buyer would actually add to cart.
+    const currency = (input.currency ?? currencyFromCountry(country)).toUpperCase();
     const passwordHash = await bcrypt.hash(input.password, BCRYPT_ROUNDS);
 
     const storeNameInput = input.storeName?.trim();
@@ -154,7 +163,7 @@ export const adminDemoAccountsService = {
           role: UserRole.BUYER,
           isTest: true,
           emailVerifiedAt: new Date(),
-          country: input.country ?? "GB",
+          country,
         },
       });
 
@@ -180,7 +189,7 @@ export const adminDemoAccountsService = {
             userId: user.id,
             storeName,
             storeSlug,
-            country: input.country ?? "GB",
+            country,
             currency,
             isTest: true,
             verificationStatus: "VERIFIED",
@@ -194,7 +203,7 @@ export const adminDemoAccountsService = {
           data: {
             vendorId: vendor.id,
             name: "Demo delivery zone",
-            country: input.country ?? "GB",
+            country,
             isActive: true,
             baseFeeAmount: 500,
             feePerKgAmount: 0,
@@ -214,7 +223,7 @@ export const adminDemoAccountsService = {
             detailsSubmitted: true,
             approvedAt: now,
             termsAcceptedAt: now,
-            coverageRegions: [input.country ?? "GB"],
+            coverageRegions: [country],
           },
           select: { id: true },
         });
