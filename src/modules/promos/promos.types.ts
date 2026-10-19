@@ -24,6 +24,13 @@ export interface UpdatePromoCodeInput {
 export interface ValidatePromoInput extends StoreScopedPromoInput {
   code: string;
   orderAmount: number;
+  /**
+   * Per-item amounts (native vendor currency, same units as orderAmount) for
+   * the cart items actually being charged. Required to correctly compute a
+   * product-scoped coupon's discount against only the matching items rather
+   * than the whole order — see promos.service.ts's validatePromo().
+   */
+  items?: { productId: string; amount: number }[];
 }
 
 export interface PromoValidationResult {

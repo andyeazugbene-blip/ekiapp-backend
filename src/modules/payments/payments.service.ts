@@ -287,6 +287,10 @@ class PaymentsService {
         code: payload.promoCode,
         orderAmount: orderAmountCents,
         vendorId: promoVendorId,
+        // Real per-item subtotals so a product-scoped coupon only discounts
+        // the items it was actually created for — see validatePromo()'s own
+        // comment for the bug this closes.
+        items: targetGroup.items.map((item) => ({ productId: item.productId, amount: item.totalAmount })),
       });
       promoDiscount = validation.discountAmount;
       promoCodeApplied = payload.promoCode;

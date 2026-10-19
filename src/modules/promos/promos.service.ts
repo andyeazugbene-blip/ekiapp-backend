@@ -259,6 +259,7 @@ export const promosService = {
           maxUses: input.maxUses,
           validFrom: input.validFrom ? new Date(input.validFrom) : new Date(),
           validUntil: input.validUntil ? new Date(input.validUntil) : null,
+          productIds,
         },
       });
 
@@ -314,13 +315,13 @@ export const promosService = {
         .map((log) => [log.entityId as string, parseVendorPromoMetadata(log.metadata)]),
     );
 
-    return promoCodes.map((promo) =>
-      toVendorPromoCodeView(
-        promo,
-        metadataMap.get(promo.id) ?? { productIds: [], audience: "all" },
-        vendor.storeSlug,
-      ),
-    );
+    return promoCodes.map((promo) => {
+      const metadata = metadataMap.get(promo.id) ?? { productIds: [], audience: "all" };
+      // PromoCode.productIds (the real, enforced column) is authoritative —
+      // the audit-log metadata's copy is historical only and may be stale
+      // for anything created before that column existed.
+      return toVendorPromoCodeView(promo, { ...metadata, productIds: promo.productIds }, vendor.storeSlug);
+    });
   },
 
   async deleteVendorPromoCode(userId: string, promoId: string): Promise<void> {
@@ -468,11 +469,31 @@ export const promosService = {
       throw new AppError("You have already used this promo code", 400);
     }
 
+    // A coupon scoped to specific products (vendor's "apply to this product
+    // only") must only discount those items' share of the order — not the
+    // whole order just because one of its items is in the cart. Without
+    // real item data there's no way to verify the scope, so refuse rather
+    // than silently granting the full-order discount a scoped coupon was
+    // never meant to give.
+    let discountBase = input.orderAmount;
+    if (promo.productIds && promo.productIds.length > 0) {
+      if (!input.items) {
+        throw new AppError("This promo code applies to specific items only.", 400, null, "PROMO_SCOPE_UNKNOWN");
+      }
+      const scopedProductIds = new Set(promo.productIds);
+      discountBase = input.items
+        .filter((item) => scopedProductIds.has(item.productId))
+        .reduce((sum, item) => sum + item.amount, 0);
+      if (discountBase <= 0) {
+        throw new AppError("This promo code doesn't apply to any items in your cart", 400, null, "PROMO_NOT_APPLICABLE");
+      }
+    }
+
     let discountAmount: number;
     if (promo.type === "PERCENTAGE") {
-      discountAmount = Math.round((input.orderAmount * promo.value) / 100);
+      discountAmount = Math.round((discountBase * promo.value) / 100);
     } else {
-      discountAmount = Math.min(promo.value, input.orderAmount);
+      discountAmount = Math.min(promo.value, discountBase);
     }
 
     return {

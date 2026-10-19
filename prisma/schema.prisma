@@ -1145,6 +1145,13 @@ model PromoCode {
   validFrom      DateTime          @default(now())
   validUntil     DateTime?
   isActive       Boolean           @default(true)
+  // 20 Oct 2026: previously a vendor's chosen "apply to this product only"
+  // selection only ever reached an AuditLog metadata blob (display-only,
+  // used for the share-link's ?product= param) — never enforced at
+  // redemption, so a coupon scoped to one item discounted the buyer's
+  // entire cart from that vendor. Now the real, authoritative source:
+  // empty means store-wide (the common case), unchanged behavior.
+  productIds     String[]          @default([])
   vendor         Vendor            @relation(fields: [vendorId], references: [id], onDelete: Restrict)
   redemptions    PromoRedemption[]
   bundle         Bundle?
