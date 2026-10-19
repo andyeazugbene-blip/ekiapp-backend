@@ -125,6 +125,7 @@ export const productsService = {
             category: input.category,
             stock: input.stock ?? 0,
             weightGrams: input.weightGrams,
+            weightUnit: input.weightUnit ?? "kg",
             status,
             isActive: status === "PUBLISHED",
             publishedAt: status === "PUBLISHED" ? new Date() : null,

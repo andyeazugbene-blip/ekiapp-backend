@@ -9,6 +9,7 @@ export interface CreateProductInput {
   category?: string;
   stock?: number;
   weightGrams?: number;
+  weightUnit?: string;
 }
 
 export interface UpdateProductInput {
@@ -21,6 +22,7 @@ export interface UpdateProductInput {
   category?: string | null;
   stock?: number;
   weightGrams?: number | null;
+  weightUnit?: string;
 }
 
 export interface ListProductsQuery {

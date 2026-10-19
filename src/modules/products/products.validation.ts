@@ -8,6 +8,19 @@ import type {
 const MAX_LIMIT = 100;
 const DEFAULT_LIMIT = 20;
 
+const VALID_WEIGHT_UNITS = new Set(["kg", "g", "lb", "oz", "pack", "bunch", "piece", "litre", "ml"]);
+
+function optionalWeightUnit(value: unknown): string | undefined {
+  if (value === undefined) return undefined;
+  const str = optionalString(value, "weightUnit");
+  if (str === undefined) return undefined;
+  const lower = str.toLowerCase();
+  if (!VALID_WEIGHT_UNITS.has(lower)) {
+    throw new AppError(`Invalid weightUnit (must be one of: ${[...VALID_WEIGHT_UNITS].join(", ")})`, 400);
+  }
+  return lower;
+}
+
 function requiredString(value: unknown, field: string): string {
   if (typeof value !== "string" || value.trim().length === 0) {
     throw new AppError(`Invalid ${field}`, 400);
@@ -87,6 +100,7 @@ export function validateCreateProductInput(input: unknown): CreateProductInput {
     stock: raw.stock === undefined ? undefined : nonNegativeInt(raw.stock, "stock"),
     weightGrams:
       raw.weightGrams === undefined ? undefined : nonNegativeInt(raw.weightGrams, "weightGrams"),
+    weightUnit: optionalWeightUnit(raw.weightUnit),
   };
 }
 
@@ -119,6 +133,10 @@ export function validateUpdateProductInput(input: unknown): UpdateProductInput {
   if (raw.weightGrams !== undefined) {
     update.weightGrams =
       raw.weightGrams === null ? null : nonNegativeInt(raw.weightGrams, "weightGrams");
+  }
+  if (raw.weightUnit !== undefined) {
+    const unit = optionalWeightUnit(raw.weightUnit);
+    if (unit !== undefined) update.weightUnit = unit;
   }
   // `currency` is intentionally NOT vendor-editable, same as `isActive` below —
   // product currency always inherits from the vendor (see products.service.ts

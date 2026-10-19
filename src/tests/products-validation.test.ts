@@ -96,6 +96,31 @@ describe("validateUpdateProductInput — currency normalization and empty-update
   });
 });
 
+describe("validateCreateProductInput / validateUpdateProductInput — weightUnit", () => {
+  it("accepts and lowercases a valid weightUnit on create", () => {
+    const result = validateCreateProductInput({ title: "Rice", priceAmount: 1000, weightUnit: "G" });
+    expect(result.weightUnit).toBe("g");
+  });
+
+  it("rejects an unrecognized weightUnit", () => {
+    expect(() => validateCreateProductInput({ title: "Rice", priceAmount: 1000, weightUnit: "stone" })).toThrow(/invalid weightunit/i);
+  });
+
+  it("is undefined on create when omitted — service defaults to kg", () => {
+    const result = validateCreateProductInput({ title: "Rice", priceAmount: 1000 });
+    expect(result.weightUnit).toBeUndefined();
+  });
+
+  it("accepts a valid weightUnit on update", () => {
+    const result = validateUpdateProductInput({ weightUnit: "lb" });
+    expect(result.weightUnit).toBe("lb");
+  });
+
+  it("rejects an unrecognized weightUnit on update", () => {
+    expect(() => validateUpdateProductInput({ weightUnit: "tonne" })).toThrow(/invalid weightunit/i);
+  });
+});
+
 describe("validateListProductsQuery — limit bounds", () => {
   it("defaults to 20 when no limit given", () => {
     expect(validateListProductsQuery({}).limit).toBe(20);
