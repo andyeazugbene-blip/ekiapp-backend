@@ -23,8 +23,8 @@ beforeEach(() => {
   productFindFirst.mockResolvedValue(null);
 });
 
-describe("Onboarding order: creating a listing is never blocked by verification status", () => {
-  it("an unverified vendor's complete product is created PENDING_ACTIVATION — not blocked, not force-drafted, not yet buyer-visible", async () => {
+describe("Policy (19 Oct 2026, explicit owner decision): publishing is never gated on verification — only withdrawal is (payouts.service.ts)", () => {
+  it("an UNVERIFIED vendor's complete product is created PUBLISHED and immediately buyer-visible", async () => {
     vendorFindUnique.mockResolvedValue({
       id: "vendor-unverified",
       verificationStatus: "PENDING",
@@ -41,11 +41,11 @@ describe("Onboarding order: creating a listing is never blocked by verification 
       images: ["https://example.com/suya.jpg"],
     });
 
-    expect(result.status).toBe("PENDING_ACTIVATION");
-    expect(result.isActive).toBe(false);
+    expect(result.status).toBe("PUBLISHED");
+    expect(result.isActive).toBe(true);
   });
 
-  it("a verified vendor's complete product is created PUBLISHED and immediately buyer-visible", async () => {
+  it("a VERIFIED vendor's complete product is also created PUBLISHED and immediately buyer-visible", async () => {
     vendorFindUnique.mockResolvedValue({
       id: "vendor-verified-live",
       verificationStatus: "VERIFIED",

@@ -354,7 +354,7 @@ describe("payoutsService.adminMarkPaid — manual (non-Stripe) payout methods ar
  */
 describe("payoutsService — NAV-04: every payout lifecycle notification carries a routable data.type", () => {
   it("createRequest() sends PAYOUT_REQUESTED with data.type = 'payout_requested'", async () => {
-    m.vendor.findUnique.mockResolvedValue({ id: "vendor-1" } as never);
+    m.vendor.findUnique.mockResolvedValue({ id: "vendor-1", verificationStatus: "VERIFIED" } as never);
     m.payoutMethod.findUnique.mockResolvedValue({ id: "method-1", vendorId: "vendor-1" } as never);
     m.wallet.findUnique.mockResolvedValue({ id: "wallet-1", vendorId: "vendor-1", availableBalance: 50000, currency: "GBP" } as never);
     m.payoutRequest.create.mockResolvedValue({ id: "payout-req-1", amount: 10000, netAmount: 10000, currency: "GBP" } as never);

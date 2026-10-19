@@ -34,9 +34,26 @@ async function getVendorForUser(userId: string): Promise<{ id: string }> {
 // Acceptance audit fix: a suspended vendor must not be able to request a
 // new payout — same 404-as-not-found convention used elsewhere for a
 // suspended vendor's own write attempts.
+//
+// Policy (19 Oct 2026, explicit owner decision): a vendor may publish and
+// sell live without identity verification — verification is required only
+// here, at withdrawal time. Unlike publishing (products.service.ts), this
+// IS the gate, so it throws a real, named error rather than the generic
+// 404-as-not-found used for suspension.
 async function getVendorForWrite(userId: string): Promise<{ id: string }> {
-  const vendor = await prisma.vendor.findUnique({ where: { userId }, select: { id: true, isSuspended: true } });
+  const vendor = await prisma.vendor.findUnique({
+    where: { userId },
+    select: { id: true, isSuspended: true, verificationStatus: true },
+  });
   if (!vendor || vendor.isSuspended) throw new AppError("Vendor profile not found", 404);
+  if (vendor.verificationStatus !== "VERIFIED") {
+    throw new AppError(
+      "Identity verification is required before requesting a payout.",
+      403,
+      null,
+      "VENDOR_NOT_VERIFIED",
+    );
+  }
   return vendor;
 }
 

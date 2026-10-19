@@ -1,7 +1,9 @@
 /**
  * Vendor-activation spec: PAUSED is vendor-resumable (symmetric to
  * disableProduct). resumeProduct() recomputes the correct status from
- * current completeness + current verification — never blindly re-publishes.
+ * current completeness — never blindly re-publishes an incomplete listing.
+ * Policy (19 Oct 2026): verification no longer affects this at all —
+ * publishing was never gated on it; only withdrawal is (payouts.service.ts).
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
@@ -42,11 +44,11 @@ describe("productsService.resumeProduct", () => {
     expect(result.isActive).toBe(true);
   });
 
-  it("resumes to PENDING_ACTIVATION, not PUBLISHED, if the vendor is no longer verified", async () => {
+  it("still resumes to PUBLISHED even when the vendor is unverified — verification never gates publishing", async () => {
     m.vendorFindUnique.mockResolvedValue({ id: "v1", isSuspended: false, verificationStatus: "PENDING" });
     const result = await productsService.resumeProduct("user-1", "p1");
-    expect(result.status).toBe("PENDING_ACTIVATION");
-    expect(result.isActive).toBe(false);
+    expect(result.status).toBe("PUBLISHED");
+    expect(result.isActive).toBe(true);
   });
 
   it("refuses to resume a product that isn't PAUSED", async () => {

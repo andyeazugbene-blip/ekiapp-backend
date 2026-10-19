@@ -19,16 +19,16 @@ import type {
 // promos.service.ts/bundles.service.ts/flash-sales.service.ts — a
 // suspended vendor's own write attempts get the same 404 an unauthorized
 // caller would, not a message revealing suspension state).
-async function getVendorWithVerification(userId: string): Promise<{ id: string; currency: string; isVerified: boolean }> {
+async function getVendorWithVerification(userId: string): Promise<{ id: string; currency: string }> {
   const vendor = await prisma.vendor.findUnique({
     where: { userId },
-    select: { id: true, verificationStatus: true, currency: true, country: true, isSuspended: true },
+    select: { id: true, currency: true, country: true, isSuspended: true },
   });
   if (!vendor || vendor.isSuspended) {
     throw new AppError("Vendor profile not found", 404);
   }
   const currency = vendor.currency || currencyFromCountry(vendor.country);
-  return { id: vendor.id, currency, isVerified: vendor.verificationStatus === "VERIFIED" };
+  return { id: vendor.id, currency };
 }
 
 // Permissive on purpose — used by read paths (listMyProducts,
@@ -48,15 +48,15 @@ async function getVendorIdForUser(userId: string): Promise<string> {
 
 // Acceptance audit fix: a suspended vendor must not be able to write —
 // same 404-as-not-found convention as promos/bundles/flash-sales.service.ts.
-async function getVendorForWrite(userId: string): Promise<{ id: string; isVerified: boolean }> {
+async function getVendorForWrite(userId: string): Promise<{ id: string }> {
   const vendor = await prisma.vendor.findUnique({
     where: { userId },
-    select: { id: true, isSuspended: true, verificationStatus: true },
+    select: { id: true, isSuspended: true },
   });
   if (!vendor || vendor.isSuspended) {
     throw new AppError("Vendor profile not found", 404);
   }
-  return { id: vendor.id, isVerified: vendor.verificationStatus === "VERIFIED" };
+  return { id: vendor.id };
 }
 
 async function nextProductCode(): Promise<string> {
@@ -75,36 +75,35 @@ export function isProductComplete(p: { images: string[] | null | undefined; pric
 }
 
 /**
- * Vendor-activation spec (12 Oct 2026): a complete listing from an
- * unverified vendor is PENDING_ACTIVATION — buyer-invisible, but the
- * vendor's intent to publish is preserved and it auto-publishes the
- * moment they verify (see verification-activation.service.ts). An
- * incomplete listing is always DRAFT regardless of verification state —
- * there's nothing to activate yet. isActive is kept in sync as a plain
- * derived value: `isActive = (status === "PUBLISHED")`, since every other
- * query in the codebase (cart, checkout, buyer feed, automations) still
- * reads isActive as the one enforced visibility gate.
+ * Policy change (19 Oct 2026, explicit owner decision): a vendor may
+ * publish and sell live the moment a listing is complete — identity
+ * verification is required only at withdrawal time (see
+ * payouts.service.ts's createRequest), never to go live. Previously a
+ * complete-but-unverified listing sat in PENDING_ACTIVATION until the
+ * vendor verified; that state is no longer reachable from any normal
+ * create/update flow (kept in the enum for admin/historical rows only —
+ * see the 20261019_publish_pending_activation_on_verification_removal
+ * migration, which flips every existing one to PUBLISHED once). An
+ * incomplete listing is always DRAFT — there's nothing to activate yet.
+ * isActive is kept in sync as a plain derived value:
+ * `isActive = (status === "PUBLISHED")`, since every other query in the
+ * codebase (cart, checkout, buyer feed, automations) still reads isActive
+ * as the one enforced visibility gate.
  */
-export function computeProductStatus(params: { complete: boolean; vendorVerified: boolean }): ProductStatus {
-  if (!params.complete) return "DRAFT";
-  return params.vendorVerified ? "PUBLISHED" : "PENDING_ACTIVATION";
+export function computeProductStatus(params: { complete: boolean }): ProductStatus {
+  return params.complete ? "PUBLISHED" : "DRAFT";
 }
 
 export const productsService = {
   async createProduct(userId: string, input: CreateProductInput): Promise<Product> {
     const vendor = await getVendorWithVerification(userId);
 
-    // Onboarding order decision: vendors set up their store — add
-    // foodstuff, configure delivery — BEFORE verification becomes a
-    // requirement; creating a complete listing is never blocked by
-    // verification state. What the listing's status IS once created
-    // depends on both completeness (handbook 14.6: image + price > 0)
-    // and verification — see computeProductStatus(). Verification is
-    // enforced as a VISIBILITY gate here, not a creation gate, and
-    // separately at checkout/payout (seller-readiness.ts's
-    // SELLER_PAYMENT_READINESS_GATE).
+    // A complete listing (image + price > 0, handbook 14.6) publishes
+    // immediately regardless of verification state — identity
+    // verification is required only at withdrawal time (payouts.service
+    // .ts's createRequest), never to go live. See computeProductStatus().
     const complete = isProductComplete({ images: input.images ?? [], priceInCents: input.priceAmount });
-    const status = computeProductStatus({ complete, vendorVerified: vendor.isVerified });
+    const status = computeProductStatus({ complete });
 
     // Enforce subscription product limit
     await subscriptionsService.enforceProductLimit(vendor.id);
@@ -181,6 +180,9 @@ export const productsService = {
     // adding the missing image completes it). PUBLISHED is guarded above
     // instead of silently downgraded, and PAUSED/REJECTED are deliberate
     // vendor/admin decisions an ordinary content edit must never override.
+    // PENDING_ACTIVATION itself is no longer reachable going forward (see
+    // computeProductStatus()) but existing rows can still carry it until
+    // their next edit flips them to PUBLISHED here.
     const statusUpdate =
       product.status === "DRAFT" || product.status === "PENDING_ACTIVATION"
         ? (() => {
@@ -188,7 +190,7 @@ export const productsService = {
               images: rest.images !== undefined ? rest.images : product.images,
               priceInCents: priceAmount ?? product.priceInCents,
             });
-            const status = computeProductStatus({ complete, vendorVerified: vendor.isVerified });
+            const status = computeProductStatus({ complete });
             return { status, isActive: status === "PUBLISHED", ...(status === "PUBLISHED" ? { publishedAt: new Date() } : {}) };
           })()
         : {};
@@ -261,7 +263,7 @@ export const productsService = {
     }
 
     const complete = isProductComplete({ images: product.images, priceInCents: product.priceInCents });
-    const status = computeProductStatus({ complete, vendorVerified: vendor.isVerified });
+    const status = computeProductStatus({ complete });
     return prisma.product.update({
       where: { id: productId },
       data: { status, isActive: status === "PUBLISHED", ...(status === "PUBLISHED" ? { publishedAt: new Date() } : {}) },

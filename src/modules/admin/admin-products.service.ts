@@ -297,11 +297,11 @@ export const adminProductsService = {
     };
   },
 
-  /** Restore: completeness gate (image + price > 0), clears the unpublish markers. Goes to PUBLISHED if the vendor is verified, otherwise PENDING_ACTIVATION (auto-publishes once they are — see verification-activation.service.ts). */
+  /** Restore: completeness gate (image + price > 0), clears the unpublish markers. Goes straight to PUBLISHED — verification is no longer a publish gate, only a withdrawal gate (see payouts.service.ts's createRequest). */
   async restore(productId: string, reason: string) {
     const product = await prisma.product.findUnique({
       where: { id: productId },
-      include: { vendor: { select: { userId: true, storeName: true, verificationStatus: true } } },
+      include: { vendor: { select: { userId: true, storeName: true } } },
     });
     if (!product) throw new AppError("Product not found", 404);
     if (product.isActive) throw new AppError("Product is already live", 409, null, "ALREADY_ACTIVE");
@@ -313,8 +313,7 @@ export const adminProductsService = {
         "PRODUCT_INCOMPLETE",
       );
     }
-    const vendorVerified = product.vendor?.verificationStatus === "VERIFIED";
-    const status = computeProductStatus({ complete: true, vendorVerified });
+    const status = computeProductStatus({ complete: true });
     const res = await prisma.product.updateMany({
       where: { id: productId, isActive: false },
       data: {
