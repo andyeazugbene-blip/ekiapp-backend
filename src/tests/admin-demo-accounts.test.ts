@@ -15,6 +15,7 @@ const m = vi.hoisted(() => ({
   vendorFindUnique: vi.fn(),
   vendorCreate: vi.fn(),
   deliveryZoneCreate: vi.fn(),
+  supplierAccountCreate: vi.fn(),
 }));
 
 vi.mock("../lib/prisma", () => ({
@@ -24,6 +25,7 @@ vi.mock("../lib/prisma", () => ({
     buyerWalletTransaction: { create: m.buyerWalletTransactionCreate },
     vendor: { findUnique: m.vendorFindUnique, create: m.vendorCreate },
     deliveryZone: { create: m.deliveryZoneCreate },
+    supplierAccount: { create: m.supplierAccountCreate },
     $transaction: (fn: any) =>
       fn({
         user: { update: m.userUpdate, create: m.userCreate },
@@ -31,6 +33,7 @@ vi.mock("../lib/prisma", () => ({
         buyerWalletTransaction: { create: m.buyerWalletTransactionCreate },
         vendor: { create: m.vendorCreate },
         deliveryZone: { create: m.deliveryZoneCreate },
+        supplierAccount: { create: m.supplierAccountCreate },
       }),
   },
 }));
@@ -48,6 +51,7 @@ beforeEach(() => {
   m.vendorFindUnique.mockResolvedValue(null); // slug is free
   m.vendorCreate.mockResolvedValue({ id: "demo-vendor-1", storeName: "Demo Store", storeSlug: "demo-store" });
   m.deliveryZoneCreate.mockResolvedValue({});
+  m.supplierAccountCreate.mockResolvedValue({ id: "demo-supplier-1" });
 });
 
 describe("adminDemoAccountsService.provision", () => {
@@ -151,5 +155,34 @@ describe("adminDemoAccountsService.createAndProvision", () => {
     expect(m.vendorCreate).not.toHaveBeenCalled();
     expect(m.deliveryZoneCreate).not.toHaveBeenCalled();
     expect(result.vendor).toBeNull();
+  });
+
+  it("with supplier:true, also creates a pre-approved SupplierAccount with payout readiness already satisfied", async () => {
+    const result = await adminDemoAccountsService.createAndProvision({
+      email: "demo-supplier@example.com",
+      password: "DemoPass123!",
+      name: "Client Demo",
+      reason: "Client wants to demo Community Buy supplier payouts too",
+      country: "GB",
+      supplier: true,
+    });
+
+    expect(m.supplierAccountCreate.mock.calls[0][0].data).toMatchObject({
+      userId: "new-buyer-1",
+      supplierState: "APPROVED",
+      chargesEnabled: true,
+      payoutsEnabled: true,
+      detailsSubmitted: true,
+      coverageRegions: ["GB"],
+    });
+    expect(result.supplierAccount).toEqual({ id: "demo-supplier-1" });
+  });
+
+  it("without supplier:true, creates no SupplierAccount at all", async () => {
+    const result = await adminDemoAccountsService.createAndProvision({
+      email: "demo-no-supplier@example.com", password: "DemoPass123!", name: "x", reason: "test",
+    });
+    expect(m.supplierAccountCreate).not.toHaveBeenCalled();
+    expect(result.supplierAccount).toBeNull();
   });
 });

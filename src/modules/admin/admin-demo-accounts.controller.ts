@@ -52,8 +52,9 @@ export async function adminCreateDemoAccount(request: Request, response: Respons
   const currency = typeof request.body?.currency === "string" ? request.body.currency : undefined;
   const storeName = typeof request.body?.storeName === "string" && request.body.storeName.trim() ? request.body.storeName.trim() : undefined;
   const country = typeof request.body?.country === "string" && request.body.country.trim() ? request.body.country.trim() : undefined;
+  const supplier = request.body?.supplier === true;
 
-  const result = await adminDemoAccountsService.createAndProvision({ email, password, name, reason, creditMinor, currency, storeName, country });
+  const result = await adminDemoAccountsService.createAndProvision({ email, password, name, reason, creditMinor, currency, storeName, country, supplier });
 
   await recordAudit({
     request,
@@ -62,7 +63,10 @@ export async function adminCreateDemoAccount(request: Request, response: Respons
     entityType: "User",
     entityId: result.userId,
     reason,
-    afterState: { email: result.email, isTest: result.isTest, walletBalanceMinor: result.walletBalanceMinor, currency: result.currency, vendorId: result.vendor?.id ?? null },
+    afterState: {
+      email: result.email, isTest: result.isTest, walletBalanceMinor: result.walletBalanceMinor, currency: result.currency,
+      vendorId: result.vendor?.id ?? null, supplierAccountId: result.supplierAccount?.id ?? null,
+    },
     failClosed: true,
   });
 

@@ -94,6 +94,19 @@ export const adminDemoAccountsService = {
      */
     storeName?: string;
     country?: string;
+    /**
+     * 19 Oct 2026: also demo the Community Buy supplier side — accepting a
+     * campaign assignment and requesting a payout. Community Buy itself
+     * (organising/joining a campaign) needs no activation at all, it's
+     * open to any authenticated user (see community-buy.routes.ts); the
+     * real gap is SupplierAccount, a separate capability from the Vendor
+     * row above. Pre-approved with chargesEnabled/payoutsEnabled true
+     * (campaign-payout.service.ts's blockers check) so a demo payout
+     * request goes through without real Stripe Connect KYC — same
+     * bypass-Stripe-entirely pattern as the buyer wallet and the vendor
+     * store above.
+     */
+    supplier?: boolean;
   }): Promise<{
     userId: string;
     email: string;
@@ -101,6 +114,7 @@ export const adminDemoAccountsService = {
     walletBalanceMinor: number;
     currency: string;
     vendor: { id: string; storeName: string; storeSlug: string } | null;
+    supplierAccount: { id: string } | null;
   }> {
     const existing = await prisma.user.findUnique({ where: { email: input.email }, select: { id: true } });
     if (existing) {
@@ -180,7 +194,25 @@ export const adminDemoAccountsService = {
         });
       }
 
-      return { userId: user.id, wallet, vendor };
+      let supplierAccount: { id: string } | null = null;
+      if (input.supplier) {
+        const now = new Date();
+        supplierAccount = await tx.supplierAccount.create({
+          data: {
+            userId: user.id,
+            supplierState: "APPROVED",
+            chargesEnabled: true,
+            payoutsEnabled: true,
+            detailsSubmitted: true,
+            approvedAt: now,
+            termsAcceptedAt: now,
+            coverageRegions: input.country ? [input.country] : [],
+          },
+          select: { id: true },
+        });
+      }
+
+      return { userId: user.id, wallet, vendor, supplierAccount };
     });
 
     return {
@@ -190,6 +222,7 @@ export const adminDemoAccountsService = {
       walletBalanceMinor: result.wallet.balance,
       currency: result.wallet.currency,
       vendor: result.vendor,
+      supplierAccount: result.supplierAccount,
     };
   },
 };
