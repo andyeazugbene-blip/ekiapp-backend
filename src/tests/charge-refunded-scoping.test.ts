@@ -10,7 +10,7 @@ const tx = {
   refund: { groupBy: vi.fn() },
   order: { updateMany: vi.fn() },
   walletTransaction: { findFirst: vi.fn().mockResolvedValue(null), create: vi.fn() },
-  wallet: { findUnique: vi.fn(), update: vi.fn() },
+  wallet: { findUnique: vi.fn(), update: vi.fn(), updateMany: vi.fn() },
   product: { update: vi.fn() },
   payment: { findFirst: vi.fn() },
   communityBuyPaymentAuthorisation: { findUnique: vi.fn() },
@@ -33,6 +33,7 @@ vi.mock("../modules/community-buy/organiser-stripe-connect.service", () => ({ or
 vi.mock("../modules/vendors/stripe-connect.service", () => ({ stripeConnectService: {} }));
 
 import { stripe } from "../lib/stripe";
+import { logger } from "../lib/logger";
 import { stripeWebhookService } from "../modules/stripe/stripe.service";
 
 const constructEvent = vi.mocked(stripe.webhooks.constructEvent);
@@ -99,5 +100,59 @@ describe("charge.refunded scoping", () => {
 
     const refundedIds = tx.order.updateMany.mock.calls.map((c) => (c[0] as { where: { id: string } }).where.id);
     expect(refundedIds).toEqual(["ord-B"]);
+  });
+});
+
+describe("charge.refunded — wallet reversal claws back from the right balance (19 Oct 2026 fix)", () => {
+  function mockFindFirst(opts: { credit?: { amount: number; currency: string }; alreadyReleased?: boolean }) {
+    tx.walletTransaction.findFirst.mockImplementation(async (args: any) => {
+      if (args.where.type === "PAYMENT_PENDING_CREDIT") {
+        return opts.credit ? { amount: opts.credit.amount, currency: opts.credit.currency } : null;
+      }
+      if (args.where.type === "PENDING_TO_AVAILABLE") {
+        return opts.alreadyReleased ? { id: "rel-1" } : null;
+      }
+      return null;
+    });
+  }
+
+  it("not yet dispatched (no PENDING_TO_AVAILABLE row): debits pendingBalance, not availableBalance", async () => {
+    tx.refund.groupBy.mockResolvedValue([]);
+    mockFindFirst({ credit: { amount: 5000, currency: "eur" }, alreadyReleased: false });
+    tx.wallet.findUnique.mockResolvedValue({ id: "w-A", vendorId: "v-A" });
+
+    await fire({ amount_refunded: 10000 });
+
+    expect(tx.wallet.update).toHaveBeenCalledWith({ where: { id: "w-A" }, data: { pendingBalance: { decrement: 5000 } } });
+    expect(tx.wallet.updateMany).not.toHaveBeenCalled();
+  });
+
+  it("already dispatched (PENDING_TO_AVAILABLE row exists): claws back from availableBalance, guarded", async () => {
+    tx.refund.groupBy.mockResolvedValue([]);
+    mockFindFirst({ credit: { amount: 5000, currency: "eur" }, alreadyReleased: true });
+    tx.wallet.findUnique.mockResolvedValue({ id: "w-A", vendorId: "v-A" });
+    tx.wallet.updateMany.mockResolvedValue({ count: 1 });
+
+    await fire({ amount_refunded: 10000 });
+
+    expect(tx.wallet.updateMany).toHaveBeenCalledWith({
+      where: { id: "w-A", availableBalance: { gte: 5000 } },
+      data: { availableBalance: { decrement: 5000 } },
+    });
+    expect(tx.wallet.update).not.toHaveBeenCalled();
+  });
+
+  it("already dispatched but availableBalance is already spent (payout already taken): logs for manual reconciliation instead of going negative or throwing", async () => {
+    tx.refund.groupBy.mockResolvedValue([]);
+    mockFindFirst({ credit: { amount: 5000, currency: "eur" }, alreadyReleased: true });
+    tx.wallet.findUnique.mockResolvedValue({ id: "w-A", vendorId: "v-A" });
+    tx.wallet.updateMany.mockResolvedValue({ count: 0 }); // guard failed — insufficient availableBalance
+
+    await expect(fire({ amount_refunded: 10000 })).resolves.toBeDefined();
+
+    expect(logger.error).toHaveBeenCalledWith(
+      expect.stringContaining("Refund clawback exceeds available balance"),
+      expect.objectContaining({ vendorId: "v-A", amount: 5000 }),
+    );
   });
 });

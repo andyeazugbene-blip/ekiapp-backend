@@ -1774,11 +1774,43 @@ class StripeWebhookService {
               if (existingCredit) {
                 const wallet = await tx.wallet.findUnique({ where: { vendorId } });
                 if (wallet) {
-                  // Debit the pending balance (reverse the credit)
-                  await tx.wallet.update({
-                    where: { id: wallet.id },
-                    data: { pendingBalance: { decrement: existingCredit.amount } },
+                  // A vendor marking an order DISPATCHED moves its earnings
+                  // pending -> available (wallet-release.ts's
+                  // releaseVendorEarnings()) — a refund arriving AFTER that
+                  // (e.g. admin refunds a DISPATCHED/DELIVERED order; only
+                  // REFUNDED/CANCELLED/open-dispute orders are blocked, see
+                  // admin-refunds.controller.ts) must claw back from
+                  // availableBalance instead, or the pendingBalance decrement
+                  // below silently misses money the vendor could otherwise
+                  // still withdraw for an order the buyer was refunded on.
+                  const alreadyReleased = await tx.walletTransaction.findFirst({
+                    where: { orderId: order.id, vendorId, type: "PENDING_TO_AVAILABLE" },
                   });
+
+                  if (alreadyReleased) {
+                    // Guarded like releaseVendorEarnings()/payout debits —
+                    // never drive the balance negative. If the vendor already
+                    // cashed out past this order's earnings (balances are a
+                    // fungible pool, not per-order), there's nothing left to
+                    // claw back automatically; log loudly for manual admin
+                    // reconciliation rather than silently under/over-debiting
+                    // unrelated orders' earnings.
+                    const clawback = await tx.wallet.updateMany({
+                      where: { id: wallet.id, availableBalance: { gte: existingCredit.amount } },
+                      data: { availableBalance: { decrement: existingCredit.amount } },
+                    });
+                    if (clawback.count === 0) {
+                      logger.error("Refund clawback exceeds available balance — vendor may have already been paid out for this order's earnings; needs manual admin reconciliation", {
+                        orderId: order.id, vendorId, amount: existingCredit.amount,
+                      });
+                    }
+                  } else {
+                    // Debit the pending balance (reverse the credit)
+                    await tx.wallet.update({
+                      where: { id: wallet.id },
+                      data: { pendingBalance: { decrement: existingCredit.amount } },
+                    });
+                  }
 
                   await tx.walletTransaction.create({
                     data: {
