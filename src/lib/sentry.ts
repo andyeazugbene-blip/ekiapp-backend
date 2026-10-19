@@ -16,6 +16,10 @@ if (dsn) {
       dsn,
       environment: process.env.NODE_ENV ?? "development",
       tracesSampleRate: 0,
+      // Shares a Sentry project with the mobile app (same org, one DSN
+      // for both) — this tag is how backend events stay distinguishable
+      // from mobile events in that shared Issues list.
+      initialScope: { tags: { app: "backend" } },
     });
     initialized = true;
     logger.info("Sentry initialized");
