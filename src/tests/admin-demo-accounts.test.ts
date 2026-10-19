@@ -12,6 +12,9 @@ const m = vi.hoisted(() => ({
   buyerWalletUpsert: vi.fn(),
   buyerWalletCreate: vi.fn(),
   buyerWalletTransactionCreate: vi.fn(),
+  vendorFindUnique: vi.fn(),
+  vendorCreate: vi.fn(),
+  deliveryZoneCreate: vi.fn(),
 }));
 
 vi.mock("../lib/prisma", () => ({
@@ -19,11 +22,15 @@ vi.mock("../lib/prisma", () => ({
     user: { findUnique: m.userFindUnique, update: m.userUpdate, create: m.userCreate },
     buyerWallet: { upsert: m.buyerWalletUpsert, create: m.buyerWalletCreate },
     buyerWalletTransaction: { create: m.buyerWalletTransactionCreate },
+    vendor: { findUnique: m.vendorFindUnique, create: m.vendorCreate },
+    deliveryZone: { create: m.deliveryZoneCreate },
     $transaction: (fn: any) =>
       fn({
         user: { update: m.userUpdate, create: m.userCreate },
         buyerWallet: { upsert: m.buyerWalletUpsert, create: m.buyerWalletCreate },
         buyerWalletTransaction: { create: m.buyerWalletTransactionCreate },
+        vendor: { create: m.vendorCreate },
+        deliveryZone: { create: m.deliveryZoneCreate },
       }),
   },
 }));
@@ -38,6 +45,9 @@ beforeEach(() => {
   m.buyerWalletCreate.mockResolvedValue({ id: "w1", balance: 500000, currency: "EUR" });
   m.buyerWalletTransactionCreate.mockResolvedValue({});
   m.userCreate.mockResolvedValue({ id: "new-buyer-1" });
+  m.vendorFindUnique.mockResolvedValue(null); // slug is free
+  m.vendorCreate.mockResolvedValue({ id: "demo-vendor-1", storeName: "Demo Store", storeSlug: "demo-store" });
+  m.deliveryZoneCreate.mockResolvedValue({});
 });
 
 describe("adminDemoAccountsService.provision", () => {
@@ -111,5 +121,35 @@ describe("adminDemoAccountsService.createAndProvision", () => {
     await expect(
       adminDemoAccountsService.createAndProvision({ email: "x@example.com", password: "DemoPass123!", name: "x", reason: "test", creditMinor: 2_000_000 }),
     ).rejects.toMatchObject({ statusCode: 400 });
+  });
+
+  it("with a storeName, also creates a pre-verified vendor store and a delivery zone so an added product publishes immediately", async () => {
+    const result = await adminDemoAccountsService.createAndProvision({
+      email: "demo-seller@example.com",
+      password: "DemoPass123!",
+      name: "Client Demo",
+      reason: "Client wants to demo adding foodstuff too",
+      storeName: "Demo Store",
+      country: "GB",
+    });
+
+    expect(m.vendorCreate.mock.calls[0][0].data).toMatchObject({
+      userId: "new-buyer-1",
+      storeName: "Demo Store",
+      storeSlug: "demo-store",
+      isTest: true,
+      verificationStatus: "VERIFIED",
+    });
+    expect(m.deliveryZoneCreate.mock.calls[0][0].data).toMatchObject({ vendorId: "demo-vendor-1", isActive: true });
+    expect(result.vendor).toEqual({ id: "demo-vendor-1", storeName: "Demo Store", storeSlug: "demo-store" });
+  });
+
+  it("without a storeName, creates no vendor at all — stays a plain buyer demo", async () => {
+    const result = await adminDemoAccountsService.createAndProvision({
+      email: "demo-buyer-only@example.com", password: "DemoPass123!", name: "x", reason: "test",
+    });
+    expect(m.vendorCreate).not.toHaveBeenCalled();
+    expect(m.deliveryZoneCreate).not.toHaveBeenCalled();
+    expect(result.vendor).toBeNull();
   });
 });
