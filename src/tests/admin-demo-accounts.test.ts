@@ -161,6 +161,23 @@ describe("adminDemoAccountsService.createAndProvision", () => {
     expect(m.vendorCreate.mock.calls[0][0].data).toMatchObject({ country: "GB" });
   });
 
+  it("dedupes storeName (not just the slug) when the default collides with an existing vendor", async () => {
+    m.vendorFindUnique
+      .mockResolvedValueOnce({ id: "existing-vendor" }) // storeName "Demo Store" taken
+      .mockResolvedValueOnce(null) // storeName "Demo Store 2" free
+      .mockResolvedValueOnce(null); // storeSlug "demo-store-2" free
+
+    await adminDemoAccountsService.createAndProvision({
+      email: "demo-collide@example.com",
+      password: "DemoPass123!",
+      name: "Client Demo",
+      reason: "Second demo left on the dialog's default store name",
+      storeName: "Demo Store",
+    });
+
+    expect(m.vendorCreate.mock.calls[0][0].data).toMatchObject({ storeName: "Demo Store 2", storeSlug: "demo-store-2" });
+  });
+
   it("without a storeName, creates no vendor at all — stays a plain buyer demo", async () => {
     const result = await adminDemoAccountsService.createAndProvision({
       email: "demo-buyer-only@example.com", password: "DemoPass123!", name: "x", reason: "test",

@@ -44,3 +44,30 @@ export async function resolveUniqueSlug(
   // Pathological fallback — vanishingly rare in practice.
   return `${safeBase}-${Date.now().toString(36)}`;
 }
+
+/**
+ * Same collision-avoidance loop as resolveUniqueSlug, but for a display
+ * value that must stay human-readable (e.g. a store name) rather than
+ * being slugified — appends " 2", " 3", ... instead of "-2", "-3".
+ */
+export async function resolveUniqueText(
+  base: string,
+  exists: (candidate: string) => Promise<boolean>,
+  options: { maxAttempts?: number } = {},
+): Promise<string> {
+  const maxAttempts = options.maxAttempts ?? 50;
+
+  if (!(await exists(base))) {
+    return base;
+  }
+
+  for (let i = 2; i <= maxAttempts; i++) {
+    const candidate = `${base} ${i}`;
+    if (!(await exists(candidate))) {
+      return candidate;
+    }
+  }
+
+  // Pathological fallback — vanishingly rare in practice.
+  return `${base} ${Date.now().toString(36)}`;
+}

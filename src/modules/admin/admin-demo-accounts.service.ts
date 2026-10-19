@@ -3,7 +3,7 @@ import { UserRole } from "@prisma/client";
 
 import { prisma } from "../../lib/prisma";
 import { AppError } from "../../shared/errors/app-error";
-import { resolveUniqueSlug } from "../../shared/utils/slug";
+import { resolveUniqueSlug, resolveUniqueText } from "../../shared/utils/slug";
 
 const MAX_CREDIT_MINOR = 1_000_000; // €10,000 cap per call — a deliberate ceiling, not a guess at what's "enough".
 const DEFAULT_CREDIT_MINOR = 500_000; // €5,000 — generous for a marketing demo, never auto-applied silently (always an explicit admin action).
@@ -128,9 +128,17 @@ export const adminDemoAccountsService = {
     const currency = (input.currency ?? "EUR").toUpperCase();
     const passwordHash = await bcrypt.hash(input.password, BCRYPT_ROUNDS);
 
-    const storeName = input.storeName?.trim();
+    const storeNameInput = input.storeName?.trim();
+    let storeName: string | null = null;
     let storeSlug: string | null = null;
-    if (storeName) {
+    if (storeNameInput) {
+      // storeName is @unique same as storeSlug — dedupe both, so a second
+      // demo account left on the dialog's default "Demo Store" name
+      // doesn't 500 on a unique constraint violation.
+      storeName = await resolveUniqueText(storeNameInput, async (candidate) => {
+        const hit = await prisma.vendor.findUnique({ where: { storeName: candidate }, select: { id: true } });
+        return hit !== null;
+      });
       storeSlug = await resolveUniqueSlug(storeName, async (candidate) => {
         const hit = await prisma.vendor.findUnique({ where: { storeSlug: candidate }, select: { id: true } });
         return hit !== null;
