@@ -2,6 +2,7 @@ import type { CommissionTier, SellerPlan, SubscriptionPlan } from "@prisma/clien
 
 import { env } from "../../config/env";
 import { prisma } from "../../lib/prisma";
+import { adminPlatformSettingsService } from "../admin/admin-platform-settings.service";
 import { DEFAULT_SELLER_PLAN_CONFIGS } from "./subscriptions.types";
 
 type SellerPlanWithTiers = SellerPlan & { commissionTiers: CommissionTier[] };
@@ -80,17 +81,26 @@ async function findStarterPlan(client: SellerPlanLookupClient): Promise<SellerPl
 /**
  * Product decision (Handbook 14.8 L587): vendor monetization is SUBSCRIPTION, not a sales
  * commission. The commission machinery (seller-plan tiers) is kept for history/reporting,
- * but it only ever produces a fee when SALES_COMMISSION_ENABLED=true is set explicitly
- * (an owner-approved exception). Default: platform fee is 0 for every new order.
- * Withdrawal fees are a separate payout concept and are not changed here.
+ * but it only ever produces a fee when the policy is explicitly enabled. Default: platform
+ * fee is 0 for every new order. Withdrawal fees are a separate payout concept and are not
+ * changed here.
+ *
+ * 21 Oct 2026: made admin-configurable without a redeploy. The env var remains the
+ * fallback used when no admin has ever touched the toggle — once an admin sets
+ * FLAG_SALES_COMMISSION_ENABLED from the admin-web Flags tab, the DB value wins. This
+ * keeps existing production behavior unchanged until an admin explicitly opts in.
  */
 export function salesCommissionEnabled(envVars: Record<string, string | undefined> = process.env): boolean {
   return (envVars.SALES_COMMISSION_ENABLED ?? "").trim().toLowerCase() === "true";
 }
 
+export async function resolveSalesCommissionPolicy(): Promise<boolean> {
+  return adminPlatformSettingsService.getFlag("FLAG_SALES_COMMISSION_ENABLED", salesCommissionEnabled());
+}
+
 export function applyCommissionPolicy(
   resolution: VendorCommissionResolution,
-  enabled: boolean = salesCommissionEnabled(),
+  enabled: boolean,
 ): VendorCommissionResolution {
   if (enabled) return resolution;
   return { ...resolution, platformFeeBps: 0, commissionTierId: null, commissionTierLabel: null };
@@ -101,7 +111,11 @@ export async function resolveVendorCommission(
   subtotalAmount = 0,
   client: SellerPlanLookupClient = prisma as unknown as SellerPlanLookupClient,
 ): Promise<VendorCommissionResolution> {
-  return applyCommissionPolicy(await resolveVendorCommissionRaw(vendorId, subtotalAmount, client));
+  const [raw, enabled] = await Promise.all([
+    resolveVendorCommissionRaw(vendorId, subtotalAmount, client),
+    resolveSalesCommissionPolicy(),
+  ]);
+  return applyCommissionPolicy(raw, enabled);
 }
 
 async function resolveVendorCommissionRaw(

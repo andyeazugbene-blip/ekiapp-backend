@@ -31,6 +31,10 @@ vi.mock("../modules/promos/promos.service", () => ({
   promosService: { validatePromo: vi.fn() },
 }));
 
+vi.mock("../modules/admin/admin-platform-settings.service", () => ({
+  adminPlatformSettingsService: { getFlag: vi.fn().mockResolvedValue(false) },
+}));
+
 import { prisma } from "../lib/prisma";
 import { stripe } from "../lib/stripe";
 import { paymentsService } from "../modules/payments/payments.service";

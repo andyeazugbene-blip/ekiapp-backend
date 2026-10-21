@@ -25,7 +25,7 @@ vi.mock("../lib/stripe", () => ({
 }));
 
 vi.mock("../modules/admin/admin-platform-settings.service", () => ({
-  adminPlatformSettingsService: { getValue: vi.fn().mockResolvedValue(null) },
+  adminPlatformSettingsService: { getValue: vi.fn().mockResolvedValue(null), getFlag: vi.fn().mockResolvedValue(false) },
 }));
 
 vi.mock("../modules/notifications/notifications.service", () => ({
