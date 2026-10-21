@@ -1,6 +1,8 @@
 import { prisma } from "../../lib/prisma";
+import { logger } from "../../lib/logger";
 import { CURSOR_ORDER_BY } from "../../shared/constants";
 import { AppError } from "../../shared/errors/app-error";
+import { releaseVendorEarnings } from "../../shared/utils/wallet-release";
 import { subscriptionsService } from "../subscriptions/subscriptions.service";
 import { marketConfigurationService } from "../community-buy/market-configuration.service";
 import { vendorMarketsService } from "./vendor-markets.service";
@@ -247,6 +249,43 @@ export const vendorDashboardService = {
     };
   },
 
+  /**
+   * Self-heal (20 Oct 2026): updateVendorOrderStatus's dispatch-triggered
+   * releaseVendorEarnings() call is wrapped in a catch-and-log only (never
+   * rethrown — a dispatch that already succeeded shouldn't fail just
+   * because the release step had a problem) — orders.service.ts's own
+   * comment confirms this is deliberate. But that means a transient
+   * failure there (DB hiccup, a concurrent-modification retry exhausted)
+   * left a vendor's earnings stuck in pendingBalance forever, with no
+   * retry path and no visibility: a real report was "buyer confirmed
+   * delivery, I still can't withdraw." releaseVendorEarnings() is already
+   * idempotent (wallet-release.ts), so it's safe to re-attempt here for
+   * any order that reached a shipped-or-later status with a successful
+   * payment but never got its PENDING_TO_AVAILABLE release transaction —
+   * every time the vendor opens Earnings, not just once at dispatch time.
+   */
+  async retryMissedEarningsReleases(vendorId: string): Promise<void> {
+    const stuckOrders = await prisma.order.findMany({
+      where: {
+        vendorId,
+        status: { in: ["DISPATCHED", "IN_TRANSIT", "DELIVERED", "COMPLETED", "AUTO_RELEASED"] },
+        payment: { status: "SUCCEEDED" },
+        walletTransactions: { none: { type: "PENDING_TO_AVAILABLE" } },
+      },
+      select: { id: true },
+    });
+
+    for (const order of stuckOrders) {
+      try {
+        await releaseVendorEarnings(order.id);
+      } catch (error) {
+        logger.error("Retry of missed vendor earnings release failed", {
+          orderId: order.id, vendorId, errorMessage: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+  },
+
   async getEarnings(userId: string): Promise<VendorEarningsData> {
     const vendor = await prisma.vendor.findUnique({
       where: { userId },
@@ -255,6 +294,8 @@ export const vendorDashboardService = {
     if (!vendor) {
       throw new AppError("Vendor profile required", 403);
     }
+
+    await this.retryMissedEarningsReleases(vendor.id);
 
     const wallet = await prisma.wallet.findUnique({
       where: { vendorId: vendor.id },

@@ -15,12 +15,20 @@ vi.mock("../lib/prisma", () => ({
     product: { count: vi.fn() },
     message: { count: vi.fn() },
     review: { aggregate: vi.fn() },
-    order: { groupBy: vi.fn() },
+    order: { groupBy: vi.fn(), findMany: vi.fn() },
     bundle: { count: vi.fn() },
     flashSale: { count: vi.fn() },
     payoutRequest: { findMany: vi.fn() },
     walletTransaction: { aggregate: vi.fn() },
   },
+}));
+
+vi.mock("../shared/utils/wallet-release", () => ({
+  releaseVendorEarnings: vi.fn().mockResolvedValue({ released: true, amount: 0 }),
+}));
+
+vi.mock("../lib/logger", () => ({
+  logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
 }));
 
 vi.mock("../modules/community-buy/market-configuration.service", () => ({
@@ -36,6 +44,7 @@ vi.mock("../modules/vendors/vendor-markets.service", () => ({
 }));
 
 import { prisma } from "../lib/prisma";
+import { releaseVendorEarnings } from "../shared/utils/wallet-release";
 import { marketConfigurationService } from "../modules/community-buy/market-configuration.service";
 import { subscriptionsService } from "../modules/subscriptions/subscriptions.service";
 import { vendorMarketsService } from "../modules/vendors/vendor-markets.service";
@@ -45,6 +54,7 @@ const m = vi.mocked(prisma, true);
 const getMarketConfig = vi.mocked(marketConfigurationService.get);
 const getVendorAccount = vi.mocked(subscriptionsService.getVendorAccount);
 const listVendorMarkets = vi.mocked(vendorMarketsService.listForVendor);
+const mockedReleaseVendorEarnings = vi.mocked(releaseVendorEarnings);
 
 const BASE_ACCOUNT = {
   verificationStatus: "verified",
@@ -67,6 +77,9 @@ beforeEach(() => {
   m.orderItem.findMany.mockResolvedValue([] as never);
   m.review.aggregate.mockResolvedValue({ _avg: { rating: 0 }, _count: { _all: 0 } } as never);
   m.order.groupBy.mockResolvedValue([] as never);
+  m.order.findMany.mockResolvedValue([] as never);
+  m.payoutRequest.findMany.mockResolvedValue([] as never);
+  m.walletTransaction.aggregate.mockResolvedValue({ _sum: { amount: 0 } } as never);
   m.bundle.count.mockResolvedValue(0);
   m.flashSale.count.mockResolvedValue(0);
   getMarketConfig.mockResolvedValue({ regularDeliveriesEnabled: false, communityBuyEnabled: false } as never);
@@ -306,5 +319,46 @@ describe("vendorDashboardService.getDashboard — legacy fields preserved (exist
     expect(result.alerts).toEqual([]);
     expect(result.earnings.currency).toBe("gbp");
     expect(result.insights).toEqual({ bestSellingProduct: null, totalOrders: 0, totalProducts: 0 });
+  });
+});
+
+describe("vendorDashboardService.getEarnings — self-heals a dispatch-release that silently failed (20 Oct 2026 fix)", () => {
+  it("retries releaseVendorEarnings for an order stuck shipped-or-later with no PENDING_TO_AVAILABLE transaction", async () => {
+    m.order.findMany.mockResolvedValue([{ id: "order-stuck-1" }] as never);
+
+    await vendorDashboardService.getEarnings("user-1");
+
+    expect(m.order.findMany).toHaveBeenCalledWith({
+      where: {
+        vendorId: "vendor-1",
+        status: { in: ["DISPATCHED", "IN_TRANSIT", "DELIVERED", "COMPLETED", "AUTO_RELEASED"] },
+        payment: { status: "SUCCEEDED" },
+        walletTransactions: { none: { type: "PENDING_TO_AVAILABLE" } },
+      },
+      select: { id: true },
+    });
+    expect(mockedReleaseVendorEarnings).toHaveBeenCalledWith("order-stuck-1");
+  });
+
+  it("never calls releaseVendorEarnings when nothing is stuck", async () => {
+    m.order.findMany.mockResolvedValue([] as never);
+
+    await vendorDashboardService.getEarnings("user-1");
+
+    expect(mockedReleaseVendorEarnings).not.toHaveBeenCalled();
+  });
+
+  it("one order's release failure doesn't block the others or the earnings response", async () => {
+    m.order.findMany.mockResolvedValue([{ id: "order-fails" }, { id: "order-succeeds" }] as never);
+    mockedReleaseVendorEarnings
+      .mockRejectedValueOnce(new Error("insufficient pendingBalance"))
+      .mockResolvedValueOnce({ released: true, amount: 500 });
+
+    const result = await vendorDashboardService.getEarnings("user-1");
+
+    expect(mockedReleaseVendorEarnings).toHaveBeenCalledTimes(2);
+    expect(mockedReleaseVendorEarnings).toHaveBeenNthCalledWith(1, "order-fails");
+    expect(mockedReleaseVendorEarnings).toHaveBeenNthCalledWith(2, "order-succeeds");
+    expect(result.availableBalance).toBe(1000); // from the default wallet mock — response still returns normally
   });
 });
