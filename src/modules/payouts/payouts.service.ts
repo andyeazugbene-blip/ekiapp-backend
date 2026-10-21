@@ -257,16 +257,47 @@ export const payoutsService = {
     return payout;
   },
 
+  /**
+   * 21 Oct 2026: a Stripe auto-transfer that fails (decline, account
+   * disconnected, timeout) lands ON_HOLD with its wallet debit already
+   * applied (adminMarkPaid's isFirstAttempt gate) — ON_HOLD was previously
+   * not a rejectable status at all, so a payout stuck there (e.g. the
+   * vendor's Stripe account is permanently broken) had no recovery path:
+   * the money stayed debited from availableBalance forever with no way to
+   * get it back so the vendor could be paid a different way. Now ON_HOLD
+   * can be rejected too, reversing that debit back to availableBalance so
+   * the admin can switch the vendor to a manual payout method and the
+   * vendor can request again. PENDING (never debited) is unchanged.
+   * PROCESSING is deliberately excluded — that means a transfer attempt
+   * may be genuinely in flight; retry adminMarkPaid first, it's idempotent.
+   */
   async adminReject(adminId: string, payoutRequestId: string, input: RejectPayoutRequestInput): Promise<PayoutRequest> {
+    const before = await prisma.payoutRequest.findUnique({ where: { id: payoutRequestId } });
+    if (!before) throw new AppError("Payout request not found", 404);
+
     const result = await prisma.payoutRequest.updateMany({
-      where: { id: payoutRequestId, status: PayoutRequestStatus.PENDING },
+      where: { id: payoutRequestId, status: { in: [PayoutRequestStatus.PENDING, PayoutRequestStatus.ON_HOLD] } },
       data: { status: PayoutRequestStatus.REJECTED, approvedById: adminId, approvedAt: new Date(), rejectionReason: input.reason ?? null },
     });
 
     if (result.count === 0) {
-      const current = await prisma.payoutRequest.findUnique({ where: { id: payoutRequestId } });
-      if (!current) throw new AppError("Payout request not found", 404);
+      const current = await prisma.payoutRequest.findUniqueOrThrow({ where: { id: payoutRequestId } });
       throw new AppError(`Cannot reject payout in status ${current.status}`, 409);
+    }
+
+    if (before.status === PayoutRequestStatus.ON_HOLD) {
+      await prisma.$transaction(async (tx) => {
+        const wallet = await tx.wallet.findUniqueOrThrow({ where: { vendorId: before.vendorId } });
+        await tx.wallet.update({ where: { id: wallet.id }, data: { availableBalance: { increment: before.amount } } });
+        await tx.walletTransaction.create({
+          data: {
+            walletId: wallet.id, vendorId: before.vendorId, payoutRequestId: before.id,
+            type: WalletTransactionType.ADJUSTMENT_CREDIT, amount: before.amount, currency: before.currency,
+            description: `Payout request ${before.id} rejected from ON_HOLD — reversing its held debit`,
+          },
+        });
+      });
+      logger.info("Rejected ON_HOLD payout — wallet debit reversed", { payoutId: before.id, vendorId: before.vendorId, amount: before.amount });
     }
 
     const payout = await prisma.payoutRequest.findUniqueOrThrow({ where: { id: payoutRequestId } });

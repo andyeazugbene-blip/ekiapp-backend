@@ -21,7 +21,7 @@ vi.mock("../lib/prisma", () => ({
     payoutRequest: { findUnique: vi.fn(), findUniqueOrThrow: vi.fn(), updateMany: vi.fn(), update: vi.fn(), create: vi.fn() },
     payoutMethod: { findUnique: vi.fn() },
     vendor: { findUnique: vi.fn() },
-    wallet: { findUnique: vi.fn(), findUniqueOrThrow: vi.fn(), updateMany: vi.fn() },
+    wallet: { findUnique: vi.fn(), findUniqueOrThrow: vi.fn(), updateMany: vi.fn(), update: vi.fn() },
     walletTransaction: { create: vi.fn() },
     $transaction: vi.fn(),
   },
@@ -411,5 +411,46 @@ describe("payoutsService — NAV-04: every payout lifecycle notification carries
         data: expect.objectContaining({ type: "payout_paid", payoutRequestId: "payout-1" }),
       }),
     );
+  });
+});
+
+describe("payoutsService.adminReject — ON_HOLD recovery (21 Oct 2026 fix)", () => {
+  it("rejecting an ON_HOLD payout reverses its wallet debit back to availableBalance", async () => {
+    const onHold = approvedPayout({ status: "ON_HOLD", amount: 5000, currency: "GBP", holdReason: "Transfer failed" });
+    m.payoutRequest.findUnique.mockResolvedValueOnce(onHold as never);
+    m.payoutRequest.updateMany.mockResolvedValue({ count: 1 } as never);
+    m.payoutRequest.findUniqueOrThrow.mockResolvedValueOnce({ ...onHold, status: "REJECTED" } as never);
+    m.wallet.findUniqueOrThrow.mockResolvedValue({ id: "wallet-1", vendorId: "vendor-1", availableBalance: 10000, currency: "GBP" } as never);
+    m.wallet.update.mockResolvedValue({} as never);
+
+    const result = await payoutsService.adminReject("admin-1", "payout-1", { reason: "Vendor's Stripe account permanently disconnected" });
+
+    expect(m.wallet.update).toHaveBeenCalledWith({ where: { id: "wallet-1" }, data: { availableBalance: { increment: 5000 } } });
+    expect(m.walletTransaction.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ type: "ADJUSTMENT_CREDIT", amount: 5000, vendorId: "vendor-1", payoutRequestId: "payout-1" }),
+    }));
+    expect(result.status).toBe("REJECTED");
+  });
+
+  it("rejecting a PENDING payout (never debited) does not touch the wallet", async () => {
+    const pending = approvedPayout({ status: "PENDING" });
+    m.payoutRequest.findUnique.mockResolvedValueOnce(pending as never);
+    m.payoutRequest.updateMany.mockResolvedValue({ count: 1 } as never);
+    m.payoutRequest.findUniqueOrThrow.mockResolvedValueOnce({ ...pending, status: "REJECTED" } as never);
+
+    await payoutsService.adminReject("admin-1", "payout-1", { reason: "Duplicate request" });
+
+    expect(m.wallet.update).not.toHaveBeenCalled();
+    expect(m.walletTransaction.create).not.toHaveBeenCalled();
+  });
+
+  it("refuses to reject a PROCESSING payout — retry adminMarkPaid instead, never double-handle an in-flight transfer", async () => {
+    const processing = approvedPayout({ status: "PROCESSING" });
+    m.payoutRequest.findUnique.mockResolvedValueOnce(processing as never);
+    m.payoutRequest.updateMany.mockResolvedValue({ count: 0 } as never);
+    m.payoutRequest.findUniqueOrThrow.mockResolvedValueOnce(processing as never);
+
+    await expect(payoutsService.adminReject("admin-1", "payout-1", { reason: "x" })).rejects.toMatchObject({ statusCode: 409 });
+    expect(m.wallet.update).not.toHaveBeenCalled();
   });
 });
