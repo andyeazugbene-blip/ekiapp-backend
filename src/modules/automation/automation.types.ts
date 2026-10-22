@@ -55,6 +55,19 @@ export const MARKETING_AUTOMATION_TYPES: AutomationType[] = [
 //   10. RENEWAL_REMINDER
 //   11. PRICE_APPROVAL_REMINDER
 //
+// REGISTRATION_REMINDER (new 2026-10-22, corrected 2026-10-23: nudges a
+// VENDOR who never created their Vendor profile, not an email-verification
+// step — see detectRegistrationReminder's doc comment) is deliberately in
+// NEITHER list above and not returned by listVendorAutomations(): there is
+// no Vendor row (and so no vendorId) for its recipient YET — that's the
+// whole point of the automation — so it can't be a per-vendor Automation
+// Centre toggle like the 11 above, same reason VENDOR_TRIAL_ENDING
+// (Stripe-triggered, not detector-driven) is also absent from both lists.
+// It still goes through automationService.scheduleAutomation() and gets an
+// AutomationRule row via ensureRules() for admin visibility/pause control
+// — it's just not vendor-facing (there's no vendor account yet to show it
+// to).
+//
 // The CAMPAIGN_* types (MILESTONE / DEADLINE / REFUND_UPDATE) are
 // buyer-facing campaign-lifecycle events, not automation-centre modules.
 

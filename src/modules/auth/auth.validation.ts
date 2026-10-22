@@ -1,5 +1,6 @@
 import { UserRole } from "@prisma/client";
 
+import { parseSignupAttribution } from "../../lib/automation-events";
 import { AppError } from "../../shared/errors/app-error";
 import { normalizePhoneNumber } from "../../shared/utils/phone";
 import type {
@@ -65,6 +66,7 @@ export function validateRegisterInput(input: unknown): RegisterInput {
       role === "VENDOR" || role === "vendor"
         ? UserRole.VENDOR
         : UserRole.BUYER,
+    attribution: parseSignupAttribution(input as Record<string, unknown>),
   };
 }
 

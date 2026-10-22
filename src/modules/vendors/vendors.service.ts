@@ -7,6 +7,7 @@ import { AppError } from "../../shared/errors/app-error";
 import { resolveMarketCode } from "../../shared/currency";
 import { resolveUniqueSlug } from "../../shared/utils/slug";
 import { resolveCurrencyForMarket, vendorMarketsService } from "./vendor-markets.service";
+import { notifyAutomationAccountCreated } from "../../lib/automation-events";
 import { vendorMilestoneNotificationsService } from "./vendor-milestone-notifications.service";
 import type {
   CreatePayoutMethodInput,
@@ -260,7 +261,15 @@ export const vendorsService = {
           // is the step that actually brings a usable vendor account into
           // existence, so it's the correct trigger point for this rule).
           void vendorMilestoneNotificationsService.sendWelcome(vendor.id);
-          return vendor;
+          return notifyAutomationAccountCreated({
+            kind: "vendor_store_created",
+            userId,
+            vendorId: vendor.id,
+            role: "VENDOR",
+            country: vendor.country,
+            isTest: vendor.isTest,
+            occurredAt: vendor.createdAt,
+          }).then(() => vendor);
         });
       } catch (error) {
         if (isUniqueViolation(error, "storeSlug")) {

@@ -141,8 +141,16 @@ export const renewalsService = {
         type: "RENEWAL_REMINDER",
         vendorId: sub.offer.vendorId,
         recipientUserId: sub.buyerId,
+        // `frequencyCapDays: 3` removed 2026-10-22 (Eki requirements review,
+        // Priority 2): isEligible()'s frequency-cap check in
+        // automation.service.ts matches on type+recipientUserId ALONE, not
+        // on subjectKey — so a buyer with two active subscriptions from
+        // different vendors would have the SECOND subscription's reminder
+        // wrongly suppressed as "frequency_capped" for 3 days whenever both
+        // renewal dates fell in the same window. The subjectKey below
+        // (subscription + cycle date) is already the real, sufficient
+        // dedupe — same class of bug and fix as FIRST_SALE/CART_RECOVERY.
         subjectKey: `${sub.id}:${sub.nextRenewalAt.toISOString().slice(0, 10)}`,
-        frequencyCapDays: 3,
         requiresMarketingConsent: false,
         title: "Upcoming Foodstuffs Subscription",
         body: `Your delivery from ${storeName} renews soon.`,
