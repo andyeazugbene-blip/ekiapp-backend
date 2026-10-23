@@ -9,9 +9,6 @@ import { runWithCoalesceScope } from "./automation-coalesce-scope";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-function isoDate(d: Date): string {
-  return d.toISOString().slice(0, 10);
-}
 function isoWeek(d: Date): string {
   const onejan = new Date(Date.UTC(d.getUTCFullYear(), 0, 1));
   const week = Math.ceil(((d.getTime() - onejan.getTime()) / DAY_MS + onejan.getUTCDay() + 1) / 7);
@@ -20,22 +17,157 @@ function isoWeek(d: Date): string {
 
 export const FIRST_SALE_PAID_STATUSES = ["PAID", "CONFIRMED", "PROCESSING", "DISPATCHED", "IN_TRANSIT", "DELIVERED", "COMPLETED", "PAYMENT_SECURED", "VENDOR_CONFIRMED", "AUTO_RELEASED", "DISPUTED"] as const;
 
+// REGISTRATION_REMINDER touch schedule, in whole days since account
+// creation. Client feedback 2026-10-22: a new account got exactly one
+// message and then silence. Two touches only.
+const REGISTRATION_TOUCH_DAYS = [1, 3] as const;
+
+/**
+ * REGISTRATION_REMINDER: nudges a VENDOR-role account that never finished
+ * creating its Vendor profile (storeName/storeSlug etc. via POST /vendors —
+ * vendors.service.ts createVendor), at day 1 and day 3 since the account
+ * was created.
+ *
+ * NOT based on email verification, despite the type's original name —
+ * verified by inspection (2026-10-23) to be the wrong signal for "finished
+ * registration" in this codebase: register()/oauth completeSignup create
+ * an EmailVerificationToken row, but NOTHING ever emails that token (no
+ * `enqueueEmail` call references it anywhere in src/modules/auth), and
+ * neither the web nor the mobile app has any verify-email screen or deep
+ * link that calls POST /auth/verify-email — it is unreachable dead
+ * scaffolding today. Nudging a user to "verify your email" would point at
+ * an action they have no way to complete. Fixing email delivery for that
+ * flow is a separate, real gap but out of scope here (not one of the three
+ * priorities, and building it means designing an email template, a
+ * token-refresh step since the original 24h-expiry token is long dead by
+ * day 1, and confirming a mobile/web landing screen exists or adding one —
+ * more than "the smallest reliable implementation" this pass asked for).
+ *
+ * A VENDOR with no Vendor row is otherwise invisible to every other
+ * onboarding automation: FIRST_SALE's candidate query is
+ * `prisma.vendor.findMany(...)`, which only ever sees vendors who already
+ * have a Vendor row. This is the actual gap matching the client's report
+ * (registered as a vendor, got one message, then nothing telling them to
+ * list products) — if they never finished the separate vendor-onboarding
+ * step (store name, business info) that creates the Vendor row, FIRST_SALE
+ * never runs for them at all.
+ *
+ * BUYER-role accounts have no further "registration" step in this
+ * codebase (no checklist, nothing left incomplete after the User row
+ * exists), so they are not candidates here — unlike the email-verification
+ * version, this also naturally excludes guest-checkout and supplier-
+ * invite-accepted accounts (both role BUYER), which was a real gap in the
+ * previous version: those accounts never went through a flow a "finish
+ * your registration" message would make sense for.
+ *
+ * Self-cancelling: the candidate query excludes any VENDOR who already has
+ * a Vendor row, so the moment they complete that step this detector simply
+ * stops finding them — no separate "cancel" step needed, same pattern as
+ * every other detector in this file.
+ */
+async function detectRegistrationReminder(): Promise<number> {
+  const cutoff = new Date(Date.now() - REGISTRATION_TOUCH_DAYS[REGISTRATION_TOUCH_DAYS.length - 1] * DAY_MS - DAY_MS);
+  const users = await prisma.user.findMany({
+    where: {
+      role: "VENDOR",
+      vendor: null,
+      isSuspended: false,
+      isTest: false,
+      createdAt: { gte: cutoff },
+    },
+    select: { id: true, name: true, createdAt: true },
+    take: 500,
+  });
+
+  let scheduled = 0;
+  for (const user of users) {
+    const daysSinceCreated = Math.floor((Date.now() - user.createdAt.getTime()) / DAY_MS);
+    if (!(REGISTRATION_TOUCH_DAYS as readonly number[]).includes(daysSinceCreated)) continue; // no touch due today
+
+    const isFinal = daysSinceCreated === REGISTRATION_TOUCH_DAYS[REGISTRATION_TOUCH_DAYS.length - 1];
+    await automationService.scheduleAutomation({
+      type: "REGISTRATION_REMINDER",
+      recipientUserId: user.id,
+      // Day is part of the subject: each touch is its own dedupe key, so
+      // day 1 firing never blocks day 3 from firing later.
+      subjectKey: `${user.id}:day${daysSinceCreated}`,
+      requiresMarketingConsent: false,
+      title: isFinal ? "Last step: finish setting up your store" : "Finish setting up your Eki store",
+      body: isFinal
+        ? "This is the last reminder — finish setting up your store so you can start listing products."
+        : "You're almost there — finish setting up your store to start selling on Eki.",
+      data: { onboarding_tier: isFinal ? "final" : "first" },
+    });
+    scheduled++;
+  }
+  return scheduled;
+}
+
+// Onboarding touch schedule, in days since the vendor's store was created.
+// Client feedback (2026-10-22): one nudge then total silence for a week
+// reads as the app not caring whether a new seller ever lists anything.
+// `frequencyCapDays: 7` on the old version blocked ANY second FIRST_SALE
+// send to the same vendor for 7 days NO MATTER which stage they were in —
+// the "new stage resets the cap" claim in the dedupe-key comment was never
+// actually true, because isEligible()'s frequency-cap lookup matches on
+// `type` + `recipientUserId` alone, not on subjectKey/stage. A vendor who
+// got the day-0 welcome push and still had 0 products 3 days later got
+// nothing else until day 7. Fixed the same way LOW_STOCK_ALERT already
+// fixes this class of bug (see its comment below): drop frequencyCapDays
+// entirely and let each touch's own unique dedupeKey (stage + exact day
+// bucket) be the only de-dupe. That means a vendor can get a DIFFERENT
+// scheduled touch on day 1, 3, 5 and 7 without any of them blocking the
+// next, while the DB-unique dedupeKey still makes every individual touch
+// idempotent across repeated sweep runs on the same day.
+const ONBOARDING_TOUCH_DAYS = [1, 3, 5, 7] as const;
+const LAST_SCHEDULED_TOUCH_DAY = ONBOARDING_TOUCH_DAYS[ONBOARDING_TOUCH_DAYS.length - 1];
+
+/**
+ * Which onboarding touch (if any) is due today, given how many whole days
+ * have passed since the vendor's store was created. Day 0 itself is the
+ * existing vendor_welcome email/in-app message (vendor-milestone-
+ * notifications.service.ts), fired once at store creation — this schedule
+ * starts the day after that. Past the last scheduled day it falls back to
+ * a weekly cadence (bounded, same "don't become spam" shape the old cap
+ * intended) so a vendor who still hasn't listed anything after a week
+ * keeps hearing from us without getting a message every single day.
+ * Returns null on a day with no touch due.
+ */
+function onboardingTouchBucket(daysSinceCreated: number): { tier: 1 | 2 | 3 | 4; bucketKey: string } | null {
+  if (daysSinceCreated < 1) return null;
+  const dayIndex = ONBOARDING_TOUCH_DAYS.indexOf(daysSinceCreated as (typeof ONBOARDING_TOUCH_DAYS)[number]);
+  if (dayIndex >= 0) return { tier: (dayIndex + 1) as 1 | 2 | 3 | 4, bucketKey: `day${daysSinceCreated}` };
+  if (daysSinceCreated > LAST_SCHEDULED_TOUCH_DAY) return { tier: 4, bucketKey: `week-${isoWeek(new Date())}` };
+  return null;
+}
+
+// Escalating incentive copy per touch tier, appended to the stage's own
+// checklist instruction. Tier 1 (day 1) is a gentle nudge; by tier 3-4
+// (day 5-7+) it names the concrete payoff — direct response to "no
+// incentive to finish registration, none to encourage me to list products
+// and make money".
+const ONBOARDING_INCENTIVE_BY_TIER: Record<1 | 2 | 3 | 4, string> = {
+  1: "It only takes a few minutes, and buyers near you are already browsing Eki.",
+  2: "Vendors who list 3+ products in their first week are twice as likely to get their first order fast — yours could be next.",
+  3: "You're a few taps from your first payout. Most sellers finish their store setup in under 10 minutes.",
+  4: "Other Eki sellers are already earning every week. Finish your store today and start getting orders too.",
+};
+
 /**
  * FIRST_SALE onboarding nudge — bug fix 2026-10-11 ("onboarding reminders
- * depend on the vendor's actual next incomplete step"). Previously this
- * fired a fixed "Get your first order" message for ANY unsuspended
- * verified vendor with a product and no sale yet, regardless of whether
- * they'd even set up delivery — telling someone to go get an order when
- * buyers can't check out with them yet. Now the candidate pool is widened
- * to every vendor who hasn't sold anything (verification included), and
- * the message is computed from whichever of the exact same checklist
- * steps the vendor app's own activation screen (app/(vendor)/
- * activation.tsx) shows is still not done: add a product -> set up
- * delivery -> verify the account -> (all done) go get that first order.
- * Stays one automation TYPE (FIRST_SALE) with one stop condition (first
- * qualifying paid order) — only the copy changes per stage, so frequency
- * capping/dedupe/coalescing all still apply to the whole onboarding
- * journey as one thing, not a notification per checklist item.
+ * depend on the vendor's actual next incomplete step"), extended 2026-10-22
+ * with a real multi-touch day 1/3/5/7(+weekly) schedule and escalating
+ * incentive copy (see ONBOARDING_TOUCH_DAYS above). The candidate pool is
+ * every vendor who hasn't sold anything (verification included), and the
+ * message is computed from whichever of the exact same checklist steps the
+ * vendor app's own activation screen (app/(vendor)/activation.tsx) shows is
+ * still not done: add a product -> set up delivery -> verify the account ->
+ * (all done) go get that first order. Stays one automation TYPE
+ * (FIRST_SALE) with one stop condition (first qualifying paid order) —
+ * only the copy changes per stage+tier, so coalescing still treats the
+ * whole onboarding journey as one thing, not a notification per checklist
+ * item. Channels now include email (DEFAULT_TEMPLATES.FIRST_SALE) — the
+ * client's "not even emails" complaint — alongside push/in-app.
  */
 async function detectFirstSale(): Promise<number> {
   const vendors = await prisma.vendor.findMany({
@@ -46,7 +178,7 @@ async function detectFirstSale(): Promise<number> {
       orderItems: { none: { order: { status: { in: [...FIRST_SALE_PAID_STATUSES] } } } },
     },
     select: {
-      id: true, userId: true, storeName: true, verificationStatus: true,
+      id: true, userId: true, storeName: true, verificationStatus: true, createdAt: true,
       _count: { select: { products: { where: { isActive: true } } } },
     },
     take: 200,
@@ -59,7 +191,12 @@ async function detectFirstSale(): Promise<number> {
     : [];
   const hasDeliveryZone = new Set(zoneCounts.filter((z) => z._count._all > 0).map((z) => z.vendorId));
 
+  let scheduled = 0;
   for (const vendor of vendors) {
+    const daysSinceCreated = Math.floor((Date.now() - vendor.createdAt.getTime()) / DAY_MS);
+    const touch = onboardingTouchBucket(daysSinceCreated);
+    if (!touch) continue; // no touch scheduled for today — stay quiet rather than repeat a stale message daily.
+
     const hasProduct = vendor._count.products > 0;
     const hasDelivery = hasDeliveryZone.has(vendor.id);
     const isVerified = vendor.verificationStatus === "VERIFIED";
@@ -76,18 +213,18 @@ async function detectFirstSale(): Promise<number> {
       type: "FIRST_SALE",
       recipientUserId: vendor.userId,
       vendorId: vendor.id,
-      // The stage key is part of the dedupe subject: moving to a NEW stage
-      // (e.g. finally adding a product) resets the weekly cap immediately
-      // instead of waiting out the old stage's cooldown with stale advice.
-      subjectKey: `${vendor.id}:${stage.key}:${isoWeek(new Date())}`,
-      frequencyCapDays: 7,
+      // Stage + exact day/week bucket is the whole de-dupe story now — see
+      // the comment above ONBOARDING_TOUCH_DAYS for why frequencyCapDays is
+      // deliberately not set here.
+      subjectKey: `${vendor.id}:${stage.key}:${touch.bucketKey}`,
       requiresMarketingConsent: false,
       title: stage.title,
-      body: stage.body,
-      data: { store_name: vendor.storeName, onboarding_stage: stage.key },
+      body: `${stage.body} ${ONBOARDING_INCENTIVE_BY_TIER[touch.tier]}`,
+      data: { store_name: vendor.storeName, onboarding_stage: stage.key, onboarding_tier: touch.tier },
     });
+    scheduled++;
   }
-  return vendors.length;
+  return scheduled;
 }
 
 /**
@@ -95,6 +232,33 @@ async function detectFirstSale(): Promise<number> {
  * delay (default 2h, vendor-configurable via VendorAutomationSetting.config).
  * A cart can span multiple vendors' products, so it's evaluated once per
  * vendor represented in the cart, each against that vendor's own delay.
+ *
+ * Bounded to exactly two touches per cart+vendor (Eki requirements review,
+ * 2026-10-22): a first reminder at `reminderHours` (default 2h) and one
+ * final reminder at `secondReminderHours` (default 24h) — not an unbounded
+ * daily repeat like the previous version. subjectKey has no date component
+ * (`:first` / `:final` only), so each touch can only ever fire once per
+ * cart+vendor; once both have fired, this cart+vendor goes quiet even if
+ * the same items are still sitting there. Known, accepted limitation: this
+ * is scoped to the cart+vendor pair, not the individual item, so a buyer
+ * who empties a vendor's items and later adds different ones from the SAME
+ * vendor to the SAME cart will not get a fresh pair of touches — re-keying
+ * per item-batch would need a per-item dedupe scheme this table doesn't
+ * have today, and is out of scope for this fix.
+ *
+ * Previously used `frequencyCapDays: 1` on top of the dedupe key, which
+ * (see isEligible() in automation.service.ts) matches on type+recipient
+ * ALONE — so a buyer with stale carts at two different vendors only ever
+ * got a reminder for whichever vendor's check ran first in a given sweep;
+ * the second vendor's reminder was wrongly suppressed as "frequency_capped"
+ * for a full day. Dropped, same fix as FIRST_SALE's equivalent bug — the
+ * per-touch dedupeKey is the only de-dupe needed.
+ *
+ * Availability recheck (spec: "recalculate product availability... before
+ * generating any checkout link"): if every item this vendor has in the
+ * cart is no longer purchasable (inactive or out of stock), the reminder
+ * is skipped entirely rather than nudging someone to check out on items
+ * that can't be bought.
  */
 async function detectCartRecovery(): Promise<number> {
   const widestCutoff = new Date(Date.now() - 60 * 60 * 1000); // API enforces reminderHours >= 1, so this is a safe pre-filter floor.
@@ -103,17 +267,17 @@ async function detectCartRecovery(): Promise<number> {
     select: {
       id: true,
       buyerId: true,
-      items: { select: { id: true, createdAt: true, product: { select: { vendorId: true } } } },
+      items: { select: { id: true, createdAt: true, product: { select: { vendorId: true, isActive: true, stock: true } } } },
     },
     take: 500,
   });
 
-  const vendorConfigCache = new Map<string, { reminderHours: number }>();
-  async function reminderHoursFor(vendorId: string): Promise<number> {
+  const vendorConfigCache = new Map<string, { reminderHours: number; secondReminderHours: number }>();
+  async function configFor(vendorId: string): Promise<{ reminderHours: number; secondReminderHours: number }> {
     if (!vendorConfigCache.has(vendorId)) {
-      vendorConfigCache.set(vendorId, await automationService.getVendorAutomationConfig(vendorId, "CART_RECOVERY") as { reminderHours: number });
+      vendorConfigCache.set(vendorId, await automationService.getVendorAutomationConfig(vendorId, "CART_RECOVERY") as { reminderHours: number; secondReminderHours: number });
     }
-    return vendorConfigCache.get(vendorId)!.reminderHours;
+    return vendorConfigCache.get(vendorId)!;
   }
 
   let scheduled = 0;
@@ -121,19 +285,28 @@ async function detectCartRecovery(): Promise<number> {
     if (cart.items.length === 0) continue;
     const vendorIds = new Set(cart.items.map((item) => item.product.vendorId));
     for (const vendorId of vendorIds) {
-      const reminderHours = await reminderHoursFor(vendorId);
-      const cutoff = new Date(Date.now() - reminderHours * 60 * 60 * 1000);
-      const hasStaleItemForVendor = cart.items.some((item) => item.product.vendorId === vendorId && item.createdAt <= cutoff);
-      if (!hasStaleItemForVendor) continue;
+      const vendorItems = cart.items.filter((item) => item.product.vendorId === vendorId);
+      const stillPurchasable = vendorItems.some((item) => item.product.isActive && item.product.stock > 0);
+      if (!stillPurchasable) continue; // nothing left to recover — every item is unavailable now.
+
+      const { reminderHours, secondReminderHours } = await configFor(vendorId);
+      const oldestItemAge = Math.min(...vendorItems.map((item) => Date.now() - item.createdAt.getTime()));
+      const touch = oldestItemAge >= secondReminderHours * 60 * 60 * 1000
+        ? { key: "final", title: "Last chance — your cart is waiting", body: "Your items are still waiting. Review availability and current prices before they're gone." }
+        : oldestItemAge >= reminderHours * 60 * 60 * 1000
+          ? { key: "first", title: "You left something in your cart", body: "Items are waiting in your cart." }
+          : null;
+      if (!touch) continue;
+
       await automationService.scheduleAutomation({
         type: "CART_RECOVERY",
         recipientUserId: cart.buyerId,
         vendorId,
-        subjectKey: `${cart.id}:${vendorId}:${isoDate(new Date())}`,
-        frequencyCapDays: 1,
+        subjectKey: `${cart.id}:${vendorId}:${touch.key}`,
         requiresMarketingConsent: true,
-        title: "You left something in your cart",
-        body: "Items are waiting in your cart.",
+        title: touch.title,
+        body: touch.body,
+        data: { cart_id: cart.id, vendor_id: vendorId },
       });
       scheduled++;
     }
@@ -360,9 +533,40 @@ async function detectPaymentRecovery(): Promise<number> {
  * without requiring a per-vendor "typical order interval" field that
  * doesn't currently exist in the schema.
  */
+/**
+ * REORDER_REMINDER: one reminder per delivered order+product, inside a
+ * vendor-configurable window (default 14 days — see reorderWindowDays in
+ * DEFAULT_CONFIG; the data model has no reliable per-product repeat-
+ * purchase interval to predict from, so this is a vendor-level default,
+ * not a per-product prediction — Eki requirements review, 2026-10-22).
+ *
+ * Eligibility, rechecked every sweep right before scheduling:
+ * 1. Product must still be active and in stock (recheck, not assumed from
+ *    order time).
+ * 2. The buyer must have no OTHER order for this exact product, placed
+ *    after this one, in any active/paid state — not just a completed
+ *    repurchase. Previously only PAID/DELIVERED/COMPLETED/AUTO_RELEASED
+ *    counted, so a buyer who'd already placed a new order that was still
+ *    PROCESSING/DISPATCHED/IN_TRANSIT (or PAYMENT_SECURED/VENDOR_CONFIRMED/
+ *    DISPUTED) got a redundant "need more?" nudge for something already on
+ *    its way. Reuses FIRST_SALE_PAID_STATUSES — the same "already paid or
+ *    further along" status set used elsewhere in this file — rather than
+ *    inventing a second list.
+ */
 async function detectReorderReminder(): Promise<number> {
-  const REMINDER_WINDOW_DAYS = 14;
-  const from = new Date(Date.now() - REMINDER_WINDOW_DAYS * DAY_MS);
+  const windowCache = new Map<string, number>();
+  async function windowDaysFor(vendorId: string): Promise<number> {
+    if (!windowCache.has(vendorId)) {
+      const config = await automationService.getVendorAutomationConfig(vendorId, "REORDER_REMINDER") as { reorderWindowDays: number };
+      windowCache.set(vendorId, config.reorderWindowDays);
+    }
+    return windowCache.get(vendorId)!;
+  }
+
+  // Widest possible window up front (a per-vendor config can only shrink
+  // this further below), to keep the DB query itself bounded.
+  const widestWindowDays = 90;
+  const from = new Date(Date.now() - widestWindowDays * DAY_MS);
   const to = new Date(Date.now() - DAY_MS); // don't remind day-of delivery
 
   const orders = await prisma.order.findMany({
@@ -388,19 +592,25 @@ async function detectReorderReminder(): Promise<number> {
 
   let scheduled = 0;
   for (const order of orders) {
+    if (!order.vendorId) continue; // no single vendor to configure/attribute a window to (e.g. a Community Buy order).
+    const windowDays = await windowDaysFor(order.vendorId);
+    const deliveredAt = order.deliveredAt ?? new Date(0);
+    if (Date.now() - deliveredAt.getTime() > windowDays * DAY_MS) continue; // outside this vendor's configured window
+
     for (const item of order.items) {
       // 1. Product must still be available.
       if (!item.product.isActive || item.product.stock <= 0) continue;
 
-      // 2. Buyer must not have already reordered this exact product after
-      //    this order was placed (prevents reminders for recent repurchases).
+      // 2. Buyer must not already have a later order for this exact product
+      //    in ANY active/paid state (prevents reminders for both a recent
+      //    repurchase and an in-flight one).
       const alreadyReordered = await prisma.orderItem.findFirst({
         where: {
           productId: item.productId,
           order: {
             buyerId: order.buyerId,
-            status: { in: ["PAID", "DELIVERED", "COMPLETED", "AUTO_RELEASED"] },
-            createdAt: { gt: order.deliveredAt ?? new Date(0) },
+            status: { in: [...FIRST_SALE_PAID_STATUSES] },
+            createdAt: { gt: deliveredAt },
           },
         },
         select: { id: true },
@@ -522,10 +732,13 @@ export const automationDetectors = {
     // entirely and their position doesn't matter; among the rest, whichever
     // detector runs first claims a given recipient for this sweep, so the
     // most time/business-critical non-urgent nudge goes first: a vendor's
-    // own low-stock situation outranks an onboarding nudge, which outranks
-    // a buyer-facing cart/review/win-back/referral prompt.
+    // own low-stock situation outranks "finish verifying your email", which
+    // outranks the FIRST_SALE onboarding nudge (verify before you're told to
+    // list products), which outranks a buyer-facing cart/review/win-back/
+    // referral prompt.
     const jobs: [string, () => Promise<number>][] = [
       ["LOW_STOCK_ALERT", detectLowStockAlert],
+      ["REGISTRATION_REMINDER", detectRegistrationReminder],
       ["FIRST_SALE", detectFirstSale],
       ["CART_RECOVERY", detectCartRecovery],
       ["REORDER_REMINDER", detectReorderReminder],

@@ -47,7 +47,11 @@ export const DEFAULT_TEMPLATES: Record<AutomationType, { title: string; body: st
   FIRST_SALE: {
     title: "Get your first order",
     body: "Hi {{name}}, your store {{store_name}} is live. Share your store link and add a few more products to attract your first buyer.",
-    channels: ["push", "in_app"],
+    // Client feedback 2026-10-22: onboarding went through push/in-app only,
+    // "not even emails" — now on every onboarding touch (see
+    // ONBOARDING_TOUCH_DAYS in automation.detectors.ts), not just this type's
+    // generic fallback copy.
+    channels: ["push", "in_app", "email"],
     recipientType: "VENDOR",
   },
   CART_RECOVERY: {
@@ -134,16 +138,39 @@ export const DEFAULT_TEMPLATES: Record<AutomationType, { title: string; body: st
     channels: ["push", "in_app", "email"],
     recipientType: "VENDOR",
   },
+  // New 2026-10-22, corrected 2026-10-23: a VENDOR-role account that never
+  // created its Vendor profile (see the long comment on
+  // detectRegistrationReminder in automation.detectors.ts for why this is
+  // NOT about email verification).
+  REGISTRATION_REMINDER: {
+    title: "Finish setting up your Eki store",
+    body: "Hi {{name}}, you're almost there — finish setting up your store to start selling on Eki.",
+    channels: ["push", "in_app", "email"],
+    recipientType: "VENDOR",
+  },
 };
 
 // Automation types whose behavior a vendor can tune, and their defaults.
 // Kept intentionally narrow — only types the doc specifies concrete tunable
 // fields for (CART_RECOVERY: reminder delay, BUYER_WIN_BACK: inactivity
 // window). Every other type stays a plain on/off toggle.
-export const CONFIGURABLE_TYPES = new Set<AutomationType>(["CART_RECOVERY", "BUYER_WIN_BACK"]);
+export const CONFIGURABLE_TYPES = new Set<AutomationType>(["CART_RECOVERY", "BUYER_WIN_BACK", "REORDER_REMINDER"]);
 export const DEFAULT_CONFIG: Record<string, Record<string, number>> = {
-  CART_RECOVERY: { reminderHours: 2 },
+  // secondReminderHours added 2026-10-22 (Eki requirements review, Priority
+  // 3): CART_RECOVERY previously had no upper bound — it kept re-sending
+  // once per calendar day for as long as the cart stayed stale, forever.
+  // Now bounded to exactly two touches (see detectCartRecovery): the first
+  // at reminderHours, a second (final) at secondReminderHours, then none.
+  CART_RECOVERY: { reminderHours: 2, secondReminderHours: 24 },
   BUYER_WIN_BACK: { inactivityDays: 45 },
+  // reorderWindowDays added 2026-10-22 (Eki requirements review, Priority
+  // 1): the data model has no reliable per-product repeat-purchase
+  // interval to predict from, so (per the actual requirement — "use a
+  // reasonable configurable default instead of pretending the prediction
+  // is accurate") this is a vendor-level configurable default, not a
+  // per-product prediction. A vendor selling fast-turnover groceries can
+  // shorten it; one selling slower-moving goods can lengthen it.
+  REORDER_REMINDER: { reorderWindowDays: 14 },
 };
 
 async function ensureTemplate(type: AutomationType): Promise<void> {
@@ -591,7 +618,7 @@ export const automationService = {
   },
 
   /** Resolves a vendor's tunable config for a configurable automation type, falling back to defaults. */
-  async getVendorAutomationConfig(vendorId: string, type: "CART_RECOVERY" | "BUYER_WIN_BACK"): Promise<{ reminderHours: number } | { inactivityDays: number }> {
+  async getVendorAutomationConfig(vendorId: string, type: "CART_RECOVERY" | "BUYER_WIN_BACK" | "REORDER_REMINDER"): Promise<{ reminderHours: number; secondReminderHours: number } | { inactivityDays: number } | { reorderWindowDays: number }> {
     const setting = await prisma.vendorAutomationSetting.findUnique({
       where: { vendorId_type: { vendorId, type } },
       select: { config: true },

@@ -1,4 +1,5 @@
 import type { UserRole } from "@prisma/client";
+import type { SignupAttribution } from "../../lib/automation-events";
 
 export interface RegisterInput {
   email: string;
@@ -8,6 +9,7 @@ export interface RegisterInput {
   country?: string;
   referralCode?: string;
   role?: Exclude<UserRole, "ADMIN">;
+  attribution?: SignupAttribution;
 }
 
 export interface LoginInput {

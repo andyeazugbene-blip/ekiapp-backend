@@ -1,3 +1,4 @@
+import { parseSignupAttribution, type SignupAttribution } from "../../../lib/automation-events";
 import { AppError } from "../../../shared/errors/app-error";
 
 export function validateProviderTokenInput(input: unknown): { idToken: string; name?: string } {
@@ -31,6 +32,7 @@ export function validateCompleteSignupInput(input: unknown): {
   country?: string;
   role: "BUYER" | "VENDOR";
   referralCode?: string;
+  attribution?: SignupAttribution;
 } {
   if (!input || typeof input !== "object") throw new AppError("Invalid request body", 400);
   const raw = input as Record<string, unknown>;
@@ -49,5 +51,6 @@ export function validateCompleteSignupInput(input: unknown): {
     country: typeof raw.country === "string" && raw.country.trim() ? raw.country.trim() : undefined,
     role: roleRaw,
     referralCode: typeof raw.referralCode === "string" && raw.referralCode.trim() ? raw.referralCode.trim().toUpperCase() : undefined,
+    attribution: parseSignupAttribution(raw),
   };
 }

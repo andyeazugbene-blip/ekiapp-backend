@@ -8,6 +8,7 @@ import { recordAudit } from "../../../shared/utils/audit";
 import { normalizePhoneNumber } from "../../../shared/utils/phone";
 import { authService, toAuthUser } from "../auth.service";
 import { referralsService } from "../../referrals/referrals.service";
+import { notifyAutomationAccountCreated, type SignupAttribution } from "../../../lib/automation-events";
 import { enqueueEmail } from "../../../lib/email-queue";
 import { emailTemplates } from "../../../lib/email-templates";
 import { communicationService } from "../../communications/communication.service";
@@ -165,6 +166,7 @@ export const oauthService = {
     country?: string;
     role: "BUYER" | "VENDOR";
     referralCode?: string;
+    attribution?: SignupAttribution;
   }): Promise<{ user: ReturnType<typeof toAuthUser>; token: string }> {
     const payload = verifyRegistrationTicket(input.ticket);
 
@@ -233,6 +235,19 @@ export const oauthService = {
     }).catch(() => {});
 
     await recordAudit({ actorId: user.id, action: "OAUTH_SIGNUP", entityType: "User", entityId: user.id, metadata: { provider: payload.provider, role: input.role } });
+
+    await notifyAutomationAccountCreated({
+      kind: "user_registered",
+      userId: user.id,
+      role: user.role,
+      country: user.country,
+      signupMethod: payload.provider === OAuthProvider.APPLE ? "apple" : "google",
+      referred: Boolean(input.referralCode),
+      emailVerified: Boolean(user.emailVerifiedAt),
+      isTest: user.isTest,
+      attribution: input.attribution,
+      occurredAt: user.createdAt,
+    });
 
     const fullUser = await prisma.user.findUnique({ where: { id: user.id }, include: { vendor: true } });
     const token = authService.signTokenPublic(fullUser!);

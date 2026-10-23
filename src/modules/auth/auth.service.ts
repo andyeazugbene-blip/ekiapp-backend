@@ -6,6 +6,7 @@ import jwt, { type SignOptions } from "jsonwebtoken";
 import { Prisma, UserRole } from "@prisma/client";
 
 import { env } from "../../config/env";
+import { notifyAutomationAccountCreated } from "../../lib/automation-events";
 import { enqueueEmail } from "../../lib/email-queue";
 import { emailTemplates } from "../../lib/email-templates";
 import { logger } from "../../lib/logger";
@@ -263,6 +264,19 @@ export const authService = {
       title: welcome.subject,
       body: `Welcome email sent to ${user.email}`,
     }).catch(() => {});
+
+    await notifyAutomationAccountCreated({
+      kind: "user_registered",
+      userId: user.id,
+      role: user.role,
+      country: user.country,
+      signupMethod: "password",
+      referred: Boolean(input.referralCode),
+      emailVerified: Boolean(user.emailVerifiedAt),
+      isTest: user.isTest,
+      attribution: input.attribution,
+      occurredAt: user.createdAt,
+    });
 
     // Send email verification token (non-blocking)
     const verificationToken = crypto.randomBytes(32).toString("hex");

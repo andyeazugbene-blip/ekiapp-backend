@@ -2101,6 +2101,11 @@ enum AutomationType {
   CAMPAIGN_REFUND_UPDATE
   // Eki-managed: vendor free trial ending soon (Stripe customer.subscription.trial_will_end).
   VENDOR_TRIAL_ENDING
+  // Eki-managed, no vendor toggle: a BUYER or VENDOR who registered but never
+  // verified their email. Stops the moment emailVerifiedAt is set — the
+  // candidate query itself excludes verified users, same self-cancelling
+  // pattern as FIRST_SALE excluding vendors who already sold.
+  REGISTRATION_REMINDER
 }
 
 enum AutomationRunStatus {

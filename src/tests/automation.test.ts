@@ -349,13 +349,19 @@ describe("automationService — per-vendor tunable config (CART_RECOVERY, BUYER_
   it("getVendorAutomationConfig falls back to defaults when no row exists", async () => {
     m.vendorAutomationSetting.findUnique.mockResolvedValue(null);
     const config = await automationService.getVendorAutomationConfig("vendor-1", "CART_RECOVERY");
-    expect(config).toEqual({ reminderHours: 2 });
+    expect(config).toEqual({ reminderHours: 2, secondReminderHours: 24 });
   });
 
-  it("getVendorAutomationConfig merges a stored override on top of the defaults", async () => {
+  it("getVendorAutomationConfig merges a stored override on top of the defaults — overriding only reminderHours leaves secondReminderHours at its default", async () => {
     m.vendorAutomationSetting.findUnique.mockResolvedValue({ config: { reminderHours: 24 } } as never);
     const config = await automationService.getVendorAutomationConfig("vendor-1", "CART_RECOVERY");
-    expect(config).toEqual({ reminderHours: 24 });
+    expect(config).toEqual({ reminderHours: 24, secondReminderHours: 24 });
+  });
+
+  it("getVendorAutomationConfig defaults REORDER_REMINDER reorderWindowDays to 14", async () => {
+    m.vendorAutomationSetting.findUnique.mockResolvedValue(null);
+    const config = await automationService.getVendorAutomationConfig("vendor-1", "REORDER_REMINDER");
+    expect(config).toEqual({ reorderWindowDays: 14 });
   });
 
   it("getVendorAutomationConfig defaults BUYER_WIN_BACK inactivityDays to 45", async () => {
@@ -372,7 +378,7 @@ describe("automationService — per-vendor tunable config (CART_RECOVERY, BUYER_
     const items = await automationService.listVendorAutomations("vendor-1");
     const cartRecovery = items.find((i) => i.type === "CART_RECOVERY");
     const firstSale = items.find((i) => i.type === "FIRST_SALE");
-    expect(cartRecovery?.config).toEqual({ reminderHours: 12 });
+    expect(cartRecovery?.config).toEqual({ reminderHours: 12, secondReminderHours: 24 });
     expect(firstSale?.config).toBeNull();
   });
 

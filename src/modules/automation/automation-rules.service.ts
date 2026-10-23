@@ -26,21 +26,45 @@ interface RuleMeta {
 }
 
 const META: Record<AutomationType, RuleMeta> = {
-  FIRST_SALE: { name: "First Sale nudge", purpose: "Help a verified vendor with live products get their first paid order.", trigger: "Daily sweep: verified, unsuspended vendor with an active product and no paid order yet.", audience: "Vendors (operational, no marketing consent required).", feature: "Vendor onboarding", frequencyCapDays: 7, exclusions: ["Vendor suspended", "Vendor already has a paid order (unpaid/failed/cancelled orders do not count)"], stop: ["First paid order"] },
-  CART_RECOVERY: { name: "Cart Recovery", purpose: "Remind a buyer about items left in their cart.", trigger: "Daily sweep: cart items older than the vendor's reminder delay (default 2h).", audience: "Buyers with marketing consent.", feature: "Cart / Checkout", frequencyCapDays: 1, exclusions: ["No marketing consent", "Vendor turned the automation off"], stop: ["Cart emptied"] },
+  // frequencyCapDays removed 2026-10-22 (client feedback: one nudge then
+  // silence for a week). The detector now runs its own day 1/3/5/7(+weekly)
+  // schedule with a per-day dedupe key — see ONBOARDING_TOUCH_DAYS in
+  // automation.detectors.ts — so this rule-level cap must stay unset (null)
+  // or it would re-impose exactly the bug being fixed. An ALREADY-SEEDED
+  // FIRST_SALE AutomationRule row from before this date needs
+  // `npm run backfill:first-sale-rule-timing` to actually clear the stale
+  // value — ensureRules() below only creates missing rows, never edits one
+  // that already exists.
+  FIRST_SALE: { name: "First Sale nudge", purpose: "Help a verified vendor with live products get their first paid order.", trigger: "Daily sweep: verified, unsuspended vendor with an active product and no paid order yet, touched on day 1/3/5/7 then weekly.", audience: "Vendors (operational, no marketing consent required).", feature: "Vendor onboarding", exclusions: ["Vendor suspended", "Vendor already has a paid order (unpaid/failed/cancelled orders do not count)"], stop: ["First paid order"] },
+  // frequencyCapDays removed 2026-10-22 (Eki requirements review, Priority
+  // 3): matched on type+recipient alone, so a buyer with stale carts at two
+  // different vendors only ever got a reminder for whichever vendor's
+  // check ran first in a sweep. The detector's own per-cart+vendor+touch
+  // dedupeKey is the real, sufficient de-dupe now (also bounded to exactly
+  // two touches instead of an unbounded daily repeat — see
+  // detectCartRecovery). An ALREADY-SEEDED CART_RECOVERY AutomationRule row
+  // from before this date needs `npm run backfill:cart-recovery-rule-timing`
+  // to clear the stale stored value — ensureRules() only creates missing
+  // rows, never edits one that already exists.
+  CART_RECOVERY: { name: "Cart Recovery", purpose: "Remind a buyer about items left in their cart.", trigger: "Daily sweep: cart items past the vendor's first reminder delay (default 2h) get one reminder, and past the second delay (default 24h) get one final reminder — bounded to those two touches.", audience: "Buyers with marketing consent.", feature: "Cart / Checkout", exclusions: ["No marketing consent", "Vendor turned the automation off", "Every item in the cart for this vendor is now unavailable"], stop: ["Cart emptied (checkout or item removal)", "Both scheduled touches sent"] },
   BUYER_WIN_BACK: { name: "Buyer Win-back", purpose: "Re-engage buyers who bought from a vendor but not recently.", trigger: "Daily sweep: paid order with the vendor, none within the vendor's inactivity window (default 45 days).", audience: "Past buyers with marketing consent.", feature: "Retention", frequencyCapDays: 30, exclusions: ["No marketing consent", "Vendor turned the automation off"], stop: ["New paid order"] },
   REVIEW_REQUEST: { name: "Review request", purpose: "Ask a buyer to review a delivered order.", trigger: "Daily sweep: order delivered 1-14 days ago with no review.", audience: "Buyers with marketing consent.", feature: "Reviews", exclusions: ["Order already reviewed", "No marketing consent"], stop: ["Review submitted"] },
   LOW_STOCK_ALERT: { name: "Low-stock alert", purpose: "Warn a vendor that products are running low.", trigger: "Daily sweep: active product with stock <= 5.", audience: "Vendors (operational).", feature: "Inventory", frequencyCapDays: 1, exclusions: ["Vendor turned the automation off"], stop: ["Stock replenished"] },
   BUYER_REFERRAL: { name: "Buyer referral prompt", purpose: "Invite repeat buyers to share their referral code.", trigger: "Daily sweep: buyer with a paid order, account >= 3 days old, never referred anyone.", audience: "Buyers with marketing consent.", feature: "Referrals", frequencyCapDays: 30, exclusions: ["No marketing consent", "Already referred someone"], stop: ["First referral"] },
-  REORDER_REMINDER: { name: "Reorder reminder", purpose: "Suggest reordering a product after delivery.", trigger: "Daily sweep: order delivered 1-14 days ago, product still in stock, not reordered.", audience: "Buyers with marketing consent.", feature: "Retention", exclusions: ["Product unavailable", "Already reordered"], stop: ["Reorder placed"] },
+  REORDER_REMINDER: { name: "Reorder reminder", purpose: "Suggest reordering a product after delivery.", trigger: "Daily sweep: order delivered 1 day ago up to the vendor's configured reorder window (default 14 days), product still active and in stock, no later order for it in any active/paid state.", audience: "Buyers with marketing consent.", feature: "Retention", exclusions: ["Product unavailable", "Already reordered or an in-flight reorder exists"], stop: ["Reorder placed (any active/paid status), or the window elapses"] },
   CHECKOUT_PAYMENT_FOLLOW_UP: { name: "Checkout follow-up", purpose: "Prompt a buyer to finish an unpaid checkout.", trigger: "Daily sweep: checkout PENDING for 2-48h (status re-read before sending).", audience: "Buyers with marketing consent.", feature: "Checkout", exclusions: ["Checkout paid in the meantime", "No marketing consent"], stop: ["Payment succeeded"] },
   PAYMENT_RECOVERY: { name: "Payment recovery", purpose: "Tell a buyer their payment failed so they can retry.", trigger: "Daily sweep: payment FAILED in last 24h and order still PENDING.", audience: "Buyers (transactional).", feature: "Payments", owner: "Eki Finance", exclusions: ["Order no longer pending"], stop: ["Order paid or cancelled"] },
-  RENEWAL_REMINDER: { name: "Foodstuffs Subscription renewal reminder", purpose: "Notify a buyer before their subscription renews.", trigger: "Renewals sweep: upcoming renewal.", audience: "Subscribed buyers (transactional).", feature: "Foodstuffs Subscription", exclusions: [], stop: ["Subscription paused/cancelled"] },
+  RENEWAL_REMINDER: { name: "Foodstuffs Subscription renewal reminder", purpose: "Notify a buyer before their subscription renews.", trigger: "Renewals sweep: ACTIVE subscription with nextRenewalAt within the next 3 days.", audience: "Subscribed buyers (transactional).", feature: "Foodstuffs Subscription", exclusions: ["Subscription not ACTIVE"], stop: ["Subscription paused/cancelled", "Renewal date passed"] },
   PRICE_APPROVAL_REMINDER: { name: "Price approval reminder", purpose: "Ask a buyer to approve a vendor price change on an upcoming delivery.", trigger: "Renewals sweep: price change awaiting approval.", audience: "Subscribed buyers (transactional).", feature: "Foodstuffs Subscription", exclusions: [], stop: ["Approved, declined or timed out"] },
   CAMPAIGN_MILESTONE: { name: "Community Buy milestone", purpose: "Tell participants a campaign reached a funding milestone.", trigger: "Campaign contribution reaches a milestone.", audience: "Campaign participants.", feature: "Community Buy", exclusions: [], stop: ["Campaign closed"] },
   CAMPAIGN_DEADLINE: { name: "Community Buy deadline", purpose: "Warn that a campaign closes soon.", trigger: "Campaign deadline approaching.", audience: "Campaign participants / watchers.", feature: "Community Buy", exclusions: [], stop: ["Campaign closed"] },
   CAMPAIGN_REFUND_UPDATE: { name: "Community Buy refund update", purpose: "Keep a participant informed of their refund status.", trigger: "Campaign refund status changes.", audience: "Refund recipients (transactional).", feature: "Community Buy", owner: "Eki Finance", exclusions: [], stop: ["Refund settled"] },
   VENDOR_TRIAL_ENDING: { name: "Vendor trial ending", purpose: "Tell a vendor their 14-day trial ends in 3 days, with plan and billing details.", trigger: "Stripe webhook customer.subscription.trial_will_end (idempotent via WebhookEvent).", audience: "Vendors in trial (transactional).", feature: "Vendor subscription", owner: "Eki Finance", exclusions: ["Unknown subscription"], stop: ["Trial converted or cancelled"] },
+  // Corrected 2026-10-23: not about email verification (see the long
+  // comment on detectRegistrationReminder in automation.detectors.ts) —
+  // that flow has no reachable UI or email delivery in this codebase today
+  // and would point users at an action they can't complete.
+  REGISTRATION_REMINDER: { name: "Registration reminder", purpose: "Nudge a VENDOR-role account that never created its Vendor profile (store name, business info) to finish store setup.", trigger: "Daily sweep: User.role is VENDOR with no Vendor row yet, touched on day 1 and day 3 since account creation.", audience: "Vendors (operational, no marketing consent required).", feature: "Account activation", exclusions: ["Account suspended", "Test account", "Vendor profile already created"], stop: ["Vendor profile created"] },
 };
 
 const RULE_INCLUDE_NOTE = "Enforced by the engine: state, frequency cap, quiet hours, channels. Other fields describe the rule and are not executable.";
