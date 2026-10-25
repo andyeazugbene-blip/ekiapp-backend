@@ -158,7 +158,7 @@ async function loadOnboardingProgressCandidates() {
       orderItems: { none: { order: { status: { in: [...FIRST_SALE_PAID_STATUSES] } } } },
     },
     select: {
-      id: true, userId: true, storeName: true, verificationStatus: true, createdAt: true,
+      id: true, userId: true, storeName: true, verificationStatus: true, stripeVerificationSessionId: true, createdAt: true,
       _count: { select: { products: { where: { isActive: true } } } },
     },
     take: 200,
@@ -172,6 +172,7 @@ async function loadOnboardingProgressCandidates() {
     hasProduct: v._count.products > 0,
     hasDelivery: hasDeliveryZone.has(v.id),
     isVerified: v.verificationStatus === "VERIFIED",
+    hasVerificationSession: Boolean(v.stripeVerificationSessionId),
   }));
 }
 
@@ -231,18 +232,16 @@ async function detectDeliverySetupReminder(): Promise<number> {
  * VERIFICATION_REMINDER (spec R06): "Verification not started when
  * eligible." Candidates: has a product AND a delivery zone (the spec's
  * "when eligible" — verification only matters once there's something to
- * sell and somewhere to send it), not yet VERIFIED. Stops on submission
- * per the spec's stop condition ("verification submitted") — this
- * codebase only tracks the final VERIFIED state, so it stops on approval
- * rather than on submission; a vendor who submitted but is still pending
- * will keep getting this reminder until approved. Documented limitation,
- * not silently assumed away.
+ * sell and somewhere to send it), not yet VERIFIED. Stops when a Stripe
+ * Identity session ID exists: createStripeVerificationSession persists it
+ * before returning the hosted verification flow, so subsequent reminders
+ * do not continue after the vendor has started/submitted verification.
  */
 async function detectVerificationReminder(): Promise<number> {
   const candidates = await loadOnboardingProgressCandidates();
   let scheduled = 0;
   for (const vendor of candidates) {
-    if (!vendor.hasProduct || !vendor.hasDelivery || vendor.isVerified) continue;
+    if (!vendor.hasProduct || !vendor.hasDelivery || vendor.isVerified || vendor.hasVerificationSession) continue;
     const hoursSinceCreated = (Date.now() - vendor.createdAt.getTime()) / HOUR_MS;
     scheduled += await scheduleP2Touches({
       type: "VERIFICATION_REMINDER",
@@ -322,23 +321,13 @@ const STORE_SHARED_SIGNAL_SHIPPED_AT = new Date("2026-10-26T00:00:00.000Z");
  *   to a bounded grandfather clause now, per compliance review, since an
  *   indefinite "any view counts as shared" substitution never actually
  *   matched the spec's literal requirement.
- * - Known, currently real gap, not yet closed: the mobile app does NOT
- *   emit `store_shared` yet (verified by direct inspection of
- *   share-store-link.tsx on 2026-10-25 — Share.share() is called with no
- *   result handling and no backend call at all). Until that mobile change
- *   ships, EVERY vendor who becomes eligible after
- *   STORE_SHARED_SIGNAL_SHIPPED_AT has no real way to ever stop this
- *   reminder except opting out — this is a genuine, currently-live
- *   degradation, not a theoretical one, and is called out again in the
- *   compliance matrix rather than left implicit here.
- *
- * iOS vs Android honesty (once mobile is wired): `store_shared` fires
- * when the Share sheet reports completion. iOS's Share API distinguishes
- * "the user picked an app" from "the user dismissed the sheet"
- * (`Share.sharedAction`); Android's Share API cannot make that
- * distinction at all, so on Android this event fires on sheet completion
- * either way — a real platform limitation, not closeable from the
- * backend side.
+ * - Mobile now posts `store_shared` only when React Native's native share
+ *   API reports `Share.sharedAction`, and the backend verifies the caller
+ *   owns the store. Copying a link or merely opening WhatsApp/SMS does not
+ *   emit the event because neither proves a completed share.
+ * - Native share-result behavior still needs device-level QA on both iOS
+ *   and Android. This client-reported signal is not proof that a recipient
+ *   received or opened the link.
  *
  * New in this migration: a vendor-facing opt-out
  * (VENDOR_TOGGLEABLE_AUTOMATION_TYPES) — gives the spec's stop condition
@@ -347,12 +336,12 @@ const STORE_SHARED_SIGNAL_SHIPPED_AT = new Date("2026-10-26T00:00:00.000Z");
  *
  * CADENCE CLOCK, corrected 2026-10-26: previously vendor.createdAt (account
  * creation), which the spec calls "24h after publication" — account
- * creation is not publication. This codebase has no stored "published at"
- * column, so a real one is derived instead of assumed: the later of (a)
- * the earliest still-active product's createdAt and (b) the earliest
- * delivery zone's createdAt — i.e. the actual moment both conditions of
- * "ready" first became true. This is a genuine, derived timestamp from
- * real rows, not an invented field, though it has one known edge case: if
+ * creation is not publication. Product.publishedAt is the real publication
+ * timestamp written by the publishing flows; combine it with the earliest
+ * delivery-zone createdAt and use whichever is later, i.e. the actual moment
+ * both conditions of "ready" first became true. If an active legacy product
+ * has no publishedAt, the detector leaves that vendor unscheduled rather than
+ * guessing publication time from createdAt. One known edge case remains: if
  * the vendor's ORIGINAL first product was later deactivated and a
  * different one created afterward, "earliest ACTIVE product" shifts
  * forward to the newer one, understating how long the vendor has actually
@@ -372,11 +361,11 @@ async function detectStoreShareReminder(): Promise<number> {
   const [zoneCounts, firstZoneByVendor, firstProductByVendor] = await Promise.all([
     prisma.deliveryZone.groupBy({ by: ["vendorId"], where: { vendorId: { in: vendorIds } }, _count: { _all: true } }),
     prisma.deliveryZone.groupBy({ by: ["vendorId"], where: { vendorId: { in: vendorIds } }, _min: { createdAt: true } }),
-    prisma.product.groupBy({ by: ["vendorId"], where: { vendorId: { in: vendorIds }, isActive: true }, _min: { createdAt: true } }),
+    prisma.product.groupBy({ by: ["vendorId"], where: { vendorId: { in: vendorIds }, isActive: true, publishedAt: { not: null } }, _min: { publishedAt: true } }),
   ]);
   const hasZone = new Set(zoneCounts.filter((z) => z._count._all > 0).map((z) => z.vendorId));
   const firstZoneAt = new Map(firstZoneByVendor.map((z) => [z.vendorId, z._min.createdAt]));
-  const firstProductAt = new Map(firstProductByVendor.map((p) => [p.vendorId, p._min.createdAt]));
+  const firstProductAt = new Map(firstProductByVendor.map((p) => [p.vendorId, p._min.publishedAt]));
   const readyVendors = vendors.filter((v) => hasZone.has(v.id));
 
   let scheduled = 0;
@@ -387,7 +376,9 @@ async function detectStoreShareReminder(): Promise<number> {
     ]);
     if (sharedCount > 0 || viewedBeforeCutoffCount > 0) continue; // stop condition — see doc comment above.
 
-    // "Ready since" = later of first active product / first delivery zone — see doc comment.
+    // "Ready since" = later of first published product / first delivery zone.
+    // Product.createdAt can precede publication by days, so use the actual
+    // publishedAt transition written by the product publishing flows.
     const zoneAt = firstZoneAt.get(vendor.id);
     const productAt = firstProductAt.get(vendor.id);
     if (!zoneAt || !productAt) continue; // defensive: readyVendors filter already guarantees both exist.

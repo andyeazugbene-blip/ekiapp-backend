@@ -308,12 +308,13 @@ describe("automationDetectors.runSweep — REORDER_REMINDER (vendor-configurable
 });
 
 describe("automationDetectors.runSweep — vendor onboarding progress rules (Notification Orchestration Spec v2, 2026-10-25: FIRST_SALE's old merged stage-switching copy split into R03/R05/R06/R11, each its own type on the 4h/24h/72h P2 cadence)", () => {
-  function candidate(overrides: Partial<{ id: string; userId: string; storeName: string; verificationStatus: string; products: number; hasZone: boolean; createdAt: Date }> = {}) {
+  function candidate(overrides: Partial<{ id: string; userId: string; storeName: string; verificationStatus: string; stripeVerificationSessionId: string | null; products: number; hasZone: boolean; createdAt: Date }> = {}) {
     return {
       id: overrides.id ?? "vendor-1",
       userId: overrides.userId ?? "vendor-1-user",
       storeName: overrides.storeName ?? "Mama Eki",
       verificationStatus: overrides.verificationStatus ?? "VERIFIED",
+      stripeVerificationSessionId: overrides.stripeVerificationSessionId ?? null,
       // Default: store created exactly 4h before NOW, so the first touch is
       // due "today" for every pre-existing test unless a test overrides it.
       createdAt: overrides.createdAt ?? new Date(NOW.getTime() - 4 * 60 * 60 * 1000),
@@ -354,6 +355,12 @@ describe("automationDetectors.runSweep — vendor onboarding progress rules (Not
     expect(mockScheduleAutomation).toHaveBeenCalledWith(
       expect.objectContaining({ type: "VERIFICATION_REMINDER", title: "Your store is close to opening" }),
     );
+  });
+
+  it("R06 stops reminding once a Stripe Identity session has been created, even before verification is approved", async () => {
+    mockCandidates(candidate({ products: 1, hasZone: true, verificationStatus: "PENDING", stripeVerificationSessionId: "vs_123" }));
+    await automationDetectors.runSweep();
+    expect(mockScheduleAutomation).not.toHaveBeenCalledWith(expect.objectContaining({ type: "VERIFICATION_REMINDER" }));
   });
 
   it("R11 FIRST_SALE: a fully set-up, verified vendor gets the first-sale-campaign nudge, not any of the onboarding-step reminders", async () => {
@@ -413,7 +420,7 @@ describe("automationDetectors.runSweep — STORE_SHARE_REMINDER (spec R10, migra
     const readyAt = new Date(NOW.getTime() - readySinceHoursAgo * 60 * 60 * 1000);
     m.vendor.findMany.mockResolvedValue([readyVendor()] as never);
     m.deliveryZone.groupBy.mockResolvedValue([{ vendorId: "vendor-1", _count: { _all: 1 }, _min: { createdAt: readyAt } }] as never);
-    m.product.groupBy.mockResolvedValue([{ vendorId: "vendor-1", _min: { createdAt: readyAt } }] as never);
+    m.product.groupBy.mockResolvedValue([{ vendorId: "vendor-1", _min: { publishedAt: readyAt } }] as never);
   }
 
   it("reminds a ready (product + delivery zone) vendor whose store has never been shared or viewed", async () => {
@@ -496,6 +503,10 @@ describe("automationDetectors.runSweep — STORE_SHARE_REMINDER (spec R10, migra
 
     const keys = mockScheduleAutomation.mock.calls.filter(([a]: any[]) => a.type === "STORE_SHARE_REMINDER").map(([a]: any[]) => a.subjectKey);
     expect(keys).toEqual(["vendor-1:touch1", "vendor-1:touch2"]);
+    expect(m.product.groupBy).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ isActive: true, publishedAt: { not: null } }),
+      _min: { publishedAt: true },
+    }));
   });
 
   it("uses whichever of product/delivery-zone became real LAST as the readiness clock — a zone added well after the first product starts the clock later, not earlier", async () => {
@@ -503,7 +514,7 @@ describe("automationDetectors.runSweep — STORE_SHARE_REMINDER (spec R10, migra
     // Product existed 30h ago, but the delivery zone (the thing that actually completed
     // readiness) was only added 2h ago — the vendor should NOT be measured from 30h.
     m.deliveryZone.groupBy.mockResolvedValue([{ vendorId: "vendor-1", _count: { _all: 1 }, _min: { createdAt: new Date(NOW.getTime() - 2 * 60 * 60 * 1000) } }] as never);
-    m.product.groupBy.mockResolvedValue([{ vendorId: "vendor-1", _min: { createdAt: new Date(NOW.getTime() - 30 * 60 * 60 * 1000) } }] as never);
+    m.product.groupBy.mockResolvedValue([{ vendorId: "vendor-1", _min: { publishedAt: new Date(NOW.getTime() - 30 * 60 * 60 * 1000) } }] as never);
     m.event.count.mockResolvedValue(0 as never);
 
     await automationDetectors.runSweep();
