@@ -1,8 +1,10 @@
 # Notification Orchestration Spec v2 — Compliance Status
 
-**Date:** 2026-10-25
+**Date:** 2026-10-26
 **Author:** Mouad (with Claude Code assistance)
-**Scope of this pass:** Phase A (baseline matrix), Phase B (verify PR #5/#6), partial Phase C/F (scheduling honesty, deep-link evidence). Phases D/E (full event-sourcing rebuild, remaining 35 rules) are **not started** — see `02-architecture-report.md` for why and what's required first.
+**Latest work:** completed R10 backend/mobile source changes on 2026-10-26. Backend branch `feat/store-share-reminder-r10` has commit `f9dcce9`, pushed to open PR #8. Mobile branch `feat/store-share-reminder-mobile` has commit `ff87a48`; pushing it was rejected by automatic approval review because it could not verify trusted authorization to publish mobile source. The existing uncommitted `android/app/src/main/AndroidManifest.xml` change remains untouched and is not included in that commit.
+
+**Completion status:** the full specification is not complete. R10 now has owner-verified event emission and a mapped tap route, but native device QA and sub-daily scheduling remain outstanding. The local repositories do not contain the original v2 specification document or the 210-event legacy catalogue; the compliance matrix and older handoff gap analysis are secondary evidence, not substitutes for those source documents. See `07-test-report.md` for current verification and `08-outstanding-decisions.md` for external dependencies.
 
 ## How to read the other files in this directory
 
@@ -21,11 +23,11 @@
 |---|---|---|
 | 1 | Compliance matrix (R01–R40) | Done this pass — built from direct repo inspection |
 | 2 | Architecture report | Done — matches the ADR already shared with the client |
-| 3 | FIRST_SALE report | Done — PR #6 is real, tested, not yet merged |
+| 3 | FIRST_SALE report | Historical report — PR #6 is merged |
 | 4 | Scheduler report | Done — daily cron confirmed, 4h claim corrected |
 | 5 | Deep-link matrix | Done — verified against the actual mobile repo, not assumed |
 | 6 | Database report | Done — two additive migrations, rollback documented |
-| 7 | Test report | Done — real command output, 198/198 files passing |
-| 8 | Changed-files summary | See `03-first-sale-report.md` and PR #6 diff directly |
+| 7 | Test report | Updated with actual 2026-10-26 commands; full HTTP suite is sandbox-blocked |
+| 8 | Changed-files summary | Backend commit `f9dcce9`; mobile commit `ff87a48` (local branch only) |
 | 9 | Outstanding decisions | Done — 4 real decisions, not 40 |
-| 10 | Release recommendation | **PR #6 is safe to merge** once CI clears the one pre-existing unrelated finding (or that's accepted as known). The full spec is NOT complete — this is one slice of it. |
+| 10 | Release recommendation | R10 backend update is on open PR #8. Mobile change is committed locally but awaits trusted authorization to push. No production deployment or merge was performed. |

@@ -1,6 +1,20 @@
 # Test Report
 
-All commands below were actually run against the `feat/notification-spec-v2-onboarding-rules` branch (PR #6) on 2026-10-25. Output is copied, not reconstructed from memory.
+## Latest verification — 2026-10-26 R10 changes
+
+- Backend `npx tsc --noEmit`: **passed**.
+- Backend `npm run build`: **passed**.
+- Backend `npx prisma validate`: **passed**; no schema or migration was added in this slice.
+- Focused backend `event-emission-extras.test.ts` and `automation-detectors.test.ts`: **58 tests passed**.
+- Mobile `npm run typecheck`: **passed**.
+- Backend full suite, `npx vitest run --pool=forks --maxWorkers=1`: **188/198 files passed; 2,812 tests passed and 308 failed**. All 10 failing suites are HTTP tests that could not connect to their local test servers (`connect EACCES 127.0.0.1`). This environment restriction prevents a full CI-equivalent result; it does not establish whether those tests pass outside this sandbox.
+- `git diff --check`: **passed** in both repositories.
+
+No mobile device runtime test, production deployment, or external provider test was performed.
+
+## Historical verification — 2026-10-25 PR #6 branch
+
+All commands below were run against the `feat/notification-spec-v2-onboarding-rules` branch on 2026-10-25. These results are retained as historical evidence and are not a substitute for the latest run above.
 
 ## TypeScript
 

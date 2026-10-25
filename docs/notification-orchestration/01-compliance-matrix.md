@@ -82,7 +82,7 @@ Status values follow the spec's own progression: **Proposed → Backend mapped �
 ## Summary counts
 
 - **Implemented, QA passed (spec-shaped):** 13 of 40 — R01, R03, R05, R06, R11, R16, R20, R30, R31, R32, R33, R37, R38
-- **Backend implemented/QA passed, but end-to-end NOT fully compliant (named mobile-side gaps remain):** 1 of 40 — R10
+- **Implemented on backend and mobile source; backend tests/typechecks pass, mobile runtime QA and production timing remain outstanding:** 1 of 40 — R10
 - **Implemented (legacy, not re-platformed):** 5 of 40 — R09, R12, R13, R15, R39
 - **Blocked (named, real dependency missing):** R02, R04 — 2
 - **Not started / not found:** R18, R28, R40 — 3
