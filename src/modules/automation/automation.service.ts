@@ -159,6 +159,13 @@ export const DEFAULT_TEMPLATES: Record<AutomationType, { title: string; body: st
     channels: ["push", "in_app", "email"],
     recipientType: "VENDOR",
   },
+  // Spec R38: vendor-facing, not the existing admin-only failure feed.
+  AUTOMATION_FAILURE_ALERT: {
+    title: "An Eki automation needs attention",
+    body: "Hi {{name}}, {{store_name}} has an automation that failed to send. Review it and the next step.",
+    channels: ["push", "in_app", "email"],
+    recipientType: "VENDOR",
+  },
   // New 2026-10-22, corrected 2026-10-23: a VENDOR-role account that never
   // created its Vendor profile (see the long comment on
   // detectRegistrationReminder in automation.detectors.ts for why this is
