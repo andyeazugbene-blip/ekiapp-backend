@@ -129,27 +129,22 @@ describe("store_viewed", () => {
 });
 
 describe("store_shared (Notification Orchestration Spec v2, R10's real stop-condition signal)", () => {
-  const vendor = { id: "v1", storeName: "S", storeSlug: "s", city: "c", country: "GB", isSuspended: false };
+  const vendor = { id: "v1", userId: "vendor-user-1", storeName: "S", storeSlug: "s", city: "c", country: "GB", isSuspended: false };
   beforeEach(() => {
     m.vendor.findUnique.mockResolvedValue(vendor);
     vi.spyOn(publicStoresService, "getAnalyticsSummaryForVendor").mockResolvedValue({} as never);
   });
 
-  it("the vendor's own share-sheet-completion beacon emits store_shared, distinct from store_viewed", async () => {
+  it("the owning vendor's completed share action emits store_shared, distinct from store_viewed", async () => {
     await publicStoresService.recordEvent("s", { event: "share", source: "instagram" } as never, "vendor-user-1");
     expect(emit).toHaveBeenCalledTimes(1);
     expect(emit.mock.calls[0][0]).toMatchObject({ name: "store_shared", entityType: "Vendor", entityId: "v1", actorId: "vendor-user-1", payload: { clientReported: true, storeSlug: "s" } });
   });
 
-  it("does not also emit store_viewed — the two are tracked as separate signals, not aliases of each other", async () => {
-    await publicStoresService.recordEvent("s", { event: "share" } as never);
-    expect(emit).toHaveBeenCalledTimes(1);
-    expect(emit.mock.calls[0][0].name).toBe("store_shared");
-  });
-
-  it("falls back to the vendor's own id as actor when no viewerId is supplied (the share action always has a known vendor, unlike an anonymous storefront 'open')", async () => {
-    await publicStoresService.recordEvent("s", { event: "share" } as never);
-    expect(emit.mock.calls[0][0]).toMatchObject({ actorType: "user", actorId: "v1" });
+  it("rejects anonymous or non-owner share beacons and emits no stop-condition event", async () => {
+    await expect(publicStoresService.recordEvent("s", { event: "share" } as never)).rejects.toMatchObject({ statusCode: 401 });
+    await expect(publicStoresService.recordEvent("s", { event: "share" } as never, "another-user")).rejects.toMatchObject({ statusCode: 403 });
+    expect(emit).not.toHaveBeenCalled();
   });
 });
 

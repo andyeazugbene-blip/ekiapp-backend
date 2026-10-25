@@ -36,6 +36,7 @@ const TRACKABLE_ORDER_STATUSES = ["PAID", "PAYMENT_SECURED", "CONFIRMED", "VENDO
 
 type VendorStoreRecord = {
   id: string;
+  userId?: string;
   storeName: string;
   storeSlug: string;
   city: string | null;
@@ -213,6 +214,7 @@ async function findVendorBySlug(slug: string): Promise<VendorStoreRecord> {
     where: { storeSlug: slug },
     select: {
       id: true,
+      userId: true,
       storeName: true,
       storeSlug: true,
       city: true,
@@ -238,6 +240,7 @@ async function findVendorBySlug(slug: string): Promise<VendorStoreRecord> {
     where: { isSuspended: false },
     select: {
       id: true,
+      userId: true,
       storeName: true,
       storeSlug: true,
       city: true,
@@ -259,6 +262,7 @@ async function findVendorByUserId(userId: string): Promise<VendorStoreRecord> {
     where: { userId },
     select: {
       id: true,
+      userId: true,
       storeName: true,
       storeSlug: true,
       city: true,
@@ -1270,6 +1274,12 @@ export const publicStoresService = {
 
   async recordEvent(slug: string, input: TrackPublicStoreEventInput, viewerId?: string): Promise<PublicStoreAnalyticsSummary> {
     const vendor = await findVendorBySlug(slug);
+    // A public store view is anonymous telemetry, but a `share` event is a
+    // vendor action used to stop the R10 reminder. Never let a visitor
+    // suppress another vendor's reminder by posting to the public endpoint.
+    if (input.event === "share" && (!viewerId || viewerId !== vendor.userId)) {
+      throw new AppError("Only the store owner can record a store share", viewerId ? 403 : 401);
+    }
     const source = normalizeSource(input.source);
 
     await prisma.auditLog.create({

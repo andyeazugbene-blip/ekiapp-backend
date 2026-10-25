@@ -413,7 +413,7 @@ describe("automationDetectors.runSweep — STORE_SHARE_REMINDER (spec R10, migra
     const readyAt = new Date(NOW.getTime() - readySinceHoursAgo * 60 * 60 * 1000);
     m.vendor.findMany.mockResolvedValue([readyVendor()] as never);
     m.deliveryZone.groupBy.mockResolvedValue([{ vendorId: "vendor-1", _count: { _all: 1 }, _min: { createdAt: readyAt } }] as never);
-    m.product.groupBy.mockResolvedValue([{ vendorId: "vendor-1", _min: { createdAt: readyAt } }] as never);
+    m.product.groupBy.mockResolvedValue([{ vendorId: "vendor-1", _min: { publishedAt: readyAt } }] as never);
   }
 
   it("reminds a ready (product + delivery zone) vendor whose store has never been shared or viewed", async () => {
@@ -496,6 +496,10 @@ describe("automationDetectors.runSweep — STORE_SHARE_REMINDER (spec R10, migra
 
     const keys = mockScheduleAutomation.mock.calls.filter(([a]: any[]) => a.type === "STORE_SHARE_REMINDER").map(([a]: any[]) => a.subjectKey);
     expect(keys).toEqual(["vendor-1:touch1", "vendor-1:touch2"]);
+    expect(m.product.groupBy).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ isActive: true, publishedAt: { not: null } }),
+      _min: { publishedAt: true },
+    }));
   });
 
   it("uses whichever of product/delivery-zone became real LAST as the readiness clock — a zone added well after the first product starts the clock later, not earlier", async () => {
@@ -503,7 +507,7 @@ describe("automationDetectors.runSweep — STORE_SHARE_REMINDER (spec R10, migra
     // Product existed 30h ago, but the delivery zone (the thing that actually completed
     // readiness) was only added 2h ago — the vendor should NOT be measured from 30h.
     m.deliveryZone.groupBy.mockResolvedValue([{ vendorId: "vendor-1", _count: { _all: 1 }, _min: { createdAt: new Date(NOW.getTime() - 2 * 60 * 60 * 1000) } }] as never);
-    m.product.groupBy.mockResolvedValue([{ vendorId: "vendor-1", _min: { createdAt: new Date(NOW.getTime() - 30 * 60 * 60 * 1000) } }] as never);
+    m.product.groupBy.mockResolvedValue([{ vendorId: "vendor-1", _min: { publishedAt: new Date(NOW.getTime() - 30 * 60 * 60 * 1000) } }] as never);
     m.event.count.mockResolvedValue(0 as never);
 
     await automationDetectors.runSweep();
