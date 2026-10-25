@@ -146,8 +146,10 @@ describe("Milestone 1: Payment Flow Safety", () => {
 
     it("failed Stripe call leaves the order in a recoverable state — cart cleanup restores stock for stale PENDING orders", () => {
       const internalRoutesSource = fs.readFileSync(path.join(__dirname, "..", "modules", "internal", "internal.routes.ts"), "utf8");
+      const stockRecoverySource = fs.readFileSync(path.join(__dirname, "..", "modules", "orders", "pending-order-stock.service.ts"), "utf8");
       expect(internalRoutesSource).toMatch(/status: "PENDING", createdAt: \{ lt: cutoff \}/);
-      expect(internalRoutesSource).toMatch(/stock: \{ increment: item\.quantity \}/);
+      expect(internalRoutesSource).toMatch(/failPendingOrderAndReleaseStock\(tx/);
+      expect(stockRecoverySource).toMatch(/stock: \{ increment: item\.quantity \}/);
     });
   });
 
