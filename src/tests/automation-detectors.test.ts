@@ -418,7 +418,7 @@ describe("automationDetectors.runSweep — STORE_SHARE_REMINDER (spec R10, migra
     );
   });
 
-  it("does not remind a vendor whose store has already been viewed at least once (stop condition)", async () => {
+  it("does not remind a vendor whose store has already been viewed at least once (fallback stop condition for pre-fix app builds)", async () => {
     m.vendor.findMany.mockResolvedValue([readyVendor()] as never);
     m.deliveryZone.groupBy.mockResolvedValue([{ vendorId: "vendor-1", _count: { _all: 1 } }] as never);
     m.event.count.mockResolvedValue(1 as never);
@@ -426,6 +426,19 @@ describe("automationDetectors.runSweep — STORE_SHARE_REMINDER (spec R10, migra
     await automationDetectors.runSweep();
 
     expect(mockScheduleAutomation).not.toHaveBeenCalledWith(expect.objectContaining({ type: "STORE_SHARE_REMINDER" }));
+  });
+
+  it("does not remind a vendor whose store has a real store_shared event — the actual spec-intended stop condition, queried alongside store_viewed", async () => {
+    m.vendor.findMany.mockResolvedValue([readyVendor()] as never);
+    m.deliveryZone.groupBy.mockResolvedValue([{ vendorId: "vendor-1", _count: { _all: 1 } }] as never);
+    m.event.count.mockResolvedValue(1 as never);
+
+    await automationDetectors.runSweep();
+
+    expect(mockScheduleAutomation).not.toHaveBeenCalledWith(expect.objectContaining({ type: "STORE_SHARE_REMINDER" }));
+    expect(m.event.count).toHaveBeenCalledWith(
+      expect.objectContaining({ where: expect.objectContaining({ name: { in: ["store_shared", "store_viewed"] } }) }),
+    );
   });
 
   it("does not remind a vendor with no delivery zone yet — not actually 'ready'", async () => {

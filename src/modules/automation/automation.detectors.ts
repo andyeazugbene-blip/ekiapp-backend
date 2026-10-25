@@ -303,13 +303,27 @@ async function detectFirstSale(): Promise<number> {
  * channel (a direct link, a repeat buyer) but whose store has still never
  * been recorded as viewed is still a legitimate candidate.
  *
- * "Shared" vs "viewed": this codebase has no event that specifically means
- * "the vendor shared their store link" — only `store_viewed`, recorded
- * when ANYONE opens the public store page (the vendor sharing it is the
- * expected cause, but a buyer finding it some other way would also count).
- * This is the same honestly-documented substitution used for R06/R11's
- * stop conditions: the closest real signal, not the literal one, stated
- * as such rather than quietly assumed to be identical.
+ * "Shared" vs "viewed": a real `store_shared` event now exists (added
+ * 2026-10-25 alongside this fix — see public-stores.service.ts
+ * recordEvent(), fired when share-store-link.tsx's Share sheet
+ * completes), replacing the previous approximation that used
+ * `store_viewed` (fired for ANY visit, vendor-initiated or not). The stop
+ * condition below checks EITHER event, not `store_shared` alone — a
+ * deliberate transition decision: an app build from before this fix
+ * shipped will never emit `store_shared`, so a vendor on an un-updated
+ * build who already got viewed (by any means) would otherwise never see
+ * this reminder stop. `store_viewed` stays as a permanent fallback
+ * signal, not a temporary one, since "the store has had any visitor at
+ * all" is itself a reasonable (if looser) reason to stop nagging about
+ * sharing it.
+ *
+ * iOS vs Android honesty: `store_shared` fires when the Share sheet
+ * reports completion. iOS's Share API distinguishes "the user picked an
+ * app" from "the user dismissed the sheet" (`Share.sharedAction`); the
+ * Android Share API cannot make that distinction at all, so on Android
+ * this event fires on sheet completion either way — a real platform
+ * limitation, not something this fix can close further on the backend
+ * side (see the mobile-side comment in share-store-link.tsx).
  *
  * New in this migration: a vendor-facing opt-out. The previous
  * implementation had no VendorAutomationSetting toggle at all — this type
@@ -338,8 +352,8 @@ async function detectStoreShareReminder(): Promise<number> {
 
   let scheduled = 0;
   for (const vendor of readyVendors) {
-    const everViewed = await prisma.event.count({ where: { name: "store_viewed", entityType: "Vendor", entityId: vendor.id } });
-    if (everViewed > 0) continue; // stop condition: store has been viewed at least once.
+    const everSharedOrViewed = await prisma.event.count({ where: { name: { in: ["store_shared", "store_viewed"] }, entityType: "Vendor", entityId: vendor.id } });
+    if (everSharedOrViewed > 0) continue; // stop condition: store has been shared (real signal) or viewed (fallback — see doc comment above).
 
     const hoursSinceCreated = (Date.now() - vendor.createdAt.getTime()) / HOUR_MS;
     scheduled += await scheduleP2Touches({

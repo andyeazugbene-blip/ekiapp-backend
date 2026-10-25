@@ -15,6 +15,7 @@ const VALID_EVENTS = new Set<PublicStoreEventType>([
   "reorder",
   "open_in_app",
   "save_vendor",
+  "share",
 ]);
 
 function requireUserId(request: Request): string {

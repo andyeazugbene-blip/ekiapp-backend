@@ -1306,6 +1306,19 @@ export const publicStoresService = {
       });
     }
 
+    // Notification Orchestration Spec v2, R10: the vendor's own share
+    // action (see app/(vendor)/share-store-link.tsx), distinct from
+    // "open" above — that fires for ANY visitor, not specifically because
+    // the vendor shared the link. This is STORE_SHARE_REMINDER's real
+    // stop condition (automation.detectors.ts detectStoreShareReminder),
+    // replacing the previous "store_viewed" approximation.
+    if (input.event === "share") {
+      eventsService.emit({
+        name: EVENT_NAMES.store_shared, actorType: "user", actorId: viewerId ?? vendor.id,
+        entityType: "Vendor", entityId: vendor.id, source, payload: { storeSlug: vendor.storeSlug, clientReported: true },
+      });
+    }
+
     return this.getAnalyticsSummaryForVendor(vendor.id, vendor.storeSlug);
   },
 
