@@ -17,7 +17,7 @@ Status values follow the spec's own progression: **Proposed → Backend mapped �
 | R07 Verification requires correction | **Not verified this pass** | Depends on a Stripe Identity "requires action"/rejected status surfaced somewhere queryable; not located in this pass's grep sweep of `payments`/`verification` modules. |
 | R08 Verification approved | **Not verified this pass** | Related to R06/R09 — needs a dedicated check of the Stripe identity webhook handler. |
 | R09 Publication confirmed → share store | **Implemented (legacy), not spec-shaped** | `vendor_store_ready` one-time milestone — [vendor-milestone-notifications.service.ts](../../src/modules/vendors/vendor-milestone-notifications.service.ts) `maybeSendStoreReady`. Fires once, outside `automationService`/`AutomationRule` — not admin-visible in the Automation Centre the way R01–R06/R11 are. |
-| R10 Store live, never shared, 24h | **Implemented (legacy), cadence mismatch** | `runShareReminderSweep` → event `vendor_store_not_shared`. Confirmed live via manual sweep trigger (`"vendor-share-reminder-sweep":{"sent":2}`). **Cadence is every 3 days, not the spec's 24h** — not corrected this pass (out of the R01/R03/R05/R06/R11 scope PR #6 covered). |
+| R10 Store live, never shared | **Implemented, QA passed (PR #8)** | Migrated off the legacy `runShareReminderSweep`/`vendor_store_not_shared` path onto `STORE_SHARE_REMINDER`, the same P2 (4h/24h/72h) framework as R01/R03/R05/R06/R11 — admin-visible, vendor-toggleable for the first time. Stop condition approximated as "store viewed" (no "shared" event exists); cadence clock is `vendor.createdAt`, not a real "published" timestamp. Destination (`store_share`) is a real mobile screen per `05-deeplink-matrix.md`, still not wired to the notification-tap handler (pre-existing, mobile-repo gap, not fixed here). 198/198 test files pass. |
 | R11 First Sale Campaign not started | **Implemented, QA passed** | `FIRST_SALE` (narrowed), PR #6. Stop condition substituted (first paid order, not "campaign started" — no such campaign concept exists). |
 
 ## R12–R18: Vendor orders and inventory
@@ -81,8 +81,8 @@ Status values follow the spec's own progression: **Proposed → Backend mapped �
 
 ## Summary counts
 
-- **Implemented, QA passed (spec-shaped):** 12 of 40 — R01, R03, R05, R06, R11, R16, R20, R30, R31, R32, R33, R37
-- **Implemented (legacy, not re-platformed):** 6 of 40 — R09, R10, R12, R13, R15, R39
+- **Implemented, QA passed (spec-shaped):** 13 of 40 — R01, R03, R05, R06, R10, R11, R16, R20, R30, R31, R32, R33, R37
+- **Implemented (legacy, not re-platformed):** 5 of 40 — R09, R12, R13, R15, R39
 - **Blocked (named, real dependency missing):** R02, R04 — 2
 - **Partially implemented, real gap identified:** R38 — 1
 - **Not started / not found:** R18, R28, R40 — 3
