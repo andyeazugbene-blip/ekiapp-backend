@@ -17,7 +17,7 @@ Status values follow the spec's own progression: **Proposed → Backend mapped �
 | R07 Verification requires correction | **Not verified this pass** | Depends on a Stripe Identity "requires action"/rejected status surfaced somewhere queryable; not located in this pass's grep sweep of `payments`/`verification` modules. |
 | R08 Verification approved | **Not verified this pass** | Related to R06/R09 — needs a dedicated check of the Stripe identity webhook handler. |
 | R09 Publication confirmed → share store | **Implemented (legacy), not spec-shaped** | `vendor_store_ready` one-time milestone — [vendor-milestone-notifications.service.ts](../../src/modules/vendors/vendor-milestone-notifications.service.ts) `maybeSendStoreReady`. Fires once, outside `automationService`/`AutomationRule` — not admin-visible in the Automation Centre the way R01–R06/R11 are. |
-| R10 Store live, never shared | **Implemented, QA passed (PR #8)** | Migrated off the legacy `runShareReminderSweep`/`vendor_store_not_shared` path onto `STORE_SHARE_REMINDER`, the same P2 (4h/24h/72h) framework as R01/R03/R05/R06/R11 — admin-visible, vendor-toggleable for the first time. Stop condition approximated as "store viewed" (no "shared" event exists); cadence clock is `vendor.createdAt`, not a real "published" timestamp. Destination (`store_share`) is a real mobile screen per `05-deeplink-matrix.md`, still not wired to the notification-tap handler (pre-existing, mobile-repo gap, not fixed here). 198/198 test files pass. |
+| R10 Store live, never shared | **Backend logic: Implemented, QA passed (PR #8). End-to-end rule: NOT fully compliant — 2 real gaps remain, both named below, neither faked.** | Backend: `STORE_SHARE_REMINDER` on the same P2 (4h/24h/72h) framework as R01/R03/R05/R06/R11, admin-visible, vendor-toggleable for the first time. Cadence clock corrected (compliance review, 2026-10-26) to a real derived "readySince" timestamp (later of first active product / first delivery zone createdAt), not account creation. Stop condition corrected to a real `store_shared` event (added 2026-10-25), with `store_viewed` kept only as a bounded grandfather fallback for views before 2026-10-26 — not a permanent substitute. **Gap 1 (live, not closed):** the mobile app does not yet call the new `store_shared` event — confirmed by direct inspection of `share-store-link.tsx`, not re-verified by assumption. Until that mobile change ships, every vendor who becomes eligible after 2026-10-26 has no way to stop this reminder except opting out. **Gap 2 (pre-existing, not closed):** per `05-deeplink-matrix.md`, `store_share` has a real mobile screen but is not wired to the notification-tap handler — tapping this notification today does not open it. Closing either gap needs a mobile-repo PR, not attempted this pass. 198/198 backend test files pass. |
 | R11 First Sale Campaign not started | **Implemented, QA passed** | `FIRST_SALE` (narrowed), PR #6. Stop condition substituted (first paid order, not "campaign started" — no such campaign concept exists). |
 
 ## R12–R18: Vendor orders and inventory
@@ -81,7 +81,8 @@ Status values follow the spec's own progression: **Proposed → Backend mapped �
 
 ## Summary counts
 
-- **Implemented, QA passed (spec-shaped):** 14 of 40 — R01, R03, R05, R06, R10, R11, R16, R20, R30, R31, R32, R33, R37, R38
+- **Implemented, QA passed (spec-shaped):** 13 of 40 — R01, R03, R05, R06, R11, R16, R20, R30, R31, R32, R33, R37, R38
+- **Backend implemented/QA passed, but end-to-end NOT fully compliant (named mobile-side gaps remain):** 1 of 40 — R10
 - **Implemented (legacy, not re-platformed):** 5 of 40 — R09, R12, R13, R15, R39
 - **Blocked (named, real dependency missing):** R02, R04 — 2
 - **Not started / not found:** R18, R28, R40 — 3
