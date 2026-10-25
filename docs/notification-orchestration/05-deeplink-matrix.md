@@ -22,6 +22,6 @@ Verified directly against `ekiapp-frontnend-application-ios-android-main` (Expo 
 
 ## Honest summary
 
-**5 of 15** destinations have tap routes mapped to real mobile screens: `order_detail`, `foodstuff_subscription`, `community_buy_campaign`, and `store_share`; `verification` and `support_case` remain partial. R10's store-share event and notification-tap changes have not yet had device-level runtime QA. The remaining **8–10** either have a real screen with zero tap-wiring, or (for `membership` and `referral_rewards`) no matching screen exists under that name at all.
+**4 of 15** destinations have tap routes mapped to real mobile screens: `order_detail`, `foodstuff_subscription`, `community_buy_campaign`, and `store_share`. `verification` and `support_case` remain partial; the other 9 have no verified end-to-end mapping or no corresponding mobile screen. R10's store-share event and notification-tap changes have not yet had device-level runtime QA.
 
 **The remaining gaps are mobile-side.** Tap routing still needs branches for `store_setup`, `foodstuff_editor`, and `inventory_detail`, plus a verified target for `first_sale`/`automation_detail`. `membership` and `referral_rewards` need either a real screen or a confirmed mapping to an existing one. `admin_case` must be checked against its intended recipient and admin-only authorization before routing. Runtime checks for the newly added `store_share` branch remain outstanding.
