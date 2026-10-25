@@ -288,6 +288,127 @@ async function detectFirstSale(): Promise<number> {
   return scheduled;
 }
 
+// The exact moment this `store_shared`/readiness-timestamp fix shipped
+// (2026-10-26). Used only to bound the `store_viewed` fallback below —
+// see detectStoreShareReminder's doc comment for why it must not be a
+// permanent substitute for the spec's real "store shared" stop condition.
+const STORE_SHARED_SIGNAL_SHIPPED_AT = new Date("2026-10-26T00:00:00.000Z");
+
+/**
+ * STORE_SHARE_REMINDER (spec R10): "Store live, never shared." Migrated
+ * 2026-10-25 from the pre-spec "handoff V-06 store.link.not.shared"
+ * (vendor-milestone-notifications.service.ts runShareReminderSweep,
+ * removed) onto the P2 cadence shared with R01/R03/R05/R06/R11.
+ *
+ * Deliberately does NOT reuse loadOnboardingProgressCandidates(): that
+ * helper excludes any vendor who already has a paid order, which is the
+ * right exclusion for R01/R03/R05/R06/R11 but wrong here — R10's stop
+ * condition is "store shared," not "never sold." A vendor who already
+ * made a sale through some other channel but whose store has still never
+ * been shared is still a legitimate candidate.
+ *
+ * STOP CONDITION, corrected 2026-10-26 after compliance review:
+ * - Primary, unbounded signal: a real `store_shared` event (added
+ *   2026-10-25 — public-stores.service.ts recordEvent(), fired when
+ *   share-store-link.tsx's Share sheet completes).
+ * - Secondary, TIME-BOUNDED fallback: a `store_viewed` event that
+ *   happened BEFORE STORE_SHARED_SIGNAL_SHIPPED_AT only. This grandfathers
+ *   vendors who were already viewed before the real signal existed (so
+ *   they don't get nagged forever for something that happened under the
+ *   old, looser rule) — but a view that happens AFTER this fix shipped no
+ *   longer silently satisfies "shared." Going forward, only a genuine
+ *   `store_shared` event stops the reminder for anyone newly becoming
+ *   eligible. This was a PERMANENT fallback before this review; restricted
+ *   to a bounded grandfather clause now, per compliance review, since an
+ *   indefinite "any view counts as shared" substitution never actually
+ *   matched the spec's literal requirement.
+ * - Known, currently real gap, not yet closed: the mobile app does NOT
+ *   emit `store_shared` yet (verified by direct inspection of
+ *   share-store-link.tsx on 2026-10-25 — Share.share() is called with no
+ *   result handling and no backend call at all). Until that mobile change
+ *   ships, EVERY vendor who becomes eligible after
+ *   STORE_SHARED_SIGNAL_SHIPPED_AT has no real way to ever stop this
+ *   reminder except opting out — this is a genuine, currently-live
+ *   degradation, not a theoretical one, and is called out again in the
+ *   compliance matrix rather than left implicit here.
+ *
+ * iOS vs Android honesty (once mobile is wired): `store_shared` fires
+ * when the Share sheet reports completion. iOS's Share API distinguishes
+ * "the user picked an app" from "the user dismissed the sheet"
+ * (`Share.sharedAction`); Android's Share API cannot make that
+ * distinction at all, so on Android this event fires on sheet completion
+ * either way — a real platform limitation, not closeable from the
+ * backend side.
+ *
+ * New in this migration: a vendor-facing opt-out
+ * (VENDOR_TOGGLEABLE_AUTOMATION_TYPES) — gives the spec's stop condition
+ * "store shared OR opt-out" its second half, which did not exist at all
+ * in the previous implementation.
+ *
+ * CADENCE CLOCK, corrected 2026-10-26: previously vendor.createdAt (account
+ * creation), which the spec calls "24h after publication" — account
+ * creation is not publication. This codebase has no stored "published at"
+ * column, so a real one is derived instead of assumed: the later of (a)
+ * the earliest still-active product's createdAt and (b) the earliest
+ * delivery zone's createdAt — i.e. the actual moment both conditions of
+ * "ready" first became true. This is a genuine, derived timestamp from
+ * real rows, not an invented field, though it has one known edge case: if
+ * the vendor's ORIGINAL first product was later deactivated and a
+ * different one created afterward, "earliest ACTIVE product" shifts
+ * forward to the newer one, understating how long the vendor has actually
+ * been ready. Accepted as a minor, documented imprecision rather than
+ * adding a new schema column for an exact historical "first ever became
+ * ready" timestamp — out of scope for this fix.
+ */
+async function detectStoreShareReminder(): Promise<number> {
+  const vendors = await prisma.vendor.findMany({
+    where: { isSuspended: false, products: { some: { isActive: true } } },
+    select: { id: true, userId: true, storeName: true },
+    take: 500,
+  });
+  if (vendors.length === 0) return 0;
+  const vendorIds = vendors.map((v) => v.id);
+
+  const [zoneCounts, firstZoneByVendor, firstProductByVendor] = await Promise.all([
+    prisma.deliveryZone.groupBy({ by: ["vendorId"], where: { vendorId: { in: vendorIds } }, _count: { _all: true } }),
+    prisma.deliveryZone.groupBy({ by: ["vendorId"], where: { vendorId: { in: vendorIds } }, _min: { createdAt: true } }),
+    prisma.product.groupBy({ by: ["vendorId"], where: { vendorId: { in: vendorIds }, isActive: true }, _min: { createdAt: true } }),
+  ]);
+  const hasZone = new Set(zoneCounts.filter((z) => z._count._all > 0).map((z) => z.vendorId));
+  const firstZoneAt = new Map(firstZoneByVendor.map((z) => [z.vendorId, z._min.createdAt]));
+  const firstProductAt = new Map(firstProductByVendor.map((p) => [p.vendorId, p._min.createdAt]));
+  const readyVendors = vendors.filter((v) => hasZone.has(v.id));
+
+  let scheduled = 0;
+  for (const vendor of readyVendors) {
+    const [sharedCount, viewedBeforeCutoffCount] = await Promise.all([
+      prisma.event.count({ where: { name: "store_shared", entityType: "Vendor", entityId: vendor.id } }),
+      prisma.event.count({ where: { name: "store_viewed", entityType: "Vendor", entityId: vendor.id, createdAt: { lt: STORE_SHARED_SIGNAL_SHIPPED_AT } } }),
+    ]);
+    if (sharedCount > 0 || viewedBeforeCutoffCount > 0) continue; // stop condition — see doc comment above.
+
+    // "Ready since" = later of first active product / first delivery zone — see doc comment.
+    const zoneAt = firstZoneAt.get(vendor.id);
+    const productAt = firstProductAt.get(vendor.id);
+    if (!zoneAt || !productAt) continue; // defensive: readyVendors filter already guarantees both exist.
+    const readySince = zoneAt.getTime() > productAt.getTime() ? zoneAt : productAt;
+    const hoursSinceReady = (Date.now() - readySince.getTime()) / HOUR_MS;
+
+    scheduled += await scheduleP2Touches({
+      type: "STORE_SHARE_REMINDER",
+      recipientUserId: vendor.userId,
+      vendorId: vendor.id,
+      subjectPrefix: vendor.id,
+      hoursSinceEligible: hoursSinceReady,
+      requiresMarketingConsent: false,
+      title: "Share your store link",
+      body: "Your store is ready for its next step. Share your store link with buyers.",
+      data: { store_name: vendor.storeName },
+    });
+  }
+  return scheduled;
+}
+
 /**
  * AUTOMATION_FAILURE_ALERT (spec R38): "An Eki automation needs
  * attention." Previously only admin-visible (automationRulesService.
@@ -867,6 +988,7 @@ export const automationDetectors = {
       ["DELIVERY_SETUP_REMINDER", detectDeliverySetupReminder],
       ["VERIFICATION_REMINDER", detectVerificationReminder],
       ["FIRST_SALE", detectFirstSale],
+      ["STORE_SHARE_REMINDER", detectStoreShareReminder],
       ["AUTOMATION_FAILURE_ALERT", detectAutomationFailureAlert],
       ["CART_RECOVERY", detectCartRecovery],
       ["REORDER_REMINDER", detectReorderReminder],

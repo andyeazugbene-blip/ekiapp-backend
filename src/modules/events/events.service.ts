@@ -23,6 +23,11 @@ export const EVENT_NAMES = {
   campaign_launched: "campaign_launched",
   campaign_impression: "campaign_impression",
   store_viewed: "store_viewed",
+  // Notification Orchestration Spec v2, R10: a real "share" signal, distinct
+  // from "store_viewed" (an open of the public store page by anyone, vendor
+  // sharing it or not). Fired by trackPublicStoreEvent when the client
+  // reports event "share" — see public-stores.service.ts recordEvent().
+  store_shared: "store_shared",
   product_viewed: "product_viewed",
   // Conversion
   cart_created: "cart_created",

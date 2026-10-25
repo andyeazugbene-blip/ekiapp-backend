@@ -2112,6 +2112,15 @@ enum AutomationType {
   FIRST_PRODUCT_REMINDER
   DELIVERY_SETUP_REMINDER
   VERIFICATION_REMINDER
+  // Spec R10: "Store live, never shared." Migrated 2026-10-25 from the
+  // pre-spec, non-toggleable "handoff V-06 store.link.not.shared"
+  // implementation (vendor-milestone-notifications.service.ts
+  // runShareReminderSweep, removed) onto the same AutomationRule/
+  // AutomationRun framework as R01/R03/R05/R06/R11 — same precedent this
+  // codebase already set when LOW_STOCK_ALERT's duplicate raw-email path
+  // was removed in favor of the real automation engine (see
+  // internal.routes.ts's comment on that fix).
+  STORE_SHARE_REMINDER
   // Eki-managed, no vendor toggle: a BUYER or VENDOR who registered but never
   // verified their email. Stops the moment emailVerifiedAt is set — the
   // candidate query itself excludes verified users, same self-cancelling

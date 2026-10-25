@@ -75,6 +75,15 @@ export const DEFAULT_TEMPLATES: Record<AutomationType, { title: string; body: st
     channels: ["push", "in_app", "email"],
     recipientType: "VENDOR",
   },
+  // Spec R10: "Store live, never shared." Migrated 2026-10-25 from the
+  // non-toggleable "handoff V-06" send — now push+in_app+email like the
+  // rest of this file's onboarding types (was push+in_app only before).
+  STORE_SHARE_REMINDER: {
+    title: "Share your store link",
+    body: "Hi {{name}}, your store is ready for its next step — share your store link with buyers.",
+    channels: ["push", "in_app", "email"],
+    recipientType: "VENDOR",
+  },
   CART_RECOVERY: {
     title: "You left something in your cart",
     body: "Hi {{name}}, you still have items waiting in your Eki cart. Complete your order before they sell out.",

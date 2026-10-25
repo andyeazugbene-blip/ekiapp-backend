@@ -62,7 +62,16 @@ export type PublicStoreEventType =
   | "track_order"
   | "reorder"
   | "open_in_app"
-  | "save_vendor";
+  | "save_vendor"
+  // Notification Orchestration Spec v2, R10: the vendor's own app reports
+  // this after their native Share sheet completes — see
+  // app/(vendor)/share-store-link.tsx. On iOS this only fires when the
+  // share sheet reports `Share.sharedAction` (the user actually picked an
+  // app); on Android the OS Share API cannot distinguish "picked an app"
+  // from "dismissed the sheet", so it fires on sheet completion either
+  // way — a known, documented platform limitation, not treated as more
+  // certain than it is.
+  | "share";
 
 export interface PublicStoreEventItemInput {
   productId: string;

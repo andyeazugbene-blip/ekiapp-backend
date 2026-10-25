@@ -80,6 +80,9 @@ export const VENDOR_TOGGLEABLE_AUTOMATION_TYPES: AutomationType[] = [
   "FIRST_PRODUCT_REMINDER",
   "DELIVERY_SETUP_REMINDER",
   "VERIFICATION_REMINDER",
+  // Spec R10 (2026-10-25) — migrated from a non-toggleable send; this is
+  // the first time a vendor can opt out of this reminder at all.
+  "STORE_SHARE_REMINDER",
   "CART_RECOVERY",
   "BUYER_WIN_BACK",
   "REORDER_REMINDER",
