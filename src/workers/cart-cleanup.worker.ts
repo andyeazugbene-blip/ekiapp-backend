@@ -3,6 +3,7 @@ import { Worker, type Job, Queue } from "bullmq";
 import { logger } from "../lib/logger";
 import { prisma } from "../lib/prisma";
 import { getRedisConnection } from "../lib/redis";
+import { failPendingOrderAndReleaseStock } from "../modules/orders/pending-order-stock.service";
 
 const QUEUE_NAME = "cart-cleanup";
 const STALE_ORDER_MINUTES = 30; // Orders pending for >30 min with no payment
@@ -38,31 +39,15 @@ async function processCartCleanup(_job: Job<CartCleanupJobData>): Promise<void> 
 
   for (const order of staleOrders) {
     try {
-      await prisma.$transaction(async (tx) => {
-        // Restore stock for each item
-        for (const item of order.items) {
-          await tx.product.update({
-            where: { id: item.productId },
-            data: { stock: { increment: item.quantity } },
-          });
-        }
-
-        // Mark order as FAILED
-        await tx.order.update({
-          where: { id: order.id },
-          data: { status: "FAILED" },
-        });
-
-        // Mark payment as FAILED
-        if (order.payment) {
-          await tx.payment.update({
-            where: { id: order.payment.id },
-            data: { status: "FAILED" },
-          });
-        }
-      });
-
-      restoredCount++;
+      if (!order.payment) continue;
+      const restored = await prisma.$transaction((tx) =>
+        failPendingOrderAndReleaseStock(tx, {
+          orderId: order.id,
+          paymentId: order.payment!.id,
+          items: order.items,
+        }),
+      );
+      if (restored) restoredCount++;
     } catch (error) {
       logger.error("Cart cleanup: failed to restore order", {
         orderId: order.id,

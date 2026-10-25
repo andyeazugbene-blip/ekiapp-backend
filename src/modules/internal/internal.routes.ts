@@ -17,6 +17,7 @@ import { escrowService } from "../paystack/escrow.service";
 import { escrowHealthService } from "../paystack/escrow-health.service";
 import { reconciliationService } from "../ledger/reconciliation.service";
 import { paymentAnomalyService } from "../ledger/payment-anomaly.service";
+import { failPendingOrderAndReleaseStock } from "../orders/pending-order-stock.service";
 import { fulfilmentDelayService } from "../community-buy/fulfilment-delay.service";
 import { enqueueEmail } from "../../lib/email-queue";
 import { checkPushReceipts } from "../../lib/expo-push";
@@ -264,14 +265,15 @@ async function runCartCleanup() {
   let restored = 0;
   for (const order of staleOrders) {
     try {
-      await prisma.$transaction(async (tx) => {
-        for (const item of order.items) {
-          await tx.product.update({ where: { id: item.productId }, data: { stock: { increment: item.quantity } } });
-        }
-        await tx.order.update({ where: { id: order.id }, data: { status: "FAILED" } });
-        if (order.payment) await tx.payment.update({ where: { id: order.payment.id }, data: { status: "FAILED" } });
-      });
-      restored++;
+      if (!order.payment) continue;
+      const released = await prisma.$transaction((tx) =>
+        failPendingOrderAndReleaseStock(tx, {
+          orderId: order.id,
+          paymentId: order.payment!.id,
+          items: order.items,
+        }),
+      );
+      if (released) restored++;
     } catch (err) {
       logger.error("Cart cleanup: failed to restore order", { orderId: order.id, error: String(err) });
     }
