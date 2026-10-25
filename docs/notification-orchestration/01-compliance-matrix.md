@@ -50,7 +50,7 @@ Status values follow the spec's own progression: **Proposed → Backend mapped �
 | R25 Payout action required | **Not verified this pass** | `payouts.service.ts` exists; notification call not confirmed by name. |
 | R26 Payout confirmed | **Not verified this pass** | Same file. |
 | R27 Dispute evidence due | **Not verified this pass** | `dispute-v2.service.ts` exists; notification call not confirmed by name. |
-| R28 Support response received | **Not started / not found** | No matching code found in `src/modules/support` or `communications` for a "support replied" push. |
+| R28 Support response received | **Implemented (legacy) for Community Buy cases; general support scope unverified** | `supportCaseService.adminUpdate()` sends `support_case_response` only when `customerVisibleResponse` changes, and targets the case's `participantId` (the reporter), with `caseId` and `campaignId`. No-op re-saves and admin-only field changes do not notify. Evidence/tests: [support-case.service.ts](../../src/modules/community-buy/support-case.service.ts) and [community-buy-support-case.test.ts](../../src/tests/community-buy-support-case.test.ts). The repository has no general support-case model in this path; the original spec is needed to confirm whether this narrow workflow fully covers R28. |
 | R29 Membership payment failed | **Not verified this pass** | Depends on Stripe subscription webhook handling; not confirmed by name. |
 | R30 Trial ending soon | **Implemented, QA passed** | `VENDOR_TRIAL_ENDING` — Stripe `customer.subscription.trial_will_end`, idempotent via `WebhookEvent`, tested. |
 

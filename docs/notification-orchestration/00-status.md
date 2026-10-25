@@ -4,6 +4,8 @@
 **Author:** Mouad (with Claude Code assistance)
 **Latest work:** completed R10 backend/mobile source changes on 2026-10-26. Backend branch `feat/store-share-reminder-r10` has commit `f9dcce9`, pushed to open PR #8. Mobile branch `feat/store-share-reminder-mobile` has commit `ff87a48`; pushing it was rejected by automatic approval review because it could not verify trusted authorization to publish mobile source. The existing uncommitted `android/app/src/main/AndroidManifest.xml` change remains untouched and is not included in that commit.
 
+R28 was rechecked against the Community Buy support workflow and its tests: changed customer-visible replies notify the case reporter; general support-case coverage remains unverified.
+
 **Completion status:** the full specification is not complete. R10 now has owner-verified event emission and a mapped tap route, but native device QA and sub-daily scheduling remain outstanding. The local repositories do not contain the original v2 specification document or the 210-event legacy catalogue; the compliance matrix and older handoff gap analysis are secondary evidence, not substitutes for those source documents. See `07-test-report.md` for current verification and `08-outstanding-decisions.md` for external dependencies.
 
 ## How to read the other files in this directory
