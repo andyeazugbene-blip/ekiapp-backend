@@ -20,6 +20,10 @@ The current workspace does not contain the authoritative Notification Orchestrat
 
 The mobile changes are committed locally on `feat/store-share-reminder-mobile` (`ff87a48`). Automatic approval review rejected the push because it could not verify trusted authorization to export mobile source to the remote. The earlier request was supplied as an attached text file, which the reviewer did not accept as trusted authorization. A direct in-chat authorization to push this branch is required before retrying.
 
+## 5. Applying vendor referral Membership credits
+
+The referral ledger records an earned free-month credit and notifies the referrer, but does not mutate Stripe subscription dates or invoices. Confirm the approved Stripe coupon/invoice-credit mechanism before implementing that financial side effect; do not infer billing changes from `Referral.creditedAt` alone.
+
 ## Remaining rules to verify
 
 14 of the 40 rules (listed in `01-compliance-matrix.md`) remain individually unverified. They are outstanding engineering work, not client decisions; continue investigating them using the supplied source spec once available.
