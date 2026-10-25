@@ -395,6 +395,7 @@ describe("automationService — per-vendor tunable config (CART_RECOVERY, BUYER_
         "FIRST_PRODUCT_REMINDER",
         "DELIVERY_SETUP_REMINDER",
         "VERIFICATION_REMINDER",
+        "STORE_SHARE_REMINDER",
         "CART_RECOVERY",
         "BUYER_WIN_BACK",
         "REORDER_REMINDER",

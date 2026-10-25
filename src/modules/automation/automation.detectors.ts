@@ -289,6 +289,75 @@ async function detectFirstSale(): Promise<number> {
 }
 
 /**
+ * STORE_SHARE_REMINDER (spec R10): "Store live, never shared." Migrated
+ * 2026-10-25 from the pre-spec "handoff V-06 store.link.not.shared"
+ * (vendor-milestone-notifications.service.ts runShareReminderSweep,
+ * removed) onto the P2 cadence shared with R01/R03/R05/R06/R11.
+ *
+ * Deliberately does NOT reuse loadOnboardingProgressCandidates(): that
+ * helper excludes any vendor who already has a paid order, which is the
+ * right exclusion for R01/R03/R05/R06/R11 (their stop condition IS "first
+ * paid order" in one form or another) but wrong here — R10's stop
+ * condition is "store shared" (approximated as "ever viewed," see below),
+ * not "never sold." A vendor who already made a sale through some other
+ * channel (a direct link, a repeat buyer) but whose store has still never
+ * been recorded as viewed is still a legitimate candidate.
+ *
+ * "Shared" vs "viewed": this codebase has no event that specifically means
+ * "the vendor shared their store link" — only `store_viewed`, recorded
+ * when ANYONE opens the public store page (the vendor sharing it is the
+ * expected cause, but a buyer finding it some other way would also count).
+ * This is the same honestly-documented substitution used for R06/R11's
+ * stop conditions: the closest real signal, not the literal one, stated
+ * as such rather than quietly assumed to be identical.
+ *
+ * New in this migration: a vendor-facing opt-out. The previous
+ * implementation had no VendorAutomationSetting toggle at all — this type
+ * is added to VENDOR_TOGGLEABLE_AUTOMATION_TYPES, which is what actually
+ * gives the spec's stop condition "store shared OR opt-out" its second
+ * half; previously there was no way to opt out at all.
+ *
+ * Cadence clock is vendor.createdAt, same as every other rule in this
+ * file — not a literal "publication" timestamp (no such column exists).
+ * A vendor who created their store long ago but only recently added a
+ * product+zone (and so only recently became "ready" in R10's sense) gets
+ * measured from account creation, not from readiness — same documented
+ * approximation class as R03/R05/R06's stop-condition substitutions.
+ */
+async function detectStoreShareReminder(): Promise<number> {
+  const vendors = await prisma.vendor.findMany({
+    where: { isSuspended: false, products: { some: { isActive: true } } },
+    select: { id: true, userId: true, storeName: true, createdAt: true },
+    take: 500,
+  });
+  if (vendors.length === 0) return 0;
+
+  const zoneCounts = await prisma.deliveryZone.groupBy({ by: ["vendorId"], where: { vendorId: { in: vendors.map((v) => v.id) } }, _count: { _all: true } });
+  const hasZone = new Set(zoneCounts.filter((z) => z._count._all > 0).map((z) => z.vendorId));
+  const readyVendors = vendors.filter((v) => hasZone.has(v.id));
+
+  let scheduled = 0;
+  for (const vendor of readyVendors) {
+    const everViewed = await prisma.event.count({ where: { name: "store_viewed", entityType: "Vendor", entityId: vendor.id } });
+    if (everViewed > 0) continue; // stop condition: store has been viewed at least once.
+
+    const hoursSinceCreated = (Date.now() - vendor.createdAt.getTime()) / HOUR_MS;
+    scheduled += await scheduleP2Touches({
+      type: "STORE_SHARE_REMINDER",
+      recipientUserId: vendor.userId,
+      vendorId: vendor.id,
+      subjectPrefix: vendor.id,
+      hoursSinceEligible: hoursSinceCreated,
+      requiresMarketingConsent: false,
+      title: "Share your store link",
+      body: "Your store is ready for its next step. Share your store link with buyers.",
+      data: { store_name: vendor.storeName },
+    });
+  }
+  return scheduled;
+}
+
+/**
  * CART_RECOVERY: items sitting in a buyer's cart past a per-vendor reminder
  * delay (default 2h, vendor-configurable via VendorAutomationSetting.config).
  * A cart can span multiple vendors' products, so it's evaluated once per
@@ -804,6 +873,7 @@ export const automationDetectors = {
       ["DELIVERY_SETUP_REMINDER", detectDeliverySetupReminder],
       ["VERIFICATION_REMINDER", detectVerificationReminder],
       ["FIRST_SALE", detectFirstSale],
+      ["STORE_SHARE_REMINDER", detectStoreShareReminder],
       ["CART_RECOVERY", detectCartRecovery],
       ["REORDER_REMINDER", detectReorderReminder],
       ["REVIEW_REQUEST", detectReviewRequest],

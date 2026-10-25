@@ -21,7 +21,6 @@ import { fulfilmentDelayService } from "../community-buy/fulfilment-delay.servic
 import { enqueueEmail } from "../../lib/email-queue";
 import { checkPushReceipts } from "../../lib/expo-push";
 import { supportRetentionService } from "../messages/support-retention.service";
-import { vendorMilestoneNotificationsService } from "../vendors/vendor-milestone-notifications.service";
 import { orderAcceptanceNotificationsService } from "../orders/order-acceptance-notifications.service";
 import { capturePendingReviewService } from "../community-buy/capture-pending-review.service";
 import { membershipGraceService } from "../subscriptions/membership-grace.service";
@@ -336,14 +335,6 @@ async function runPushReceiptCheck() {
   return checkPushReceipts();
 }
 
-// Handoff V-06 "store.link.not.shared" (Eki Notification & Automation
-// Engine, 12 Oct 2026): a repeating reminder for a ready-but-never-visited
-// store, stopping once any real view is recorded.
-async function runVendorShareReminderSweep() {
-  const sent = await vendorMilestoneNotificationsService.runShareReminderSweep();
-  return { sent };
-}
-
 // Handoff O-02 "order.unacknowledged" / O-04 "order.dispatch.due" — P1,
 // time-sensitive (see .github/workflows/automation-scheduler.yml, which
 // calls these every 10 minutes once CRON_SECRET is configured).
@@ -446,7 +437,9 @@ const jobs: [string, string, () => Promise<Record<string, unknown>>][] = [
   ["reconciliation-sweep", "daily Stripe reconciliation", runReconciliationSweep],
   ["payment-anomaly-scan", "duplicate-payment / financial-inconsistency scan", runPaymentAnomalyScan],
   ["fulfilment-delay-scan", "supplier-fulfilment delay scan", runFulfilmentDelayScan],
-  ["vendor-share-reminder-sweep", "vendor store-not-shared reminder sweep", runVendorShareReminderSweep],
+  // "vendor-share-reminder-sweep" removed 2026-10-25 — migrated to
+  // STORE_SHARE_REMINDER inside the real "automation-sweep" entry below
+  // (automationDetectors.runSweep), same as LOW_STOCK_ALERT's earlier migration.
   ["order-unacknowledged-sweep", "unacknowledged paid-order reminder sweep", runOrderUnacknowledgedSweep],
   ["order-dispatch-due-sweep", "dispatch-due reminder sweep", runOrderDispatchDueSweep],
   ["community-buy-capture-pending-review-sweep", "Community Buy stuck-capture review alert", runCapturePendingReviewSweep],

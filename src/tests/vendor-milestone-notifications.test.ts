@@ -7,10 +7,9 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 
 vi.mock("../lib/prisma", () => ({
   prisma: {
-    vendor: { findUnique: vi.fn(), findMany: vi.fn() },
+    vendor: { findUnique: vi.fn() },
     product: { count: vi.fn() },
-    deliveryZone: { count: vi.fn(), groupBy: vi.fn() },
-    event: { count: vi.fn() },
+    deliveryZone: { count: vi.fn() },
   },
 }));
 
@@ -112,44 +111,8 @@ describe("vendorMilestoneNotificationsService.maybeSendFirstVisit (handoff V-07)
   });
 });
 
-describe("vendorMilestoneNotificationsService.runShareReminderSweep (handoff V-06)", () => {
-  it("reminds a ready vendor who has never had a store_viewed event", async () => {
-    m.vendor.findMany.mockResolvedValue([{ id: "vendor-1", userId: "user-1", storeName: "Mama Eki" }]);
-    m.deliveryZone.groupBy.mockResolvedValue([{ vendorId: "vendor-1", _count: { _all: 1 } }]);
-    m.event.count.mockResolvedValue(0);
-
-    const sent = await vendorMilestoneNotificationsService.runShareReminderSweep();
-
-    expect(sent).toBe(1);
-    expect(mockSend).toHaveBeenCalledWith(expect.objectContaining({ eventKey: "vendor_store_not_shared", recipientId: "user-1" }));
-  });
-
-  it("does not remind a vendor who has already had at least one view (stop condition)", async () => {
-    m.vendor.findMany.mockResolvedValue([{ id: "vendor-1", userId: "user-1", storeName: "Mama Eki" }]);
-    m.deliveryZone.groupBy.mockResolvedValue([{ vendorId: "vendor-1", _count: { _all: 1 } }]);
-    m.event.count.mockResolvedValue(1);
-
-    const sent = await vendorMilestoneNotificationsService.runShareReminderSweep();
-
-    expect(sent).toBe(0);
-    expect(mockSend).not.toHaveBeenCalled();
-  });
-
-  it("does not remind a vendor with no delivery zone — not actually 'ready' yet", async () => {
-    m.vendor.findMany.mockResolvedValue([{ id: "vendor-1", userId: "user-1", storeName: "Mama Eki" }]);
-    m.deliveryZone.groupBy.mockResolvedValue([]);
-
-    const sent = await vendorMilestoneNotificationsService.runShareReminderSweep();
-
-    expect(sent).toBe(0);
-    expect(mockSend).not.toHaveBeenCalled();
-    expect(m.event.count).not.toHaveBeenCalled();
-  });
-
-  it("returns 0 immediately when there are no candidate vendors (no N+1 delivery-zone query)", async () => {
-    m.vendor.findMany.mockResolvedValue([]);
-    const sent = await vendorMilestoneNotificationsService.runShareReminderSweep();
-    expect(sent).toBe(0);
-    expect(m.deliveryZone.groupBy).not.toHaveBeenCalled();
-  });
-});
+// Handoff V-06 "store.link.not.shared" (runShareReminderSweep) was removed
+// 2026-10-25 — migrated to automation.detectors.ts's
+// detectStoreShareReminder() as STORE_SHARE_REMINDER (spec R10). Its test
+// coverage now lives in automation-detectors.test.ts alongside the other
+// P2-cadence onboarding rules.

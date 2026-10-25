@@ -1,19 +1,24 @@
 /**
  * Eki Notification & Automation Engine handoff (12 Oct 2026), vendor
- * activation one-time milestones and the "share not detected" reminder.
- * Each `maybeSend*`/`send*` function here is a real, idempotent DB check
- * (not a time window) for whether the triggering condition has actually
- * been met, not just "did this code path run" — and relies on
- * communicationService.send()'s dedupeKey (a real unique DB constraint on
- * Notification.dedupeKey) as the second, race-proof layer.
+ * activation one-time milestones. Each `maybeSend*`/`send*` function here
+ * is a real, idempotent DB check (not a time window) for whether the
+ * triggering condition has actually been met, not just "did this code
+ * path run" — and relies on communicationService.send()'s dedupeKey (a
+ * real unique DB constraint on Notification.dedupeKey) as the second,
+ * race-proof layer.
+ *
+ * Handoff V-06 "store.link.not.shared" used to live here too
+ * (runShareReminderSweep) — migrated 2026-10-25 to
+ * automation.detectors.ts's detectStoreShareReminder() as
+ * STORE_SHARE_REMINDER (spec R10), same precedent this codebase already
+ * set removing LOW_STOCK_ALERT's duplicate raw-email path: a raw,
+ * non-dedup'd, non-toggleable, non-admin-visible send has no reason to
+ * keep existing alongside the real, vendor-toggleable, admin-visible
+ * AutomationRule/AutomationRun version once that exists.
  */
 import { prisma } from "../../lib/prisma";
 import { logger } from "../../lib/logger";
 import { communicationService } from "../communications/communication.service";
-
-const DAY_MS = 24 * 60 * 60 * 1000;
-/** V-06's recommended default cadence (handoff: "24h; day 3; day 7") — a configurable default, not a locked value; see NOTIFICATION_ENGINE_GAP_ANALYSIS_AND_PLAN.md. */
-const SHARE_REMINDER_COOLDOWN_DAYS = 3;
 
 export const vendorMilestoneNotificationsService = {
   /** Handoff V-01 "account.created". Fires once, right after a vendor account/store is created. */
@@ -80,45 +85,4 @@ export const vendorMilestoneNotificationsService = {
     }
   },
 
-  /**
-   * Handoff V-06 "store.link.not.shared" — a repeating reminder (default
-   * cooldown SHARE_REMINDER_COOLDOWN_DAYS, configurable), stopping once a
-   * store_viewed event has ever been recorded. Intended to be called from
-   * a daily sweep job, once per ready-but-unvisited vendor.
-   */
-  async runShareReminderSweep(): Promise<number> {
-    const candidates = await prisma.vendor.findMany({
-      where: { isSuspended: false, products: { some: { isActive: true } } },
-      select: { id: true, userId: true, storeName: true },
-      take: 500,
-    });
-    if (candidates.length === 0) return 0;
-
-    // DeliveryZone has no back-relation declared on Vendor (plain vendorId
-    // FK only, same as everywhere else in this codebase that queries it) —
-    // one grouped query for the whole batch rather than N+1 per-vendor lookups.
-    const zoneCounts = await prisma.deliveryZone.groupBy({ by: ["vendorId"], where: { vendorId: { in: candidates.map((v) => v.id) } }, _count: { _all: true } });
-    const hasZone = new Set(zoneCounts.filter((z) => z._count._all > 0).map((z) => z.vendorId));
-    const readyVendors = candidates.filter((v) => hasZone.has(v.id));
-
-    let sent = 0;
-    for (const vendor of readyVendors) {
-      const everVisited = await prisma.event.count({ where: { name: "store_viewed", entityType: "Vendor", entityId: vendor.id } });
-      if (everVisited > 0) continue;
-
-      const cooldownBucket = Math.floor(Date.now() / (SHARE_REMINDER_COOLDOWN_DAYS * DAY_MS));
-      try {
-        const result = await communicationService.send({
-          eventKey: "vendor_store_not_shared",
-          recipientId: vendor.userId,
-          variables: { store_name: vendor.storeName ?? "Your store" },
-          dedupeKey: `STORE_NOT_SHARED:${vendor.id}:${cooldownBucket}`,
-        });
-        if (result.outcome === "SENT") sent++;
-      } catch (error) {
-        logger.warn("Share-reminder send failed", { vendorId: vendor.id, errorMessage: error instanceof Error ? error.message : String(error) });
-      }
-    }
-    return sent;
-  },
 };

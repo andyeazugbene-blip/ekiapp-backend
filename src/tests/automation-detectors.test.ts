@@ -9,6 +9,7 @@ vi.mock("../lib/prisma", () => ({
     deliveryZone: { groupBy: vi.fn().mockResolvedValue([]) },
     order: { findMany: vi.fn().mockResolvedValue([]) },
     orderItem: { findFirst: vi.fn().mockResolvedValue(null) },
+    event: { count: vi.fn().mockResolvedValue(0) },
   },
 }));
 
@@ -392,6 +393,76 @@ describe("automationDetectors.runSweep — vendor onboarding progress rules (Not
     await automationDetectors.runSweep();
     const keys = mockScheduleAutomation.mock.calls.filter(([a]: any[]) => a.type === "FIRST_PRODUCT_REMINDER").map(([a]: any[]) => a.subjectKey);
     expect(keys).toEqual(["vendor-1:touch1", "vendor-1:touch2", "vendor-1:touch3"]);
+  });
+});
+
+describe("automationDetectors.runSweep — STORE_SHARE_REMINDER (spec R10, migrated 2026-10-25 from a non-toggleable send onto the P2 cadence)", () => {
+  function readyVendor(overrides: Partial<{ id: string; userId: string; storeName: string; createdAt: Date }> = {}) {
+    return {
+      id: overrides.id ?? "vendor-1",
+      userId: overrides.userId ?? "vendor-1-user",
+      storeName: overrides.storeName ?? "Mama Eki",
+      createdAt: overrides.createdAt ?? new Date(NOW.getTime() - 4 * 60 * 60 * 1000),
+    };
+  }
+
+  it("reminds a ready (product + delivery zone) vendor whose store has never been viewed", async () => {
+    m.vendor.findMany.mockResolvedValue([readyVendor()] as never);
+    m.deliveryZone.groupBy.mockResolvedValue([{ vendorId: "vendor-1", _count: { _all: 1 } }] as never);
+    m.event.count.mockResolvedValue(0 as never);
+
+    await automationDetectors.runSweep();
+
+    expect(mockScheduleAutomation).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "STORE_SHARE_REMINDER", vendorId: "vendor-1", title: "Share your store link" }),
+    );
+  });
+
+  it("does not remind a vendor whose store has already been viewed at least once (stop condition)", async () => {
+    m.vendor.findMany.mockResolvedValue([readyVendor()] as never);
+    m.deliveryZone.groupBy.mockResolvedValue([{ vendorId: "vendor-1", _count: { _all: 1 } }] as never);
+    m.event.count.mockResolvedValue(1 as never);
+
+    await automationDetectors.runSweep();
+
+    expect(mockScheduleAutomation).not.toHaveBeenCalledWith(expect.objectContaining({ type: "STORE_SHARE_REMINDER" }));
+  });
+
+  it("does not remind a vendor with no delivery zone yet — not actually 'ready'", async () => {
+    m.vendor.findMany.mockResolvedValue([readyVendor()] as never);
+    m.deliveryZone.groupBy.mockResolvedValue([] as never);
+
+    await automationDetectors.runSweep();
+
+    expect(mockScheduleAutomation).not.toHaveBeenCalledWith(expect.objectContaining({ type: "STORE_SHARE_REMINDER" }));
+    expect(m.event.count).not.toHaveBeenCalled();
+  });
+
+  it("still reminds a vendor who already has a paid order — unlike R01/R03/R05/R06/R11, R10's stop condition is 'store viewed', not 'never sold'", async () => {
+    // Confirms this detector does NOT reuse loadOnboardingProgressCandidates(),
+    // which would wrongly exclude a vendor with a paid order.
+    m.vendor.findMany.mockResolvedValue([readyVendor()] as never);
+    m.deliveryZone.groupBy.mockResolvedValue([{ vendorId: "vendor-1", _count: { _all: 1 } }] as never);
+    m.event.count.mockResolvedValue(0 as never);
+
+    await automationDetectors.runSweep();
+
+    expect(mockScheduleAutomation).toHaveBeenCalledWith(expect.objectContaining({ type: "STORE_SHARE_REMINDER" }));
+    // The query itself has no orderItems/paid-status filter — verified via the mock call args.
+    expect(m.vendor.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: expect.not.objectContaining({ orderItems: expect.anything() }) }),
+    );
+  });
+
+  it("follows the same 4h/24h/72h, max-3-touches P2 cadence as the other onboarding rules", async () => {
+    m.vendor.findMany.mockResolvedValue([readyVendor({ createdAt: new Date(NOW.getTime() - 30 * 60 * 60 * 1000) })] as never);
+    m.deliveryZone.groupBy.mockResolvedValue([{ vendorId: "vendor-1", _count: { _all: 1 } }] as never);
+    m.event.count.mockResolvedValue(0 as never);
+
+    await automationDetectors.runSweep();
+
+    const keys = mockScheduleAutomation.mock.calls.filter(([a]: any[]) => a.type === "STORE_SHARE_REMINDER").map(([a]: any[]) => a.subjectKey);
+    expect(keys).toEqual(["vendor-1:touch1", "vendor-1:touch2"]);
   });
 });
 
