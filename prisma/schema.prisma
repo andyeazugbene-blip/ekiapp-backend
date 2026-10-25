@@ -2101,6 +2101,14 @@ enum AutomationType {
   CAMPAIGN_REFUND_UPDATE
   // Eki-managed: vendor free trial ending soon (Stripe customer.subscription.trial_will_end).
   VENDOR_TRIAL_ENDING
+  // Notification Orchestration Spec v2 (2026-10-25), R03/R05/R06: vendor
+  // onboarding steps that used to be merged into FIRST_SALE's stage-
+  // switching copy are now separate rules, each with its own P2 cadence
+  // (4h/24h/72h since inactivity, max 3 sends) and stop condition — FIRST_SALE
+  // itself narrows to R11 only (first paid order) from this point on.
+  FIRST_PRODUCT_REMINDER
+  DELIVERY_SETUP_REMINDER
+  VERIFICATION_REMINDER
   // Eki-managed, no vendor toggle: a BUYER or VENDOR who registered but never
   // verified their email. Stops the moment emailVerifiedAt is set — the
   // candidate query itself excludes verified users, same self-cancelling

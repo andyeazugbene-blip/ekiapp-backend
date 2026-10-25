@@ -17,16 +17,77 @@ function isoWeek(d: Date): string {
 
 export const FIRST_SALE_PAID_STATUSES = ["PAID", "CONFIRMED", "PROCESSING", "DISPATCHED", "IN_TRANSIT", "DELIVERED", "COMPLETED", "PAYMENT_SECURED", "VENDOR_CONFIRMED", "AUTO_RELEASED", "DISPUTED"] as const;
 
-// REGISTRATION_REMINDER touch schedule, in whole days since account
-// creation. Client feedback 2026-10-22: a new account got exactly one
-// message and then silence. Two touches only.
-const REGISTRATION_TOUCH_DAYS = [1, 3] as const;
+// Notification Orchestration Spec v2 (2026-10-25), section 6: P2 "task
+// recovery" cadence is 4h / 24h / 72h after inactivity, maximum three sends
+// per unresolved episode — then silence (no indefinite weekly fallback;
+// the spec is explicit about the cap). Shared by every R01/R03/R05/R06
+// vendor-onboarding rule below.
+//
+// Honesty note on timing: this backend's only trigger is the Vercel cron
+// in vercel.json, currently once/day. A daily cron cannot deliver a true
+// "4 hours after inactivity" first touch — by the time it next runs, more
+// than 4h has usually already passed. The logic below is written to be
+// correct at ANY cron frequency: each call attempts every threshold whose
+// time has already passed (not just the "nearest" one), and the DB-unique
+// dedupeKey per threshold makes an already-sent touch a harmless no-op on
+// re-attempt. So touch timing will track the spec exactly once the cron
+// runs at least every few minutes; with today's once-daily cron it
+// degrades to "each threshold fires on the first daily check after it's
+// crossed" — still bounded to 3 sends, still correct, just coarser than
+// spec until the cron frequency changes (needs a Vercel plan that allows
+// more than one cron run per day).
+const P2_TOUCH_HOURS = [4, 24, 72] as const;
+const HOUR_MS = 60 * 60 * 1000;
+
+/** Every P2 touch number (1-based) whose threshold has already passed. */
+function duePTouchNumbers(hoursSinceEligible: number): number[] {
+  const due: number[] = [];
+  for (let i = 0; i < P2_TOUCH_HOURS.length; i++) {
+    if (hoursSinceEligible >= P2_TOUCH_HOURS[i]) due.push(i + 1);
+  }
+  return due;
+}
 
 /**
- * REGISTRATION_REMINDER: nudges a VENDOR-role account that never finished
- * creating its Vendor profile (storeName/storeSlug etc. via POST /vendors —
- * vendors.service.ts createVendor), at day 1 and day 3 since the account
- * was created.
+ * Fires every P2 touch (up to 3) whose threshold has passed for one
+ * candidate, each as its own automationService.scheduleAutomation call
+ * with its own `:touchN` dedupeKey — see duePTouchNumbers' doc comment on
+ * why "attempt all due, let dedupe no-op the already-sent ones" is correct
+ * regardless of cron frequency.
+ */
+async function scheduleP2Touches(input: {
+  type: Parameters<typeof automationService.scheduleAutomation>[0]["type"];
+  recipientUserId: string;
+  vendorId?: string;
+  subjectPrefix: string;
+  hoursSinceEligible: number;
+  requiresMarketingConsent: boolean;
+  title: string;
+  body: string;
+  data?: Record<string, unknown>;
+}): Promise<number> {
+  let scheduled = 0;
+  for (const touchNumber of duePTouchNumbers(input.hoursSinceEligible)) {
+    await automationService.scheduleAutomation({
+      type: input.type,
+      recipientUserId: input.recipientUserId,
+      vendorId: input.vendorId,
+      subjectKey: `${input.subjectPrefix}:touch${touchNumber}`,
+      requiresMarketingConsent: input.requiresMarketingConsent,
+      title: input.title,
+      body: input.body,
+      data: { ...input.data, touch_number: touchNumber },
+    });
+    scheduled++;
+  }
+  return scheduled;
+}
+
+/**
+ * REGISTRATION_REMINDER (spec R01): nudges a VENDOR-role account that
+ * never finished creating its Vendor profile (storeName/storeSlug etc. via
+ * POST /vendors — vendors.service.ts createVendor), at 4h/24h/72h since
+ * the account was created (see P2_TOUCH_HOURS above).
  *
  * NOT based on email verification, despite the type's original name —
  * verified by inspection (2026-10-23) to be the wrong signal for "finished
@@ -37,36 +98,23 @@ const REGISTRATION_TOUCH_DAYS = [1, 3] as const;
  * link that calls POST /auth/verify-email — it is unreachable dead
  * scaffolding today. Nudging a user to "verify your email" would point at
  * an action they have no way to complete. Fixing email delivery for that
- * flow is a separate, real gap but out of scope here (not one of the three
- * priorities, and building it means designing an email template, a
- * token-refresh step since the original 24h-expiry token is long dead by
- * day 1, and confirming a mobile/web landing screen exists or adding one —
- * more than "the smallest reliable implementation" this pass asked for).
+ * flow is a separate, real gap, still out of scope here.
  *
  * A VENDOR with no Vendor row is otherwise invisible to every other
- * onboarding automation: FIRST_SALE's candidate query is
- * `prisma.vendor.findMany(...)`, which only ever sees vendors who already
- * have a Vendor row. This is the actual gap matching the client's report
- * (registered as a vendor, got one message, then nothing telling them to
- * list products) — if they never finished the separate vendor-onboarding
- * step (store name, business info) that creates the Vendor row, FIRST_SALE
- * never runs for them at all.
+ * onboarding automation (FIRST_PRODUCT_REMINDER/DELIVERY_SETUP_REMINDER/
+ * VERIFICATION_REMINDER/FIRST_SALE all query `prisma.vendor.findMany`,
+ * which only ever sees vendors who already have a Vendor row). This is the
+ * actual gap matching the client's report.
  *
  * BUYER-role accounts have no further "registration" step in this
- * codebase (no checklist, nothing left incomplete after the User row
- * exists), so they are not candidates here — unlike the email-verification
- * version, this also naturally excludes guest-checkout and supplier-
- * invite-accepted accounts (both role BUYER), which was a real gap in the
- * previous version: those accounts never went through a flow a "finish
- * your registration" message would make sense for.
+ * codebase, so they are not candidates here — this also naturally excludes
+ * guest-checkout and supplier-invite-accepted accounts (both role BUYER).
  *
  * Self-cancelling: the candidate query excludes any VENDOR who already has
- * a Vendor row, so the moment they complete that step this detector simply
- * stops finding them — no separate "cancel" step needed, same pattern as
- * every other detector in this file.
+ * a Vendor row.
  */
 async function detectRegistrationReminder(): Promise<number> {
-  const cutoff = new Date(Date.now() - REGISTRATION_TOUCH_DAYS[REGISTRATION_TOUCH_DAYS.length - 1] * DAY_MS - DAY_MS);
+  const cutoff = new Date(Date.now() - P2_TOUCH_HOURS[P2_TOUCH_HOURS.length - 1] * HOUR_MS - DAY_MS);
   const users = await prisma.user.findMany({
     where: {
       role: "VENDOR",
@@ -75,106 +123,38 @@ async function detectRegistrationReminder(): Promise<number> {
       isTest: false,
       createdAt: { gte: cutoff },
     },
-    select: { id: true, name: true, createdAt: true },
+    select: { id: true, createdAt: true },
     take: 500,
   });
 
   let scheduled = 0;
   for (const user of users) {
-    const daysSinceCreated = Math.floor((Date.now() - user.createdAt.getTime()) / DAY_MS);
-    if (!(REGISTRATION_TOUCH_DAYS as readonly number[]).includes(daysSinceCreated)) continue; // no touch due today
-
-    const isFinal = daysSinceCreated === REGISTRATION_TOUCH_DAYS[REGISTRATION_TOUCH_DAYS.length - 1];
-    await automationService.scheduleAutomation({
+    const hoursSinceCreated = (Date.now() - user.createdAt.getTime()) / HOUR_MS;
+    scheduled += await scheduleP2Touches({
       type: "REGISTRATION_REMINDER",
       recipientUserId: user.id,
-      // Day is part of the subject: each touch is its own dedupe key, so
-      // day 1 firing never blocks day 3 from firing later.
-      subjectKey: `${user.id}:day${daysSinceCreated}`,
+      // No Vendor row exists yet — this is the whole point of the rule — so vendorId is omitted.
+      subjectPrefix: user.id,
+      hoursSinceEligible: hoursSinceCreated,
       requiresMarketingConsent: false,
-      title: isFinal ? "Last step: finish setting up your store" : "Finish setting up your Eki store",
-      body: isFinal
-        ? "This is the last reminder — finish setting up your store so you can start listing products."
-        : "You're almost there — finish setting up your store to start selling on Eki.",
-      data: { onboarding_tier: isFinal ? "final" : "first" },
+      title: "Start setting up your Eki store",
+      body: "Add your business details to begin.",
     });
-    scheduled++;
   }
   return scheduled;
 }
 
-// Onboarding touch schedule, in days since the vendor's store was created.
-// Client feedback (2026-10-22): one nudge then total silence for a week
-// reads as the app not caring whether a new seller ever lists anything.
-// `frequencyCapDays: 7` on the old version blocked ANY second FIRST_SALE
-// send to the same vendor for 7 days NO MATTER which stage they were in —
-// the "new stage resets the cap" claim in the dedupe-key comment was never
-// actually true, because isEligible()'s frequency-cap lookup matches on
-// `type` + `recipientUserId` alone, not on subjectKey/stage. A vendor who
-// got the day-0 welcome push and still had 0 products 3 days later got
-// nothing else until day 7. Fixed the same way LOW_STOCK_ALERT already
-// fixes this class of bug (see its comment below): drop frequencyCapDays
-// entirely and let each touch's own unique dedupeKey (stage + exact day
-// bucket) be the only de-dupe. That means a vendor can get a DIFFERENT
-// scheduled touch on day 1, 3, 5 and 7 without any of them blocking the
-// next, while the DB-unique dedupeKey still makes every individual touch
-// idempotent across repeated sweep runs on the same day.
-const ONBOARDING_TOUCH_DAYS = [1, 3, 5, 7] as const;
-const LAST_SCHEDULED_TOUCH_DAY = ONBOARDING_TOUCH_DAYS[ONBOARDING_TOUCH_DAYS.length - 1];
-
 /**
- * Which onboarding touch (if any) is due today, given how many whole days
- * have passed since the vendor's store was created. Day 0 itself is the
- * existing vendor_welcome email/in-app message (vendor-milestone-
- * notifications.service.ts), fired once at store creation — this schedule
- * starts the day after that. Past the last scheduled day it falls back to
- * a weekly cadence (bounded, same "don't become spam" shape the old cap
- * intended) so a vendor who still hasn't listed anything after a week
- * keeps hearing from us without getting a message every single day.
- * Returns null on a day with no touch due.
+ * Shared candidate query for the three vendor-store-progress rules
+ * (R03/R05/R06): every unsuspended, non-test vendor who hasn't sold
+ * anything yet, with product count and delivery-zone presence attached.
+ * Mirrors FIRST_SALE's old merged candidate query exactly — only the
+ * per-rule stage check and copy differ now.
  */
-function onboardingTouchBucket(daysSinceCreated: number): { tier: 1 | 2 | 3 | 4; bucketKey: string } | null {
-  if (daysSinceCreated < 1) return null;
-  const dayIndex = ONBOARDING_TOUCH_DAYS.indexOf(daysSinceCreated as (typeof ONBOARDING_TOUCH_DAYS)[number]);
-  if (dayIndex >= 0) return { tier: (dayIndex + 1) as 1 | 2 | 3 | 4, bucketKey: `day${daysSinceCreated}` };
-  if (daysSinceCreated > LAST_SCHEDULED_TOUCH_DAY) return { tier: 4, bucketKey: `week-${isoWeek(new Date())}` };
-  return null;
-}
-
-// Escalating incentive copy per touch tier, appended to the stage's own
-// checklist instruction. Tier 1 (day 1) is a gentle nudge; by tier 3-4
-// (day 5-7+) it names the concrete payoff — direct response to "no
-// incentive to finish registration, none to encourage me to list products
-// and make money".
-const ONBOARDING_INCENTIVE_BY_TIER: Record<1 | 2 | 3 | 4, string> = {
-  1: "It only takes a few minutes, and buyers near you are already browsing Eki.",
-  2: "Vendors who list 3+ products in their first week are twice as likely to get their first order fast — yours could be next.",
-  3: "You're a few taps from your first payout. Most sellers finish their store setup in under 10 minutes.",
-  4: "Other Eki sellers are already earning every week. Finish your store today and start getting orders too.",
-};
-
-/**
- * FIRST_SALE onboarding nudge — bug fix 2026-10-11 ("onboarding reminders
- * depend on the vendor's actual next incomplete step"), extended 2026-10-22
- * with a real multi-touch day 1/3/5/7(+weekly) schedule and escalating
- * incentive copy (see ONBOARDING_TOUCH_DAYS above). The candidate pool is
- * every vendor who hasn't sold anything (verification included), and the
- * message is computed from whichever of the exact same checklist steps the
- * vendor app's own activation screen (app/(vendor)/activation.tsx) shows is
- * still not done: add a product -> set up delivery -> verify the account ->
- * (all done) go get that first order. Stays one automation TYPE
- * (FIRST_SALE) with one stop condition (first qualifying paid order) —
- * only the copy changes per stage+tier, so coalescing still treats the
- * whole onboarding journey as one thing, not a notification per checklist
- * item. Channels now include email (DEFAULT_TEMPLATES.FIRST_SALE) — the
- * client's "not even emails" complaint — alongside push/in-app.
- */
-async function detectFirstSale(): Promise<number> {
+async function loadOnboardingProgressCandidates() {
   const vendors = await prisma.vendor.findMany({
     where: {
       isSuspended: false,
-      // Only a PAID (non-failed/non-cancelled) order counts as a first sale. An
-      // unpaid/failed/cancelled order must not stop the onboarding nudge.
       orderItems: { none: { order: { status: { in: [...FIRST_SALE_PAID_STATUSES] } } } },
     },
     select: {
@@ -183,46 +163,127 @@ async function detectFirstSale(): Promise<number> {
     },
     take: 200,
   });
-  // DeliveryZone has no back-relation declared on Vendor (plain vendorId FK
-  // only, same as everywhere else that queries it) -- one grouped query for
-  // the whole candidate batch rather than N+1 per-vendor lookups.
   const zoneCounts = vendors.length
     ? await prisma.deliveryZone.groupBy({ by: ["vendorId"], where: { vendorId: { in: vendors.map((v) => v.id) } }, _count: { _all: true } })
     : [];
   const hasDeliveryZone = new Set(zoneCounts.filter((z) => z._count._all > 0).map((z) => z.vendorId));
+  return vendors.map((v) => ({
+    ...v,
+    hasProduct: v._count.products > 0,
+    hasDelivery: hasDeliveryZone.has(v.id),
+    isVerified: v.verificationStatus === "VERIFIED",
+  }));
+}
 
+/**
+ * FIRST_PRODUCT_REMINDER (spec R03): "Store ready, zero foodstuff."
+ * Candidates: has a Vendor row, no active products yet. Stops the moment
+ * the first active product exists.
+ */
+async function detectFirstProductReminder(): Promise<number> {
+  const candidates = await loadOnboardingProgressCandidates();
   let scheduled = 0;
-  for (const vendor of vendors) {
-    const daysSinceCreated = Math.floor((Date.now() - vendor.createdAt.getTime()) / DAY_MS);
-    const touch = onboardingTouchBucket(daysSinceCreated);
-    if (!touch) continue; // no touch scheduled for today — stay quiet rather than repeat a stale message daily.
+  for (const vendor of candidates) {
+    if (vendor.hasProduct) continue;
+    const hoursSinceCreated = (Date.now() - vendor.createdAt.getTime()) / HOUR_MS;
+    scheduled += await scheduleP2Touches({
+      type: "FIRST_PRODUCT_REMINDER",
+      recipientUserId: vendor.userId,
+      vendorId: vendor.id,
+      subjectPrefix: vendor.id,
+      hoursSinceEligible: hoursSinceCreated,
+      requiresMarketingConsent: false,
+      title: "Add your first foodstuff",
+      body: "Start with the foodstuff your buyers ask for most.",
+      data: { store_name: vendor.storeName },
+    });
+  }
+  return scheduled;
+}
 
-    const hasProduct = vendor._count.products > 0;
-    const hasDelivery = hasDeliveryZone.has(vendor.id);
-    const isVerified = vendor.verificationStatus === "VERIFIED";
+/**
+ * DELIVERY_SETUP_REMINDER (spec R05): "Delivery setup missing." Candidates:
+ * has at least one active product, no DeliveryZone yet. Stops once a
+ * delivery zone exists.
+ */
+async function detectDeliverySetupReminder(): Promise<number> {
+  const candidates = await loadOnboardingProgressCandidates();
+  let scheduled = 0;
+  for (const vendor of candidates) {
+    if (!vendor.hasProduct || vendor.hasDelivery) continue;
+    const hoursSinceCreated = (Date.now() - vendor.createdAt.getTime()) / HOUR_MS;
+    scheduled += await scheduleP2Touches({
+      type: "DELIVERY_SETUP_REMINDER",
+      recipientUserId: vendor.userId,
+      vendorId: vendor.id,
+      subjectPrefix: vendor.id,
+      hoursSinceEligible: hoursSinceCreated,
+      requiresMarketingConsent: false,
+      title: "Set up how buyers receive your foodstuff",
+      body: "Add delivery or collection options.",
+      data: { store_name: vendor.storeName },
+    });
+  }
+  return scheduled;
+}
 
-    const stage = !hasProduct
-      ? { key: "add_product", title: "Add your first foodstuff", body: `Add a product to ${vendor.storeName} so buyers have something to order.` }
-      : !hasDelivery
-        ? { key: "set_delivery", title: "Set up delivery", body: `${vendor.storeName} has products but no delivery zone yet — buyers can't check out without one.` }
-        : !isVerified
-          ? { key: "verify", title: "Verify your account", body: `Verify ${vendor.storeName} so buyers can actually place orders with you.` }
-          : { key: "get_first_order", title: "Get your first order", body: `Your store ${vendor.storeName} is ready — share your store link to get your first order.` };
+/**
+ * VERIFICATION_REMINDER (spec R06): "Verification not started when
+ * eligible." Candidates: has a product AND a delivery zone (the spec's
+ * "when eligible" — verification only matters once there's something to
+ * sell and somewhere to send it), not yet VERIFIED. Stops on submission
+ * per the spec's stop condition ("verification submitted") — this
+ * codebase only tracks the final VERIFIED state, so it stops on approval
+ * rather than on submission; a vendor who submitted but is still pending
+ * will keep getting this reminder until approved. Documented limitation,
+ * not silently assumed away.
+ */
+async function detectVerificationReminder(): Promise<number> {
+  const candidates = await loadOnboardingProgressCandidates();
+  let scheduled = 0;
+  for (const vendor of candidates) {
+    if (!vendor.hasProduct || !vendor.hasDelivery || vendor.isVerified) continue;
+    const hoursSinceCreated = (Date.now() - vendor.createdAt.getTime()) / HOUR_MS;
+    scheduled += await scheduleP2Touches({
+      type: "VERIFICATION_REMINDER",
+      recipientUserId: vendor.userId,
+      vendorId: vendor.id,
+      subjectPrefix: vendor.id,
+      hoursSinceEligible: hoursSinceCreated,
+      requiresMarketingConsent: false,
+      title: "Your store is close to opening",
+      body: "Complete secure verification to continue.",
+      data: { store_name: vendor.storeName },
+    });
+  }
+  return scheduled;
+}
 
-    await automationService.scheduleAutomation({
+/**
+ * FIRST_SALE (spec R11 only, narrowed 2026-10-25 — R01/R03/R05/R06 are now
+ * their own types above): "First Sale Campaign not started." Candidates:
+ * product + delivery + verified, still zero paid orders. Stop condition
+ * per spec is "campaign started," which this codebase has no separate
+ * concept of — stops on first qualifying paid order instead, same
+ * honestly-documented substitution as VERIFICATION_REMINDER above.
+ */
+async function detectFirstSale(): Promise<number> {
+  const candidates = await loadOnboardingProgressCandidates();
+  let scheduled = 0;
+  for (const vendor of candidates) {
+    if (!vendor.hasProduct || !vendor.hasDelivery || !vendor.isVerified) continue;
+    const hoursSinceCreated = (Date.now() - vendor.createdAt.getTime()) / HOUR_MS;
+    scheduled += await scheduleP2Touches({
       type: "FIRST_SALE",
       recipientUserId: vendor.userId,
       vendorId: vendor.id,
-      // Stage + exact day/week bucket is the whole de-dupe story now — see
-      // the comment above ONBOARDING_TOUCH_DAYS for why frequencyCapDays is
-      // deliberately not set here.
-      subjectKey: `${vendor.id}:${stage.key}:${touch.bucketKey}`,
+      subjectPrefix: vendor.id,
+      hoursSinceEligible: hoursSinceCreated,
       requiresMarketingConsent: false,
-      title: stage.title,
-      body: `${stage.body} ${ONBOARDING_INCENTIVE_BY_TIER[touch.tier]}`,
-      data: { store_name: vendor.storeName, onboarding_stage: stage.key, onboarding_tier: touch.tier },
+      title: "Work towards your first order",
+      body: "Open your First Sale Campaign for the next step.",
+      data: { store_name: vendor.storeName },
     });
-    scheduled++;
   }
   return scheduled;
 }
@@ -739,6 +800,9 @@ export const automationDetectors = {
     const jobs: [string, () => Promise<number>][] = [
       ["LOW_STOCK_ALERT", detectLowStockAlert],
       ["REGISTRATION_REMINDER", detectRegistrationReminder],
+      ["FIRST_PRODUCT_REMINDER", detectFirstProductReminder],
+      ["DELIVERY_SETUP_REMINDER", detectDeliverySetupReminder],
+      ["VERIFICATION_REMINDER", detectVerificationReminder],
       ["FIRST_SALE", detectFirstSale],
       ["CART_RECOVERY", detectCartRecovery],
       ["REORDER_REMINDER", detectReorderReminder],

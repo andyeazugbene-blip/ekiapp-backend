@@ -73,6 +73,13 @@ export const MARKETING_AUTOMATION_TYPES: AutomationType[] = [
 
 export const VENDOR_TOGGLEABLE_AUTOMATION_TYPES: AutomationType[] = [
   "FIRST_SALE",
+  // Spec R03/R05/R06 (2026-10-25) — split out of FIRST_SALE's old merged
+  // stage-switching copy. Unlike REGISTRATION_REMINDER (R01), these three
+  // DO have a Vendor row/vendorId by the time they're eligible, so they
+  // belong in the vendor-facing toggle list same as FIRST_SALE.
+  "FIRST_PRODUCT_REMINDER",
+  "DELIVERY_SETUP_REMINDER",
+  "VERIFICATION_REMINDER",
   "CART_RECOVERY",
   "BUYER_WIN_BACK",
   "REORDER_REMINDER",

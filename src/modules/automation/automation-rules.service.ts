@@ -35,7 +35,9 @@ const META: Record<AutomationType, RuleMeta> = {
   // `npm run backfill:first-sale-rule-timing` to actually clear the stale
   // value — ensureRules() below only creates missing rows, never edits one
   // that already exists.
-  FIRST_SALE: { name: "First Sale nudge", purpose: "Help a verified vendor with live products get their first paid order.", trigger: "Daily sweep: verified, unsuspended vendor with an active product and no paid order yet, touched on day 1/3/5/7 then weekly.", audience: "Vendors (operational, no marketing consent required).", feature: "Vendor onboarding", exclusions: ["Vendor suspended", "Vendor already has a paid order (unpaid/failed/cancelled orders do not count)"], stop: ["First paid order"] },
+  // Narrowed 2026-10-25 (Notification Orchestration Spec v2, R11) — R01/
+  // R03/R05/R06 are now their own rules below.
+  FIRST_SALE: { name: "First Sale nudge (R11)", purpose: "Help a verified vendor with live products get their first paid order.", trigger: "Daily sweep: verified, unsuspended vendor with an active product and a delivery zone, no paid order yet, touched at 4h/24h/72h since store creation (max 3 sends).", audience: "Vendors (operational, no marketing consent required).", feature: "Vendor onboarding", exclusions: ["Vendor suspended", "Vendor already has a paid order (unpaid/failed/cancelled orders do not count)"], stop: ["First paid order"] },
   // frequencyCapDays removed 2026-10-22 (Eki requirements review, Priority
   // 3): matched on type+recipient alone, so a buyer with stale carts at two
   // different vendors only ever got a reminder for whichever vendor's
@@ -64,7 +66,14 @@ const META: Record<AutomationType, RuleMeta> = {
   // comment on detectRegistrationReminder in automation.detectors.ts) —
   // that flow has no reachable UI or email delivery in this codebase today
   // and would point users at an action they can't complete.
-  REGISTRATION_REMINDER: { name: "Registration reminder", purpose: "Nudge a VENDOR-role account that never created its Vendor profile (store name, business info) to finish store setup.", trigger: "Daily sweep: User.role is VENDOR with no Vendor row yet, touched on day 1 and day 3 since account creation.", audience: "Vendors (operational, no marketing consent required).", feature: "Account activation", exclusions: ["Account suspended", "Test account", "Vendor profile already created"], stop: ["Vendor profile created"] },
+  // Spec R01.
+  REGISTRATION_REMINDER: { name: "Registration reminder (R01)", purpose: "Nudge a VENDOR-role account that never created its Vendor profile (store name, business info) to finish store setup.", trigger: "Daily sweep: User.role is VENDOR with no Vendor row yet, touched at 4h/24h/72h since account creation (max 3 sends).", audience: "Vendors (operational, no marketing consent required).", feature: "Account activation", exclusions: ["Account suspended", "Test account", "Vendor profile already created"], stop: ["Vendor profile created"] },
+  // Spec R03.
+  FIRST_PRODUCT_REMINDER: { name: "First product reminder (R03)", purpose: "Nudge a vendor with a store but zero active products to list their first foodstuff.", trigger: "Daily sweep: Vendor row exists, no active products, no paid order yet, touched at 4h/24h/72h since store creation (max 3 sends).", audience: "Vendors (operational, no marketing consent required).", feature: "Vendor onboarding", exclusions: ["Vendor suspended", "Already has an active product"], stop: ["First active product listed"] },
+  // Spec R05.
+  DELIVERY_SETUP_REMINDER: { name: "Delivery setup reminder (R05)", purpose: "Nudge a vendor with a product but no delivery zone to finish delivery/collection setup.", trigger: "Daily sweep: has an active product, no DeliveryZone yet, touched at 4h/24h/72h since store creation (max 3 sends).", audience: "Vendors (operational, no marketing consent required).", feature: "Vendor onboarding", exclusions: ["Vendor suspended", "No active product yet (handled by FIRST_PRODUCT_REMINDER first)", "Delivery zone already exists"], stop: ["Delivery zone created"] },
+  // Spec R06.
+  VERIFICATION_REMINDER: { name: "Verification reminder (R06)", purpose: "Nudge a vendor who is eligible to verify (has product + delivery) but hasn't been verified yet.", trigger: "Daily sweep: has an active product and a delivery zone, verificationStatus != VERIFIED, touched at 4h/24h/72h since store creation (max 3 sends).", audience: "Vendors (operational, no marketing consent required).", feature: "Vendor onboarding", exclusions: ["Vendor suspended", "Product or delivery not set up yet", "Already verified"], stop: ["Verified (this codebase has no separate 'submitted' state — see detectVerificationReminder's doc comment)"] },
 };
 
 const RULE_INCLUDE_NOTE = "Enforced by the engine: state, frequency cap, quiet hours, channels. Other fields describe the rule and are not executable.";
