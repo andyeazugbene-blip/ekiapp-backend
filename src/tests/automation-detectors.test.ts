@@ -5,7 +5,7 @@ vi.mock("../lib/prisma", () => ({
     cart: { findMany: vi.fn() },
     vendor: { findMany: vi.fn(), findUnique: vi.fn() },
     user: { findMany: vi.fn() },
-    product: { findMany: vi.fn() },
+    product: { findMany: vi.fn(), groupBy: vi.fn().mockResolvedValue([]) },
     deliveryZone: { groupBy: vi.fn().mockResolvedValue([]) },
     order: { findMany: vi.fn().mockResolvedValue([]) },
     orderItem: { findFirst: vi.fn().mockResolvedValue(null) },
@@ -396,19 +396,27 @@ describe("automationDetectors.runSweep — vendor onboarding progress rules (Not
   });
 });
 
-describe("automationDetectors.runSweep — STORE_SHARE_REMINDER (spec R10, migrated 2026-10-25 from a non-toggleable send onto the P2 cadence)", () => {
-  function readyVendor(overrides: Partial<{ id: string; userId: string; storeName: string; createdAt: Date }> = {}) {
+describe("automationDetectors.runSweep — STORE_SHARE_REMINDER (spec R10, migrated 2026-10-25, corrected 2026-10-26: real readiness clock + bounded store_viewed fallback)", () => {
+  const SHIPPED_AT = new Date("2026-10-26T00:00:00.000Z");
+
+  function readyVendor(overrides: Partial<{ id: string; userId: string; storeName: string }> = {}) {
     return {
       id: overrides.id ?? "vendor-1",
       userId: overrides.userId ?? "vendor-1-user",
       storeName: overrides.storeName ?? "Mama Eki",
-      createdAt: overrides.createdAt ?? new Date(NOW.getTime() - 4 * 60 * 60 * 1000),
     };
   }
 
-  it("reminds a ready (product + delivery zone) vendor whose store has never been viewed", async () => {
+  /** Sets up a ready vendor whose product+zone both became real `readySinceHoursAgo` hours before NOW. */
+  function mockReady(readySinceHoursAgo: number) {
+    const readyAt = new Date(NOW.getTime() - readySinceHoursAgo * 60 * 60 * 1000);
     m.vendor.findMany.mockResolvedValue([readyVendor()] as never);
-    m.deliveryZone.groupBy.mockResolvedValue([{ vendorId: "vendor-1", _count: { _all: 1 } }] as never);
+    m.deliveryZone.groupBy.mockResolvedValue([{ vendorId: "vendor-1", _count: { _all: 1 }, _min: { createdAt: readyAt } }] as never);
+    m.product.groupBy.mockResolvedValue([{ vendorId: "vendor-1", _min: { createdAt: readyAt } }] as never);
+  }
+
+  it("reminds a ready (product + delivery zone) vendor whose store has never been shared or viewed", async () => {
+    mockReady(4);
     m.event.count.mockResolvedValue(0 as never);
 
     await automationDetectors.runSweep();
@@ -418,26 +426,39 @@ describe("automationDetectors.runSweep — STORE_SHARE_REMINDER (spec R10, migra
     );
   });
 
-  it("does not remind a vendor whose store has already been viewed at least once (fallback stop condition for pre-fix app builds)", async () => {
-    m.vendor.findMany.mockResolvedValue([readyVendor()] as never);
-    m.deliveryZone.groupBy.mockResolvedValue([{ vendorId: "vendor-1", _count: { _all: 1 } }] as never);
-    m.event.count.mockResolvedValue(1 as never);
+  it("does not remind a vendor whose store has a real store_shared event — the unbounded, spec-intended stop condition", async () => {
+    mockReady(4);
+    m.event.count.mockImplementation(({ where }: any) => Promise.resolve(where.name === "store_shared" ? 1 : 0) as never);
 
     await automationDetectors.runSweep();
 
     expect(mockScheduleAutomation).not.toHaveBeenCalledWith(expect.objectContaining({ type: "STORE_SHARE_REMINDER" }));
   });
 
-  it("does not remind a vendor whose store has a real store_shared event — the actual spec-intended stop condition, queried alongside store_viewed", async () => {
-    m.vendor.findMany.mockResolvedValue([readyVendor()] as never);
-    m.deliveryZone.groupBy.mockResolvedValue([{ vendorId: "vendor-1", _count: { _all: 1 } }] as never);
-    m.event.count.mockResolvedValue(1 as never);
+  it("does not remind a vendor viewed BEFORE the 2026-10-26 cutoff (grandfather fallback)", async () => {
+    mockReady(4);
+    m.event.count.mockImplementation(({ where }: any) => Promise.resolve(where.name === "store_viewed" ? 1 : 0) as never);
 
     await automationDetectors.runSweep();
 
     expect(mockScheduleAutomation).not.toHaveBeenCalledWith(expect.objectContaining({ type: "STORE_SHARE_REMINDER" }));
     expect(m.event.count).toHaveBeenCalledWith(
-      expect.objectContaining({ where: expect.objectContaining({ name: { in: ["store_shared", "store_viewed"] } }) }),
+      expect.objectContaining({ where: expect.objectContaining({ name: "store_viewed", createdAt: { lt: SHIPPED_AT } }) }),
+    );
+  });
+
+  it("DOES remind a vendor whose only store_viewed event is AFTER the cutoff — a post-fix view no longer silently counts as 'shared' (the restriction this compliance review added)", async () => {
+    mockReady(4);
+    // The mock resolves to 0 regardless of the createdAt filter's actual value — this test's real
+    // assertion is that the query sent to the DB scopes store_viewed to createdAt < cutoff at all,
+    // proving a post-cutoff view is excluded by construction, not merely "not covered by this test".
+    m.event.count.mockResolvedValue(0 as never);
+
+    await automationDetectors.runSweep();
+
+    expect(mockScheduleAutomation).toHaveBeenCalledWith(expect.objectContaining({ type: "STORE_SHARE_REMINDER" }));
+    expect(m.event.count).toHaveBeenCalledWith(
+      expect.objectContaining({ where: expect.objectContaining({ name: "store_viewed", createdAt: { lt: SHIPPED_AT } }) }),
     );
   });
 
@@ -451,11 +472,10 @@ describe("automationDetectors.runSweep — STORE_SHARE_REMINDER (spec R10, migra
     expect(m.event.count).not.toHaveBeenCalled();
   });
 
-  it("still reminds a vendor who already has a paid order — unlike R01/R03/R05/R06/R11, R10's stop condition is 'store viewed', not 'never sold'", async () => {
+  it("still reminds a vendor who already has a paid order — unlike R01/R03/R05/R06/R11, R10's stop condition is 'store shared/viewed', not 'never sold'", async () => {
     // Confirms this detector does NOT reuse loadOnboardingProgressCandidates(),
     // which would wrongly exclude a vendor with a paid order.
-    m.vendor.findMany.mockResolvedValue([readyVendor()] as never);
-    m.deliveryZone.groupBy.mockResolvedValue([{ vendorId: "vendor-1", _count: { _all: 1 } }] as never);
+    mockReady(4);
     m.event.count.mockResolvedValue(0 as never);
 
     await automationDetectors.runSweep();
@@ -467,15 +487,28 @@ describe("automationDetectors.runSweep — STORE_SHARE_REMINDER (spec R10, migra
     );
   });
 
-  it("follows the same 4h/24h/72h, max-3-touches P2 cadence as the other onboarding rules", async () => {
-    m.vendor.findMany.mockResolvedValue([readyVendor({ createdAt: new Date(NOW.getTime() - 30 * 60 * 60 * 1000) })] as never);
-    m.deliveryZone.groupBy.mockResolvedValue([{ vendorId: "vendor-1", _count: { _all: 1 } }] as never);
+  it("cadence clock is the real readiness timestamp (later of first product / first delivery zone), not vendor.createdAt", async () => {
+    mockReady(30); // ready 30h ago -> touch1 (4h) and touch2 (24h) both due
     m.event.count.mockResolvedValue(0 as never);
 
     await automationDetectors.runSweep();
 
     const keys = mockScheduleAutomation.mock.calls.filter(([a]: any[]) => a.type === "STORE_SHARE_REMINDER").map(([a]: any[]) => a.subjectKey);
     expect(keys).toEqual(["vendor-1:touch1", "vendor-1:touch2"]);
+  });
+
+  it("uses whichever of product/delivery-zone became real LAST as the readiness clock — a zone added well after the first product starts the clock later, not earlier", async () => {
+    m.vendor.findMany.mockResolvedValue([readyVendor()] as never);
+    // Product existed 30h ago, but the delivery zone (the thing that actually completed
+    // readiness) was only added 2h ago — the vendor should NOT be measured from 30h.
+    m.deliveryZone.groupBy.mockResolvedValue([{ vendorId: "vendor-1", _count: { _all: 1 }, _min: { createdAt: new Date(NOW.getTime() - 2 * 60 * 60 * 1000) } }] as never);
+    m.product.groupBy.mockResolvedValue([{ vendorId: "vendor-1", _min: { createdAt: new Date(NOW.getTime() - 30 * 60 * 60 * 1000) } }] as never);
+    m.event.count.mockResolvedValue(0 as never);
+
+    await automationDetectors.runSweep();
+
+    // Only 2h have passed since the LATER (zone) timestamp, under the 4h touch1 threshold.
+    expect(mockScheduleAutomation).not.toHaveBeenCalledWith(expect.objectContaining({ type: "STORE_SHARE_REMINDER" }));
   });
 });
 
