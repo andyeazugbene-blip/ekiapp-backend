@@ -2101,6 +2101,9 @@ enum AutomationType {
   CAMPAIGN_REFUND_UPDATE
   // Eki-managed: vendor free trial ending soon (Stripe customer.subscription.trial_will_end).
   VENDOR_TRIAL_ENDING
+  // Spec R38: "An Eki automation needs attention" — vendor-facing, not the
+  // existing admin-only failure feed (automationRulesService.failures()).
+  AUTOMATION_FAILURE_ALERT
   // Notification Orchestration Spec v2 (2026-10-25), R03/R05/R06: vendor
   // onboarding steps that used to be merged into FIRST_SALE's stage-
   // switching copy are now separate rules, each with its own P2 cadence

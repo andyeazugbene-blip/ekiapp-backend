@@ -1,0 +1,27 @@
+# Deep-Link Matrix — All 15 Destination Keys
+
+Verified directly against `ekiapp-frontnend-application-ios-android-main` (Expo Router). The app has one generic notification-tap handler, `handleNotificationTap` in `app/_layout.tsx:179-394`, wired via `Notifications.addNotificationResponseReceivedListener` (`app/_layout.tsx:396-408`), which switches on a `data.type` string that uses **its own vocabulary** — none of the client spec's 15 semantic destination keys appear literally in that switch. So "a real screen exists" and "a push notification can actually open it" are two separate, both-required facts, checked separately below.
+
+| Destination key | Real screen | Route | Params | Tap-wired today? |
+|---|---|---|---|---|
+| `store_setup` | `app/(vendor-onboarding)/setup-store.tsx` | `(vendor-onboarding)/setup-store` | none (vendor's own in-progress store) | **No** |
+| `foodstuff_editor` | `app/(vendor)/foodstuff-edit.tsx` | `(vendor)/foodstuff-edit` | `id` | **No** |
+| `verification` | `app/(vendor-verification)/index.tsx` (+ `approved.tsx`/`rejected.tsx`/`pending.tsx`) | `(vendor-verification)/index` etc. | none | **Partial** — `vendor_verification_approved`/`rejected` push types route to `approved`/`rejected`; nothing routes to the generic intro or `pending` screen |
+| `inventory_detail` | `app/(vendor)/foodstuff-detail.tsx` (the product/stock screen — no separate "stock" screen exists) | `(vendor)/foodstuff-detail` | `id` | **No** |
+| `order_detail` | `app/(vendor)/order-detail.tsx`; buyer equivalent is `app/(buyer)/track-order.tsx` (different name, same role) | `(vendor)/order-detail` / `(buyer)/track-order` | `id` | **Yes** — `order_status`/`new_order`/`order_paid`/`order_delivered` etc. route here; `order_refunded` only deep-links when exactly one order id |
+| `store_share` | `app/(vendor)/share-store-link.tsx` | `(vendor)/share-store-link` | none | **No** |
+| `first_sale` | No dedicated screen. Closest: `app/(vendor)/automation-detail.tsx?type=FIRST_SALE` | `(vendor)/automation-detail` | `type` (an `AutomationType` string, not an entity id) | **No** — vendor `automation_*` notifications with no specific branch fall through to the list screen (`automation-center`), not this detail screen with a `type` param |
+| `automation_detail` | `app/(vendor)/automation-detail.tsx` | `(vendor)/automation-detail` | `type` | **No** — same gap as `first_sale` |
+| `checkout` | `app/(buyer)/checkout.tsx` | `(buyer)/checkout` | none (reads cart store state) | **No** |
+| `foodstuff_subscription` | Code naming is still **"regular delivery"**, not "Foodstuff Subscription" — `app/(buyer)/regular-delivery-detail.tsx`, `app/(vendor)/regular-delivery-subscriber-detail.tsx` | `(buyer)/regular-delivery-detail` / `(vendor)/regular-delivery-subscriber-detail` | `id` (buyer side required) | **Yes** — `subscription_update` and `regular_delivery_frequency_changed` both route here |
+| `community_buy_campaign` | `app/(buyer)/community-buy-campaign.tsx` (+ organiser/supplier variants) | `(buyer)/community-buy-campaign` etc. | `id`/`campaignId` | **Yes** — `community_campaign_update` routes by role (participant/organiser/supplier) to the matching screen |
+| `membership` | **Not found as a concept in the mobile app at all.** Closest: `app/(vendor)/subscription-plans.tsx` (+ `plan-active`/`plan-free`/`plan-growth`/`plan-pro`), never called "membership" in its own source. "Eki Membership" only appears in `admin-web` (the separate admin dashboard), not in this app. | n/a | n/a | **No** |
+| `referral_rewards` | **No single matching screen.** `app/(buyer)/referral-program.tsx` is a re-export of `invite-friend.tsx` (the invite flow, not a rewards tracker); `reward-history.tsx` is general wallet history, unrelated to referrals specifically. | n/a | n/a | **No** |
+| `support_case` | `app/(buyer)/community-buy-support-cases.tsx` — **Community-Buy-scoped only**, no generic support-case viewer exists (`contact-support.tsx` is a submission form, not a viewer) | `(buyer)/community-buy-support-cases` | `campaignId` (optional) | **Partial** — `support_case_response` routes here, but only for Community Buy cases |
+| `admin_case` | Admin screens exist in-app (`app/(admin)/dispute-detail.tsx`, `vendor-detail.tsx`, `order-detail.tsx`, with `id` params) | `(admin)/...` | `id` | **No** — confirmed, not assumed: `utils/broadcastLink.ts:7`'s `LINK_PATTERN` regex only allow-lists `/(buyer)/...` and `/(vendor)/...`, never `/(admin)/...`, and no push type targets this group at all |
+
+## Honest summary
+
+**4 of 15** destinations are genuinely wired end-to-end today: `order_detail`, `foodstuff_subscription`, `community_buy_campaign`, and — partially — `verification` and `support_case` (2 more, partial). The remaining **9–11** either have a real screen with zero tap-wiring, or (for `membership` and `referral_rewards`) no matching screen exists under that name at all.
+
+**This is a mobile-repo change, not a backend one.** Closing this gap means adding branches to `handleNotificationTap` in `app/_layout.tsx` for `store_setup`, `foodstuff_editor`, `inventory_detail`, `store_share`, and a real decision on what `first_sale`/`automation_detail` should open for a vendor (today's fallback — the list screen — may be the right interim answer, not a bug). `membership` and `referral_rewards` need either a real screen built or the destination key retired/remapped to an existing one. None of this was done in this pass — flagged, not silently assumed or faked.

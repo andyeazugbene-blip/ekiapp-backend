@@ -406,6 +406,7 @@ describe("automationService — per-vendor tunable config (CART_RECOVERY, BUYER_
         "PAYMENT_RECOVERY",
         "RENEWAL_REMINDER",
         "PRICE_APPROVAL_REMINDER",
+        "AUTOMATION_FAILURE_ALERT",
       ].sort(),
     );
   });

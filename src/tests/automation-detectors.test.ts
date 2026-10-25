@@ -10,6 +10,7 @@ vi.mock("../lib/prisma", () => ({
     order: { findMany: vi.fn().mockResolvedValue([]) },
     orderItem: { findFirst: vi.fn().mockResolvedValue(null) },
     event: { count: vi.fn().mockResolvedValue(0) },
+    automationRun: { findMany: vi.fn().mockResolvedValue([]) },
   },
 }));
 
@@ -509,6 +510,59 @@ describe("automationDetectors.runSweep — STORE_SHARE_REMINDER (spec R10, migra
 
     // Only 2h have passed since the LATER (zone) timestamp, under the 4h touch1 threshold.
     expect(mockScheduleAutomation).not.toHaveBeenCalledWith(expect.objectContaining({ type: "STORE_SHARE_REMINDER" }));
+  });
+});
+
+describe("automationDetectors.runSweep — AUTOMATION_FAILURE_ALERT (spec R38, 2026-10-25: vendor-facing, not the existing admin-only failures() feed)", () => {
+  it("alerts the vendor once when one of their own automations failed in the last 24h", async () => {
+    m.automationRun.findMany.mockResolvedValue([{ vendorId: "vendor-1" }] as never);
+    m.vendor.findMany.mockResolvedValue([{ id: "vendor-1", userId: "vendor-1-user", storeName: "Mama Eki" }] as never);
+
+    await automationDetectors.runSweep();
+
+    expect(mockScheduleAutomation).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "AUTOMATION_FAILURE_ALERT", recipientUserId: "vendor-1-user", vendorId: "vendor-1", title: "An Eki automation needs attention" }),
+    );
+  });
+
+  it("excludes its own type from the failure scan — a notification-loop guard (sending this alert itself failing must never cascade into more alerts)", async () => {
+    m.automationRun.findMany.mockResolvedValue([] as never); // the query itself excludes AUTOMATION_FAILURE_ALERT; simulated here as "no qualifying failures found"
+    await automationDetectors.runSweep();
+    expect(mockScheduleAutomation).not.toHaveBeenCalledWith(expect.objectContaining({ type: "AUTOMATION_FAILURE_ALERT" }));
+    expect(m.automationRun.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: expect.objectContaining({ type: { not: "AUTOMATION_FAILURE_ALERT" } }) }),
+    );
+  });
+
+  it("sends exactly one alert per vendor regardless of how many of their automations failed (grouped, not per-failure)", async () => {
+    m.automationRun.findMany.mockResolvedValue([{ vendorId: "vendor-1" }] as never); // distinct: ["vendorId"] in the real query collapses multiple failures to one row per vendor
+    m.vendor.findMany.mockResolvedValue([{ id: "vendor-1", userId: "vendor-1-user", storeName: "Mama Eki" }] as never);
+
+    await automationDetectors.runSweep();
+
+    const calls = mockScheduleAutomation.mock.calls.filter(([a]: any[]) => a.type === "AUTOMATION_FAILURE_ALERT");
+    expect(calls).toHaveLength(1);
+  });
+
+  it("dedupe key is per vendor per calendar day — a second sweep the same day is a no-op via the real unique dedupeKey, not re-sent", async () => {
+    m.automationRun.findMany.mockResolvedValue([{ vendorId: "vendor-1" }] as never);
+    m.vendor.findMany.mockResolvedValue([{ id: "vendor-1", userId: "vendor-1-user", storeName: "Mama Eki" }] as never);
+
+    await automationDetectors.runSweep();
+    const firstKey = mockScheduleAutomation.mock.calls.find(([a]: any[]) => a.type === "AUTOMATION_FAILURE_ALERT")?.[0].subjectKey;
+    mockScheduleAutomation.mockClear();
+
+    await automationDetectors.runSweep();
+    const secondKey = mockScheduleAutomation.mock.calls.find(([a]: any[]) => a.type === "AUTOMATION_FAILURE_ALERT")?.[0].subjectKey;
+
+    expect(firstKey).toBe(secondKey);
+    expect(firstKey).toBe("vendor-1:" + new Date(NOW).toISOString().slice(0, 10));
+  });
+
+  it("does nothing when no vendor had a failed automation in the window", async () => {
+    m.automationRun.findMany.mockResolvedValue([] as never);
+    await automationDetectors.runSweep();
+    expect(mockScheduleAutomation).not.toHaveBeenCalledWith(expect.objectContaining({ type: "AUTOMATION_FAILURE_ALERT" }));
   });
 });
 

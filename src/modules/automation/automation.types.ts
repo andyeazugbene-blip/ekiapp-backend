@@ -97,4 +97,7 @@ export const EKI_MANAGED_AUTOMATION_TYPES: AutomationType[] = [
   "PAYMENT_RECOVERY",
   "RENEWAL_REMINDER",
   "PRICE_APPROVAL_REMINDER",
+  // Spec R38 (2026-10-25) — a vendor should not be able to silence being
+  // told one of their own automations failed to send.
+  "AUTOMATION_FAILURE_ALERT",
 ];

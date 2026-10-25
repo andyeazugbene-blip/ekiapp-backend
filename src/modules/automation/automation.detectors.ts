@@ -410,6 +410,69 @@ async function detectStoreShareReminder(): Promise<number> {
 }
 
 /**
+ * AUTOMATION_FAILURE_ALERT (spec R38): "An Eki automation needs
+ * attention." Previously only admin-visible (automationRulesService.
+ * failures(), the Automation Centre's own failure feed) — the spec wants
+ * the VENDOR notified too, which did not exist at all before this.
+ *
+ * Looks back 24h over AutomationRun rows with status=FAILED, a real
+ * vendorId (excludes REGISTRATION_REMINDER, which has none — nothing to
+ * tell a non-existent vendor), isTest=false, and — critically — type !==
+ * "AUTOMATION_FAILURE_ALERT" itself. That self-exclusion is the
+ * notification-loop guard the spec explicitly calls for (section 4, R38
+ * and R40): without it, if sending THIS alert ever failed, the next
+ * sweep would see that failure too and schedule another alert about it,
+ * which could fail the same way, forever.
+ *
+ * One alert per vendor per calendar day, regardless of how many of their
+ * automations failed that day (dedupeKey `${vendorId}:${isoDate}`) — this
+ * is a "something's wrong, go look" signal, not a per-failure escalating
+ * nudge, so it doesn't use the P2 touch helper.
+ *
+ * Not vendor-toggleable (added to EKI_MANAGED_AUTOMATION_TYPES, not
+ * VENDOR_TOGGLEABLE_AUTOMATION_TYPES) — the same reasoning as
+ * PAYMENT_RECOVERY/RENEWAL_REMINDER/PRICE_APPROVAL_REMINDER: a vendor
+ * should not be able to silence being told their own automations are
+ * broken.
+ */
+async function detectAutomationFailureAlert(): Promise<number> {
+  const since = new Date(Date.now() - DAY_MS);
+  const failedRuns = await prisma.automationRun.findMany({
+    where: {
+      status: "FAILED",
+      isTest: false,
+      vendorId: { not: null },
+      type: { not: "AUTOMATION_FAILURE_ALERT" },
+      createdAt: { gte: since },
+    },
+    select: { vendorId: true },
+    distinct: ["vendorId"],
+  });
+  if (failedRuns.length === 0) return 0;
+
+  const vendorIds = failedRuns.map((r) => r.vendorId as string);
+  const vendors = await prisma.vendor.findMany({ where: { id: { in: vendorIds } }, select: { id: true, userId: true, storeName: true } });
+
+  const todayKey = new Date().toISOString().slice(0, 10);
+  let scheduled = 0;
+  for (const vendor of vendors) {
+    await automationService.scheduleAutomation({
+      type: "AUTOMATION_FAILURE_ALERT",
+      recipientUserId: vendor.userId,
+      vendorId: vendor.id,
+      subjectKey: `${vendor.id}:${todayKey}`,
+      requiresMarketingConsent: false,
+      bypassQuietHours: true, // operational alert about their own account — same class as PAYMENT_RECOVERY.
+      title: "An Eki automation needs attention",
+      body: `${vendor.storeName ?? "Your store"} has an automation that failed to send. Review it and the next step.`,
+      data: { store_name: vendor.storeName },
+    });
+    scheduled++;
+  }
+  return scheduled;
+}
+
+/**
  * CART_RECOVERY: items sitting in a buyer's cart past a per-vendor reminder
  * delay (default 2h, vendor-configurable via VendorAutomationSetting.config).
  * A cart can span multiple vendors' products, so it's evaluated once per
@@ -926,6 +989,7 @@ export const automationDetectors = {
       ["VERIFICATION_REMINDER", detectVerificationReminder],
       ["FIRST_SALE", detectFirstSale],
       ["STORE_SHARE_REMINDER", detectStoreShareReminder],
+      ["AUTOMATION_FAILURE_ALERT", detectAutomationFailureAlert],
       ["CART_RECOVERY", detectCartRecovery],
       ["REORDER_REMINDER", detectReorderReminder],
       ["REVIEW_REQUEST", detectReviewRequest],
