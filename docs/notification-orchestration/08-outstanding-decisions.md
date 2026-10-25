@@ -1,6 +1,6 @@
 # Outstanding Decisions — Genuinely the Client's to Make
 
-Four real decisions block further progress. Everything else in the compliance matrix that isn't "implemented" is an engineering task, not a decision.
+Two business/infrastructure choices and two missing artifacts/access items remain. The R06 and R39 questions from the earlier version are resolved by existing code and the locked referral decision; they are no longer client decisions.
 
 ## 1. WhatsApp provider
 
@@ -12,14 +12,14 @@ The spec's 4h/24h/72h cadence needs a cron that runs more often than once a day.
 - Stay on daily cron: cadence degrades to "fires on the first daily check after the threshold passes" — still correct and bounded, just not real-time.
 - Add a sub-daily cron (needs a plan that supports it): true spec-compliant 4h/24h/72h timing.
 
-## 3. R39 — which referral reward is actually meant
+## 3. Original v2 specification and legacy catalogue
 
-The spec's R39 ("referral credit confirmed") could map to either of two different existing things: a buyer-to-buyer share-code reward (`BUYER_REFERRAL`), or a vendor-to-vendor invitation Membership credit (handoff "M-08" in `referrals.service.ts`). The client's own locked decision #12 says these are deliberately separate automations — I read R39 as the vendor-to-vendor one, but this should be confirmed rather than assumed before any further work on it.
+The current workspace does not contain the authoritative Notification Orchestration Developer Specification v2.0 or the original 210-event catalogue. The R01–R40 matrix and the earlier v1 gap analysis are secondary sources; they do not contain the full trigger/copy/recipient/destination evidence needed to safely finish every rule or reconcile each catalogue ID. Provide or point to those exact source files so implementation can continue without guessing client-defined behavior.
 
-## 4. R06/R07/R08 — verification "submitted" state
+## 4. Publishing the mobile branch
 
-Fixing the documented substitution in R06 (nudges even after submission, because this codebase has no "submitted, pending" state) needs either a new timestamp column or reading an intermediate Stripe Identity status. Low cost either way, but it's new schema — flagging for a go-ahead rather than adding it unasked.
+The mobile changes are committed locally on `feat/store-share-reminder-mobile` (`ff87a48`). Automatic approval review rejected the push because it could not verify trusted authorization to export mobile source to the remote. The earlier request was supplied as an attached text file, which the reviewer did not accept as trusted authorization. A direct in-chat authorization to push this branch is required before retrying.
 
-## Not a decision — a scope confirmation
+## Remaining rules to verify
 
-16 of the 40 rules (listed in `01-compliance-matrix.md`) were not individually verified implemented-or-not this pass, for time reasons, not because they're blocked on anything. If the client wants those chased down to a confirmed status next, that's scheduling, not a decision — happy to continue.
+14 of the 40 rules (listed in `01-compliance-matrix.md`) remain individually unverified. They are outstanding engineering work, not client decisions; continue investigating them using the supplied source spec once available.

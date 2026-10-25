@@ -308,12 +308,13 @@ describe("automationDetectors.runSweep — REORDER_REMINDER (vendor-configurable
 });
 
 describe("automationDetectors.runSweep — vendor onboarding progress rules (Notification Orchestration Spec v2, 2026-10-25: FIRST_SALE's old merged stage-switching copy split into R03/R05/R06/R11, each its own type on the 4h/24h/72h P2 cadence)", () => {
-  function candidate(overrides: Partial<{ id: string; userId: string; storeName: string; verificationStatus: string; products: number; hasZone: boolean; createdAt: Date }> = {}) {
+  function candidate(overrides: Partial<{ id: string; userId: string; storeName: string; verificationStatus: string; stripeVerificationSessionId: string | null; products: number; hasZone: boolean; createdAt: Date }> = {}) {
     return {
       id: overrides.id ?? "vendor-1",
       userId: overrides.userId ?? "vendor-1-user",
       storeName: overrides.storeName ?? "Mama Eki",
       verificationStatus: overrides.verificationStatus ?? "VERIFIED",
+      stripeVerificationSessionId: overrides.stripeVerificationSessionId ?? null,
       // Default: store created exactly 4h before NOW, so the first touch is
       // due "today" for every pre-existing test unless a test overrides it.
       createdAt: overrides.createdAt ?? new Date(NOW.getTime() - 4 * 60 * 60 * 1000),
@@ -354,6 +355,12 @@ describe("automationDetectors.runSweep — vendor onboarding progress rules (Not
     expect(mockScheduleAutomation).toHaveBeenCalledWith(
       expect.objectContaining({ type: "VERIFICATION_REMINDER", title: "Your store is close to opening" }),
     );
+  });
+
+  it("R06 stops reminding once a Stripe Identity session has been created, even before verification is approved", async () => {
+    mockCandidates(candidate({ products: 1, hasZone: true, verificationStatus: "PENDING", stripeVerificationSessionId: "vs_123" }));
+    await automationDetectors.runSweep();
+    expect(mockScheduleAutomation).not.toHaveBeenCalledWith(expect.objectContaining({ type: "VERIFICATION_REMINDER" }));
   });
 
   it("R11 FIRST_SALE: a fully set-up, verified vendor gets the first-sale-campaign nudge, not any of the onboarding-step reminders", async () => {

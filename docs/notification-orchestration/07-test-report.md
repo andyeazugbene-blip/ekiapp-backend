@@ -5,10 +5,9 @@
 - Backend `npx tsc --noEmit`: **passed**.
 - Backend `npm run build`: **passed**.
 - Backend `npx prisma validate`: **passed**; no schema or migration was added in this slice.
-- Focused backend `event-emission-extras.test.ts` and `automation-detectors.test.ts`: **58 tests passed**.
-- Backend `community-buy-support-case.test.ts`: **19 tests passed**, verifying R28's current Community Buy scoped response behavior.
+- Focused backend `automation-detectors.test.ts`, `event-emission-extras.test.ts`, `stripe-identity.test.ts`, and `community-buy-support-case.test.ts`: **92 tests passed**. This includes R06 session-stop, R07/R08 Stripe Identity outcomes, R10 event authorization/readiness timing, and R28 reporter ownership.
 - Mobile `npm run typecheck`: **passed**.
-- Backend full suite, `npx vitest run --pool=forks --maxWorkers=1`: **188/198 files passed; 2,812 tests passed and 308 failed**. All 10 failing suites are HTTP tests that could not connect to their local test servers (`connect EACCES 127.0.0.1`). This environment restriction prevents a full CI-equivalent result; it does not establish whether those tests pass outside this sandbox.
+- Backend full suite, `npx vitest run --pool=forks --maxWorkers=1`: **188/198 files passed; 2,813 tests passed and 308 failed**. All 10 failing suites are HTTP tests that could not connect to their local test servers (`connect EACCES 127.0.0.1`). This environment restriction prevents a full CI-equivalent result; it does not establish whether those tests pass outside this sandbox.
 - `git diff --check`: **passed** in both repositories.
 
 No mobile device runtime test, production deployment, or external provider test was performed.

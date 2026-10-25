@@ -158,7 +158,7 @@ async function loadOnboardingProgressCandidates() {
       orderItems: { none: { order: { status: { in: [...FIRST_SALE_PAID_STATUSES] } } } },
     },
     select: {
-      id: true, userId: true, storeName: true, verificationStatus: true, createdAt: true,
+      id: true, userId: true, storeName: true, verificationStatus: true, stripeVerificationSessionId: true, createdAt: true,
       _count: { select: { products: { where: { isActive: true } } } },
     },
     take: 200,
@@ -172,6 +172,7 @@ async function loadOnboardingProgressCandidates() {
     hasProduct: v._count.products > 0,
     hasDelivery: hasDeliveryZone.has(v.id),
     isVerified: v.verificationStatus === "VERIFIED",
+    hasVerificationSession: Boolean(v.stripeVerificationSessionId),
   }));
 }
 
@@ -231,18 +232,16 @@ async function detectDeliverySetupReminder(): Promise<number> {
  * VERIFICATION_REMINDER (spec R06): "Verification not started when
  * eligible." Candidates: has a product AND a delivery zone (the spec's
  * "when eligible" — verification only matters once there's something to
- * sell and somewhere to send it), not yet VERIFIED. Stops on submission
- * per the spec's stop condition ("verification submitted") — this
- * codebase only tracks the final VERIFIED state, so it stops on approval
- * rather than on submission; a vendor who submitted but is still pending
- * will keep getting this reminder until approved. Documented limitation,
- * not silently assumed away.
+ * sell and somewhere to send it), not yet VERIFIED. Stops when a Stripe
+ * Identity session ID exists: createStripeVerificationSession persists it
+ * before returning the hosted verification flow, so subsequent reminders
+ * do not continue after the vendor has started/submitted verification.
  */
 async function detectVerificationReminder(): Promise<number> {
   const candidates = await loadOnboardingProgressCandidates();
   let scheduled = 0;
   for (const vendor of candidates) {
-    if (!vendor.hasProduct || !vendor.hasDelivery || vendor.isVerified) continue;
+    if (!vendor.hasProduct || !vendor.hasDelivery || vendor.isVerified || vendor.hasVerificationSession) continue;
     const hoursSinceCreated = (Date.now() - vendor.createdAt.getTime()) / HOUR_MS;
     scheduled += await scheduleP2Touches({
       type: "VERIFICATION_REMINDER",
