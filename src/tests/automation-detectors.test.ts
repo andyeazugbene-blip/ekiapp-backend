@@ -165,42 +165,40 @@ describe("automationDetectors.runSweep — BUYER_WIN_BACK (per-vendor inactivity
   });
 });
 
-describe("automationDetectors.runSweep — REGISTRATION_REMINDER (new 2026-10-22, corrected 2026-10-23: nudges a VENDOR who never created their Vendor profile — not email verification, which has no reachable UI in this codebase)", () => {
-  function user(overrides: Partial<{ id: string; name: string; createdAt: Date }> = {}) {
+describe("automationDetectors.runSweep — REGISTRATION_REMINDER (spec R01, 2026-10-25: nudges a VENDOR who never created their Vendor profile, on the spec's 4h/24h/72h P2 cadence — not email verification, which has no reachable UI in this codebase)", () => {
+  function user(overrides: Partial<{ id: string; createdAt: Date }> = {}) {
     return {
       id: overrides.id ?? "user-1",
-      name: overrides.name ?? "Amina",
-      createdAt: overrides.createdAt ?? new Date(NOW.getTime() - 1 * 24 * 60 * 60 * 1000),
+      createdAt: overrides.createdAt ?? new Date(NOW.getTime() - 4 * 60 * 60 * 1000),
     };
   }
 
-  it("day 1 since signup: an unverified account gets the first reminder", async () => {
-    m.user.findMany.mockResolvedValue([user({ createdAt: new Date(NOW.getTime() - 1 * 24 * 60 * 60 * 1000) })] as never);
+  it("at 4h since signup: the first touch fires", async () => {
+    m.user.findMany.mockResolvedValue([user({ createdAt: new Date(NOW.getTime() - 4 * 60 * 60 * 1000) })] as never);
     await automationDetectors.runSweep();
     expect(mockScheduleAutomation).toHaveBeenCalledWith(
-      expect.objectContaining({ type: "REGISTRATION_REMINDER", recipientUserId: "user-1", subjectKey: "user-1:day1", data: expect.objectContaining({ onboarding_tier: "first" }) }),
+      expect.objectContaining({ type: "REGISTRATION_REMINDER", recipientUserId: "user-1", subjectKey: "user-1:touch1", data: expect.objectContaining({ touch_number: 1 }) }),
     );
   });
 
-  it("day 3 since signup: the FINAL reminder, with distinct copy and its own dedupe key (doesn't collide with day 1's)", async () => {
-    m.user.findMany.mockResolvedValue([user({ createdAt: new Date(NOW.getTime() - 3 * 24 * 60 * 60 * 1000) })] as never);
+  it("at 30h since signup (past the 24h threshold too): both touch1 AND touch2 are attempted in the same sweep — each is its own dedupe key, so a daily cron that only samples once doesn't skip a threshold it's already past", async () => {
+    m.user.findMany.mockResolvedValue([user({ createdAt: new Date(NOW.getTime() - 30 * 60 * 60 * 1000) })] as never);
     await automationDetectors.runSweep();
-    const [[call]] = mockScheduleAutomation.mock.calls.filter(([a]: any[]) => a.type === "REGISTRATION_REMINDER");
-    expect(call.subjectKey).toBe("user-1:day3");
-    expect(call.title).toContain("Last step");
-    expect(call.data.onboarding_tier).toBe("final");
+    const calls = mockScheduleAutomation.mock.calls.filter(([a]: any[]) => a.type === "REGISTRATION_REMINDER").map(([a]: any[]) => a.subjectKey);
+    expect(calls).toEqual(["user-1:touch1", "user-1:touch2"]);
   });
 
-  it("day 0 (just signed up) and day 2 (between touches) get no reminder at all", async () => {
-    m.user.findMany.mockResolvedValue([user({ createdAt: NOW }), user({ id: "user-2", createdAt: new Date(NOW.getTime() - 2 * 24 * 60 * 60 * 1000) })] as never);
+  it("under 4h since signup gets no reminder at all", async () => {
+    m.user.findMany.mockResolvedValue([user({ createdAt: new Date(NOW.getTime() - 2 * 60 * 60 * 1000) })] as never);
     await automationDetectors.runSweep();
     expect(mockScheduleAutomation).not.toHaveBeenCalledWith(expect.objectContaining({ type: "REGISTRATION_REMINDER" }));
   });
 
-  it("past day 3 with no further touch scheduled gets no reminder — the sequence is exactly two messages, not an escalating one", async () => {
+  it("past 72h, exactly three touches have been attempted and no fourth is ever generated — the spec's 'maximum three sends per unresolved episode'", async () => {
     m.user.findMany.mockResolvedValue([user({ createdAt: new Date(NOW.getTime() - 10 * 24 * 60 * 60 * 1000) })] as never);
     await automationDetectors.runSweep();
-    expect(mockScheduleAutomation).not.toHaveBeenCalledWith(expect.objectContaining({ type: "REGISTRATION_REMINDER" }));
+    const calls = mockScheduleAutomation.mock.calls.filter(([a]: any[]) => a.type === "REGISTRATION_REMINDER").map(([a]: any[]) => a.subjectKey);
+    expect(calls).toEqual(["user-1:touch1", "user-1:touch2", "user-1:touch3"]);
   });
 
   it("the candidate query itself excludes vendors who already have a Vendor profile, plus suspended/test accounts, and never targets buyers — self-cancelling, no separate 'cancel reminder' step needed", async () => {
@@ -307,117 +305,93 @@ describe("automationDetectors.runSweep — REORDER_REMINDER (vendor-configurable
   });
 });
 
-describe("automationDetectors.runSweep — FIRST_SALE (bug fix 2026-10-11: depends on the vendor's actual next incomplete step; extended 2026-10-22: multi-touch day 1/3/5/7 schedule)", () => {
-  function candidate(overrides: Partial<{ id: string; userId: string; storeName: string; verificationStatus: string; products: number; createdAt: Date }> = {}) {
+describe("automationDetectors.runSweep — vendor onboarding progress rules (Notification Orchestration Spec v2, 2026-10-25: FIRST_SALE's old merged stage-switching copy split into R03/R05/R06/R11, each its own type on the 4h/24h/72h P2 cadence)", () => {
+  function candidate(overrides: Partial<{ id: string; userId: string; storeName: string; verificationStatus: string; products: number; hasZone: boolean; createdAt: Date }> = {}) {
     return {
       id: overrides.id ?? "vendor-1",
       userId: overrides.userId ?? "vendor-1-user",
       storeName: overrides.storeName ?? "Mama Eki",
       verificationStatus: overrides.verificationStatus ?? "VERIFIED",
-      // Default: store created exactly 1 day before NOW, so the day-1 touch
-      // in the schedule is due "today" for every pre-existing test unless
-      // a test overrides it to check a different day/off-schedule day.
-      createdAt: overrides.createdAt ?? new Date(NOW.getTime() - 1 * 24 * 60 * 60 * 1000),
+      // Default: store created exactly 4h before NOW, so the first touch is
+      // due "today" for every pre-existing test unless a test overrides it.
+      createdAt: overrides.createdAt ?? new Date(NOW.getTime() - 4 * 60 * 60 * 1000),
       _count: { products: overrides.products ?? 1 },
+      hasZone: overrides.hasZone ?? true,
     };
   }
+  function mockCandidates(...candidates: ReturnType<typeof candidate>[]) {
+    m.vendor.findMany.mockResolvedValue(candidates as never);
+    m.deliveryZone.groupBy.mockResolvedValue(
+      candidates.filter((c) => c.hasZone).map((c) => ({ vendorId: c.id, _count: { _all: 1 } })) as never,
+    );
+  }
 
-  it("a vendor with no active product yet is nudged to add one, not to 'get an order'", async () => {
-    m.vendor.findMany.mockResolvedValue([candidate({ products: 0 })] as never);
-    m.deliveryZone.groupBy.mockResolvedValue([] as never);
-
+  it("R03 FIRST_PRODUCT_REMINDER: a vendor with no active product yet is nudged to add one — not DELIVERY_SETUP_REMINDER/VERIFICATION_REMINDER/FIRST_SALE", async () => {
+    mockCandidates(candidate({ products: 0 }));
     await automationDetectors.runSweep();
-
     expect(mockScheduleAutomation).toHaveBeenCalledWith(
-      expect.objectContaining({
-        type: "FIRST_SALE", vendorId: "vendor-1", title: "Add your first foodstuff",
-        data: expect.objectContaining({ onboarding_stage: "add_product" }),
-      }),
+      expect.objectContaining({ type: "FIRST_PRODUCT_REMINDER", vendorId: "vendor-1", title: "Add your first foodstuff" }),
+    );
+    for (const other of ["DELIVERY_SETUP_REMINDER", "VERIFICATION_REMINDER", "FIRST_SALE"]) {
+      expect(mockScheduleAutomation).not.toHaveBeenCalledWith(expect.objectContaining({ type: other }));
+    }
+  });
+
+  it("R05 DELIVERY_SETUP_REMINDER: a vendor with a product but no delivery zone is nudged to set up delivery, not FIRST_PRODUCT_REMINDER", async () => {
+    mockCandidates(candidate({ products: 1, hasZone: false }));
+    await automationDetectors.runSweep();
+    expect(mockScheduleAutomation).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "DELIVERY_SETUP_REMINDER", title: "Set up how buyers receive your foodstuff" }),
+    );
+    expect(mockScheduleAutomation).not.toHaveBeenCalledWith(expect.objectContaining({ type: "FIRST_PRODUCT_REMINDER" }));
+  });
+
+  it("R06 VERIFICATION_REMINDER: a vendor with product + delivery but not verified is nudged to verify", async () => {
+    mockCandidates(candidate({ products: 1, hasZone: true, verificationStatus: "PENDING" }));
+    await automationDetectors.runSweep();
+    expect(mockScheduleAutomation).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "VERIFICATION_REMINDER", title: "Your store is close to opening" }),
     );
   });
 
-  it("a vendor with a product but no delivery zone is nudged to set up delivery", async () => {
-    m.vendor.findMany.mockResolvedValue([candidate({ products: 1 })] as never);
-    m.deliveryZone.groupBy.mockResolvedValue([] as never); // no zones for anyone
-
+  it("R11 FIRST_SALE: a fully set-up, verified vendor gets the first-sale-campaign nudge, not any of the onboarding-step reminders", async () => {
+    mockCandidates(candidate({ products: 1, hasZone: true, verificationStatus: "VERIFIED" }));
     await automationDetectors.runSweep();
-
     expect(mockScheduleAutomation).toHaveBeenCalledWith(
-      expect.objectContaining({ type: "FIRST_SALE", title: "Set up delivery", data: expect.objectContaining({ onboarding_stage: "set_delivery" }) }),
+      expect.objectContaining({ type: "FIRST_SALE", title: "Work towards your first order" }),
     );
+    for (const other of ["FIRST_PRODUCT_REMINDER", "DELIVERY_SETUP_REMINDER", "VERIFICATION_REMINDER"]) {
+      expect(mockScheduleAutomation).not.toHaveBeenCalledWith(expect.objectContaining({ type: other }));
+    }
   });
 
-  it("a vendor with product + delivery but not verified is nudged to verify", async () => {
-    m.vendor.findMany.mockResolvedValue([candidate({ products: 1, verificationStatus: "PENDING" })] as never);
-    m.deliveryZone.groupBy.mockResolvedValue([{ vendorId: "vendor-1", _count: { _all: 2 } }] as never);
-
+  it("no frequencyCapDays on any of the four — each touch's own dedupeKey is the only de-dupe (the bug that silenced a vendor for days)", async () => {
+    mockCandidates(candidate({ products: 0 }));
     await automationDetectors.runSweep();
-
-    expect(mockScheduleAutomation).toHaveBeenCalledWith(
-      expect.objectContaining({ type: "FIRST_SALE", title: "Verify your account", data: expect.objectContaining({ onboarding_stage: "verify" }) }),
-    );
-  });
-
-  it("a fully set-up, verified vendor gets the original 'get your first order' nudge", async () => {
-    m.vendor.findMany.mockResolvedValue([candidate({ products: 1, verificationStatus: "VERIFIED" })] as never);
-    m.deliveryZone.groupBy.mockResolvedValue([{ vendorId: "vendor-1", _count: { _all: 1 } }] as never);
-
-    await automationDetectors.runSweep();
-
-    expect(mockScheduleAutomation).toHaveBeenCalledWith(
-      expect.objectContaining({ type: "FIRST_SALE", title: "Get your first order", data: expect.objectContaining({ onboarding_stage: "get_first_order" }) }),
-    );
-  });
-
-  it("the dedupe subjectKey includes the stage, so a stage change gets its own key rather than reusing another stage's", async () => {
-    m.vendor.findMany.mockResolvedValue([candidate({ products: 0 })] as never);
-    m.deliveryZone.groupBy.mockResolvedValue([] as never);
-    await automationDetectors.runSweep();
-    const [[firstCall]] = mockScheduleAutomation.mock.calls.filter(([a]: any[]) => a.type === "FIRST_SALE");
-    expect(firstCall.subjectKey).toContain("add_product");
-  });
-
-  it("no longer sets a frequencyCapDays — a day's own unique dedupeKey is the only de-dupe (the bug: a flat 7-day type+recipient cap blocked every later day's DIFFERENT message too)", async () => {
-    m.vendor.findMany.mockResolvedValue([candidate({ products: 0 })] as never);
-    m.deliveryZone.groupBy.mockResolvedValue([] as never);
-    await automationDetectors.runSweep();
-    const [[call]] = mockScheduleAutomation.mock.calls.filter(([a]: any[]) => a.type === "FIRST_SALE");
+    const [[call]] = mockScheduleAutomation.mock.calls.filter(([a]: any[]) => a.type === "FIRST_PRODUCT_REMINDER");
     expect(call.frequencyCapDays).toBeUndefined();
   });
 
-  it("day 2 (between scheduled touches) gets no FIRST_SALE nudge at all — client complaint was silence, not an extra message on an off day", async () => {
-    m.vendor.findMany.mockResolvedValue([candidate({ products: 0, createdAt: new Date(NOW.getTime() - 2 * 24 * 60 * 60 * 1000) })] as never);
-    m.deliveryZone.groupBy.mockResolvedValue([] as never);
+  it("under 4h since store creation: no onboarding-progress nudge fires at all", async () => {
+    mockCandidates(candidate({ products: 0, createdAt: new Date(NOW.getTime() - 2 * 60 * 60 * 1000) }));
     await automationDetectors.runSweep();
-    expect(mockScheduleAutomation).not.toHaveBeenCalledWith(expect.objectContaining({ type: "FIRST_SALE" }));
+    for (const type of ["FIRST_PRODUCT_REMINDER", "DELIVERY_SETUP_REMINDER", "VERIFICATION_REMINDER", "FIRST_SALE"]) {
+      expect(mockScheduleAutomation).not.toHaveBeenCalledWith(expect.objectContaining({ type }));
+    }
   });
 
-  it("day 0 (the moment the store is created) gets no FIRST_SALE nudge — that's the separate one-time vendor_welcome message", async () => {
-    m.vendor.findMany.mockResolvedValue([candidate({ products: 0, createdAt: NOW })] as never);
-    m.deliveryZone.groupBy.mockResolvedValue([] as never);
+  it("at 30h (past 24h too): both touch1 and touch2 fire with distinct dedupe keys, matching the P2 'attempt every due threshold' design", async () => {
+    mockCandidates(candidate({ products: 0, createdAt: new Date(NOW.getTime() - 30 * 60 * 60 * 1000) }));
     await automationDetectors.runSweep();
-    expect(mockScheduleAutomation).not.toHaveBeenCalledWith(expect.objectContaining({ type: "FIRST_SALE" }));
+    const keys = mockScheduleAutomation.mock.calls.filter(([a]: any[]) => a.type === "FIRST_PRODUCT_REMINDER").map(([a]: any[]) => a.subjectKey);
+    expect(keys).toEqual(["vendor-1:touch1", "vendor-1:touch2"]);
   });
 
-  it.each([
-    [1, "a few minutes"],
-    [3, "twice as likely"],
-    [5, "first payout"],
-    [7, "already earning"],
-  ])("day %i gets its own escalating incentive copy appended to the stage instruction", async (day, expectedPhrase) => {
-    m.vendor.findMany.mockResolvedValue([candidate({ products: 0, createdAt: new Date(NOW.getTime() - day * 24 * 60 * 60 * 1000) })] as never);
-    m.deliveryZone.groupBy.mockResolvedValue([] as never);
+  it("past 72h, exactly three touches total — never a fourth, matching the spec's 'maximum three sends per unresolved episode'", async () => {
+    mockCandidates(candidate({ products: 0, createdAt: new Date(NOW.getTime() - 10 * 24 * 60 * 60 * 1000) }));
     await automationDetectors.runSweep();
-    const [[call]] = mockScheduleAutomation.mock.calls.filter(([a]: any[]) => a.type === "FIRST_SALE");
-    expect(call.body).toContain(expectedPhrase);
-  });
-
-  it("past the last scheduled day, falls back to a weekly bucket key rather than firing (or staying silent) every day forever", async () => {
-    m.vendor.findMany.mockResolvedValue([candidate({ products: 0, createdAt: new Date(NOW.getTime() - 10 * 24 * 60 * 60 * 1000) })] as never);
-    m.deliveryZone.groupBy.mockResolvedValue([] as never);
-    await automationDetectors.runSweep();
-    const [[call]] = mockScheduleAutomation.mock.calls.filter(([a]: any[]) => a.type === "FIRST_SALE");
-    expect(call.subjectKey).toMatch(/:week-\d{4}-W\d+$/);
+    const keys = mockScheduleAutomation.mock.calls.filter(([a]: any[]) => a.type === "FIRST_PRODUCT_REMINDER").map(([a]: any[]) => a.subjectKey);
+    expect(keys).toEqual(["vendor-1:touch1", "vendor-1:touch2", "vendor-1:touch3"]);
   });
 });
 
@@ -462,21 +436,21 @@ describe("automationDetectors.runSweep — LOW_STOCK_ALERT (bug fix 2026-10-11: 
 });
 
 describe("automationDetectors.runSweep — coalescing (bug fix 2026-10-11: no stacking non-urgent notifications)", () => {
-  it("a vendor eligible for BOTH LOW_STOCK_ALERT and FIRST_SALE in the same sweep is only sent LOW_STOCK_ALERT (it runs first / outranks onboarding)", async () => {
+  it("a vendor eligible for BOTH LOW_STOCK_ALERT and FIRST_PRODUCT_REMINDER in the same sweep is only sent LOW_STOCK_ALERT (it runs first / outranks onboarding)", async () => {
     // Real automationService.scheduleAutomation is mocked out entirely in
     // this file, so this proves the DETECTOR ORDER (the priority rule), not
     // the claim mechanism itself — that's covered against the real service
     // in automation.test.ts's coalescing describe block.
     m.product.findMany.mockResolvedValue([{ id: "p1", vendorId: "vendor-1" }] as never);
     m.vendor.findUnique.mockResolvedValue({ userId: "vendor-1-user" } as never);
-    m.vendor.findMany.mockResolvedValue([{ id: "vendor-1", userId: "vendor-1-user", storeName: "Mama Eki", verificationStatus: "VERIFIED", createdAt: new Date(NOW.getTime() - 1 * 24 * 60 * 60 * 1000), _count: { products: 0 } }] as never);
+    m.vendor.findMany.mockResolvedValue([{ id: "vendor-1", userId: "vendor-1-user", storeName: "Mama Eki", verificationStatus: "VERIFIED", createdAt: new Date(NOW.getTime() - 4 * 60 * 60 * 1000), _count: { products: 0 } }] as never);
 
     await automationDetectors.runSweep();
 
     const types = mockScheduleAutomation.mock.calls.map(([a]: any[]) => a.type);
     const lowStockIndex = types.indexOf("LOW_STOCK_ALERT");
-    const firstSaleIndex = types.indexOf("FIRST_SALE");
+    const firstProductIndex = types.indexOf("FIRST_PRODUCT_REMINDER");
     expect(lowStockIndex).toBeGreaterThanOrEqual(0);
-    expect(firstSaleIndex).toBeGreaterThan(lowStockIndex);
+    expect(firstProductIndex).toBeGreaterThan(lowStockIndex);
   });
 });

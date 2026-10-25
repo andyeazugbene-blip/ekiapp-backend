@@ -44,13 +44,34 @@ function automationEventKey(type: AutomationType): string {
 // CommunicationTemplate table (admin-editable) on first use — same
 // bootstrap pattern as ensureDefaultPlanConfigs() in subscriptions.service.ts.
 export const DEFAULT_TEMPLATES: Record<AutomationType, { title: string; body: string; channels: ("email" | "push" | "in_app")[]; recipientType: "BUYER" | "VENDOR" }> = {
+  // Narrowed 2026-10-25 (Notification Orchestration Spec v2) to spec rule
+  // R11 only — "First Sale Campaign not started." R01/R03/R05/R06 (the
+  // store-setup/product/delivery/verification steps this used to cover
+  // with stage-switching copy) are now their own types below.
   FIRST_SALE: {
-    title: "Get your first order",
-    body: "Hi {{name}}, your store {{store_name}} is live. Share your store link and add a few more products to attract your first buyer.",
-    // Client feedback 2026-10-22: onboarding went through push/in-app only,
-    // "not even emails" — now on every onboarding touch (see
-    // ONBOARDING_TOUCH_DAYS in automation.detectors.ts), not just this type's
-    // generic fallback copy.
+    title: "Work towards your first order",
+    body: "Hi {{name}}, open your First Sale Campaign for the next step.",
+    channels: ["push", "in_app", "email"],
+    recipientType: "VENDOR",
+  },
+  // Spec R03: "Store ready, zero foodstuff."
+  FIRST_PRODUCT_REMINDER: {
+    title: "Add your first foodstuff",
+    body: "Hi {{name}}, start with the foodstuff your buyers ask for most.",
+    channels: ["push", "in_app", "email"],
+    recipientType: "VENDOR",
+  },
+  // Spec R05: "Delivery setup missing."
+  DELIVERY_SETUP_REMINDER: {
+    title: "Set up how buyers receive your foodstuff",
+    body: "Hi {{name}}, add delivery or collection options for {{store_name}}.",
+    channels: ["push", "in_app", "email"],
+    recipientType: "VENDOR",
+  },
+  // Spec R06: "Verification not started when eligible."
+  VERIFICATION_REMINDER: {
+    title: "Your store is close to opening",
+    body: "Hi {{name}}, complete secure verification to continue.",
     channels: ["push", "in_app", "email"],
     recipientType: "VENDOR",
   },
@@ -142,9 +163,10 @@ export const DEFAULT_TEMPLATES: Record<AutomationType, { title: string; body: st
   // created its Vendor profile (see the long comment on
   // detectRegistrationReminder in automation.detectors.ts for why this is
   // NOT about email verification).
+  // Spec R01: "Registration complete, store absent."
   REGISTRATION_REMINDER: {
-    title: "Finish setting up your Eki store",
-    body: "Hi {{name}}, you're almost there — finish setting up your store to start selling on Eki.",
+    title: "Start setting up your Eki store",
+    body: "Hi {{name}}, add your business details to begin.",
     channels: ["push", "in_app", "email"],
     recipientType: "VENDOR",
   },
