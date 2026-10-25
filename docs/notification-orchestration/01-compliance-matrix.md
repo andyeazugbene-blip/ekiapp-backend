@@ -81,9 +81,9 @@ Status values follow the spec's own progression: **Proposed → Backend mapped �
 
 ## Summary counts
 
-- **Implemented, QA passed (spec-shaped):** 13 of 40 — R01, R03, R05, R06, R11, R16, R20, R30, R31, R32, R33, R37, R38
+- **Implemented, QA passed (spec-shaped):** 12 of 40 — R01, R03, R05, R06, R11, R16, R30, R31, R32, R33, R37, R38
 - **Implemented on backend and mobile source; backend tests/typechecks pass, mobile runtime QA and production timing remain outstanding:** 1 of 40 — R10
-- **Implemented (legacy, not re-platformed):** 6 of 40 — R07, R08, R09, R12, R13, R15
+- **Implemented (legacy, not re-platformed):** 7 of 40 — R07, R08, R09, R12, R13, R15, R20
 - **Partial, with scoped or financial-application gaps:** 2 of 40 — R28 (Community Buy only), R39 (Membership credit recorded, not applied in Stripe)
 - **Blocked (named, real dependency missing):** R02 — 1
 - **Not implemented, with existing states but no rule or no source evidence:** R04, R18, R40 — 3
