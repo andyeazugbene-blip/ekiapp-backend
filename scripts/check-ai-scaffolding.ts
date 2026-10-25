@@ -40,8 +40,10 @@ function scanFile(filePath: string): { file: string; line: number; phrase: strin
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
-    // Skip comments that are legitimate documentation
-    if (line.trim().startsWith("//") || line.trim().startsWith("*")) continue;
+    // Skip comments that are legitimate documentation, including the
+    // opening line of a JSDoc block (/**), which does not start with `*`.
+    const trimmed = line.trim();
+    if (trimmed.startsWith("//") || trimmed.startsWith("/*") || trimmed.startsWith("*")) continue;
 
     for (const phrase of RISKY_PHRASES) {
       if (
