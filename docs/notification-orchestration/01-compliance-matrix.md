@@ -75,16 +75,15 @@ Status values follow the spec's own progression: **Proposed → Backend mapped �
 
 | Rule | Status | Evidence |
 |---|---|---|
-| R38 Automation service failure | **Partially implemented — admin-only, not vendor-facing** | `automationRulesService.failures()` surfaces failures to **admins** in the Automation Centre. The spec's R38 is a **vendor-facing** "an Eki automation needs attention" push — that does not exist. Real gap. |
+| R38 Automation service failure | **Implemented, QA passed (PR #9)** | New `AUTOMATION_FAILURE_ALERT` type — daily sweep, grouped per vendor, one alert/vendor/day, with a notification-loop guard (excludes its own type from the failure scan). Admin-only `automationRulesService.failures()` feed is unchanged and still exists alongside this — different audience, not a duplicate. 198/198 test files pass. |
 | R39 Referral credit confirmed | **Implemented (legacy), with a terminology mismatch worth flagging** | Two different things exist under similar names: (a) `BUYER_REFERRAL` — a **buyer**-facing "share your code" reward; (b) a **vendor**-to-vendor invitation credit, handoff "M-08 referral.credit.earned" in [referrals.service.ts](../../src/modules/referrals/referrals.service.ts). The client's locked decision #12 says vendor-to-vendor invitation rewards are **conditional Eki Membership credits**, and buyer-to-buyer referrals are a **separate** automation — that distinction already exists in the code, by accident of naming, not by deliberate spec alignment. Worth confirming with the client which of the two R39 actually refers to (my reading: the vendor-to-vendor one, i.e. (b)). |
 | R40 Critical administrative incident | **Not started / not found** | No matching "critical incident → admin push" code found. |
 
 ## Summary counts
 
-- **Implemented, QA passed (spec-shaped):** 13 of 40 — R01, R03, R05, R06, R10, R11, R16, R20, R30, R31, R32, R33, R37
+- **Implemented, QA passed (spec-shaped):** 14 of 40 — R01, R03, R05, R06, R10, R11, R16, R20, R30, R31, R32, R33, R37, R38
 - **Implemented (legacy, not re-platformed):** 5 of 40 — R09, R12, R13, R15, R39
 - **Blocked (named, real dependency missing):** R02, R04 — 2
-- **Partially implemented, real gap identified:** R38 — 1
 - **Not started / not found:** R18, R28, R40 — 3
 - **Not verified this pass (likely exist under legacy naming, not confirmed by name):** R07, R08, R14, R17, R19, R21, R22, R23, R24, R25, R26, R27, R29, R34, R35, R36 — 16
 
