@@ -58,6 +58,20 @@ async function productStockAlertStillEligible(delivery: NotificationDelivery & {
     && product.stock === 0 && product.stockVersion === data.stockVersion);
 }
 
+async function criticalIncidentStillEligible(delivery: NotificationDelivery & { notification: { userId: string; readAt: Date | null; data: unknown } }): Promise<boolean> {
+  if (process.env.R40_PAYMENT_ANOMALY_ALERTS_ENABLED !== "true") return false;
+  const data = delivery.notification.data;
+  if (!isRecord(data) || data.type !== "critical_incident" || data.ruleKey !== "R40_CRITICAL_INCIDENT"
+    || typeof data.incidentId !== "string" || delivery.notification.readAt) return false;
+  const [incident, recipient] = await Promise.all([
+    prisma.paymentAnomaly.findUnique({ where: { id: data.incidentId }, select: { id: true, dedupeKey: true, severity: true, status: true } }),
+    prisma.user.findUnique({ where: { id: delivery.notification.userId }, select: { id: true, role: true, isSuspended: true } }),
+  ]);
+  return Boolean(incident && incident.dedupeKey === data.anomalyKey && incident.severity === "CRITICAL"
+    && incident.status !== "RESOLVED" && recipient?.id === delivery.notification.userId
+    && recipient.role === "ADMIN" && !recipient.isSuspended);
+}
+
 async function communityBuyMinimumStillEligible(delivery: NotificationDelivery & { notification: { userId: string; readAt: Date | null; data: unknown } }): Promise<boolean> {
   const data = delivery.notification.data;
   if (!isRecord(data) || data.type !== "community_campaign_update" || data.event !== "minimum_reached"
@@ -195,6 +209,9 @@ async function supplierReconfirmationStillEligible(delivery: NotificationDeliver
 async function notificationStillEligible(delivery: NotificationDelivery & { notification: { userId: string; readAt: Date | null; data: unknown } }): Promise<boolean> {
   const data = delivery.notification.data;
   if (!isRecord(data)) return false;
+  if (data.type === "critical_incident" && data.ruleKey === "R40_CRITICAL_INCIDENT") {
+    return criticalIncidentStillEligible(delivery);
+  }
   if (data.type === "support_case_response" && data.ruleKey === "R28_SUPPORT_RESPONSE") {
     const rule = resolveNotificationRule({ name: EVENT_NAMES.support_response_received, schemaVersion: Number(data.ruleVersion) });
     return Boolean(rule?.enabled && await supportReplyStillEligible(delivery));

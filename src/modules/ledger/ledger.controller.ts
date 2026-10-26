@@ -114,3 +114,12 @@ export async function adminEscalatePaymentAnomaly(request: Request, response: Re
   await recordAudit({ actorId: adminId, action: "payment_anomaly.escalated", entityType: "PaymentAnomaly", entityId: anomaly.id, reason: note, request });
   response.json({ anomaly });
 }
+
+export async function adminResolvePaymentAnomaly(request: Request, response: Response): Promise<void> {
+  const adminId = requireUserId(request);
+  const note = request.body?.note;
+  if (typeof note !== "string" || !note.trim()) throw new AppError("note is required", 400);
+  const anomaly = await paymentAnomalyService.resolve(requireIdParam(request), adminId, note.trim());
+  await recordAudit({ actorId: adminId, action: "payment_anomaly.resolved", entityType: "PaymentAnomaly", entityId: anomaly.id, reason: note, request });
+  response.json({ anomaly });
+}
