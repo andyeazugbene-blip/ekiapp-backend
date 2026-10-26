@@ -1,4 +1,5 @@
 import { eventsService, EVENT_NAMES } from "../events/events.service";
+import { dispatchNotificationsAfterCommit } from "../events/dispatch-notifications";
 import { NotificationType, OrderStatus, PaymentStatus, Prisma, SubscriptionPlan, SubscriptionStatus } from "@prisma/client";
 import type Stripe from "stripe";
 
@@ -787,7 +788,19 @@ class StripeWebhookService {
         return { received: true, ignored: true, eventId: event.id, type: event.type };
       }
 
-      await prisma.vendorSubscription.update({ where: { id: subscription.id }, data: { status: "PAST_DUE" } });
+      await prisma.$transaction(async (tx) => {
+        await tx.vendorSubscription.update({ where: { id: subscription.id }, data: { status: "PAST_DUE" } });
+        await eventsService.enqueueTransactional(tx, {
+          name: EVENT_NAMES.vendor_membership_payment_failed,
+          actorType: "stripe",
+          actorId: event.id,
+          entityType: "VendorSubscription",
+          entityId: subscription.id,
+          source: "stripe_webhook",
+          payload: { subscriptionId: subscription.id, vendorId: subscription.vendorId, stripeEventId: event.id, invoiceId: invoice.id },
+        }, { dedupeKey: `vendor-membership-payment-failed:${event.id}`, schemaVersion: 1 });
+      });
+      await dispatchNotificationsAfterCommit();
 
       const vendor = await prisma.vendor.findUnique({ where: { id: subscription.vendorId }, select: { userId: true } });
       if (vendor) {
@@ -805,13 +818,15 @@ class StripeWebhookService {
         const body = graceDays != null
           ? `${copy.body} You have ${graceDays} day${graceDays === 1 ? "" : "s"} to update it before your store's selling capabilities are paused. Your store and data are never deleted.`
           : copy.body;
-        notificationsService.enqueue({
-          userId: vendor.userId,
-          type: "SUBSCRIPTION_UPDATE",
-          title: copy.title,
-          body,
-          data: { type: "subscription_update", event: "vendor_subscription_payment_failed", vendorSubscriptionId: subscription.id },
-        }).catch((err) => logger.warn("Vendor subscription payment-failed notification failed", { eventId: event.id, error: String(err) }));
+        if (process.env.R29_MEMBERSHIP_PAYMENT_FAILED_ENABLED !== "true") {
+          notificationsService.enqueue({
+            userId: vendor.userId,
+            type: "SUBSCRIPTION_UPDATE",
+            title: copy.title,
+            body,
+            data: { type: "subscription_update", event: "vendor_subscription_payment_failed", vendorSubscriptionId: subscription.id },
+          }).catch((err) => logger.warn("Vendor subscription payment-failed notification failed", { eventId: event.id, error: String(err) }));
+        }
       }
 
       logger.info("Webhook processed: invoice.payment_failed (vendor subscription)", {

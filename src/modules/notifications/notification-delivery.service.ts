@@ -110,6 +110,23 @@ async function payoutActionStillEligible(delivery: NotificationDelivery & { noti
     && !recipient.isSuspended && payout.vendor.userId === recipient.id);
 }
 
+async function vendorMembershipPaymentStillEligible(delivery: NotificationDelivery & { notification: { userId: string; readAt: Date | null; data: unknown } }): Promise<boolean> {
+  if (process.env.R29_MEMBERSHIP_PAYMENT_FAILED_ENABLED !== "true") return false;
+  const data = delivery.notification.data;
+  if (!isRecord(data) || data.type !== "subscription_update" || data.event !== "vendor_subscription_payment_failed"
+    || typeof data.vendorSubscriptionId !== "string" || delivery.notification.readAt) return false;
+  const [subscription, recipient] = await Promise.all([
+    prisma.vendorSubscription.findUnique({
+      where: { id: data.vendorSubscriptionId },
+      select: { status: true, vendorId: true },
+    }),
+    prisma.user.findUnique({ where: { id: delivery.notification.userId }, select: { id: true, role: true, isSuspended: true } }),
+  ]);
+  if (!subscription || subscription.status !== "PAST_DUE" || !recipient || recipient.role !== "VENDOR" || recipient.isSuspended) return false;
+  const vendor = await prisma.vendor.findUnique({ where: { id: subscription.vendorId }, select: { userId: true } });
+  return vendor?.userId === recipient.id;
+}
+
 async function communityBuyBelowMinimumStillEligible(delivery: NotificationDelivery & { notification: { userId: string; readAt: Date | null; data: unknown } }): Promise<boolean> {
   if (process.env.R34_COMMUNITY_BUY_BELOW_MINIMUM_ENABLED !== "true") return false;
   const data = delivery.notification.data;
@@ -135,7 +152,6 @@ async function communityBuyBelowMinimumStillEligible(delivery: NotificationDeliv
   return quantity < campaign.minimumShares && data.deadline === deadline.toISOString()
     && data.remainingShares === campaign.minimumShares - quantity;
 }
-
 async function payoutConfirmedStillEligible(delivery: NotificationDelivery & { notification: { userId: string; readAt: Date | null; data: unknown } }): Promise<boolean> {
   if (process.env.R26_PAYOUT_CONFIRMED_ENABLED !== "true") return false;
   const data = delivery.notification.data;
@@ -202,6 +218,10 @@ async function notificationStillEligible(delivery: NotificationDelivery & { noti
   if (data.type === "payout_action_required" && data.ruleKey === "R25_PAYOUT_ACTION_REQUIRED") {
     const rule = resolveNotificationRule({ name: EVENT_NAMES.payout_action_required, schemaVersion: Number(data.ruleVersion) });
     return Boolean(rule?.enabled && await payoutActionStillEligible(delivery));
+  }
+  if (data.type === "subscription_update" && data.event === "vendor_subscription_payment_failed" && data.ruleKey === "R29_MEMBERSHIP_PAYMENT_FAILED") {
+    const rule = resolveNotificationRule({ name: EVENT_NAMES.vendor_membership_payment_failed, schemaVersion: Number(data.ruleVersion) });
+    return Boolean(rule?.enabled && await vendorMembershipPaymentStillEligible(delivery));
   }
   if (data.type === "community_campaign_update" && data.event === "below_minimum" && data.ruleKey === "R34_COMMUNITY_BUY_BELOW_MINIMUM") {
     const rule = resolveNotificationRule({ name: EVENT_NAMES.community_buy_below_minimum, schemaVersion: Number(data.ruleVersion) });
