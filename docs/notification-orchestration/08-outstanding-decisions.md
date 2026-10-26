@@ -16,13 +16,13 @@ The spec's 4h/24h/72h cadence needs a cron that runs more often than once a day.
 
 The current workspace does not contain the authoritative Notification Orchestration Developer Specification v2.0 or the original 210-event catalogue. The R01–R40 matrix and the earlier v1 gap analysis are secondary sources; they do not contain the full trigger/copy/recipient/destination evidence needed to safely finish every rule or reconcile each catalogue ID. Provide or point to those exact source files so implementation can continue without guessing client-defined behavior.
 
-## 4. Publishing the mobile branch
-
-The mobile changes are committed locally on `feat/store-share-reminder-mobile` (`ff87a48`). Automatic approval review rejected the push because it could not verify trusted authorization to export mobile source to the remote. The earlier request was supplied as an attached text file, which the reviewer did not accept as trusted authorization. A direct in-chat authorization to push this branch is required before retrying.
-
-## 5. Applying vendor referral Membership credits
+## 4. Applying vendor referral Membership credits
 
 The referral ledger records an earned free-month credit and notifies the referrer, but does not mutate Stripe subscription dates or invoices. Confirm the approved Stripe coupon/invoice-credit mechanism before implementing that financial side effect; do not infer billing changes from `Referral.creditedAt` alone.
+
+## 5. Mobile runtime QA and R04 copy approval
+
+The authenticated tap routes and screen mappings are implemented in source, including R40's payment-anomaly destination. Cold-start and background behavior still needs iOS/Android device QA; typechecking and preview CI do not verify native tap delivery. R04's detector is implemented but its AutomationRule defaults to DRAFT until the exact v2 copy and policy are checked.
 
 ## Remaining rules to verify
 
