@@ -67,7 +67,7 @@ Status values follow the spec's own progression: **Proposed → Backend mapped �
 | Rule | Status | Evidence |
 |---|---|---|
 | R34 Closing below minimum | **Partially implemented; trigger/cadence mapping unverified** | The Community Buy authorisation path tells the organiser when the campaign is below its minimum and gives the actual authorised quantity, minimum, and decision deadline. It is tied to the below-minimum rescue decision, not verified as a general closing-soon reminder. |
-| R35 Minimum reached | **Partially implemented; semantics differ by campaign mode** | Pledge-mode contributions call `notifyProgressMilestone()`; its milestone target is `goalShares` when present, falling back to `minimumShares`, and it dedupes by milestone/recipient. The authorisation-mode path emits a target-reached event when its minimum is met. A unified R35 notification across modes and the exact mapping to “minimum reached” are not verified. |
+| R35 Minimum reached | **Implemented across pledge and authorisation modes; device QA pending** | Both verified threshold paths now enqueue `community_buy_minimum_reached` v1 transactionally with the contribution/transition and a campaign-scoped dedupe key. The consumer checks current minimum/state, sends the exact v2 copy only to the non-suspended BUYER who owns the organiser profile, and persists a unique push delivery. Send-time checks revalidate organiser ownership, role, suspension, and that the campaign has not closed or fallen below the same minimum. The semantic `community_buy_campaign` destination includes `audience: organiser` and maps to the authenticated organiser campaign screen in `app/_layout.tsx`. Evidence: `campaign-contributions.service.ts`, `campaign-authorisation.service.ts`, `core-event-handlers.ts`, `notification-delivery.service.ts`; tests cover transactional producer, both campaign-mode threshold flow, candidate, route payload, delivery and stale-state suppression. Native device QA remains pending. |
 | R36 Payment action required | **Implemented for Community Buy; ordinary checkout scope unverified** | When a Community Buy hold returns Stripe `requires_action`, the participant receives “Confirm your card” with a campaign destination. Ordinary checkout handles 3DS in the active PaymentSheet flow (R19); no separate recovery notification was found. |
 | R37 Supplier reconfirmation requested | **Implemented (legacy)** | `supplier_reconfirmation_requested` notification confirmed in [campaign-authorisation.service.ts](../../src/modules/community-buy/campaign-authorisation.service.ts). |
 
@@ -82,9 +82,9 @@ Status values follow the spec's own progression: **Proposed → Backend mapped �
 ## Summary counts
 
 - **Implemented, QA passed (spec-shaped):** 12 of 40 — R01, R03, R05, R06, R11, R16, R30, R31, R32, R33, R37, R38
-- **Implemented on backend and mobile source; backend tests/typechecks pass, mobile runtime QA and production timing remain outstanding:** 1 of 40 — R10
+- **Implemented on backend and mobile source; backend tests/typechecks pass, mobile runtime QA and production timing remain outstanding:** 2 of 40 — R10, R35
 - **Implemented (legacy, not re-platformed):** R07–R09, R12–R13, R15, R20–R22, R26, R29, R37
-- **Partial or scoped:** R04, R17, R23, R25, R27, R34–R36, R39–R40
+- **Partial or scoped:** R04, R17, R23, R25, R27, R34, R36, R39–R40
 - **Blocked on source semantics or a real signal:** R02, R14, R18, R24
 - **Implemented source with native device QA pending:** R19, R28
 

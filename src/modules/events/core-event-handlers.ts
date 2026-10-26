@@ -121,11 +121,73 @@ export async function handleProductStockDepleted(tx: Prisma.TransactionClient, e
   }
 }
 
+/** R35: notify only the campaign organiser after a confirmed minimum threshold. */
+export async function handleCommunityBuyMinimumReached(tx: Prisma.TransactionClient, event: Event): Promise<void> {
+  const rule = resolveNotificationRule(event);
+  if (!rule?.enabled) return;
+  const campaignId = requiredId(event.payload, "campaignId");
+  const payload = event.payload as Record<string, unknown>;
+  const confirmedShares = payload.confirmedShares;
+  const minimumShares = payload.minimumShares;
+  if (!Number.isSafeInteger(confirmedShares) || !Number.isSafeInteger(minimumShares)
+    || Number(minimumShares) < 1 || Number(confirmedShares) < Number(minimumShares)) {
+    throw new AppError("Invalid Community Buy minimum-reached event quantities", 400);
+  }
+
+  const campaign = await tx.communityCampaign.findUnique({
+    where: { id: campaignId },
+    select: { id: true, title: true, minimumShares: true, confirmedShares: true, paymentMode: true, status: true, organiser: { select: { userId: true } } },
+  });
+  if (!campaign || !campaign.minimumShares || campaign.minimumShares !== minimumShares
+    || (campaign.confirmedShares < campaign.minimumShares
+      && !(campaign.paymentMode === "AUTHORISE_THEN_CAPTURE"
+        && ["PAYMENT_CAPTURE", "FULFILLING", "COMPLETED"].includes(campaign.status)
+        && Number(confirmedShares) >= campaign.minimumShares))
+    || ["CANCELLED", "FAILED", "FINANCIALLY_CLOSED"].includes(campaign.status)) return;
+  const recipient = await tx.user.findUnique({
+    where: { id: campaign.organiser.userId },
+    select: { id: true, role: true, isSuspended: true },
+  });
+  if (!recipient || recipient.role !== "BUYER" || recipient.isSuspended) return;
+
+  const dedupeKey = `R35_COMMUNITY_BUY_MINIMUM_REACHED:${campaign.id}`;
+  const created = await notificationsService.create({
+    userId: recipient.id,
+    type: "COMMUNITY_CAMPAIGN_UPDATE",
+    title: "Your Community Buy reached its minimum",
+    body: "Review the campaign's next step.",
+    data: {
+      type: "community_campaign_update",
+      event: "minimum_reached",
+      audience: "organiser",
+      ruleKey: rule.key,
+      ruleVersion: rule.version,
+      eventId: event.id,
+      templateVersion: 1,
+      destination: "community_buy_campaign",
+      campaignId: campaign.id,
+      confirmedShares: Number(confirmedShares),
+      minimumShares: campaign.minimumShares,
+      paymentMode: campaign.paymentMode,
+    },
+    dedupeKey,
+  }, tx);
+  const candidate = created ?? await tx.notification.findUnique({ where: { dedupeKey }, select: { id: true } });
+  if (candidate) {
+    await tx.notificationDelivery.upsert({
+      where: { notificationId_channel: { notificationId: candidate.id, channel: "push" } },
+      create: { notificationId: candidate.id, channel: "push" },
+      update: {},
+    });
+  }
+}
+
 let registered = false;
 export function registerCoreEventHandlers(): void {
   if (registered) return;
   eventOutboxService.registerHandler(EVENT_NAMES.support_response_received, handleSupportResponseReceived);
   eventOutboxService.registerHandler(EVENT_NAMES.product_stock_depleted, handleProductStockDepleted);
+  eventOutboxService.registerHandler(EVENT_NAMES.community_buy_minimum_reached, handleCommunityBuyMinimumReached);
   registered = true;
 }
 

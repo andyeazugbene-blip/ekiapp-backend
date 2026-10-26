@@ -57,6 +57,28 @@ async function productStockAlertStillEligible(delivery: NotificationDelivery & {
     && product.stock === 0 && product.stockVersion === data.stockVersion);
 }
 
+async function communityBuyMinimumStillEligible(delivery: NotificationDelivery & { notification: { userId: string; readAt: Date | null; data: unknown } }): Promise<boolean> {
+  const data = delivery.notification.data;
+  if (!isRecord(data) || data.type !== "community_campaign_update" || data.event !== "minimum_reached"
+    || typeof data.campaignId !== "string" || !Number.isSafeInteger(data.minimumShares)
+    || !Number.isSafeInteger(data.confirmedShares) || delivery.notification.readAt) return false;
+  const [campaign, recipient] = await Promise.all([
+    prisma.communityCampaign.findUnique({
+      where: { id: data.campaignId },
+      select: { status: true, minimumShares: true, confirmedShares: true, paymentMode: true, organiser: { select: { userId: true } } },
+    }),
+    prisma.user.findUnique({ where: { id: delivery.notification.userId }, select: { id: true, role: true, isSuspended: true } }),
+  ]);
+  if (!campaign || !recipient || recipient.role !== "BUYER" || recipient.isSuspended || campaign.organiser.userId !== recipient.id
+    || campaign.minimumShares == null || campaign.minimumShares !== data.minimumShares
+    || ["CANCELLED", "FAILED", "FINANCIALLY_CLOSED"].includes(campaign.status)) return false;
+  const thresholdStillMet = campaign.confirmedShares >= campaign.minimumShares
+    || (campaign.paymentMode === "AUTHORISE_THEN_CAPTURE"
+      && ["PAYMENT_CAPTURE", "FULFILLING", "COMPLETED"].includes(campaign.status)
+      && Number(data.confirmedShares) >= Number(data.minimumShares));
+  return thresholdStillMet;
+}
+
 async function notificationStillEligible(delivery: NotificationDelivery & { notification: { userId: string; readAt: Date | null; data: unknown } }): Promise<boolean> {
   const data = delivery.notification.data;
   if (!isRecord(data)) return false;
@@ -67,6 +89,10 @@ async function notificationStillEligible(delivery: NotificationDelivery & { noti
   if (data.type === "product_stock_depleted" && data.ruleKey === "R17_STOCK_DEPLETED") {
     const rule = resolveNotificationRule({ name: EVENT_NAMES.product_stock_depleted, schemaVersion: Number(data.ruleVersion) });
     return Boolean(rule?.enabled && await productStockAlertStillEligible(delivery));
+  }
+  if (data.type === "community_campaign_update" && data.event === "minimum_reached" && data.ruleKey === "R35_COMMUNITY_BUY_MINIMUM_REACHED") {
+    const rule = resolveNotificationRule({ name: EVENT_NAMES.community_buy_minimum_reached, schemaVersion: Number(data.ruleVersion) });
+    return Boolean(rule?.enabled && await communityBuyMinimumStillEligible(delivery));
   }
   return false;
 }

@@ -74,6 +74,7 @@ export const EVENT_NAMES = {
   community_buy_approved: "community_buy_approved",
   community_buy_published: "community_buy_published",
   community_buy_joined: "community_buy_joined",
+  community_buy_minimum_reached: "community_buy_minimum_reached",
   community_buy_target_reached: "community_buy_target_reached",
   community_buy_target_failed: "community_buy_target_failed",
   community_buy_refund_started: "community_buy_refund_started",

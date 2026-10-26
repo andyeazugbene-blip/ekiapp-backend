@@ -606,7 +606,8 @@ describe("communityCampaignsService.remindApproachingDeadlines — NAV-10: campa
 describe("campaignContributionsService.pledge — PLEDGE_THEN_CHARGE (client mandate 2026-09: no upfront capture)", () => {
   it("client test #1 / #12: saves the payment method reference and records a pledge — no Stripe charge is ever created", async () => {
     m.communityCampaign.findUnique.mockResolvedValue({
-      id: "camp-10", status: "LIVE", country: "GB", currency: "GBP", deadline: new Date(Date.now() + 100000), pricePerShareMinor: 1000, maximumShares: 6, confirmedShares: 0,
+      id: "camp-10", status: "LIVE", country: "GB", currency: "GBP", deadline: new Date(Date.now() + 100000), pricePerShareMinor: 1000, maximumShares: 6, minimumShares: 3, confirmedShares: 2,
+      organiser: { userId: "organiser-1" }, participants: [],
     } as never);
     m.marketConfiguration.findUnique.mockResolvedValue({
       countryCode: "GB", communityBuyEnabled: true, communityBuyPaymentsEnabled: true, communityBuyPaymentMode: "PLEDGE_THEN_CHARGE",
@@ -615,9 +616,10 @@ describe("campaignContributionsService.pledge — PLEDGE_THEN_CHARGE (client man
     m.buyerPaymentMethod.findUnique.mockResolvedValue({ id: "pm-1", buyerId: "buyer-1", stripeCustomerId: "cus_1", stripePaymentMethodId: "pm_1" } as never);
     m.campaignParticipant.upsert.mockResolvedValue({ id: "part-1" } as never);
 
-    const txCampaign = { findUniqueOrThrow: vi.fn().mockResolvedValue({ id: "camp-10", maximumShares: 6, confirmedShares: 0, termsLockedAt: null }), updateMany: vi.fn().mockResolvedValue({ count: 1 }), update: vi.fn() };
+    const txCampaign = { findUniqueOrThrow: vi.fn().mockResolvedValue({ id: "camp-10", maximumShares: 6, minimumShares: 3, confirmedShares: 2, termsLockedAt: null }), updateMany: vi.fn().mockResolvedValue({ count: 1 }), update: vi.fn() };
     const txContribution = { create: vi.fn().mockResolvedValue({ id: "contrib-10" }) };
-    m.$transaction.mockImplementationOnce(async (cb: any) => cb({ communityCampaign: txCampaign, campaignContribution: txContribution }));
+    const txEvent = { upsert: vi.fn().mockResolvedValue({ id: "event-r35" }) };
+    m.$transaction.mockImplementationOnce(async (cb: any) => cb({ communityCampaign: txCampaign, campaignContribution: txContribution, event: txEvent }));
     m.campaignContribution.findUniqueOrThrow.mockResolvedValue({ id: "contrib-10", status: "PLEDGED", participant: { userId: "buyer-1" } } as never);
 
     const result = await campaignContributionsService.pledge("buyer-1", "camp-10", 1, "pm-1");
@@ -626,6 +628,13 @@ describe("campaignContributionsService.pledge — PLEDGE_THEN_CHARGE (client man
     expect(txContribution.create).toHaveBeenCalledWith(
       expect.objectContaining({ data: expect.objectContaining({ status: "PLEDGED", paymentMethodId: "pm-1", amount: 1000 }) }),
     );
+    expect(txEvent.upsert).toHaveBeenCalledWith(expect.objectContaining({
+      where: { dedupeKey: "R35_COMMUNITY_BUY_MINIMUM_REACHED:camp-10" },
+      create: expect.objectContaining({
+        name: "community_buy_minimum_reached",
+        payload: { campaignId: "camp-10", confirmedShares: 3, minimumShares: 3 },
+      }),
+    }));
     // The whole point of this model: nothing is captured at pledge time.
     expect(stripe.paymentIntents.create).not.toHaveBeenCalled();
   });

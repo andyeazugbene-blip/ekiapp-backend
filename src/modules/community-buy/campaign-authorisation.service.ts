@@ -19,6 +19,7 @@ import { resolveCampaignConnectedAccountId, resolveCampaignSupplierLedgerOwnerId
 import { upsertParticipantWithAttribution } from "./campaign-participant-attribution.service";
 import { alertOps } from "./ops-alert.service";
 import { assertBuyerCountryEligible } from "./campaign-contributions.service";
+import { dispatchNotificationsAfterCommit } from "../events/dispatch-notifications";
 
 const SYSTEM_CRON_ACTOR = "system:cron";
 const CONSENT_WORDING_VERSION = "cb-authorise-v1";
@@ -518,9 +519,23 @@ export const campaignAuthorisationService = {
       const authorisedQuantity = await this.getAuthorisedQuantity(campaign.id);
       const minimum = campaign.minimumShares ?? 0;
       if (authorisedQuantity >= minimum) {
-        const claim = await prisma.communityCampaign.updateMany({ where: { id: campaign.id, status: "HOLD_WINDOW" }, data: { status: "PAYMENT_CAPTURE" } });
+        const claim = await prisma.$transaction(async (tx) => {
+          const result = await tx.communityCampaign.updateMany({ where: { id: campaign.id, status: "HOLD_WINDOW" }, data: { status: "PAYMENT_CAPTURE" } });
+          if (result.count === 1) {
+            await eventsService.enqueueTransactional(tx, {
+              name: EVENT_NAMES.community_buy_minimum_reached,
+              actorType: "system",
+              entityType: "CommunityCampaign",
+              entityId: campaign.id,
+              source: "community_buy_authorisation_decision",
+              payload: { campaignId: campaign.id, confirmedShares: authorisedQuantity, minimumShares: minimum },
+            }, { dedupeKey: `R35_COMMUNITY_BUY_MINIMUM_REACHED:${campaign.id}`, schemaVersion: 1 });
+          }
+          return result;
+        });
         if (claim.count !== 1) continue;
         proceeded++;
+        void dispatchNotificationsAfterCommit();
         emitCampaignLifecycleEvent(EVENT_NAMES.community_buy_target_reached, campaign.id, "evaluate_authorisation_decisions", { authorisedQuantity, minimum });
         await this.notifyDecisionOutcome(campaign.id, "proceeding", { authorisedQuantity, minimum });
         await this.captureWorker(campaign.id);
