@@ -1,27 +1,27 @@
 # Deep-Link Matrix — All 15 Destination Keys
 
-Verified directly against `ekiapp-frontnend-application-ios-android-main` (Expo Router). The app has one generic notification-tap handler, `handleNotificationTap` in `app/_layout.tsx:179-394`, wired via `Notifications.addNotificationResponseReceivedListener` (`app/_layout.tsx:396-408`), which switches on a `data.type` string that uses **its own vocabulary** — none of the client spec's 15 semantic destination keys appear literally in that switch. So "a real screen exists" and "a push notification can actually open it" are two separate, both-required facts, checked separately below.
+The mobile root notification handler supports the 15 v2 semantic destination keys in `data.destination`. A tap can arrive while the app is foregrounded or as a cold-start response; the handler deduplicates taps, holds them until authentication restores, marks persisted notifications read only for the signed-in user, and then applies role-gated routing. The messages and case screens reload data under the authenticated account, so a route parameter alone does not grant access. This is source evidence, not native device QA.
 
 | Destination key | Real screen | Route | Params | Tap-wired today? |
 |---|---|---|---|---|
-| `store_setup` | `app/(vendor-onboarding)/setup-store.tsx` | `(vendor-onboarding)/setup-store` | none (vendor's own in-progress store) | **No** |
-| `foodstuff_editor` | `app/(vendor)/foodstuff-edit.tsx` | `(vendor)/foodstuff-edit` | `id` | **No** |
-| `verification` | `app/(vendor-verification)/index.tsx` (+ `approved.tsx`/`rejected.tsx`/`pending.tsx`) | `(vendor-verification)/index` etc. | none | **Partial** — `vendor_verification_approved`/`rejected` push types route to `approved`/`rejected`; nothing routes to the generic intro or `pending` screen |
-| `inventory_detail` | `app/(vendor)/foodstuff-detail.tsx` (the product/stock screen — no separate "stock" screen exists) | `(vendor)/foodstuff-detail` | `id` | **No** |
-| `order_detail` | `app/(vendor)/order-detail.tsx`; buyer equivalent is `app/(buyer)/track-order.tsx` (different name, same role) | `(vendor)/order-detail` / `(buyer)/track-order` | `id` | **Yes** — `order_status`/`new_order`/`order_paid`/`order_delivered` etc. route here; `order_refunded` only deep-links when exactly one order id |
-| `store_share` | `app/(vendor)/share-store-link.tsx` | `(vendor)/share-store-link` | none | **Yes for `automation_store_share_reminder`** — routes through the existing notification-tap handler; the screen uses `useVendorProfile` to load the signed-in vendor's own store. |
-| `first_sale` | No dedicated screen. Closest: `app/(vendor)/automation-detail.tsx?type=FIRST_SALE` | `(vendor)/automation-detail` | `type` (an `AutomationType` string, not an entity id) | **No** — vendor `automation_*` notifications with no specific branch fall through to the list screen (`automation-center`), not this detail screen with a `type` param |
-| `automation_detail` | `app/(vendor)/automation-detail.tsx` | `(vendor)/automation-detail` | `type` | **No** — same gap as `first_sale` |
-| `checkout` | `app/(buyer)/checkout.tsx` | `(buyer)/checkout` | none (reads cart store state) | **No** |
-| `foodstuff_subscription` | Code naming is still **"regular delivery"**, not "Foodstuff Subscription" — `app/(buyer)/regular-delivery-detail.tsx`, `app/(vendor)/regular-delivery-subscriber-detail.tsx` | `(buyer)/regular-delivery-detail` / `(vendor)/regular-delivery-subscriber-detail` | `id` (buyer side required) | **Yes** — `subscription_update` and `regular_delivery_frequency_changed` both route here |
-| `community_buy_campaign` | `app/(buyer)/community-buy-campaign.tsx` (+ organiser/supplier variants) | `(buyer)/community-buy-campaign` etc. | `id`/`campaignId` | **Yes** — `community_campaign_update` routes by role (participant/organiser/supplier) to the matching screen |
-| `membership` | **Not found as a concept in the mobile app at all.** Closest: `app/(vendor)/subscription-plans.tsx` (+ `plan-active`/`plan-free`/`plan-growth`/`plan-pro`), never called "membership" in its own source. "Eki Membership" only appears in `admin-web` (the separate admin dashboard), not in this app. | n/a | n/a | **No** |
-| `referral_rewards` | **No single matching screen.** `app/(buyer)/referral-program.tsx` is a re-export of `invite-friend.tsx` (the invite flow, not a rewards tracker); `reward-history.tsx` is general wallet history, unrelated to referrals specifically. | n/a | n/a | **No** |
-| `support_case` | `app/(buyer)/community-buy-support-cases.tsx` — **Community-Buy-scoped only**, no generic support-case viewer exists (`contact-support.tsx` is a submission form, not a viewer) | `(buyer)/community-buy-support-cases` | `campaignId` (optional) | **Partial** — `support_case_response` routes here, but only for Community Buy cases |
-| `admin_case` | Admin screens exist in-app (`app/(admin)/dispute-detail.tsx`, `vendor-detail.tsx`, `order-detail.tsx`, with `id` params) | `(admin)/...` | `id` | **No** — confirmed, not assumed: `utils/broadcastLink.ts:7`'s `LINK_PATTERN` regex only allow-lists `/(buyer)/...` and `/(vendor)/...`, never `/(admin)/...`, and no push type targets this group at all |
+| `store_setup` | Store setup screen | `/(vendor-onboarding)/setup-store` | Signed-in vendor | Yes; role-gated; fallback to vendor home |
+| `foodstuff_editor` | Foodstuff edit/add | `/(vendor)/foodstuff-edit` or `foodstuff-add` | `productId`/`id` when editing | Yes; role-gated; missing id opens add form |
+| `verification` | Verification intro | `/(vendor-verification)/index` | none | Yes; role-gated |
+| `inventory_detail` | Product stock detail/list | `/(vendor)/foodstuff-detail` or `foodstuff?filter=low_stock` | `productId`/`id` optional | Yes; role-gated; missing id falls back to low-stock list |
+| `order_detail` | Buyer/vendor/admin order screen or list | role-specific order route | `orderId`/`id` optional | Yes; role-specific fallback list |
+| `store_share` | Store sharing screen | `/(vendor)/share-store-link` | none | Yes; role-gated |
+| `first_sale` | Vendor sales-growth screen | `/(vendor)/grow-sales` | none | Yes; role-gated |
+| `automation_detail` | Automation detail/center | `/(vendor)/automation-detail` or center | `automationType`/`type` optional | Yes; role-gated; missing type opens center |
+| `checkout` | Buyer checkout | `/(buyer)/checkout` | cart state | Yes; role-gated |
+| `foodstuff_subscription` | Subscription detail/list | `/(buyer)/regular-delivery-detail` or list | `subscriptionId`/`foodstuffSubscriptionId`/`id` optional | Yes; role-gated; missing id opens list |
+| `community_buy_campaign` | Buyer/organiser/supplier campaign screen or list | role/audience-specific Community Buy route | `campaignId`/`id` optional | Yes; role/audience-gated; explicit fallback list |
+| `membership` | Vendor plan screen | `/(vendor)/subscription-plans` | none | Yes; role-gated |
+| `referral_rewards` | Buyer referral program | `/(buyer)/referral-program` | none | Yes; role-gated; reward-history-specific copy remains limited |
+| `support_case` | Authenticated support thread or Community Buy case list | buyer/vendor messages list when `conversationId`; buyer Community Buy support list otherwise | `conversationId` or `campaignId`/`caseId` | Yes; role-gated; thread is reloaded from the signed-in user account |
+| `admin_case` | Admin payment anomaly queue | `/(admin)/payment-anomalies` | `anomalyKey` optional | Yes for `critical_payment_anomaly`; admin-only with queue fallback |
 
-## Honest summary
+## Source verification summary
 
-**4 of 15** destinations have tap routes mapped to real mobile screens: `order_detail`, `foodstuff_subscription`, `community_buy_campaign`, and `store_share`. `verification` and `support_case` remain partial; the other 9 have no verified end-to-end mapping or no corresponding mobile screen. R10's store-share event and notification-tap changes have not yet had device-level runtime QA.
+All 15 destination keys have an explicit tap route or role-safe fallback in mobile `app/_layout.tsx`. Authentication restoration, cold-start response retrieval, duplicate-tap suppression, recipient notification read acknowledgement, and role-specific routing are implemented in source. Support thread IDs are reopened only through the signed-in user's conversations list; Community Buy case IDs are expanded only from the authenticated user's own-case response.
 
-**The remaining gaps are mobile-side.** Tap routing still needs branches for `store_setup`, `foodstuff_editor`, and `inventory_detail`, plus a verified target for `first_sale`/`automation_detail`. `membership` and `referral_rewards` need either a real screen or a confirmed mapping to an existing one. `admin_case` must be checked against its intended recipient and admin-only authorization before routing. Runtime checks for the newly added `store_share` branch remain outstanding.
+The mobile repository typecheck and PR preview checks pass. No iOS/Android device run has verified provider delivery, killed-app navigation, or cold-start behavior. The selected fallback for `referral_rewards` opens the existing referral program, which does not yet show vendor membership-credit history; R39 remains gated for that reason.

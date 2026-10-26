@@ -29,7 +29,7 @@ const delivery = {
   notification: {
     id: "notification-1", userId: "buyer-1", title: "Eki Support has replied",
     body: "Open your case to read the update.", readAt: null,
-    data: { type: "support_response_received", destination: "support_conversation", conversationId: "conversation-1", messageId: "message-1" },
+    data: { type: "support_case_response", destination: "support_case", conversationId: "conversation-1", messageId: "message-1" },
   },
 };
 

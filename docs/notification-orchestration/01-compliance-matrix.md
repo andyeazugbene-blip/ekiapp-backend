@@ -84,8 +84,8 @@ Status values follow the spec's own progression: **Proposed → Backend mapped �
 - **Implemented, QA passed (spec-shaped):** 12 of 40 — R01, R03, R05, R06, R11, R16, R30, R31, R32, R33, R37, R38
 - **Implemented on backend and mobile source; backend tests/typechecks pass, mobile runtime QA and production timing remain outstanding:** 1 of 40 — R10
 - **Implemented (legacy, not re-platformed):** R07–R09, R12–R13, R15, R20–R22, R26, R29, R37
-- **Partial or scoped:** R04, R17, R23, R25, R27–R28, R34–R36, R39–R40
+- **Partial or scoped:** R04, R17, R23, R25, R27, R34–R36, R39–R40
 - **Blocked on source semantics or a real signal:** R02, R14, R18, R24
-- **Native flow with device QA pending:** R19
+- **Implemented source with native device QA pending:** R19, R28
 
 The previously unverified rules above were inspected in code during this pass. These are implementation mappings, not a claim of v2 approval or enablement. Exact acceptance still depends on the missing authoritative v2 specification and original 210-event catalogue; rules with unverified policy, copy, timing, or signals remain gated.
