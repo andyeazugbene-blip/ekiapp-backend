@@ -4,7 +4,7 @@
  * (mocked) row shapes — never a fabricated alert — and that reviewing/
  * escalating only ever changes the PaymentAnomaly row's own status.
  */
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../lib/prisma", () => ({
   prisma: {
@@ -30,6 +30,8 @@ import { paymentAnomalyService } from "../modules/ledger/payment-anomaly.service
 
 const m = vi.mocked(prisma, true);
 
+afterEach(() => vi.unstubAllEnvs());
+
 beforeEach(() => {
   vi.clearAllMocks();
   m.subscriptionPaymentAttempt.groupBy.mockResolvedValue([] as never);
@@ -45,7 +47,22 @@ beforeEach(() => {
 });
 
 describe("paymentAnomalyService.scan — R40 administrative incident alerts", () => {
+  it("keeps R40 notifications disabled unless explicitly enabled after approval", async () => {
+    vi.stubEnv("R40_PAYMENT_ANOMALY_ALERTS_ENABLED", "false");
+    m.subscriptionPaymentAttempt.groupBy.mockImplementation(async (args: any) => args.by[0] === "stripePaymentIntentId"
+      ? [{ stripePaymentIntentId: "pi_critical", _count: { _all: 2 } }] as never
+      : [] as never);
+
+    await paymentAnomalyService.scan();
+
+    expect(m.paymentAnomaly.upsert).toHaveBeenCalled();
+    expect(m.user.findMany).not.toHaveBeenCalled();
+    expect(notificationsService.enqueue).not.toHaveBeenCalled();
+    vi.unstubAllEnvs();
+  });
+
   it("alerts only ADMIN accounts and gives each finding a stable dedupe key", async () => {
+    vi.stubEnv("R40_PAYMENT_ANOMALY_ALERTS_ENABLED", "true");
     m.subscriptionPaymentAttempt.groupBy.mockImplementation(async (args: any) => args.by[0] === "stripePaymentIntentId"
       ? [{ stripePaymentIntentId: "pi_critical", _count: { _all: 2 } }] as never
       : [] as never);
@@ -68,6 +85,7 @@ describe("paymentAnomalyService.scan — R40 administrative incident alerts", ()
     expect(notificationsService.enqueue).toHaveBeenNthCalledWith(2, expect.objectContaining({
       dedupeKey: "R40_PAYMENT_ANOMALY:admin-1:DUPLICATE_PROVIDER_REF:SubscriptionPaymentAttempt:pi_critical",
     }));
+    vi.unstubAllEnvs();
   });
 
   it("does not query or notify admins when a scan finds no verified anomaly", async () => {

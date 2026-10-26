@@ -22,6 +22,13 @@ import { notificationsService } from "../notifications/notifications.service";
 // business rule about when a payment is "too old" to matter.
 const LEDGER_SCAN_WINDOW_DAYS = 90;
 
+// R40 remains off until its policy, admin destination, and runtime delivery
+// have been approved and verified. The scanner still records real anomalies
+// while this gate is closed; only outbound notifications are suppressed.
+function r40NotificationsEnabled(): boolean {
+  return process.env.R40_PAYMENT_ANOMALY_ALERTS_ENABLED === "true";
+}
+
 interface Finding {
   kind: "DUPLICATE_PROVIDER_REF" | "MULTIPLE_SUCCESSFUL_ATTEMPTS" | "MISSING_LEDGER_ENTRY";
   dedupeKey: string;
@@ -194,7 +201,7 @@ export const paymentAnomalyService = {
     // manual scans do not produce another push. The scan only inspects
     // payment and ledger rows; notifications it creates cannot feed back into
     // its own detector.
-    if (findings.length > 0) {
+    if (findings.length > 0 && r40NotificationsEnabled()) {
       const admins = await prisma.user.findMany({
         where: { role: "ADMIN" },
         select: { id: true },
