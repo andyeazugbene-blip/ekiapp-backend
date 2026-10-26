@@ -5,6 +5,7 @@ import { prisma } from "../../lib/prisma";
 import { sendPushToUser } from "../../lib/expo-push";
 import { EVENT_NAMES } from "../events/events.service";
 import { resolveNotificationRule } from "../events/notification-event-rules";
+import { COMMUNITY_BUY_ORGANISER_DECISION_WINDOW_MS } from "../community-buy/community-buy-timing";
 
 const MAX_ATTEMPTS = 8;
 const STALE_LOCK_MS = 5 * 60 * 1000;
@@ -109,6 +110,32 @@ async function payoutActionStillEligible(delivery: NotificationDelivery & { noti
     && !recipient.isSuspended && payout.vendor.userId === recipient.id);
 }
 
+async function communityBuyBelowMinimumStillEligible(delivery: NotificationDelivery & { notification: { userId: string; readAt: Date | null; data: unknown } }): Promise<boolean> {
+  if (process.env.R34_COMMUNITY_BUY_BELOW_MINIMUM_ENABLED !== "true") return false;
+  const data = delivery.notification.data;
+  if (!isRecord(data) || data.type !== "community_campaign_update" || data.event !== "below_minimum"
+    || typeof data.campaignId !== "string" || delivery.notification.readAt) return false;
+  const [campaign, recipient] = await Promise.all([
+    prisma.communityCampaign.findUnique({ where: { id: data.campaignId }, select: { status: true, paymentMode: true, minimumShares: true, confirmedShares: true, rescueEndsAt: true, decisionRequiredAt: true, organiser: { select: { userId: true } } } }),
+    prisma.user.findUnique({ where: { id: delivery.notification.userId }, select: { id: true, role: true, isSuspended: true } }),
+  ]);
+  if (!campaign || !recipient || recipient.role !== "BUYER" || recipient.isSuspended
+    || campaign.organiser.userId !== recipient.id || campaign.minimumShares == null) return false;
+  const deadline = campaign.status === "RESCUE_WINDOW" ? campaign.rescueEndsAt
+    : campaign.status === "DECISION_REQUIRED" && campaign.decisionRequiredAt
+      ? new Date(campaign.decisionRequiredAt.getTime() + COMMUNITY_BUY_ORGANISER_DECISION_WINDOW_MS)
+      : null;
+  if (!deadline || deadline <= new Date()) return false;
+  const quantity = campaign.paymentMode === "AUTHORISE_THEN_CAPTURE"
+    ? (await prisma.campaignContribution.findMany({
+      where: { campaignId: data.campaignId, paymentAuthorisation: { holdStatus: "HOLD_SUCCEEDED" } },
+      select: { quantity: true },
+    })).reduce((sum, contribution) => sum + contribution.quantity, 0)
+    : campaign.confirmedShares;
+  return quantity < campaign.minimumShares && data.deadline === deadline.toISOString()
+    && data.remainingShares === campaign.minimumShares - quantity;
+}
+
 async function payoutConfirmedStillEligible(delivery: NotificationDelivery & { notification: { userId: string; readAt: Date | null; data: unknown } }): Promise<boolean> {
   if (process.env.R26_PAYOUT_CONFIRMED_ENABLED !== "true") return false;
   const data = delivery.notification.data;
@@ -121,7 +148,6 @@ async function payoutConfirmedStillEligible(delivery: NotificationDelivery & { n
   return Boolean(payout?.status === "PAID" && recipient?.role === "VENDOR" && !recipient.isSuspended
     && payout.vendor.userId === recipient.id);
 }
-
 async function supplierReconfirmationStillEligible(delivery: NotificationDelivery & { notification: { userId: string; readAt: Date | null; data: unknown } }): Promise<boolean> {
   if (process.env.R37_SUPPLIER_RECONFIRMATION_ENABLED !== "true") return false;
   const data = delivery.notification.data;
@@ -176,6 +202,10 @@ async function notificationStillEligible(delivery: NotificationDelivery & { noti
   if (data.type === "payout_action_required" && data.ruleKey === "R25_PAYOUT_ACTION_REQUIRED") {
     const rule = resolveNotificationRule({ name: EVENT_NAMES.payout_action_required, schemaVersion: Number(data.ruleVersion) });
     return Boolean(rule?.enabled && await payoutActionStillEligible(delivery));
+  }
+  if (data.type === "community_campaign_update" && data.event === "below_minimum" && data.ruleKey === "R34_COMMUNITY_BUY_BELOW_MINIMUM") {
+    const rule = resolveNotificationRule({ name: EVENT_NAMES.community_buy_below_minimum, schemaVersion: Number(data.ruleVersion) });
+    return Boolean(rule?.enabled && await communityBuyBelowMinimumStillEligible(delivery));
   }
   if (data.type === "payout_confirmed" && data.ruleKey === "R26_PAYOUT_CONFIRMED") {
     const rule = resolveNotificationRule({ name: EVENT_NAMES.payout_confirmed, schemaVersion: Number(data.ruleVersion) });

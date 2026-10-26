@@ -20,6 +20,7 @@ import { upsertParticipantWithAttribution } from "./campaign-participant-attribu
 import { alertOps } from "./ops-alert.service";
 import { assertBuyerCountryEligible } from "./campaign-contributions.service";
 import { dispatchNotificationsAfterCommit } from "../events/dispatch-notifications";
+import { COMMUNITY_BUY_ORGANISER_DECISION_WINDOW_MS } from "./community-buy-timing";
 
 const SYSTEM_CRON_ACTOR = "system:cron";
 const CONSENT_WORDING_VERSION = "cb-authorise-v1";
@@ -29,7 +30,7 @@ const CONSENT_WORDING_VERSION = "cb-authorise-v1";
 const HOLD_RECOVERY_WINDOW_MS = 48 * 60 * 60 * 1000;
 
 // spec AT-11/AT-13 — organiser's below-minimum proceed/cancel window.
-const DECISION_WINDOW_MS = 24 * 60 * 60 * 1000;
+const DECISION_WINDOW_MS = COMMUNITY_BUY_ORGANISER_DECISION_WINDOW_MS;
 
 // spec 10.5 — "Recommended defaults are a maximum 12-hour supplier
 // response period and at least six safe hours before capture expiry."
@@ -554,9 +555,23 @@ export const campaignAuthorisationService = {
       } else {
         const decisionRequiredAt = new Date();
         const organiserDeadline = new Date(decisionRequiredAt.getTime() + DECISION_WINDOW_MS);
-        const claim = await prisma.communityCampaign.updateMany({ where: { id: campaign.id, status: "HOLD_WINDOW" }, data: { status: "DECISION_REQUIRED", decisionRequiredAt } });
+        const claim = await prisma.$transaction(async (tx) => {
+          const transition = await tx.communityCampaign.updateMany({ where: { id: campaign.id, status: "HOLD_WINDOW" }, data: { status: "DECISION_REQUIRED", decisionRequiredAt } });
+          if (transition.count === 1) {
+            await eventsService.enqueueTransactional(tx, {
+              name: EVENT_NAMES.community_buy_below_minimum,
+              actorType: "system",
+              entityType: "CommunityCampaign",
+              entityId: campaign.id,
+              source: "community_buy_authorisation_decision",
+              payload: { campaignId: campaign.id, minimumShares: minimum, confirmedShares: authorisedQuantity, remainingShares: minimum - authorisedQuantity, rescueDeadline: organiserDeadline.toISOString() },
+            }, { dedupeKey: `R34_COMMUNITY_BUY_BELOW_MINIMUM:${campaign.id}` });
+          }
+          return transition;
+        });
         if (claim.count !== 1) continue;
         decisionRequired++;
+        void dispatchNotificationsAfterCommit();
         await this.notifyDecisionOutcome(campaign.id, "decision_required", { authorisedQuantity, minimum, deadline: organiserDeadline });
       }
     }
@@ -579,13 +594,15 @@ export const campaignAuthorisationService = {
       await notifyParticipant(campaign.organiser.userId, "authorisation_proceeding", "Your campaign is proceeding", `${campaign.title} reached its minimum authorised quantity (${context.authorisedQuantity} of ${context.minimum} required) — capturing payment now.`, campaignId);
     } else {
       const deadlineText = context.deadline ? ` Decide by ${context.deadline.toISOString()}.` : "";
-      await notifyParticipant(
-        campaign.organiser.userId,
-        "decision_required",
-        "Decision required",
-        `${campaign.title} authorised ${context.authorisedQuantity} of the ${context.minimum} minimum required. Choose to proceed with the reduced quantity or cancel the campaign.${deadlineText}`,
-        campaignId,
-      );
+      if (process.env.R34_COMMUNITY_BUY_BELOW_MINIMUM_ENABLED !== "true") {
+        await notifyParticipant(
+          campaign.organiser.userId,
+          "decision_required",
+          "Decision required",
+          `${campaign.title} authorised ${context.authorisedQuantity} of the ${context.minimum} minimum required. Choose to proceed with the reduced quantity or cancel the campaign.${deadlineText}`,
+          campaignId,
+        );
+      }
     }
   },
 
