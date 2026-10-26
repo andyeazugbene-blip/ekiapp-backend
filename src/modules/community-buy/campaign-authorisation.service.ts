@@ -405,12 +405,24 @@ export const campaignAuthorisationService = {
       return this.markHoldSucceeded(authorisation, intent);
     }
     if (intent.status === "requires_action") {
-      await prisma.communityBuyPaymentAuthorisation.update({
-        where: { id: authorisation.id },
-        data: { holdStatus: "REQUIRES_ACTION", paymentIntentId: intent.id, authenticationStatus: intent.status },
+      await prisma.$transaction(async (tx) => {
+        await tx.communityBuyPaymentAuthorisation.update({
+          where: { id: authorisation.id },
+          data: { holdStatus: "REQUIRES_ACTION", paymentIntentId: intent.id, authenticationStatus: intent.status },
+        });
+        await eventsService.enqueueTransactional(tx, {
+          name: EVENT_NAMES.community_buy_payment_action_required,
+          actorType: "system",
+          entityType: "CommunityBuyPaymentAuthorisation",
+          entityId: authorisation.id,
+          payload: { authorisationId: authorisation.id, campaignId: authorisation.campaignId, contributionId: authorisation.contributionId },
+        }, { dedupeKey: `community-buy-payment-action-required:${authorisation.id}`, schemaVersion: 1 });
       });
       const contribution = await prisma.campaignContribution.findUniqueOrThrow({ where: { id: authorisation.contributionId }, include: { participant: true } });
-      await notifyParticipant(contribution.participant.userId, "hold_requires_action", "Confirm your card", "Your bank needs one more security check to place this hold.", authorisation.campaignId);
+      await dispatchNotificationsAfterCommit();
+      if (process.env.R36_COMMUNITY_BUY_PAYMENT_ACTION_REQUIRED_ENABLED !== "true") {
+        await notifyParticipant(contribution.participant.userId, "hold_requires_action", "Confirm your card", "Your bank needs one more security check to place this hold.", authorisation.campaignId);
+      }
       return prisma.communityBuyPaymentAuthorisation.findUniqueOrThrow({ where: { id: authorisation.id } });
     }
     if (intent.status === "processing") {

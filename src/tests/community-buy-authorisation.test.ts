@@ -47,6 +47,8 @@ vi.mock("../modules/notifications/notifications.service", () => ({
   notificationsService: { enqueue: vi.fn().mockResolvedValue(undefined) },
 }));
 
+vi.mock("../modules/events/dispatch-notifications", () => ({ dispatchNotificationsAfterCommit: vi.fn().mockResolvedValue(undefined) }));
+
 import { prisma } from "../lib/prisma";
 import { stripe } from "../lib/stripe";
 import { notificationsService } from "../modules/notifications/notifications.service";
@@ -260,6 +262,10 @@ describe("createHold() — spec §11.3 hold creation (AT-07, AT-08, AT-09)", () 
     m.communityBuyPaymentAuthorisation.findUniqueOrThrow.mockResolvedValue(baseAuthorisation() as any);
     m.communityBuyPaymentAuthorisation.updateMany.mockResolvedValue({ count: 1 } as any);
     s.paymentIntents.create.mockResolvedValue({ id: "pi_1", status: "requires_action" } as any);
+    m.$transaction.mockImplementationOnce(async (callback: any) => callback({
+      communityBuyPaymentAuthorisation: { update: m.communityBuyPaymentAuthorisation.update },
+      event: { upsert: vi.fn().mockResolvedValue({ id: "event-r36" }) },
+    }));
 
     await campaignAuthorisationService.createHold("auth-1");
 
@@ -270,6 +276,34 @@ describe("createHold() — spec §11.3 hold creation (AT-07, AT-08, AT-09)", () 
     m.campaignContribution.findMany.mockResolvedValue([]);
     const authorisedQuantity = await campaignAuthorisationService.getAuthorisedQuantity(CAMPAIGN_ID);
     expect(authorisedQuantity).toBe(0);
+  });
+
+  it("transactionally enqueues the R36 event when Stripe requires participant authentication", async () => {
+    vi.stubEnv("R36_COMMUNITY_BUY_PAYMENT_ACTION_REQUIRED_ENABLED", "false");
+    m.communityBuyPaymentAuthorisation.findUniqueOrThrow.mockResolvedValue(baseAuthorisation() as any);
+    m.communityBuyPaymentAuthorisation.update.mockResolvedValue(baseAuthorisation({ holdStatus: "REQUIRES_ACTION" }) as any);
+    m.communityBuyPaymentAuthorisation.updateMany.mockResolvedValue({ count: 1 } as any);
+    m.campaignContribution.findUniqueOrThrow.mockResolvedValue({ id: "contrib-1", participant: { userId: "user-1" } } as any);
+    s.paymentIntents.create.mockResolvedValue({ id: "pi_1", status: "requires_action" } as any);
+    const eventUpsert = vi.fn().mockResolvedValue({ id: "event-r36" });
+    m.$transaction.mockImplementationOnce(async (callback: any) => callback({
+      communityBuyPaymentAuthorisation: { update: m.communityBuyPaymentAuthorisation.update },
+      event: { upsert: eventUpsert },
+    }));
+
+    await campaignAuthorisationService.createHold("auth-1");
+
+    expect(m.communityBuyPaymentAuthorisation.update).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: "auth-1" }, data: { holdStatus: "REQUIRES_ACTION", paymentIntentId: "pi_1", authenticationStatus: "requires_action" },
+    }));
+    expect(eventUpsert).toHaveBeenCalledWith(expect.objectContaining({
+      where: { dedupeKey: "community-buy-payment-action-required:auth-1" },
+      create: expect.objectContaining({ name: "community_buy_payment_action_required", schemaVersion: 1,
+        payload: { authorisationId: "auth-1", campaignId: CAMPAIGN_ID, contributionId: "contrib-1" } }),
+    }));
+    expect(notificationsService.enqueue).toHaveBeenCalledWith(expect.objectContaining({
+      userId: "user-1", title: "Confirm your card", data: expect.objectContaining({ event: "hold_requires_action" }),
+    }));
   });
 
   it("AT-09: a genuine decline marks HOLD_DECLINED with a recovery deadline, excluded from authorised quantity", async () => {
