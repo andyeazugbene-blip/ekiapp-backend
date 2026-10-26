@@ -38,6 +38,7 @@ async function supportReplyStillEligible(delivery: NotificationDelivery & { noti
 }
 
 async function productStockAlertStillEligible(delivery: NotificationDelivery & { notification: { userId: string; readAt: Date | null; data: unknown } }): Promise<boolean> {
+  if (process.env.R17_STOCK_DEPLETED_ENABLED !== "true") return false;
   const data = delivery.notification.data;
   if (!isRecord(data) || data.type !== "product_stock_depleted" || typeof data.productId !== "string"
     || !Number.isSafeInteger(data.stockVersion) || delivery.notification.readAt) return false;

@@ -67,6 +67,7 @@ export async function handleSupportResponseReceived(tx: Prisma.TransactionClient
 
 /** R17 rule handler: exact vendor alert for an active listing that truly reached zero. */
 export async function handleProductStockDepleted(tx: Prisma.TransactionClient, event: Event): Promise<void> {
+  if (process.env.R17_STOCK_DEPLETED_ENABLED !== "true") return;
   const productId = requiredId(event.payload, "productId");
   const stockVersion = event.payload && typeof event.payload === "object" && !Array.isArray(event.payload)
     ? (event.payload as Record<string, unknown>).stockVersion

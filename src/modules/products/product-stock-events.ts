@@ -8,6 +8,8 @@ export async function enqueueProductStockDepleted(
   input: { product: Pick<Product, "id" | "stock" | "stockVersion" | "status" | "isActive">; stockDecrementedBy: number; actorId?: string | null; actorType: string },
 ): Promise<boolean> {
   const { product } = input;
+  // R17 stays off until the semantic mobile route and production timing are approved.
+  if (process.env.R17_STOCK_DEPLETED_ENABLED !== "true") return false;
   if (input.stockDecrementedBy <= 0 || product.stock !== 0 || !product.isActive || product.status !== "PUBLISHED") return false;
 
   const stockEpisode = product.stockVersion;
