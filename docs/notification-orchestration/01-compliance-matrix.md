@@ -37,7 +37,7 @@ Status values follow the spec's own progression: **Proposed → Backend mapped �
 | Rule | Status | Evidence |
 |---|---|---|
 | R19 Payment authentication required (3DS) | **Native checkout path implemented; QA pending** | Stripe maps `requires_action` to `REQUIRES_ACTION`; the mobile checkout presents Stripe PaymentSheet with the client secret and Stripe return URL, so authentication is handled in the live checkout rather than by a later push. No separate 3DS push path was found. Native iOS/Android challenge and return testing is still required. |
-| R20 Payment failed (ordinary checkout) | **Implemented (legacy)** | `CHECKOUT_PAYMENT_FOLLOW_UP` type exists and is tested — distinct from `PAYMENT_RECOVERY` (Foodstuff Subscription-only), matching the spec's own distinction. |
+| R20 Payment failed (ordinary checkout) | **Transactional event/candidate/delivery implemented; gated pending authenticated checkout runtime QA** | For a standard Stripe checkout, the verified `PENDING`→`FAILED` transition and versioned `payment_failed` event commit together; only confirmed `payment_intent.payment_failed` creates the outbox event. The consumer resolves the actual checkout buyer, creates the exact v2 copy with `checkout` destination and durable push delivery, and send time cancels if payment has resolved, buyer ownership/role changed, or the buyer is suspended. `R20_PAYMENT_FAILED_ENABLED` defaults off. End-to-end candidate/delivery and resolved-payment cancellation tests cover the pipeline. Legacy single-order/no-checkout failures remain outside this new rule path. |
 | R21 Order confirmed | **Implemented (legacy); trigger semantics need v2 confirmation** | Stripe success emits buyer `order_paid` after payment is confirmed and sends the buyer-facing confirmation communication. The separate `buyer_order_confirmed` communication is log-only, not a push. Mobile routes `order_paid` to the order destination. |
 | R22 Order dispatched | **Implemented (legacy); QA pending** | `ordersService` sends buyer `order_status` and `buyer_order_shipped` when an order transitions to `DISPATCHED`; the mobile tap handler routes both to the buyer order. No mobile device tap QA in this pass. |
 | R23 Collection ready | **Implemented for Community Buy only; general order scope unverified** | Community Buy fulfilment sends “ready for collection” notifications to organiser and participants when fulfilment becomes ready. The ordinary order model has no equivalent collection-ready transition in this path. Do not count this as general-order coverage without the source mapping. |
@@ -82,11 +82,13 @@ Status values follow the spec's own progression: **Proposed → Backend mapped �
 ## Summary counts
 
 - **Implemented, QA passed (spec-shaped):** 11 of 40 — R01, R03, R05, R06, R11, R16, R30, R31, R32, R33, R38
-- **Implemented on backend and mobile source; backend tests/typechecks pass, mobile runtime QA and production timing remain outstanding:** 3 of 40 — R10, R18, R35
-- **Implemented (legacy, not re-platformed):** R07–R09, R12–R13, R15, R20–R22, R26
-- **Implemented on backend but gated pending route/runtime/approval:** R25, R29, R34, R37, R40
-- **Partial or scoped:** R04, R17, R23, R27, R36, R39–R40
-- **Blocked on source semantics or a real signal:** R02, R14, R24
-- **Implemented source with native device QA pending:** R19, R28
+- **Implemented, focused backend QA passed (spec-shaped):** 11 of 40 — R01, R03, R05, R06, R11, R16, R30–R33, R38
+- **Implemented on backend and mobile source; runtime/device QA or verified timing outstanding:** 5 of 40 — R10, R18, R19, R28, R35
+- **Implemented (legacy, not re-platformed):** 8 of 40 — R07–R09, R13, R15, R21–R22, R26
+- **Implemented on backend but gated pending route/runtime/approval:** 7 of 40 — R12, R20, R25, R29, R34, R37, R40
+- **Partial or scoped:** 5 of 40 — R04, R17, R23, R27, R36
+- **Blocked on source semantics or an approved business mechanism:** 4 of 40 — R02, R14, R24, R39
+
+These six disjoint groups cover R01–R40 exactly once. Focused backend QA does not imply mobile device QA, client approval, or production enablement.
 
 The authoritative v2 specification is checked in at `Eki-Notification-Orchestration-Spec-v2.md`. The original 210-event catalogue remains a separate missing source. These are implementation mappings, not a claim of approval or enablement; rules with unverified policy, copy, timing, or signals remain gated.

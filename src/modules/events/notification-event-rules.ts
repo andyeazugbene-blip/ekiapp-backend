@@ -23,6 +23,12 @@ interface NotificationRuleDefinition {
  */
 export const NOTIFICATION_EVENT_RULES: readonly NotificationRuleDefinition[] = [
   {
+    eventName: EVENT_NAMES.payment_failed,
+    key: "R20_PAYMENT_FAILED",
+    version: 1,
+    enabled: () => process.env.R20_PAYMENT_FAILED_ENABLED === "true",
+  },
+  {
     eventName: EVENT_NAMES.support_response_received,
     key: "R28_SUPPORT_RESPONSE",
     version: 1,
