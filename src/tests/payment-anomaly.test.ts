@@ -239,4 +239,16 @@ describe("paymentAnomalyService.markReviewed / escalate", () => {
     // No other model was ever touched by this call.
     expect(m.payment.findMany).not.toHaveBeenCalled();
   });
+
+  it("resolves an incident with an attributable admin and stops future sends", async () => {
+    m.paymentAnomaly.findUnique.mockResolvedValue({ id: "anom-3" } as never);
+    m.paymentAnomaly.update.mockResolvedValue({ id: "anom-3", status: "RESOLVED" } as never);
+
+    await paymentAnomalyService.resolve("anom-3", "admin-1", "reconciled and fixed");
+
+    expect(m.paymentAnomaly.update).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: "anom-3" },
+      data: expect.objectContaining({ status: "RESOLVED", reviewedById: "admin-1", resolvedAt: expect.any(Date), note: "reconciled and fixed" }),
+    }));
+  });
 });
