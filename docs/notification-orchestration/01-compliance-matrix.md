@@ -30,7 +30,7 @@ Status values follow the spec's own progression: **Proposed → Backend mapped �
 | R15 Dispatch not confirmed | **Implemented (legacy)** | `order-dispatch-due-sweep` (handoff O-04) — [order-acceptance-notifications.service.ts](../../src/modules/orders/order-acceptance-notifications.service.ts). Comment in that file notes **no real `dispatchDueAt` column exists** — the "due" timing is an assumed window, not a verified deadline. Spec explicitly requires "deadline messages derive from real entity timestamps" — this is a known gap in the existing (pre-spec) implementation, not introduced by this pass. |
 | R16 Stock crosses low threshold | **Implemented, QA passed** | `LOW_STOCK_ALERT` — content-hash deduped, tested (`automation-detectors.test.ts`). |
 | R17 Stock reaches zero | **Not verified this pass** | Likely the same detector with threshold=0 as one case, not confirmed as a distinct episode/copy this pass. |
-| R18 Stock conflicts with open orders | **Not started** | No matching code found. |
+| R18 Stock conflicts with open orders | **Blocked pending a verifiable conflict signal and exact rule policy** | Checkout paths decrement `Product.stock` atomically when creating a pending order, so pending quantities are already removed from available stock; failed pending orders restore stock exactly once through the guarded recovery path. There is no separate reservation ledger or `reservedStock` field. Comparing open-order quantities with current stock would double-count reservations and create false alerts. Manual stock edits do not preserve an authoritative pre-edit quantity to compare. The real trigger, copy, and action still require the authoritative v2 specification and an agreed stock-conflict definition. |
 
 ## R19–R24: Buyer payment and order lifecycle
 
@@ -77,16 +77,16 @@ Status values follow the spec's own progression: **Proposed → Backend mapped �
 |---|---|---|
 | R38 Automation service failure | **Implemented, QA passed (PR #9)** | New `AUTOMATION_FAILURE_ALERT` type — daily sweep, grouped per vendor, one alert/vendor/day, with a notification-loop guard (excludes its own type from the failure scan). Admin-only `automationRulesService.failures()` feed is unchanged and still exists alongside this — different audience, not a duplicate. 198/198 test files pass. |
 | R39 Referral credit confirmed | **Partially implemented (legacy); vendor-to-vendor mapping verified** | The earlier handoff's locked decision #12 defines vendor-to-vendor rewards as conditional Eki Membership credits and buyer referrals as separate. `creditVendorReferralOnMembershipQualified()` reads the real `Referral` ledger, checks verification + active product + active zone + first Membership payment, claims `creditedAt` idempotently, reads configurable credit months, audits, and notifies. It deliberately does not apply a Stripe coupon/invoice credit, so the financial benefit is recorded but not automatically applied. Evidence/tests: [referrals.service.ts](../../src/modules/referrals/referrals.service.ts), [vendor-referral-credit.test.ts](../../src/tests/vendor-referral-credit.test.ts). |
-| R40 Critical administrative incident | **Not started / not found** | No matching "critical incident → admin push" code found. |
+| R40 Critical administrative incident | **Partially implemented; review and enablement blocked** | Backend PR #15 adds admin-role-only, per-admin/per-anomaly idempotent alerts from the existing verified PaymentAnomaly signals (duplicate provider references, multiple successful charges, missing ledger entries). Mobile PR #5 adds the authenticated admin payment-anomaly queue route and existing `reports.read` API boundary. CI/typecheck evidence is recorded in those PRs. This covers payment/ledger anomalies only; the full v2 incident signal set, severity/copy policy, native-device QA, and approval/enablement gates remain unverified. |
 
 ## Summary counts
 
 - **Implemented, QA passed (spec-shaped):** 12 of 40 — R01, R03, R05, R06, R11, R16, R30, R31, R32, R33, R37, R38
 - **Implemented on backend and mobile source; backend tests/typechecks pass, mobile runtime QA and production timing remain outstanding:** 1 of 40 — R10
 - **Implemented (legacy, not re-platformed):** 7 of 40 — R07, R08, R09, R12, R13, R15, R20
-- **Partial, with scoped or financial-application gaps:** 2 of 40 — R28 (Community Buy only), R39 (Membership credit recorded, not applied in Stripe)
+- **Partial, with scoped or financial-application gaps:** 3 of 40 — R28 (Community Buy only), R39 (Membership credit recorded, not applied in Stripe), R40 (verified payment/ledger incidents only)
 - **Blocked (named, real dependency missing):** R02 — 1
-- **Not implemented, with existing states but no rule or no source evidence:** R04, R18, R40 — 3
+- **Not implemented, with existing states but no safe signal:** R04, R18 — 2
 - **Not verified this pass (likely exist under legacy naming, not confirmed by name):** R14, R17, R19, R21, R22, R23, R24, R25, R26, R27, R29, R34, R35, R36 — 14
 
 14 of 40 rules were not individually chased down to a confirmed yes/no this pass — that is a real limit of this session's time, stated plainly rather than guessed at.
