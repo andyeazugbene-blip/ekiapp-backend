@@ -3,6 +3,8 @@ import type { CommunicationLog, NotificationDelivery } from "@prisma/client";
 import { logger } from "../../lib/logger";
 import { prisma } from "../../lib/prisma";
 import { sendPushToUser } from "../../lib/expo-push";
+import { EVENT_NAMES } from "../events/events.service";
+import { resolveNotificationRule } from "../events/notification-event-rules";
 
 const MAX_ATTEMPTS = 8;
 const STALE_LOCK_MS = 5 * 60 * 1000;
@@ -58,8 +60,14 @@ async function productStockAlertStillEligible(delivery: NotificationDelivery & {
 async function notificationStillEligible(delivery: NotificationDelivery & { notification: { userId: string; readAt: Date | null; data: unknown } }): Promise<boolean> {
   const data = delivery.notification.data;
   if (!isRecord(data)) return false;
-  if (data.type === "support_case_response") return supportReplyStillEligible(delivery);
-  if (data.type === "product_stock_depleted") return productStockAlertStillEligible(delivery);
+  if (data.type === "support_case_response" && data.ruleKey === "R28_SUPPORT_RESPONSE") {
+    const rule = resolveNotificationRule({ name: EVENT_NAMES.support_response_received, schemaVersion: Number(data.ruleVersion) });
+    return Boolean(rule?.enabled && await supportReplyStillEligible(delivery));
+  }
+  if (data.type === "product_stock_depleted" && data.ruleKey === "R17_STOCK_DEPLETED") {
+    const rule = resolveNotificationRule({ name: EVENT_NAMES.product_stock_depleted, schemaVersion: Number(data.ruleVersion) });
+    return Boolean(rule?.enabled && await productStockAlertStillEligible(delivery));
+  }
   return false;
 }
 

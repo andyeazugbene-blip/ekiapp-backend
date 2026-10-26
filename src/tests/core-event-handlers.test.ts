@@ -29,10 +29,16 @@ function makeTx(message = supportMessage, roles = new Map([["admin-1", "ADMIN"],
 }
 
 const outboxEvent = {
+  id: "event-r28",
+  name: "support_response_received",
+  schemaVersion: 1,
   payload: { conversationId: "conversation-1", messageId: "message-1" },
 } as never;
 
-beforeEach(() => vi.clearAllMocks());
+beforeEach(() => {
+  vi.clearAllMocks();
+  vi.stubEnv("R28_GENERAL_SUPPORT_NOTIFICATIONS_ENABLED", "true");
+});
 
 describe("R28 general support response outbox handler", () => {
   it("creates the exact, recipient-targeted idempotent inbox candidate", async () => {
@@ -48,7 +54,7 @@ describe("R28 general support response outbox handler", () => {
       title: "Eki Support has replied",
       body: "Open your case to read the update.",
       dedupeKey: "R28_SUPPORT_THREAD_REPLY:message-1",
-      data: expect.objectContaining({ type: "support_case_response", destination: "support_case", conversationId: "conversation-1", messageId: "message-1" }),
+      data: expect.objectContaining({ type: "support_case_response", ruleKey: "R28_SUPPORT_RESPONSE", ruleVersion: 1, eventId: "event-r28", destination: "support_case", conversationId: "conversation-1", messageId: "message-1" }),
     }), tx);
     expect((tx as any).notificationDelivery.upsert).toHaveBeenCalledWith(expect.objectContaining({
       where: { notificationId_channel: { notificationId: "notification-1", channel: "push" } },
@@ -74,7 +80,7 @@ describe("R17 stock-depleted outbox handler", () => {
     notification: { findUnique: vi.fn() },
     notificationDelivery: { upsert: vi.fn() },
   } as never;
-  const event = { payload: { productId: "product-1", stockVersion: 4 } } as never;
+  const event = { id: "event-r17", name: "product_stock_depleted", schemaVersion: 1, payload: { productId: "product-1", stockVersion: 4 } } as never;
 
   it("keeps R17 disabled unless its explicit reviewed gate is enabled", async () => {
     vi.stubEnv("R17_STOCK_DEPLETED_ENABLED", "false");
@@ -90,7 +96,7 @@ describe("R17 stock-depleted outbox handler", () => {
     expect(createCandidate).toHaveBeenCalledWith(expect.objectContaining({
       userId: "vendor-user", title: "Rice is out of stock", body: "Restock it when available.",
       dedupeKey: "R17_STOCK_DEPLETED:product-1:v4",
-      data: expect.objectContaining({ destination: "inventory_detail", productId: "product-1", stockVersion: 4 }),
+      data: expect.objectContaining({ ruleKey: "R17_STOCK_DEPLETED", ruleVersion: 1, eventId: "event-r17", destination: "inventory_detail", productId: "product-1", stockVersion: 4 }),
     }), tx);
     expect((tx as any).notificationDelivery.upsert).toHaveBeenCalled();
     vi.unstubAllEnvs();
