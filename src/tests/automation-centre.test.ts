@@ -106,6 +106,21 @@ describe("suppression recording", () => {
       data: expect.objectContaining({ status: "SENT", communicationLogId: "log1", channelResults: [expect.objectContaining({ channel: "push", providerRef: "tkt" })] }),
     }));
   });
+
+  it("rechecks consent at dispatch time and suppresses a candidate if consent was withdrawn", async () => {
+    m.user.findUnique
+      .mockResolvedValueOnce({ isSuspended: false, marketingConsentAt: new Date(), country: "NG" } as never)
+      .mockResolvedValueOnce(null as never);
+    m.automationRun.create.mockResolvedValue({ id: "r-consent", dedupeKey: "CART_RECOVERY:cart-1" } as never);
+
+    await automationService.scheduleAutomation(input);
+
+    expect(mSend).not.toHaveBeenCalled();
+    expect(m.automationRun.update).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: "r-consent" },
+      data: { status: "SUPPRESSED", suppressedReason: "send_time_recipient_not_found" },
+    }));
+  });
 });
 
 describe("honest delivery state", () => {

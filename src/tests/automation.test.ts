@@ -102,7 +102,7 @@ describe("automationService.scheduleAutomation", () => {
     vi.setSystemTime(new Date("2026-06-15T21:59:59.000Z"));
     m.user.findUnique.mockResolvedValueOnce({ isSuspended: false, marketingConsentAt: new Date() } as never);
     m.automationRun.create.mockResolvedValue({ id: "run-boundary-1" } as never);
-    m.user.findUnique.mockResolvedValueOnce({ name: "Buyer", email: "b@eki.app" } as never);
+    m.user.findUnique.mockResolvedValueOnce({ name: "Buyer", email: "b@eki.app", isSuspended: false, marketingConsentAt: new Date() } as never);
     mSend.mockResolvedValue({ outcome: "SENT" } as never);
     await automationService.scheduleAutomation(baseInput);
     expect(m.automationRun.create).toHaveBeenCalled();
@@ -124,7 +124,7 @@ describe("automationService.scheduleAutomation", () => {
     vi.setSystemTime(new Date("2026-06-15T07:00:00.000Z"));
     m.user.findUnique.mockResolvedValueOnce({ isSuspended: false, marketingConsentAt: new Date() } as never);
     m.automationRun.create.mockResolvedValue({ id: "run-boundary-2" } as never);
-    m.user.findUnique.mockResolvedValueOnce({ name: "Buyer", email: "b@eki.app" } as never);
+    m.user.findUnique.mockResolvedValueOnce({ name: "Buyer", email: "b@eki.app", isSuspended: false, marketingConsentAt: new Date() } as never);
     mSend.mockResolvedValue({ outcome: "SENT" } as never);
     await automationService.scheduleAutomation(baseInput);
     expect(m.automationRun.create).toHaveBeenCalled();
@@ -134,7 +134,7 @@ describe("automationService.scheduleAutomation", () => {
     vi.setSystemTime(new Date("2026-06-15T12:00:00.000Z"));
     m.user.findUnique.mockResolvedValueOnce({ isSuspended: false, marketingConsentAt: new Date() } as never);
     m.automationRun.create.mockResolvedValue({ id: "run-cron-hour" } as never);
-    m.user.findUnique.mockResolvedValueOnce({ name: "Buyer", email: "b@eki.app" } as never);
+    m.user.findUnique.mockResolvedValueOnce({ name: "Buyer", email: "b@eki.app", isSuspended: false, marketingConsentAt: new Date() } as never);
     mSend.mockResolvedValue({ outcome: "SENT" } as never);
     await automationService.scheduleAutomation(baseInput);
     expect(m.automationRun.create).toHaveBeenCalled();
@@ -153,7 +153,7 @@ describe("automationService.scheduleAutomation", () => {
     vi.setSystemTime(new Date("2026-06-15T12:00:00.000Z"));
     m.user.findUnique.mockResolvedValueOnce({ isSuspended: false, marketingConsentAt: new Date() } as never);
     m.automationRun.create.mockResolvedValue({ id: "run-data-passthrough", dedupeKey: "CAMPAIGN_DEADLINE:campaign-1:deadline:buyer-1" } as never);
-    m.user.findUnique.mockResolvedValueOnce({ name: "Buyer", email: "b@eki.app" } as never);
+    m.user.findUnique.mockResolvedValueOnce({ name: "Buyer", email: "b@eki.app", isSuspended: false, marketingConsentAt: new Date() } as never);
     mSend.mockResolvedValue({ outcome: "SENT" } as never);
 
     await automationService.scheduleAutomation({
@@ -171,7 +171,7 @@ describe("automationService.scheduleAutomation", () => {
     vi.setSystemTime(new Date("2026-06-15T12:00:00.000Z"));
     m.user.findUnique.mockResolvedValueOnce({ isSuspended: false, marketingConsentAt: new Date() } as never);
     m.automationRun.create.mockResolvedValue({ id: "run-no-data" } as never);
-    m.user.findUnique.mockResolvedValueOnce({ name: "Buyer", email: "b@eki.app" } as never);
+    m.user.findUnique.mockResolvedValueOnce({ name: "Buyer", email: "b@eki.app", isSuspended: false, marketingConsentAt: new Date() } as never);
     mSend.mockResolvedValue({ outcome: "SENT" } as never);
 
     await automationService.scheduleAutomation({ ...baseInput, type: "BUYER_WIN_BACK", requiresMarketingConsent: true });
@@ -262,7 +262,7 @@ describe("automationService.scheduleAutomation", () => {
   it("creates a run and sends on the happy path, then marks it SENT", async () => {
     m.user.findUnique.mockResolvedValueOnce({ isSuspended: false, marketingConsentAt: new Date() } as never);
     m.automationRun.create.mockResolvedValue({ id: "run-2" } as never);
-    m.user.findUnique.mockResolvedValueOnce({ name: "Buyer", email: "b@eki.app" } as never);
+    m.user.findUnique.mockResolvedValueOnce({ name: "Buyer", email: "b@eki.app", isSuspended: false, marketingConsentAt: new Date() } as never);
     mSend.mockResolvedValue({ outcome: "SENT" } as never);
 
     await automationService.scheduleAutomation(baseInput);
@@ -290,7 +290,7 @@ describe("automationService.scheduleAutomation", () => {
   it("marks the run FAILED (not thrown) if delivery fails", async () => {
     m.user.findUnique.mockResolvedValueOnce({ isSuspended: false, marketingConsentAt: new Date() } as never);
     m.automationRun.create.mockResolvedValue({ id: "run-3" } as never);
-    m.user.findUnique.mockResolvedValueOnce({ name: "Buyer", email: "b@eki.app" } as never);
+    m.user.findUnique.mockResolvedValueOnce({ name: "Buyer", email: "b@eki.app", isSuspended: false, marketingConsentAt: new Date() } as never);
     mSend.mockRejectedValue(new Error("push failed"));
 
     await expect(automationService.scheduleAutomation(baseInput)).resolves.toBeUndefined();
@@ -311,7 +311,7 @@ describe("automationService.scheduleAutomation", () => {
   it("marks the run SUPPRESSED (not SENT) when the communication layer reports the template was disabled/missing", async () => {
     m.user.findUnique.mockResolvedValueOnce({ isSuspended: false, marketingConsentAt: new Date() } as never);
     m.automationRun.create.mockResolvedValue({ id: "run-4" } as never);
-    m.user.findUnique.mockResolvedValueOnce({ name: "Buyer", email: "b@eki.app" } as never);
+    m.user.findUnique.mockResolvedValueOnce({ name: "Buyer", email: "b@eki.app", isSuspended: false, marketingConsentAt: new Date() } as never);
     mSend.mockResolvedValue({ outcome: "SUPPRESSED", reason: "Template disabled" } as never);
 
     await automationService.scheduleAutomation(baseInput);
@@ -331,7 +331,7 @@ describe("automationService.scheduleAutomation", () => {
   it("marks the run FAILED (with the real reason) when every channel failed to dispatch, even though send() didn't throw", async () => {
     m.user.findUnique.mockResolvedValueOnce({ isSuspended: false, marketingConsentAt: new Date() } as never);
     m.automationRun.create.mockResolvedValue({ id: "run-5" } as never);
-    m.user.findUnique.mockResolvedValueOnce({ name: "Buyer", email: "b@eki.app" } as never);
+    m.user.findUnique.mockResolvedValueOnce({ name: "Buyer", email: "b@eki.app", isSuspended: false, marketingConsentAt: new Date() } as never);
     mSend.mockResolvedValue({ outcome: "FAILED", reason: "Every channel failed to dispatch" } as never);
 
     await automationService.scheduleAutomation(baseInput);
@@ -450,7 +450,7 @@ describe("local-time quiet hours (bug fix 2026-10-11)", () => {
     vi.setSystemTime(new Date("2026-06-15T02:00:00.000Z")); // 21:00 the previous day, US Eastern
     m.user.findUnique
       .mockResolvedValueOnce({ isSuspended: false, marketingConsentAt: new Date(), country: "United States" } as never)
-      .mockResolvedValueOnce({ name: "Buyer", email: "b@eki.app" } as never);
+      .mockResolvedValueOnce({ name: "Buyer", email: "b@eki.app", isSuspended: false, marketingConsentAt: new Date() } as never);
     m.automationRun.create.mockResolvedValue({ id: "run-us-1" } as never);
     mSend.mockResolvedValue([{ channel: "push", status: "SENT" }] as never);
     await automationService.scheduleAutomation({ ...baseInput, recipientUserId: "buyer-us" });
