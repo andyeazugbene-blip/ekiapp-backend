@@ -1,0 +1,148 @@
+import type { CommunicationLog, NotificationDelivery } from "@prisma/client";
+
+import { logger } from "../../lib/logger";
+import { prisma } from "../../lib/prisma";
+import { sendPushToUser } from "../../lib/expo-push";
+
+const MAX_ATTEMPTS = 8;
+const STALE_LOCK_MS = 5 * 60 * 1000;
+const MAX_RETRY_DELAY_MS = 6 * 60 * 60 * 1000;
+
+function retryDelayMs(attempt: number): number {
+  return Math.min(30_000 * 2 ** Math.max(0, attempt - 1), MAX_RETRY_DELAY_MS);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+async function supportReplyStillEligible(delivery: NotificationDelivery & { notification: { userId: string; readAt: Date | null; data: unknown } }): Promise<boolean> {
+  const data = delivery.notification.data;
+  if (!isRecord(data) || data.type !== "support_response_received"
+    || typeof data.conversationId !== "string" || typeof data.messageId !== "string"
+    || delivery.notification.readAt) return false;
+
+  const [message, recipient] = await Promise.all([
+    prisma.message.findUnique({
+      where: { id: data.messageId },
+      include: { conversation: { select: { id: true, type: true, status: true, participantA: true, participantB: true } } },
+    }),
+    prisma.user.findUnique({ where: { id: delivery.notification.userId }, select: { id: true, role: true, isSuspended: true } }),
+  ]);
+  if (!message || !recipient || recipient.isSuspended || recipient.role === "ADMIN"
+    || message.conversationId !== data.conversationId || message.isInternal || message.readAt
+    || message.conversation.type !== "SUPPORT" || message.conversation.status !== "OPEN") return false;
+  if (message.conversation.participantA !== recipient.id && message.conversation.participantB !== recipient.id) return false;
+  const sender = await prisma.user.findUnique({ where: { id: message.senderId }, select: { role: true } });
+  return sender?.role === "ADMIN";
+}
+
+export const notificationDeliveryService = {
+  /** Process durable push deliveries. Expo receipt checks finalize SENT rows. */
+  async dispatchBatch(limit = 50, now = new Date()): Promise<{ claimed: number; sent: number; retried: number; cancelled: number; dead: number }> {
+    const boundedLimit = Math.min(Math.max(Math.floor(limit), 1), 200);
+    await prisma.notificationDelivery.updateMany({
+      where: { status: "PROCESSING", lockedAt: { lt: new Date(now.getTime() - STALE_LOCK_MS) } },
+      data: { status: "PENDING", lockedAt: null, availableAt: now },
+    });
+    const due = await prisma.notificationDelivery.findMany({
+      where: { status: "PENDING", availableAt: { lte: now } },
+      include: { notification: { select: { id: true, userId: true, title: true, body: true, data: true, readAt: true } } },
+      orderBy: [{ availableAt: "asc" }, { createdAt: "asc" }],
+      take: boundedLimit,
+    });
+    const result = { claimed: 0, sent: 0, retried: 0, cancelled: 0, dead: 0 };
+
+    for (const delivery of due) {
+      const claim = await prisma.notificationDelivery.updateMany({
+        where: { id: delivery.id, status: "PENDING", availableAt: { lte: now } },
+        data: { status: "PROCESSING", lockedAt: now, attempt: { increment: 1 } },
+      });
+      if (!claim.count) continue;
+      result.claimed++;
+      const attempt = delivery.attempt + 1;
+
+      if (!(await supportReplyStillEligible(delivery))) {
+        await prisma.notificationDelivery.updateMany({
+          where: { id: delivery.id, status: "PROCESSING", lockedAt: now },
+          data: { status: "CANCELLED", lockedAt: null, lastError: "send_time_ineligible" },
+        });
+        result.cancelled++;
+        continue;
+      }
+
+      const role = await prisma.user.findUnique({ where: { id: delivery.notification.userId }, select: { role: true } });
+      const data = isRecord(delivery.notification.data) ? delivery.notification.data : {};
+      const communication = await prisma.$transaction(async (tx) => {
+        const log = await tx.communicationLog.create({
+          data: {
+            recipientId: delivery.notification.userId,
+            recipientType: role?.role ?? "UNKNOWN",
+            eventKey: `notification_delivery:${delivery.id}:attempt:${attempt}`,
+            channel: "push",
+            title: delivery.notification.title,
+            body: delivery.notification.body ?? "",
+            status: "QUEUED",
+            metadata: { deliveryId: delivery.id, notificationId: delivery.notification.id, ...data },
+          },
+        });
+        await tx.notificationDelivery.updateMany({
+          where: { id: delivery.id, status: "PROCESSING", lockedAt: now },
+          data: { communicationLogId: log.id },
+        });
+        return log;
+      });
+
+      const push = await sendPushToUser(delivery.notification.userId, {
+        title: delivery.notification.title,
+        body: delivery.notification.body ?? "",
+        data: { ...data, notificationId: delivery.notification.id },
+      }, { logId: communication.id });
+
+      if (push.accepted > 0) {
+        await prisma.communicationLog.update({
+          where: { id: communication.id },
+          data: { status: "SENT", providerRef: push.ticketIds[0] ?? null, statusDetail: "expo_accepted_receipt_pending" },
+        });
+        await prisma.notificationDelivery.updateMany({
+          where: { id: delivery.id, status: "PROCESSING", lockedAt: now },
+          data: { status: "SENT", lockedAt: null, communicationLogId: communication.id, providerRef: push.ticketIds[0] ?? null, lastError: null },
+        });
+        result.sent++;
+      } else {
+        const dead = attempt >= MAX_ATTEMPTS;
+        const error = push.error ?? (push.tokens === 0 ? "no_push_tokens" : "provider_rejected");
+        const next = new Date(now.getTime() + retryDelayMs(attempt));
+        await prisma.communicationLog.update({ where: { id: communication.id }, data: { status: "FAILED", statusDetail: error } });
+        await prisma.notificationDelivery.updateMany({
+          where: { id: delivery.id, status: "PROCESSING", lockedAt: now },
+          data: { status: dead ? "DEAD" : "PENDING", lockedAt: null, availableAt: next, communicationLogId: communication.id, lastError: error },
+        });
+        if (dead) result.dead++;
+        else result.retried++;
+        logger.warn("Notification push delivery did not reach Expo", { deliveryId: delivery.id, attempt, error, retryAt: dead ? undefined : next.toISOString() });
+      }
+    }
+    return result;
+  },
+
+  /** Provider receipt callback: acceptance is not delivery. */
+  async recordReceipt(logId: string, delivered: boolean, detail: string): Promise<void> {
+    const delivery = await prisma.notificationDelivery.findUnique({ where: { communicationLogId: logId }, select: { id: true, attempt: true, status: true } });
+    if (!delivery || delivery.status !== "SENT") return;
+    if (delivered) {
+      await prisma.notificationDelivery.updateMany({ where: { id: delivery.id, status: "SENT" }, data: { status: "DELIVERED", deliveredAt: new Date(), lastError: null } });
+      return;
+    }
+    const dead = delivery.attempt >= MAX_ATTEMPTS;
+    await prisma.notificationDelivery.updateMany({
+      where: { id: delivery.id, status: "SENT" },
+      data: {
+        status: dead ? "DEAD" : "PENDING",
+        availableAt: dead ? new Date() : new Date(Date.now() + retryDelayMs(delivery.attempt)),
+        lastError: detail,
+      },
+    });
+  },
+};
+

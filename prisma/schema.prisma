@@ -795,11 +795,44 @@ model Notification {
   // application-level "check then create" which races.
   dedupeKey String?          @unique
   user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  deliveries NotificationDelivery[]
   createdAt DateTime         @default(now())
 
   @@index([userId, readAt])
   @@index([userId, createdAt])
   @@index([type])
+}
+
+enum NotificationDeliveryStatus {
+  PENDING
+  PROCESSING
+  SENT
+  DELIVERED
+  FAILED
+  CANCELLED
+  DEAD
+}
+
+// Per-channel delivery attempts for an idempotent notification candidate.
+// This is additive and does not change delivery behavior for legacy rows.
+model NotificationDelivery {
+  id                  String                     @id @default(cuid())
+  notificationId      String
+  channel             String
+  status              NotificationDeliveryStatus @default(PENDING)
+  attempt             Int                        @default(0)
+  availableAt         DateTime                   @default(now())
+  lockedAt            DateTime?
+  communicationLogId  String?                    @unique
+  providerRef         String?
+  lastError           String?                    @db.Text
+  deliveredAt         DateTime?
+  notification        Notification               @relation(fields: [notificationId], references: [id], onDelete: Cascade)
+  createdAt           DateTime                   @default(now())
+  updatedAt           DateTime                   @updatedAt
+
+  @@unique([notificationId, channel])
+  @@index([status, availableAt])
 }
 
 model WebhookEvent {

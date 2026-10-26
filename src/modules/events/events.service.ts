@@ -98,6 +98,10 @@ export const EVENT_NAMES = {
   message_opened: "message_opened",
   message_clicked: "message_clicked",
   message_opted_out: "message_opted_out",
+  // A customer-visible reply from an Eki administrator in a general SUPPORT
+  // conversation. Deliberately distinct from generic messaging events so the
+  // R28 consumer can validate ownership, open state, and the support route.
+  support_response_received: "support_response_received",
 } as const;
 
 export type EventName = (typeof EVENT_NAMES)[keyof typeof EVENT_NAMES];
