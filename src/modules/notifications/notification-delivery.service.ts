@@ -6,6 +6,7 @@ import { sendPushToUser } from "../../lib/expo-push";
 import { EVENT_NAMES } from "../events/events.service";
 import { resolveNotificationRule } from "../events/notification-event-rules";
 import { COMMUNITY_BUY_ORGANISER_DECISION_WINDOW_MS } from "../community-buy/community-buy-timing";
+import { getCurrentInventoryConflict } from "../products/inventory-conflict";
 
 const MAX_ATTEMPTS = 8;
 const STALE_LOCK_MS = 5 * 60 * 1000;
@@ -56,6 +57,23 @@ async function productStockAlertStillEligible(delivery: NotificationDelivery & {
   return Boolean(product && recipient && !recipient.isSuspended && recipient.role === "VENDOR"
     && product.vendor.userId === recipient.id && product.isActive && product.status === "PUBLISHED"
     && product.stock === 0 && product.stockVersion === data.stockVersion);
+}
+
+async function productInventoryConflictStillEligible(delivery: NotificationDelivery & { notification: { userId: string; readAt: Date | null; data: unknown } }): Promise<boolean> {
+  if (process.env.R18_STOCK_CONFLICT_ENABLED !== "true") return false;
+  const data = delivery.notification.data;
+  if (!isRecord(data) || data.type !== "product_inventory_conflict" || typeof data.productId !== "string"
+    || typeof data.inventoryCountId !== "string" || delivery.notification.readAt) return false;
+  const [conflict, product, recipient, latestCount] = await Promise.all([
+    getCurrentInventoryConflict(prisma, data.inventoryCountId),
+    prisma.product.findUnique({ where: { id: data.productId }, include: { vendor: { select: { userId: true } } } }),
+    prisma.user.findUnique({ where: { id: delivery.notification.userId }, select: { id: true, role: true, isSuspended: true } }),
+    prisma.productInventoryCount.findFirst({ where: { productId: data.productId }, orderBy: [{ createdAt: "desc" }, { id: "desc" }], select: { id: true } }),
+  ]);
+  return Boolean(conflict && conflict.count.productId === data.productId && conflict.shortfall > 0
+    && latestCount?.id === data.inventoryCountId && product && product.isActive && product.status === "PUBLISHED"
+    && product.stockVersion === conflict.count.stockVersion && product.vendor.userId === delivery.notification.userId
+    && recipient?.role === "VENDOR" && !recipient.isSuspended);
 }
 
 async function criticalIncidentStillEligible(delivery: NotificationDelivery & { notification: { userId: string; readAt: Date | null; data: unknown } }): Promise<boolean> {
@@ -219,6 +237,10 @@ async function notificationStillEligible(delivery: NotificationDelivery & { noti
   if (data.type === "product_stock_depleted" && data.ruleKey === "R17_STOCK_DEPLETED") {
     const rule = resolveNotificationRule({ name: EVENT_NAMES.product_stock_depleted, schemaVersion: Number(data.ruleVersion) });
     return Boolean(rule?.enabled && await productStockAlertStillEligible(delivery));
+  }
+  if (data.type === "product_inventory_conflict" && data.ruleKey === "R18_STOCK_CONFLICT") {
+    const rule = resolveNotificationRule({ name: EVENT_NAMES.product_inventory_conflict_detected, schemaVersion: Number(data.ruleVersion) });
+    return Boolean(rule?.enabled && await productInventoryConflictStillEligible(delivery));
   }
   if (data.type === "community_campaign_update" && data.event === "minimum_reached" && data.ruleKey === "R35_COMMUNITY_BUY_MINIMUM_REACHED") {
     const rule = resolveNotificationRule({ name: EVENT_NAMES.community_buy_minimum_reached, schemaVersion: Number(data.ruleVersion) });

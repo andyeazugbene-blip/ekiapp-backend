@@ -25,6 +25,9 @@ const { prismaMock, txMock, sendPushToUser } = vi.hoisted(() => {
     campaignContribution: { findMany: vi.fn() },
     payoutRequest: { findUnique: vi.fn() },
     vendorSubscription: { findUnique: vi.fn() },
+    product: { findUnique: vi.fn() },
+    productInventoryCount: { findUnique: vi.fn(), findFirst: vi.fn(), create: vi.fn() },
+    orderItem: { aggregate: vi.fn() },
     notification: {
       create: vi.fn(async ({ data }: any) => {
         notificationRow = { id: "notification-1", readAt: null, ...data };
@@ -62,6 +65,8 @@ const { prismaMock, txMock, sendPushToUser } = vi.hoisted(() => {
     payoutRequest: { findUnique: vi.fn() },
     vendorSubscription: { findUnique: vi.fn() },
     product: { findUnique: vi.fn() },
+    productInventoryCount: { findUnique: vi.fn(), findFirst: vi.fn() },
+    orderItem: { aggregate: vi.fn() },
     communicationLog: { update: vi.fn().mockResolvedValue({}) },
     $transaction: vi.fn(async (fn: (tx: typeof txMock) => Promise<unknown>) => fn(txMock)),
   };
@@ -76,6 +81,7 @@ import { eventOutboxService } from "../modules/events/event-outbox.service";
 import { registerCoreEventHandlers } from "../modules/events/core-event-handlers";
 import { EVENT_NAMES } from "../modules/events/events.service";
 import { notificationDeliveryService } from "../modules/notifications/notification-delivery.service";
+import { inventoryCountsService } from "../modules/products/inventory-counts.service";
 import { ensureCriticalIncidentCandidates } from "../modules/ledger/critical-incident-notifications";
 
 describe("event to notification pipeline integration", () => {
@@ -148,6 +154,62 @@ describe("event to notification pipeline integration", () => {
       where: { id: "delivery-1", status: "SENT" },
       data: expect.objectContaining({ status: "DELIVERED", deliveredAt: expect.any(Date) }),
     }));
+  });
+
+  it("routes a physical stocktake conflict without counting checkout-reserved quantities twice", async () => {
+    vi.stubEnv("R18_STOCK_CONFLICT_ENABLED", "true");
+    const count = { id: "count-1", productId: "product-1", physicalQuantity: 3, outstandingOrderQuantity: 5, shortfallQuantity: 2, stockVersion: 4, createdAt: new Date("2026-10-26T11:00:00Z") };
+    txMock.productInventoryCount.findUnique.mockResolvedValue(count);
+    prismaMock.productInventoryCount.findUnique.mockResolvedValue(count);
+    prismaMock.productInventoryCount.findFirst.mockResolvedValue({ id: "count-1" });
+    // Five real units remain outstanding; Product.stock is deliberately not
+    // added to that number because checkout already deducted it.
+    const orderQuantity = async ({ where }: any) => ({ _sum: { quantity: where.order.deliveredAt ? null : 5 } });
+    txMock.orderItem.aggregate.mockImplementation(orderQuantity);
+    prismaMock.orderItem.aggregate.mockImplementation(orderQuantity);
+    const product = { id: "product-1", stock: 0, stockVersion: 4, status: "PUBLISHED", isActive: true, vendor: { userId: "vendor-1" } };
+    txMock.product.findUnique.mockResolvedValue(product);
+    prismaMock.product.findUnique.mockResolvedValue(product);
+    txMock.user.findUnique.mockResolvedValue({ id: "vendor-1", role: "VENDOR", isSuspended: false });
+    prismaMock.user.findUnique.mockResolvedValue({ id: "vendor-1", role: "VENDOR", isSuspended: false });
+
+    const event = await prismaMock.$transaction((tx: typeof txMock) => eventOutboxService.enqueue(tx, {
+      name: EVENT_NAMES.product_inventory_conflict_detected,
+      actorType: "vendor", actorId: "vendor-1", entityType: "Product", entityId: "product-1",
+      payload: { productId: "product-1", inventoryCountId: "count-1", stockVersion: 4 },
+    }, { dedupeKey: "product-inventory-conflict:count-1", schemaVersion: 1 }));
+    const outboxResult = await eventOutboxService.dispatchRegisteredBatch(10, new Date("2026-10-26T12:00:00Z"));
+    expect(outboxResult).toMatchObject({ claimed: 1, delivered: 1 });
+    expect(txMock.notification.create).toHaveBeenCalledWith({ data: expect.objectContaining({
+      userId: "vendor-1", type: "INVENTORY_ALERT", title: "Check stock for an active order",
+      body: "Available quantity may not cover outstanding orders.", dedupeKey: "R18_STOCK_CONFLICT:count-1",
+      data: expect.objectContaining({ ruleKey: "R18_STOCK_CONFLICT", eventId: event.id, destination: "inventory_detail", shortfallQuantity: 2 }),
+    }) });
+    const delivery = await notificationDeliveryService.dispatchBatch(10, new Date("2026-10-26T12:00:00Z"));
+    expect(delivery).toMatchObject({ claimed: 1, sent: 1 });
+    expect(sendPushToUser).toHaveBeenCalledWith("vendor-1", expect.objectContaining({
+      title: "Check stock for an active order", data: expect.objectContaining({ inventoryCountId: "count-1", destination: "inventory_detail" }),
+    }), { logId: "log-1" });
+  });
+
+  it("reconciles available stock from a physical count minus already-reserved open orders", async () => {
+    const product = { id: "product-1", vendorId: "vendor-profile-1", stock: 8, stockVersion: 3, vendor: { id: "vendor-profile-1", userId: "vendor-1", isSuspended: false } };
+    prismaMock.product.findUnique.mockResolvedValue(product);
+    txMock.product.findUnique.mockResolvedValue({ stock: 8, stockVersion: 3, vendorId: "vendor-profile-1" });
+    txMock.product.updateMany = vi.fn().mockResolvedValue({ count: 1 });
+    txMock.product.findUniqueOrThrow = vi.fn().mockResolvedValue({ stockVersion: 4 });
+    txMock.orderItem.aggregate.mockResolvedValue({ _sum: { quantity: 5 } });
+    txMock.productInventoryCount.create.mockResolvedValue({ id: "count-2", shortfallQuantity: 0 });
+
+    await inventoryCountsService.record("vendor-1", "product-1", 7);
+    expect(txMock.product.updateMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: "product-1", stock: 8, stockVersion: 3 },
+      data: { stock: 2, stockVersion: { increment: 1 } },
+    }));
+    expect(txMock.productInventoryCount.create).toHaveBeenCalledWith({ data: expect.objectContaining({
+      productId: "product-1", physicalQuantity: 7, outstandingOrderQuantity: 5, shortfallQuantity: 0,
+    }) });
+    expect(txMock.event.upsert).not.toHaveBeenCalled();
   });
 
   it("routes confirmed Community Buy minimum events to the organiser through the durable delivery path", async () => {

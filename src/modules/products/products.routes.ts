@@ -11,6 +11,7 @@ import {
   listMyProducts,
   listProducts,
   resumeProduct,
+  recordInventoryCount,
   updateProduct,
 } from "./products.controller";
 
@@ -25,3 +26,4 @@ productsRouter.post("/", authenticate, requireVendorProfile(), asyncHandler(crea
 productsRouter.patch("/:id", authenticate, requireVendorProfile(), asyncHandler(updateProduct));
 productsRouter.delete("/:id", authenticate, requireVendorProfile(), asyncHandler(disableProduct));
 productsRouter.post("/:id/resume", authenticate, requireVendorProfile(), asyncHandler(resumeProduct));
+productsRouter.post("/:id/inventory-counts", authenticate, requireVendorProfile(), asyncHandler(recordInventoryCount));

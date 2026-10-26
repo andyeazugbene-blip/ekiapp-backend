@@ -144,6 +144,7 @@ enum NotificationType {
   // Diaspora Expansion — Community Buy. Sub-event is carried in
   // Notification.data.event (e.g. "milestone_reached", "refund_started").
   COMMUNITY_CAMPAIGN_UPDATE
+  INVENTORY_ALERT
   // In-app support messaging (2026-09-22 client decision): a real,
   // dedicated type for "you got a new conversation message" — messages
   // .service.ts previously (mis)used ADMIN_BROADCAST for this, which the
@@ -454,6 +455,7 @@ model Product {
   adminUnpublishedById      String?
   vendor                    Vendor                     @relation(fields: [vendorId], references: [id], onDelete: Restrict)
   orderItems                OrderItem[]
+  inventoryCounts           ProductInventoryCount[]
   cartItems                 CartItem[]
   subscriptionOfferProducts SubscriptionOfferProduct[]
   subscriptionItems         SubscriptionItem[]
@@ -470,6 +472,23 @@ model Product {
   @@index([createdAt])
   @@index([vendorId, status])
   @@index([status])
+}
+
+// Explicit physical stocktakes are distinct from Product.stock, which is the
+// sellable quantity after checkout has already deducted open-order items.
+// Keeping the count snapshot lets R18 compare physical on-hand with real
+// outstanding order obligations without counting those obligations twice.
+model ProductInventoryCount {
+  id                       String   @id @default(cuid())
+  productId                String
+  physicalQuantity         Int
+  outstandingOrderQuantity Int
+  shortfallQuantity        Int
+  stockVersion             Int
+  createdAt                DateTime @default(now())
+  product                  Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@index([productId, createdAt])
 }
 
 // One cart per buyer. A buyer may add products in different native

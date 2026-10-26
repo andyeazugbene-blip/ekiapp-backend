@@ -35,6 +35,12 @@ export const NOTIFICATION_EVENT_RULES: readonly NotificationRuleDefinition[] = [
     enabled: () => process.env.R17_STOCK_DEPLETED_ENABLED === "true",
   },
   {
+    eventName: EVENT_NAMES.product_inventory_conflict_detected,
+    key: "R18_STOCK_CONFLICT",
+    version: 1,
+    enabled: () => process.env.R18_STOCK_CONFLICT_ENABLED === "true",
+  },
+  {
     eventName: EVENT_NAMES.community_buy_minimum_reached,
     key: "R35_COMMUNITY_BUY_MINIMUM_REACHED",
     version: 1,
