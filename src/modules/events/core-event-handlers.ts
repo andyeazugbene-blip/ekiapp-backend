@@ -47,9 +47,9 @@ export async function handleSupportResponseReceived(tx: Prisma.TransactionClient
     title: "Eki Support has replied",
     body: "Open your case to read the update.",
     data: {
-      type: "support_response_received",
+      type: "support_case_response",
       templateVersion: 1,
-      destination: "support_conversation",
+      destination: "support_case",
       conversationId,
       messageId,
     },

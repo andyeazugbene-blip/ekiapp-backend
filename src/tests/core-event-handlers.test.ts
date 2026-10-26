@@ -48,7 +48,7 @@ describe("R28 general support response outbox handler", () => {
       title: "Eki Support has replied",
       body: "Open your case to read the update.",
       dedupeKey: "R28_SUPPORT_THREAD_REPLY:message-1",
-      data: expect.objectContaining({ destination: "support_conversation", conversationId: "conversation-1", messageId: "message-1" }),
+      data: expect.objectContaining({ type: "support_case_response", destination: "support_case", conversationId: "conversation-1", messageId: "message-1" }),
     }), tx);
     expect((tx as any).notificationDelivery.upsert).toHaveBeenCalledWith(expect.objectContaining({
       where: { notificationId_channel: { notificationId: "notification-1", channel: "push" } },
