@@ -81,6 +81,9 @@ describe("notificationsService.enqueue — a deduped DB row must also suppress t
     m.notification.create.mockResolvedValue({ id: "n1" } as never);
     await notificationsService.enqueue({ userId: "u1", type: "ADMIN_BROADCAST", title: "Hi", dedupeKey: "EVENT:1" });
     expect(mSendPush).toHaveBeenCalledTimes(1);
+    expect(mSendPush).toHaveBeenCalledWith("u1", expect.objectContaining({
+      data: { notificationId: "n1" },
+    }));
   });
 
   it("skips the push entirely when dedupeKey already existed — a real duplicate push to the buyer's device is exactly what this must never do", async () => {

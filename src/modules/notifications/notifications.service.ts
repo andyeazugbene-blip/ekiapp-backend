@@ -114,7 +114,10 @@ export const notificationsService = {
     await sendPushToUser(input.userId, {
       title: input.title,
       body: input.body ?? "",
-      data: input.data as Record<string, unknown> | undefined,
+      data: {
+        ...(input.data as Record<string, unknown> | undefined),
+        ...(created ? { notificationId: created.id } : {}),
+      },
     }).catch((error) => {
       logger.warn("Push notification send failed (non-blocking)", {
         userId: input.userId,

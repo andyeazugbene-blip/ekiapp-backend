@@ -1,4 +1,5 @@
 import type { SupportCaseStatus, SupportCaseType } from "@prisma/client";
+import { createHash } from "node:crypto";
 
 import { prisma } from "../../lib/prisma";
 import { logger } from "../../lib/logger";
@@ -117,7 +118,9 @@ export const supportCaseService = {
     // only by manually reopening the app — no push, no in-app row, no
     // email was ever sent. Only notify on a genuine transition (a new or
     // changed response), not a no-op re-save of the same text.
-    const respondedNow = input.customerVisibleResponse !== undefined && input.customerVisibleResponse !== existing.customerVisibleResponse;
+    const respondedNow = input.customerVisibleResponse !== undefined
+      && input.customerVisibleResponse !== existing.customerVisibleResponse
+      && existing.status !== "CLOSED";
     if (input.customerVisibleResponse !== undefined) data.customerVisibleResponse = input.customerVisibleResponse;
     if (input.escalated !== undefined) {
       data.escalated = input.escalated;
@@ -128,12 +131,23 @@ export const supportCaseService = {
 
     if (respondedNow) {
       try {
+        // A response is one notification episode. Include the case's prior
+        // version so the same text may be sent again after a later response
+        // cycle, while concurrent/retried writes of this version dedupe.
+        const responseHash = createHash("sha256")
+          .update(input.customerVisibleResponse!.trim())
+          .digest("hex")
+          .slice(0, 16);
+        const priorVersion = existing.updatedAt instanceof Date
+          ? existing.updatedAt.toISOString()
+          : "legacy";
         await notificationsService.enqueue({
           userId: existing.participantId,
           type: "COMMUNITY_CAMPAIGN_UPDATE",
-          title: "Your support case has a response",
-          body: input.customerVisibleResponse!.length > 140 ? `${input.customerVisibleResponse!.slice(0, 140)}…` : input.customerVisibleResponse!,
-          data: { type: "support_case_response", campaignId: existing.campaignId, caseId },
+          title: "Eki Support has replied",
+          body: "Open your case to read the update.",
+          data: { type: "support_case_response", destination: "support_case", campaignId: existing.campaignId, caseId },
+          dedupeKey: `R28_SUPPORT_RESPONSE:${caseId}:${priorVersion}:${responseHash}`,
         });
       } catch (error) {
         logger.error("Support case response notification failed (non-blocking)", {
