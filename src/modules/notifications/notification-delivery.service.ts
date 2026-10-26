@@ -92,6 +92,20 @@ async function paidOrderStillEligible(delivery: NotificationDelivery & { notific
     && recipient?.id === delivery.notification.userId && recipient.role === "VENDOR" && !recipient.isSuspended);
 }
 
+async function buyerOrderConfirmationStillEligible(delivery: NotificationDelivery & { notification: { userId: string; readAt: Date | null; data: unknown } }): Promise<boolean> {
+  const data = delivery.notification.data;
+  if (!isRecord(data) || typeof data.orderId !== "string" || delivery.notification.readAt
+    || process.env.R21_ORDER_CONFIRMED_ENABLED !== "true") return false;
+  const rule = resolveNotificationRule({ name: EVENT_NAMES.order_confirmed, schemaVersion: Number(data.ruleVersion) });
+  if (!rule?.enabled || rule.key !== "R21_ORDER_CONFIRMED") return false;
+  const [order, recipient] = await Promise.all([
+    prisma.order.findUnique({ where: { id: data.orderId }, select: { buyerId: true, status: true } }),
+    prisma.user.findUnique({ where: { id: delivery.notification.userId }, select: { id: true, role: true, isSuspended: true } }),
+  ]);
+  return Boolean(order?.status === "PAID" && order.buyerId === delivery.notification.userId
+    && recipient?.id === delivery.notification.userId && recipient.role === "BUYER" && !recipient.isSuspended);
+}
+
 async function criticalIncidentStillEligible(delivery: NotificationDelivery & { notification: { userId: string; readAt: Date | null; data: unknown } }): Promise<boolean> {
   if (process.env.R40_PAYMENT_ANOMALY_ALERTS_ENABLED !== "true") return false;
   const data = delivery.notification.data;
@@ -243,6 +257,7 @@ async function supplierReconfirmationStillEligible(delivery: NotificationDeliver
 async function notificationStillEligible(delivery: NotificationDelivery & { notification: { userId: string; readAt: Date | null; data: unknown } }): Promise<boolean> {
   const data = delivery.notification.data;
   if (!isRecord(data)) return false;
+  if (data.type === "buyer_order_confirmed" && data.ruleKey === "R21_ORDER_CONFIRMED") return buyerOrderConfirmationStillEligible(delivery);
   if (data.type === "vendor_order_paid" && data.ruleKey === "R12_FIRST_PAID_ORDER") return paidOrderStillEligible(delivery);
   if (data.type === "critical_incident" && data.ruleKey === "R40_CRITICAL_INCIDENT") {
     return criticalIncidentStillEligible(delivery);

@@ -91,6 +91,7 @@ describe("event to notification pipeline integration", () => {
     vi.clearAllMocks();
     vi.stubEnv("R28_GENERAL_SUPPORT_NOTIFICATIONS_ENABLED", "true");
     vi.stubEnv("R12_FIRST_PAID_ORDER_ENABLED", "false");
+    vi.stubEnv("R21_ORDER_CONFIRMED_ENABLED", "false");
     vi.stubEnv("R34_COMMUNITY_BUY_BELOW_MINIMUM_ENABLED", "true");
     vi.stubEnv("R26_PAYOUT_CONFIRMED_ENABLED", "true");
     vi.stubEnv("R36_COMMUNITY_BUY_PAYMENT_ACTION_REQUIRED_ENABLED", "false");
@@ -117,6 +118,32 @@ describe("event to notification pipeline integration", () => {
       organiser: { userId: "buyer-1" },
     });
     registerCoreEventHandlers();
+  });
+
+  it("routes a transactional order-confirmed event to the buyer with the v2 copy", async () => {
+    vi.stubEnv("R21_ORDER_CONFIRMED_ENABLED", "true");
+    txMock.order.findUnique.mockResolvedValue({ id: "order-21", orderNumber: "EKI-21", buyerId: "buyer-21", status: "PAID" });
+    prismaMock.order.findUnique.mockResolvedValue({ buyerId: "buyer-21", status: "PAID" });
+    txMock.user.findUnique.mockResolvedValue({ id: "buyer-21", role: "BUYER", isSuspended: false });
+    prismaMock.user.findUnique.mockResolvedValue({ id: "buyer-21", role: "BUYER", isSuspended: false });
+
+    const event = await prismaMock.$transaction((tx: typeof txMock) => eventOutboxService.enqueue(tx, {
+      name: EVENT_NAMES.order_confirmed, actorType: "stripe", entityType: "Order", entityId: "order-21",
+      payload: { orderId: "order-21", stripeEventId: "evt-21" },
+    }, { dedupeKey: "order-confirmed:evt-21:order-21", schemaVersion: 1 }));
+    const outbox = await eventOutboxService.dispatchRegisteredBatch(10, new Date("2026-10-27T12:00:00Z"));
+    expect(outbox).toMatchObject({ claimed: 1, delivered: 1 });
+    expect(txMock.notification.create).toHaveBeenCalledWith({ data: expect.objectContaining({
+      userId: "buyer-21", title: "Your order is confirmed", body: "Track your foodstuff order in Eki.",
+      dedupeKey: "R21_ORDER_CONFIRMED:order-21",
+      data: expect.objectContaining({ ruleKey: "R21_ORDER_CONFIRMED", eventId: event.id, destination: "order_detail", orderId: "order-21" }),
+    }) });
+    const delivery = await notificationDeliveryService.dispatchBatch(10, new Date("2026-10-27T12:00:01Z"));
+    expect(delivery).toMatchObject({ claimed: 1, sent: 1 });
+    expect(sendPushToUser).toHaveBeenCalledWith("buyer-21", expect.objectContaining({
+      title: "Your order is confirmed", body: "Track your foodstuff order in Eki.",
+      data: expect.objectContaining({ type: "buyer_order_confirmed", destination: "order_detail", orderId: "order-21" }),
+    }), { logId: "log-1" });
   });
 
   it("routes a transactional paid-order event to one vendor candidate and durable push", async () => {
