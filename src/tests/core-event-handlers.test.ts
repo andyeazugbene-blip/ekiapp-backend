@@ -36,7 +36,12 @@ beforeEach(() => vi.clearAllMocks());
 
 describe("R28 general support response outbox handler", () => {
   it("creates the exact, recipient-targeted idempotent inbox candidate", async () => {
-    const tx = makeTx();
+    createCandidate.mockResolvedValue({ id: "notification-1" });
+    const tx = {
+      ...(makeTx() as object),
+      notification: { findUnique: vi.fn() },
+      notificationDelivery: { upsert: vi.fn() },
+    } as never;
     await handleSupportResponseReceived(tx, outboxEvent);
     expect(createCandidate).toHaveBeenCalledWith(expect.objectContaining({
       userId: "buyer-1",
@@ -45,6 +50,9 @@ describe("R28 general support response outbox handler", () => {
       dedupeKey: "R28_SUPPORT_THREAD_REPLY:message-1",
       data: expect.objectContaining({ destination: "support_conversation", conversationId: "conversation-1", messageId: "message-1" }),
     }), tx);
+    expect((tx as any).notificationDelivery.upsert).toHaveBeenCalledWith(expect.objectContaining({
+      where: { notificationId_channel: { notificationId: "notification-1", channel: "push" } },
+    }));
   });
 
   it.each([

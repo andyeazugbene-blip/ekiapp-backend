@@ -286,6 +286,10 @@ async function markLog(logId: string, status: "DELIVERED" | "FAILED", detail: st
     });
     // Real provider receipt => canonical message event (eventKey = name:logId, so a re-checked receipt dedupes).
     if (result?.count === 1) emitMessageEvent(status === "DELIVERED" ? "delivered" : "failed", { logId, channel: "push", detail, source: "expo_receipt" });
+    if (result?.count === 1) {
+      const { notificationDeliveryService } = await import("../modules/notifications/notification-delivery.service.js");
+      await notificationDeliveryService.recordReceipt(logId, status === "DELIVERED", detail);
+    }
   } catch (error) {
     logger.warn("Could not record push receipt on communication log", {
       logId,
