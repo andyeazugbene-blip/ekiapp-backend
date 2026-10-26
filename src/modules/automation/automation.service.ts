@@ -75,11 +75,11 @@ export const DEFAULT_TEMPLATES: Record<AutomationType, { title: string; body: st
     channels: ["push", "in_app", "email"],
     recipientType: "VENDOR",
   },
-  // R04 candidate copy is intentionally generic pending the authoritative
-  // v2 template. The corresponding AutomationRule is created DRAFT.
+  // Exact v2 R04 copy. The corresponding AutomationRule remains DRAFT until
+  // the Acquisition WhatsApp owner, sub-daily timing, and live route are verified.
   DRAFT_PRODUCT_REMINDER: {
-    title: "Finish your foodstuff draft",
-    body: "Your foodstuff draft is incomplete. Finish the missing details when you're ready.",
+    title: "Your foodstuff listing is nearly ready",
+    body: "Finish the remaining details.",
     channels: ["push", "in_app"],
     recipientType: "VENDOR",
   },

@@ -4,19 +4,18 @@ import { assertRuleCanBeActivated } from "../modules/automation/automation-rules
 afterEach(() => vi.unstubAllEnvs());
 
 describe("R04 enablement gate", () => {
-  it("rejects activation while the client copy and policy have not been approved", () => {
-    vi.stubEnv("R04_ENABLEMENT_APPROVED", "false");
+  it("rejects activation while channel ownership, sub-daily timing, and live route QA are unverified", () => {
     expect(() => assertRuleCanBeActivated("DRAFT_PRODUCT_REMINDER", "ACTIVE"))
-      .toThrow("R04 cannot be enabled until its exact client copy and policy are approved");
+      .toThrow("R04 cannot be enabled until Acquisition WhatsApp coordination, sub-daily timing, and route delivery are verified");
   });
 
-  it("permits activation only when the explicit approval gate is true", () => {
+  it("does not let an approval environment flag bypass the unverified operational dependencies", () => {
     vi.stubEnv("R04_ENABLEMENT_APPROVED", "true");
-    expect(() => assertRuleCanBeActivated("DRAFT_PRODUCT_REMINDER", "ACTIVE")).not.toThrow();
+    expect(() => assertRuleCanBeActivated("DRAFT_PRODUCT_REMINDER", "ACTIVE"))
+      .toThrow("R04 cannot be enabled until Acquisition WhatsApp coordination, sub-daily timing, and route delivery are verified");
   });
 
   it("does not block unrelated rules or non-activation transitions", () => {
-    vi.stubEnv("R04_ENABLEMENT_APPROVED", "false");
     expect(() => assertRuleCanBeActivated("FIRST_SALE", "ACTIVE")).not.toThrow();
     expect(() => assertRuleCanBeActivated("DRAFT_PRODUCT_REMINDER", "PAUSED")).not.toThrow();
   });

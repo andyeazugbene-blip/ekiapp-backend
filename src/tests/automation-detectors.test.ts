@@ -75,6 +75,8 @@ describe("automationDetectors.runSweep — R04 incomplete product drafts", () =>
     expect(calls[0]).toEqual(expect.objectContaining({
       recipientUserId: "vendor-user-1",
       vendorId: "vendor-1",
+      title: "Your foodstuff listing is nearly ready",
+      body: "Finish the remaining details.",
       data: expect.objectContaining({ destination: "foodstuff_editor", productId: "draft-1", touch_number: 1 }),
     }));
   });

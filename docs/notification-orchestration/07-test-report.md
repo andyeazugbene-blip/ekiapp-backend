@@ -6,7 +6,13 @@
 - Backend `npm run build`: **passed**.
 - Mobile `npm run typecheck`: **passed** after adding case-specific R28 routing, own-case verification before expansion, and read acknowledgement after authentication restoration.
 - No schema or migration changes were made. No native device QA or full backend suite was run for this slice.
-- GitHub was unreachable from this environment during publication; this local feature commit has no PR or CI result yet.
+- Backend PR #21 was published, then GitHub reports it merged by `andyeazugbene-blip` at 2026-10-26 12:05:48 UTC; I did not perform the merge. At the latest check its `test` job was still IN_PROGRESS and Vercel was PENDING, so CI success is not established. Mobile PR #5 remains open; its Vercel and preview-comment checks passed after the R28 mobile commit.
+
+## Follow-up verification — 2026-10-26 R04 source alignment
+
+- Backend `src/tests/automation-detectors.test.ts` and `src/tests/automation-rule-approval.test.ts`: **51 tests passed**. The detector assertions now check the exact v2 title/body and the gate rejects activation even when the old approval environment flag is set.
+- Backend build and mobile typecheck passed in the R28 verification above; no mobile source changed in this R04 slice.
+- R04 remains disabled because the active scheduler is daily, Acquisition WhatsApp coordination is not implemented/verified, and native route QA is unavailable.
 
 ## Historical verification — 2026-10-26 R10 changes
 

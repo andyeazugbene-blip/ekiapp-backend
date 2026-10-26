@@ -209,8 +209,9 @@ async function detectFirstProductReminder(): Promise<number> {
  * predicate as products.service (images.length > 0 && priceInCents > 0).
  * The draft's updatedAt is the inactivity clock, so saving meaningful edits
  * restarts the P2 window. A completed draft or any transition out of DRAFT
- * is excluded on the next sweep. New rule records are DRAFT until client
- * copy and policy are checked against the authoritative v2 document.
+ * is excluded on the next sweep. Copy follows v2; new rule records stay
+ * DRAFT while Acquisition WhatsApp ownership, sub-daily timing, and live
+ * route delivery remain unverified.
  */
 async function detectDraftProductReminder(): Promise<number> {
   const gate = await getRuleGate("DRAFT_PRODUCT_REMINDER");
@@ -242,8 +243,8 @@ async function detectDraftProductReminder(): Promise<number> {
       subjectPrefix: product.id,
       hoursSinceEligible: hoursSinceUpdate,
       requiresMarketingConsent: false,
-      title: "Finish your foodstuff draft",
-      body: "Your foodstuff draft is incomplete. Finish the missing details when you're ready.",
+      title: "Your foodstuff listing is nearly ready",
+      body: "Finish the remaining details.",
       data: {
         destination: "foodstuff_editor",
         productId: product.id,
