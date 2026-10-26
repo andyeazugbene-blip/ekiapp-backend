@@ -13,6 +13,7 @@ const { prismaMock, txMock, sendPushToUser } = vi.hoisted(() => {
       message: { findUnique: vi.fn() },
       product: { findUnique: vi.fn() },
       communityCampaign: { findUnique: vi.fn() },
+      campaignContribution: { findMany: vi.fn() },
       payoutRequest: { findUnique: vi.fn() },
       user: { findUnique: vi.fn() },
       communicationLog: { update: vi.fn() },

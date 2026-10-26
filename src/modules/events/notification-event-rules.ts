@@ -46,6 +46,12 @@ export const NOTIFICATION_EVENT_RULES: readonly NotificationRuleDefinition[] = [
     version: 1,
     enabled: () => process.env.R25_PAYOUT_ACTION_REQUIRED_ENABLED === "true",
   },
+  {
+    eventName: EVENT_NAMES.community_buy_below_minimum,
+    key: "R34_COMMUNITY_BUY_BELOW_MINIMUM",
+    version: 1,
+    enabled: () => process.env.R34_COMMUNITY_BUY_BELOW_MINIMUM_ENABLED === "true",
+  },
 ];
 
 export function resolveNotificationRule(event: Pick<Event, "name" | "schemaVersion">): ResolvedNotificationRule | null {
