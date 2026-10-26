@@ -8,6 +8,8 @@ import { currencyFromCountry } from "../../shared/currency";
 import { AppError } from "../../shared/errors/app-error";
 import { subscriptionsService } from "../subscriptions/subscriptions.service";
 import { isSellerReadinessGateEnabled, purchasableVendorWhere } from "./seller-readiness";
+import { enqueueProductStockDepleted } from "./product-stock-events";
+import { dispatchNotificationsAfterCommit } from "../events/dispatch-notifications";
 import type {
   CreateProductInput,
   ListProductsQuery,
@@ -196,10 +198,11 @@ export const productsService = {
           })()
         : {};
 
-    return prisma.product.update({
-      where: { id: productId },
-      data: {
+    const stockChanged = typeof rest.stock === "number" && rest.stock !== product.stock;
+    const updatedProduct = await prisma.$transaction(async (tx) => {
+      const data = {
         ...rest,
+        ...(stockChanged ? { stockVersion: { increment: 1 } } : {}),
         ...(priceAmount !== undefined ? { priceInCents: priceAmount } : {}),
         ...(costAmount !== undefined
           ? {
@@ -210,8 +213,23 @@ export const productsService = {
             ? { costCurrency }
             : {}),
         ...statusUpdate,
-      },
+      };
+      if (stockChanged) {
+        const claimed = await tx.product.updateMany({
+          where: { id: productId, stock: product.stock, stockVersion: product.stockVersion },
+          data,
+        });
+        if (!claimed.count) throw new AppError("Product stock changed concurrently. Refresh and try again.", 409, null, "STOCK_CHANGED");
+        const current = await tx.product.findUniqueOrThrow({ where: { id: productId } });
+        if (product.stock > 0 && current.stock === 0) {
+          await enqueueProductStockDepleted(tx, { product: current, stockDecrementedBy: product.stock, actorId: userId, actorType: "user" });
+        }
+        return current;
+      }
+      return tx.product.update({ where: { id: productId }, data });
     });
+    if (stockChanged && product.stock > 0 && updatedProduct.stock === 0) void dispatchNotificationsAfterCommit();
+    return updatedProduct;
   },
 
   async listMyProducts(userId: string): Promise<Product[]> {

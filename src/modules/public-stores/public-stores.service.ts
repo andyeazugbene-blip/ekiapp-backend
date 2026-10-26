@@ -14,6 +14,8 @@ import { otpService } from "../auth/otp.service";
 import { resolveVendorCommission } from "../subscriptions/subscription-plan-utils";
 import { buildVendorShareUrl } from "../vendors/vendors.service";
 import { vendorMilestoneNotificationsService } from "../vendors/vendor-milestone-notifications.service";
+import { enqueueProductStockDepleted } from "../products/product-stock-events";
+import { dispatchNotificationsAfterCommit } from "../events/dispatch-notifications";
 import type {
   ListPublicProductsQuery,
   PublicProduct,
@@ -1046,11 +1048,13 @@ export const publicStoresService = {
       for (const item of pricedItems) {
         const updated = await tx.product.updateMany({
           where: { id: item.productId, vendorId: vendor.id, isActive: true, stock: { gte: item.quantity } },
-          data: { stock: { decrement: item.quantity } },
+          data: { stock: { decrement: item.quantity }, stockVersion: { increment: 1 } },
         });
         if (updated.count !== 1) {
           throw new AppError(`Insufficient stock for "${item.productTitle}"`, 409);
         }
+        const stock = await tx.product.findUnique({ where: { id: item.productId }, select: { id: true, stock: true, stockVersion: true, status: true, isActive: true } });
+        if (stock) await enqueueProductStockDepleted(tx, { product: stock, stockDecrementedBy: item.quantity, actorId: buyer.id, actorType: "user" });
       }
 
       const checkout = await tx.checkout.create({
@@ -1161,6 +1165,8 @@ export const publicStoresService = {
 
       return { checkoutId: checkout.id, orderId: order.id, orderNumber: order.orderNumber };
     }, { isolationLevel: "Serializable" });
+
+    void dispatchNotificationsAfterCommit();
 
     const publicBaseUrl = process.env.FRONTEND_URL ?? "https://www.culinarytales.app";
 

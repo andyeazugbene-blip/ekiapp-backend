@@ -230,7 +230,7 @@ describe("paymentsService.createPaymentIntent — PaymentSheet response shape", 
 
     expect(rollbackTx.product.update).toHaveBeenCalledWith({
       where: { id: "p1" },
-      data: { stock: { increment: 2 } },
+      data: { stock: { increment: 2 }, stockVersion: { increment: 1 } },
     });
     expect(rollbackTx.order.updateMany).toHaveBeenCalledWith({
       where: { id: { in: ["ord-3"] } },
@@ -424,7 +424,7 @@ describe("paymentsService.createPaymentIntent — PaymentSheet response shape", 
     mValidatePromo.mockResolvedValue({ discountAmount: 100, code: "SAVE10", type: "PERCENTAGE", value: 10 } as never);
 
     const tx = {
-      product: { updateMany: vi.fn().mockResolvedValue({ count: 1 }) },
+      product: { updateMany: vi.fn().mockResolvedValue({ count: 1 }), findUnique: vi.fn().mockResolvedValue(null) },
       checkout: { create: vi.fn().mockResolvedValue({ id: "co-6" }) },
       order: { create: vi.fn().mockResolvedValue({ id: "ord-6" }) },
       orderItem: { createMany: vi.fn().mockResolvedValue({ count: 1 }) },

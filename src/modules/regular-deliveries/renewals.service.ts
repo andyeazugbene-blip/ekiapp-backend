@@ -14,6 +14,8 @@ import { recordAudit } from "../../shared/utils/audit";
 import { eventsService, EVENT_NAMES } from "../events/events.service";
 import { nextCycleDate, recordAction } from "./buyer-subscriptions.service";
 import { adminPlatformSettingsService } from "../admin/admin-platform-settings.service";
+import { enqueueProductStockDepleted } from "../products/product-stock-events";
+import { dispatchNotificationsAfterCommit } from "../events/dispatch-notifications";
 
 // Regular Deliveries had zero AuditLog coverage for anything beyond buyer-
 // initiated actions (those go to SubscriptionActionHistory instead, see
@@ -229,6 +231,7 @@ export const renewalsService = {
 
     // The DB unique (subscriptionId, cycleDate) means create() above succeeds once per cycle,
     // so this fires once; eventKey lets consumers dedupe the at-least-once delivery anyway.
+    void dispatchNotificationsAfterCommit();
     eventsService.emit({
       name: EVENT_NAMES.renewal_due, actorType: "system", entityType: "Renewal", entityId: renewal.id,
       secondaryEntities: { subscriptionId }, source: "generate_due_renewals", currency: renewal.currency,
@@ -1042,13 +1045,16 @@ export const renewalsService = {
       for (const item of renewal.items) {
         const result = await tx.product.updateMany({
           where: { id: item.productId, isActive: true, stock: { gte: item.quantity } },
-          data: { stock: { decrement: item.quantity } },
+          data: { stock: { decrement: item.quantity }, stockVersion: { increment: 1 } },
         });
         if (result.count !== 1) {
           // Stock disappeared between confirmation and payment — the payment
           // already succeeded, so we still create the order (money moved),
           // but flag it for vendor/admin attention via zero-decrement skip.
           logger.error("Renewal order conversion: stock unavailable after payment succeeded", { renewalId, productId: item.productId });
+        } else {
+          const stock = await tx.product.findUnique({ where: { id: item.productId }, select: { id: true, stock: true, stockVersion: true, status: true, isActive: true } });
+          if (stock) await enqueueProductStockDepleted(tx, { product: stock, stockDecrementedBy: item.quantity, actorId: null, actorType: "system" });
         }
       }
 

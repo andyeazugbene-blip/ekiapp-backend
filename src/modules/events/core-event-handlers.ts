@@ -65,10 +65,56 @@ export async function handleSupportResponseReceived(tx: Prisma.TransactionClient
   }
 }
 
+/** R17 rule handler: exact vendor alert for an active listing that truly reached zero. */
+export async function handleProductStockDepleted(tx: Prisma.TransactionClient, event: Event): Promise<void> {
+  const productId = requiredId(event.payload, "productId");
+  const stockVersion = event.payload && typeof event.payload === "object" && !Array.isArray(event.payload)
+    ? (event.payload as Record<string, unknown>).stockVersion
+    : undefined;
+  if (!Number.isSafeInteger(stockVersion) || Number(stockVersion) < 1) throw new AppError("Invalid product stock version", 400);
+
+  const product = await tx.product.findUnique({
+    where: { id: productId },
+    include: { vendor: { select: { userId: true } } },
+  });
+  if (!product || !product.isActive || product.status !== "PUBLISHED" || product.stock !== 0 || product.stockVersion !== stockVersion) return;
+
+  const recipient = await tx.user.findUnique({
+    where: { id: product.vendor.userId },
+    select: { id: true, role: true, isSuspended: true },
+  });
+  if (!recipient || recipient.role !== "VENDOR" || recipient.isSuspended) return;
+
+  const dedupeKey = `R17_STOCK_DEPLETED:${product.id}:v${stockVersion}`;
+  const created = await notificationsService.create({
+    userId: recipient.id,
+    type: "AUTOMATION_MESSAGE",
+    title: `${product.title} is out of stock`,
+    body: "Restock it when available.",
+    data: {
+      type: "product_stock_depleted",
+      templateVersion: 1,
+      destination: "inventory_detail",
+      productId: product.id,
+      stockVersion,
+    },
+    dedupeKey,
+  }, tx);
+  const candidate = created ?? await tx.notification.findUnique({ where: { dedupeKey }, select: { id: true } });
+  if (candidate) {
+    await tx.notificationDelivery.upsert({
+      where: { notificationId_channel: { notificationId: candidate.id, channel: "push" } },
+      create: { notificationId: candidate.id, channel: "push" },
+      update: {},
+    });
+  }
+}
+
 let registered = false;
 export function registerCoreEventHandlers(): void {
   if (registered) return;
   eventOutboxService.registerHandler(EVENT_NAMES.support_response_received, handleSupportResponseReceived);
+  eventOutboxService.registerHandler(EVENT_NAMES.product_stock_depleted, handleProductStockDepleted);
   registered = true;
 }
 

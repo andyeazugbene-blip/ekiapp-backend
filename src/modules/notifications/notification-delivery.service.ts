@@ -37,6 +37,31 @@ async function supportReplyStillEligible(delivery: NotificationDelivery & { noti
   return sender?.role === "ADMIN";
 }
 
+async function productStockAlertStillEligible(delivery: NotificationDelivery & { notification: { userId: string; readAt: Date | null; data: unknown } }): Promise<boolean> {
+  const data = delivery.notification.data;
+  if (!isRecord(data) || data.type !== "product_stock_depleted" || typeof data.productId !== "string"
+    || !Number.isSafeInteger(data.stockVersion) || delivery.notification.readAt) return false;
+  const product = await prisma.product.findUnique({
+    where: { id: data.productId },
+    include: { vendor: { select: { userId: true } } },
+  });
+  const recipient = await prisma.user.findUnique({
+    where: { id: delivery.notification.userId },
+    select: { id: true, role: true, isSuspended: true },
+  });
+  return Boolean(product && recipient && !recipient.isSuspended && recipient.role === "VENDOR"
+    && product.vendor.userId === recipient.id && product.isActive && product.status === "PUBLISHED"
+    && product.stock === 0 && product.stockVersion === data.stockVersion);
+}
+
+async function notificationStillEligible(delivery: NotificationDelivery & { notification: { userId: string; readAt: Date | null; data: unknown } }): Promise<boolean> {
+  const data = delivery.notification.data;
+  if (!isRecord(data)) return false;
+  if (data.type === "support_case_response") return supportReplyStillEligible(delivery);
+  if (data.type === "product_stock_depleted") return productStockAlertStillEligible(delivery);
+  return false;
+}
+
 export const notificationDeliveryService = {
   /** Process durable push deliveries. Expo receipt checks finalize SENT rows. */
   async dispatchBatch(limit = 50, now = new Date()): Promise<{ claimed: number; sent: number; retried: number; cancelled: number; dead: number }> {
@@ -62,7 +87,7 @@ export const notificationDeliveryService = {
       result.claimed++;
       const attempt = delivery.attempt + 1;
 
-      if (!(await supportReplyStillEligible(delivery))) {
+      if (!(await notificationStillEligible(delivery))) {
         await prisma.notificationDelivery.updateMany({
           where: { id: delivery.id, status: "PROCESSING", lockedAt: now },
           data: { status: "CANCELLED", lockedAt: null, lastError: "send_time_ineligible" },

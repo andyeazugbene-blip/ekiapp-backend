@@ -4,7 +4,7 @@ const { createCandidate } = vi.hoisted(() => ({ createCandidate: vi.fn() }));
 vi.mock("../modules/notifications/notifications.service", () => ({ notificationsService: { create: createCandidate } }));
 vi.mock("../lib/prisma", () => ({ prisma: {} }));
 
-import { handleSupportResponseReceived } from "../modules/events/core-event-handlers";
+import { handleProductStockDepleted, handleSupportResponseReceived } from "../modules/events/core-event-handlers";
 
 const supportMessage = {
   id: "message-1",
@@ -62,6 +62,34 @@ describe("R28 general support response outbox handler", () => {
     ["non-support thread", { ...supportMessage, conversation: { ...supportMessage.conversation, type: "BUYER_VENDOR" } }],
   ])("does not create a candidate for a %s", async (_label, message) => {
     await handleSupportResponseReceived(makeTx(message), outboxEvent);
+    expect(createCandidate).not.toHaveBeenCalled();
+  });
+});
+
+describe("R17 stock-depleted outbox handler", () => {
+  const product = { id: "product-1", title: "Rice", stock: 0, stockVersion: 4, isActive: true, status: "PUBLISHED", vendor: { userId: "vendor-user" } };
+  const tx = {
+    product: { findUnique: vi.fn().mockResolvedValue(product) },
+    user: { findUnique: vi.fn().mockResolvedValue({ id: "vendor-user", role: "VENDOR", isSuspended: false }) },
+    notification: { findUnique: vi.fn() },
+    notificationDelivery: { upsert: vi.fn() },
+  } as never;
+  const event = { payload: { productId: "product-1", stockVersion: 4 } } as never;
+
+  it("creates the exact vendor notification for the still-current zero-stock episode", async () => {
+    createCandidate.mockResolvedValue({ id: "notification-r17" });
+    await handleProductStockDepleted(tx, event);
+    expect(createCandidate).toHaveBeenCalledWith(expect.objectContaining({
+      userId: "vendor-user", title: "Rice is out of stock", body: "Restock it when available.",
+      dedupeKey: "R17_STOCK_DEPLETED:product-1:v4",
+      data: expect.objectContaining({ destination: "inventory_detail", productId: "product-1", stockVersion: 4 }),
+    }), tx);
+    expect((tx as any).notificationDelivery.upsert).toHaveBeenCalled();
+  });
+
+  it("suppresses an old episode after stock changes or the listing is unavailable", async () => {
+    const staleTx = { ...(tx as object), product: { findUnique: vi.fn().mockResolvedValue({ ...product, stockVersion: 5 }) } } as never;
+    await handleProductStockDepleted(staleTx, event);
     expect(createCandidate).not.toHaveBeenCalled();
   });
 });

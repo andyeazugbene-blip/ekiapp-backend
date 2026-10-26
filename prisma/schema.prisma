@@ -432,6 +432,10 @@ model Product {
   images                    String[]                   @default([])
   category                  String?
   stock                     Int                        @default(0)
+  // Monotonic version for stock-changing episodes; notification dedupe and
+  // send-time rechecks use this rather than UpdatedAt, which changes for
+  // unrelated product edits.
+  stockVersion              Int                        @default(0)
   weightGrams               Int?
   // Display-only unit the vendor typed `weightGrams` in (kg/g/lb/oz/pack/
   // bunch/piece/litre/ml) — weightGrams itself is always true grams (real
