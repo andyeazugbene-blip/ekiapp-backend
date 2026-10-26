@@ -2182,29 +2182,47 @@ model AutomationRule {
   @@index([automationType])
 }
 
-// Canonical business event (handbook 12). Written fire-and-forget by
-// eventsService.emit(); never read by business flows.
+enum EventDeliveryStatus {
+  // Existing analytics/audit events are intentionally not dispatched.
+  LOG_ONLY
+  PENDING
+  PROCESSING
+  DELIVERED
+  DEAD
+}
+
+// Canonical business event (handbook 12). `LOG_ONLY` retains existing
+// append-only behavior; transactional producers opt into the outbox.
 model Event {
-  id                String   @id @default(cuid())
-  name              String
-  occurredAt        DateTime @default(now())
-  timezone          String   @default("UTC")
-  actorType         String?
-  actorId           String?
-  entityType        String?
-  entityId          String?
-  secondaryEntities Json?
-  source            String?
-  consentContext    Json?
-  amountMinor       Int?
-  currency          String?
-  payload           Json?
-  createdAt         DateTime @default(now())
+  id                  String              @id @default(cuid())
+  name                String
+  schemaVersion       Int                 @default(1)
+  dedupeKey           String?             @unique
+  deliveryStatus      EventDeliveryStatus @default(LOG_ONLY)
+  deliveryAttempt     Int                 @default(0)
+  availableAt         DateTime            @default(now())
+  lockedAt            DateTime?
+  deliveredAt         DateTime?
+  lastDeliveryError   String?             @db.Text
+  occurredAt          DateTime            @default(now())
+  timezone            String              @default("UTC")
+  actorType           String?
+  actorId             String?
+  entityType          String?
+  entityId            String?
+  secondaryEntities   Json?
+  source              String?
+  consentContext      Json?
+  amountMinor         Int?
+  currency            String?
+  payload             Json?
+  createdAt           DateTime            @default(now())
 
   @@index([name, occurredAt])
   @@index([entityType, entityId])
   @@index([actorId, occurredAt])
   @@index([occurredAt])
+  @@index([deliveryStatus, availableAt])
 }
 
 model VendorAutomationSetting {

@@ -24,6 +24,7 @@ describe("internal job routes — low-stock duplication removed", () => {
   it("still registers the automation sweep (the sole remaining low-stock path) and the combined daily sweep", () => {
     const paths = registeredPaths();
     expect(paths).toContain("/jobs/automation-sweep");
+    expect(paths).toContain("/jobs/event-outbox");
     expect(paths).toContain("/jobs/daily-sweep");
   });
 });
