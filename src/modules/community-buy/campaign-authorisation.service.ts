@@ -652,13 +652,34 @@ export const campaignAuthorisationService = {
 
     if (campaign.fulfilmentOwner === "SUPPLIER") {
       const reconfirmationDeadline = await this.computeReconfirmationDeadline(campaign.id);
-      const claim = await prisma.communityCampaign.updateMany({
-        where: { id: campaignId, status: "DECISION_REQUIRED" },
-        data: { status: "AWAITING_SUPPLIER_RECONFIRMATION", reconfirmationRequestedAt: new Date(), reconfirmationDeadline, reconfirmationQuantity: authorisedQuantity },
+      const reconfirmationRequestedAt = new Date();
+      await prisma.$transaction(async (tx) => {
+        const claim = await tx.communityCampaign.updateMany({
+          where: { id: campaignId, status: "DECISION_REQUIRED" },
+          data: { status: "AWAITING_SUPPLIER_RECONFIRMATION", reconfirmationRequestedAt, reconfirmationDeadline, reconfirmationQuantity: authorisedQuantity },
+        });
+        if (claim.count !== 1) throw new AppError("This campaign is no longer awaiting a decision", 409);
+        await eventsService.enqueueTransactional(tx, {
+          name: EVENT_NAMES.community_buy_supplier_reconfirmation_requested,
+          actorType: "user",
+          actorId: userId,
+          entityType: "CommunityCampaign",
+          entityId: campaignId,
+          payload: {
+            campaignId,
+            quantity: authorisedQuantity,
+            requestedAt: reconfirmationRequestedAt.toISOString(),
+            deadline: reconfirmationDeadline.toISOString(),
+          },
+        }, { dedupeKey: `community-buy-supplier-reconfirmation:${campaignId}:${reconfirmationRequestedAt.toISOString()}`, schemaVersion: 1 });
       });
-      if (claim.count !== 1) throw new AppError("This campaign is no longer awaiting a decision", 409);
       await this.assertReconfirmationDeadlineSafe(campaignId, reconfirmationDeadline);
-      await this.notifySupplierReconfirmationRequested(campaignId, authorisedQuantity, reconfirmationDeadline);
+      await dispatchNotificationsAfterCommit();
+      // Keep the existing delivery path until the spec-shaped route and runtime
+      // gate are approved. Once enabled, the outbox candidate owns this notice.
+      if (process.env.R37_SUPPLIER_RECONFIRMATION_ENABLED !== "true") {
+        await this.notifySupplierReconfirmationRequested(campaignId, authorisedQuantity, reconfirmationDeadline);
+      }
     } else {
       const claim = await prisma.communityCampaign.updateMany({
         where: { id: campaignId, status: "DECISION_REQUIRED" },

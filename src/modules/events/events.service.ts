@@ -75,6 +75,7 @@ export const EVENT_NAMES = {
   community_buy_published: "community_buy_published",
   community_buy_joined: "community_buy_joined",
   community_buy_minimum_reached: "community_buy_minimum_reached",
+  community_buy_supplier_reconfirmation_requested: "community_buy_supplier_reconfirmation_requested",
   community_buy_target_reached: "community_buy_target_reached",
   community_buy_target_failed: "community_buy_target_failed",
   community_buy_refund_started: "community_buy_refund_started",
@@ -107,6 +108,7 @@ export const EVENT_NAMES = {
   // Stripe Connect payout entered ON_HOLD and needs vendor action.
   payout_action_required: "payout_action_required",
   community_buy_below_minimum: "community_buy_below_minimum",
+  payout_confirmed: "payout_confirmed",
 } as const;
 
 export type EventName = (typeof EVENT_NAMES)[keyof typeof EVENT_NAMES];

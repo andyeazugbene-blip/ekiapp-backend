@@ -41,6 +41,12 @@ export const NOTIFICATION_EVENT_RULES: readonly NotificationRuleDefinition[] = [
     enabled: () => true,
   },
   {
+    eventName: EVENT_NAMES.community_buy_supplier_reconfirmation_requested,
+    key: "R37_SUPPLIER_RECONFIRMATION",
+    version: 1,
+    enabled: () => process.env.R37_SUPPLIER_RECONFIRMATION_ENABLED === "true",
+  },
+  {
     eventName: EVENT_NAMES.payout_action_required,
     key: "R25_PAYOUT_ACTION_REQUIRED",
     version: 1,
@@ -51,6 +57,12 @@ export const NOTIFICATION_EVENT_RULES: readonly NotificationRuleDefinition[] = [
     key: "R34_COMMUNITY_BUY_BELOW_MINIMUM",
     version: 1,
     enabled: () => process.env.R34_COMMUNITY_BUY_BELOW_MINIMUM_ENABLED === "true",
+  },
+  {
+    eventName: EVENT_NAMES.payout_confirmed,
+    key: "R26_PAYOUT_CONFIRMED",
+    version: 1,
+    enabled: () => process.env.R26_PAYOUT_CONFIRMED_ENABLED === "true",
   },
 ];
 
