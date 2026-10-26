@@ -17,6 +17,7 @@ export const EVENT_NAMES = {
   store_ready: "store_ready",
   product_published: "product_published",
   product_stock_depleted: "product_stock_depleted",
+  product_inventory_conflict_detected: "product_inventory_conflict_detected",
   delivery_configured: "delivery_configured",
   // Discovery
   campaign_created: "campaign_created",

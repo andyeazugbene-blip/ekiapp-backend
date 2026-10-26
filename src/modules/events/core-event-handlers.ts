@@ -6,6 +6,7 @@ import { eventOutboxService } from "./event-outbox.service";
 import { EVENT_NAMES } from "./events.service";
 import { resolveNotificationRule } from "./notification-event-rules";
 import { COMMUNITY_BUY_ORGANISER_DECISION_WINDOW_MS } from "../community-buy/community-buy-timing";
+import { getCurrentInventoryConflict } from "../products/inventory-conflict";
 
 function requiredId(payload: unknown, field: string): string {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) throw new AppError("Invalid support response event payload", 400);
@@ -120,6 +121,44 @@ export async function handleProductStockDepleted(tx: Prisma.TransactionClient, e
       update: {},
     });
   }
+}
+
+/** R18: notify the listing owner only when an explicit stocktake proves a real shortfall. */
+export async function handleProductInventoryConflictDetected(tx: Prisma.TransactionClient, event: Event): Promise<void> {
+  const rule = resolveNotificationRule(event);
+  if (!rule?.enabled) return;
+  const productId = requiredId(event.payload, "productId");
+  const inventoryCountId = requiredId(event.payload, "inventoryCountId");
+  const payload = event.payload as Record<string, unknown>;
+  if (!Number.isSafeInteger(payload.stockVersion)) throw new AppError("Invalid inventory stock version", 400);
+  const conflict = await getCurrentInventoryConflict(tx, inventoryCountId);
+  if (!conflict || conflict.count.productId !== productId || conflict.shortfall < 1) return;
+  const product = await tx.product.findUnique({
+    where: { id: productId },
+    include: { vendor: { select: { userId: true } } },
+  });
+  if (!product || product.stockVersion !== payload.stockVersion || !product.isActive || product.status !== "PUBLISHED") return;
+  const recipient = await tx.user.findUnique({ where: { id: product.vendor.userId }, select: { id: true, role: true, isSuspended: true } });
+  if (!recipient || recipient.role !== "VENDOR" || recipient.isSuspended) return;
+
+  const dedupeKey = `R18_STOCK_CONFLICT:${inventoryCountId}`;
+  const created = await notificationsService.create({
+    userId: recipient.id,
+    type: "INVENTORY_ALERT",
+    title: "Check stock for an active order",
+    body: "Available quantity may not cover outstanding orders.",
+    data: {
+      type: "product_inventory_conflict", ruleKey: rule.key, ruleVersion: rule.version,
+      eventId: event.id, templateVersion: 1, destination: "inventory_detail", productId,
+      inventoryCountId, shortfallQuantity: conflict.shortfall,
+    },
+    dedupeKey,
+  }, tx);
+  const candidate = created ?? await tx.notification.findUnique({ where: { dedupeKey }, select: { id: true } });
+  if (candidate) await tx.notificationDelivery.upsert({
+    where: { notificationId_channel: { notificationId: candidate.id, channel: "push" } },
+    create: { notificationId: candidate.id, channel: "push" }, update: {},
+  });
 }
 
 /** R35: notify only the campaign organiser after a confirmed minimum threshold. */
@@ -470,6 +509,7 @@ export function registerCoreEventHandlers(): void {
   if (registered) return;
   eventOutboxService.registerHandler(EVENT_NAMES.support_response_received, handleSupportResponseReceived);
   eventOutboxService.registerHandler(EVENT_NAMES.product_stock_depleted, handleProductStockDepleted);
+  eventOutboxService.registerHandler(EVENT_NAMES.product_inventory_conflict_detected, handleProductInventoryConflictDetected);
   eventOutboxService.registerHandler(EVENT_NAMES.community_buy_minimum_reached, handleCommunityBuyMinimumReached);
   eventOutboxService.registerHandler(EVENT_NAMES.community_buy_payment_action_required, handleCommunityBuyPaymentActionRequired);
   eventOutboxService.registerHandler(EVENT_NAMES.community_buy_supplier_reconfirmation_requested, handleSupplierReconfirmationRequested);

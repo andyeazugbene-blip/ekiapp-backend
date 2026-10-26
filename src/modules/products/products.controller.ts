@@ -2,6 +2,7 @@ import type { Request, Response } from "express";
 
 import { AppError } from "../../shared/errors/app-error";
 import { productsService } from "./products.service";
+import { inventoryCountsService } from "./inventory-counts.service";
 import {
   validateCreateProductInput,
   validateListProductsQuery,
@@ -52,6 +53,14 @@ export async function resumeProduct(request: Request, response: Response): Promi
   const userId = requireUserId(request);
   const product = await productsService.resumeProduct(userId, requireIdParam(request));
   response.status(200).json({ product });
+}
+
+export async function recordInventoryCount(request: Request, response: Response): Promise<void> {
+  const userId = requireUserId(request);
+  const physicalQuantity = request.body?.physicalQuantity;
+  if (!Number.isSafeInteger(physicalQuantity) || physicalQuantity < 0) throw new AppError("Invalid physicalQuantity", 400);
+  const result = await inventoryCountsService.record(userId, requireIdParam(request), physicalQuantity);
+  response.status(201).json(result);
 }
 
 export async function listProducts(request: Request, response: Response): Promise<void> {
