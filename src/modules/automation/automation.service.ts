@@ -233,12 +233,12 @@ async function ensureTemplate(type: AutomationType): Promise<void> {
 
 type Timing = { frequencyCapDays?: number; quietHoursStartUtc?: number; quietHoursEndUtc?: number } | null;
 
-type RecipientForEligibility = { isSuspended: boolean; marketingConsentAt: Date | null; country: string | null };
+type RecipientForEligibility = { isSuspended: boolean; marketingConsentAt: Date | null; country: string | null; name?: string | null; email?: string | null };
 
 async function loadRecipientForEligibility(userId: string): Promise<RecipientForEligibility | null> {
   return prisma.user.findUnique({
     where: { id: userId },
-    select: { isSuspended: true, marketingConsentAt: true, country: true },
+    select: { isSuspended: true, marketingConsentAt: true, country: true, name: true, email: true },
   });
 }
 
@@ -272,6 +272,7 @@ async function isEligible(
   input: ScheduleAutomationInput,
   timing: Timing = null,
   preloadedRecipient?: RecipientForEligibility | null,
+  checkCoalescing = true,
 ): Promise<{ eligible: boolean; reason?: string }> {
   const recipient = preloadedRecipient !== undefined ? preloadedRecipient : await loadRecipientForEligibility(input.recipientUserId);
   if (!recipient) return { eligible: false, reason: "recipient_not_found" };
@@ -310,7 +311,7 @@ async function isEligible(
   // transactional types always bypass this; everything else gets at most
   // one send per recipient per sweep invocation — see
   // automation-coalesce-scope.ts's doc comment for the full rationale.
-  if (!TRANSACTIONAL_AUTOMATION_TYPES.has(input.type) && !claimRecipientForNonUrgentSend(input.recipientUserId)) {
+  if (checkCoalescing && !TRANSACTIONAL_AUTOMATION_TYPES.has(input.type) && !claimRecipientForNonUrgentSend(input.recipientUserId)) {
     return { eligible: false, reason: "coalesced_same_run" };
   }
 
@@ -406,9 +407,30 @@ async function recordSuppression(input: ScheduleAutomationInput, reason: string,
  */
 async function dispatchRun(
   run: { id: string; dedupeKey: string },
-  params: { type: AutomationType; recipientUserId: string; data?: Record<string, unknown> | null },
+  params: { type: AutomationType; recipientUserId: string; data?: Record<string, unknown> | null; policy?: ScheduleAutomationInput },
 ): Promise<"SENT" | "SUPPRESSED" | "FAILED"> {
-  const recipient = await prisma.user.findUnique({
+  let currentRecipient: RecipientForEligibility | null | undefined;
+  // Re-read mutable eligibility immediately before crossing the provider
+  // boundary. A queued candidate can outlive consent, account, vendor-rule,
+  // quiet-hour, or global-pause state from its initial eligibility check.
+  if (params.policy) {
+    const policy = params.policy;
+    const gate = await getRuleGate(policy.type);
+    let reason = gate.runnable ? null : gate.reason ?? "rule_paused";
+    if (!reason && await commsPauseService.isAutomationsPaused()) reason = "emergency_pause";
+    currentRecipient = reason ? null : await loadRecipientForEligibility(policy.recipientUserId);
+    if (!reason && !policy.bypassQuietHours && isQuietHoursWith(gate.timing, currentRecipient?.country)) reason = "quiet_hours";
+    if (!reason) {
+      const eligibility = await isEligible(policy, gate.timing, currentRecipient, false);
+      if (!eligibility.eligible) reason = eligibility.reason ?? "ineligible";
+    }
+    if (reason) {
+      await prisma.automationRun.update({ where: { id: run.id }, data: { status: "SUPPRESSED", suppressedReason: `send_time_${reason}` } });
+      await noteRuleSkipped(policy.type, `send_time_${reason}`);
+      return "SUPPRESSED";
+    }
+  }
+  const recipient = params.policy ? currentRecipient : await prisma.user.findUnique({
     where: { id: params.recipientUserId },
     select: { name: true, email: true },
   });
@@ -418,7 +440,7 @@ async function dispatchRun(
     const result = await communicationService.send({
       eventKey,
       recipientId: params.recipientUserId,
-      recipientEmail: recipient?.email,
+      recipientEmail: recipient?.email ?? undefined,
       variables: { name: recipient?.name ?? "there", ...(params.data as Record<string, string> | undefined) },
       notificationType: "AUTOMATION_MESSAGE",
       // NAV-10: forward entity ids so push/in-app taps can deep-link.
@@ -543,7 +565,7 @@ export const automationService = {
         payload: { type: input.type, subjectKey: input.subjectKey },
       });
       await noteRuleRan(input.type);
-      await dispatchRun(run, { type: input.type, recipientUserId: input.recipientUserId, data: input.data });
+      await dispatchRun(run, { type: input.type, recipientUserId: input.recipientUserId, data: input.data, policy: input });
     } catch (error) {
       // Automation must never break the caller's real business logic.
       logger.error("Automation scheduling failed", {
@@ -610,7 +632,7 @@ export const automationService = {
       return { id: run.id, status: "SUPPRESSED" };
     }
     await ensureTemplate(original.type);
-    const outcome = await dispatchRun(run, { type: original.type, recipientUserId: original.recipientUserId, data: input.data });
+    const outcome = await dispatchRun(run, { type: original.type, recipientUserId: original.recipientUserId, data: input.data, policy: input });
     return { id: run.id, status: outcome };
   },
 
