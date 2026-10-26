@@ -36,7 +36,7 @@ describe("Milestone 1: Payment Flow Safety", () => {
       expect(paymentsServiceSource).toMatch(
         /where: \{ id: item\.productId, isActive: true, stock: \{ gte: item\.quantity \} \}/,
       );
-      expect(paymentsServiceSource).toMatch(/data: \{ stock: \{ decrement: item\.quantity \} \}/);
+      expect(paymentsServiceSource).toMatch(/data: \{ stock: \{ decrement: item\.quantity \}, stockVersion: \{ increment: 1 \} \}/);
       expect(paymentsServiceSource).toMatch(/if \(result\.count !== 1\)/);
     });
 

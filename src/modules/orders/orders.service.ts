@@ -417,7 +417,7 @@ export const ordersService = {
           await tx.payment.updateMany({ where: { id: order.payment.id, status: "PENDING" }, data: { status: "FAILED", processedAt: new Date() } });
         }
         for (const item of order.items) {
-          await tx.product.update({ where: { id: item.productId }, data: { stock: { increment: item.quantity } } });
+          await tx.product.update({ where: { id: item.productId }, data: { stock: { increment: item.quantity }, stockVersion: { increment: 1 } } });
         }
       });
     }

@@ -1371,7 +1371,7 @@ class StripeWebhookService {
             order.items.map((item) =>
               tx.product.update({
                 where: { id: item.productId },
-                data: { stock: { increment: item.quantity } },
+                data: { stock: { increment: item.quantity }, stockVersion: { increment: 1 } },
               }),
             ),
           );
@@ -1497,7 +1497,7 @@ class StripeWebhookService {
     await tx.order.updateMany({ where: { id: orderId, status: "PENDING" }, data: { status: "FAILED" } });
     const items = await tx.orderItem.findMany({ where: { orderId }, select: { productId: true, quantity: true } });
     for (const item of items) {
-      await tx.product.update({ where: { id: item.productId }, data: { stock: { increment: item.quantity } } });
+      await tx.product.update({ where: { id: item.productId }, data: { stock: { increment: item.quantity }, stockVersion: { increment: 1 } } });
     }
   }
 
@@ -1845,7 +1845,7 @@ class StripeWebhookService {
           for (const item of order.items) {
             await tx.product.update({
               where: { id: item.productId },
-              data: { stock: { increment: item.quantity } },
+              data: { stock: { increment: item.quantity }, stockVersion: { increment: 1 } },
             });
           }
         }

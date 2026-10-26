@@ -11,6 +11,8 @@ import { calculatePlatformFee } from "../../shared/pricing";
 import { resolveVendorCommission } from "../subscriptions/subscription-plan-utils";
 import { ledgerService } from "../ledger/ledger.service";
 import { LedgerAccountType, LedgerDirection, LedgerOwnerType } from "@prisma/client";
+import { enqueueProductStockDepleted } from "../products/product-stock-events";
+import { dispatchNotificationsAfterCommit } from "../events/dispatch-notifications";
 
 export interface InitializeEscrowInput {
   cartId: string;
@@ -130,11 +132,13 @@ export const paystackService = {
       for (const item of pricedItems) {
         const result = await tx.product.updateMany({
           where: { id: item.productId, isActive: true, stock: { gte: item.quantity } },
-          data: { stock: { decrement: item.quantity } },
+          data: { stock: { decrement: item.quantity }, stockVersion: { increment: 1 } },
         });
         if (result.count !== 1) {
           throw new AppError(`Insufficient stock for "${item.productTitle}"`, 409);
         }
+        const stock = await tx.product.findUnique({ where: { id: item.productId }, select: { id: true, stock: true, stockVersion: true, status: true, isActive: true } });
+        if (stock) await enqueueProductStockDepleted(tx, { product: stock, stockDecrementedBy: item.quantity, actorId: buyerId, actorType: "user" });
       }
 
       const orderNumber = `Eki-${crypto.randomBytes(3).toString("hex").slice(0, 5).toUpperCase()}`;
@@ -191,6 +195,8 @@ export const paystackService = {
 
       return { orderId: order.id };
     });
+
+    void dispatchNotificationsAfterCommit();
 
     // Initialize Paystack payment
     const paystackResult = await paystack.initializeTransaction({

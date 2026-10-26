@@ -35,7 +35,7 @@ export async function failPendingOrderAndReleaseStock(
   for (const item of input.items) {
     await tx.product.update({
       where: { id: item.productId },
-      data: { stock: { increment: item.quantity } },
+      data: { stock: { increment: item.quantity }, stockVersion: { increment: 1 } },
     });
   }
 

@@ -466,7 +466,10 @@ describe("renewalsService.convertPaidRenewalToOrder", () => {
 
   function fakeTx() {
     return {
-      product: { updateMany: vi.fn().mockResolvedValue({ count: 1 }) },
+      product: {
+        updateMany: vi.fn().mockResolvedValue({ count: 1 }),
+        findUnique: vi.fn().mockResolvedValue(null),
+      },
       order: { create: vi.fn().mockResolvedValue({ id: "order-1", orderNumber: "EKI-100" }) },
       wallet: {
         findUnique: vi.fn().mockResolvedValue(null),
@@ -1018,7 +1021,7 @@ describe("renewal job -> canonical events", () => {
     m.renewal.findUniqueOrThrow.mockResolvedValue(renewal as never);
     m.vendor.findUnique.mockResolvedValue({ userId: "vendor-user-1" } as never);
     const tx = {
-      product: { updateMany: vi.fn().mockResolvedValue({ count: 1 }) },
+      product: { updateMany: vi.fn().mockResolvedValue({ count: 1 }), findUnique: vi.fn().mockResolvedValue(null) },
       order: { create: vi.fn().mockResolvedValue({ id: "order-1", orderNumber: "EKI-100" }) },
       wallet: { findUnique: vi.fn().mockResolvedValue(null), create: vi.fn().mockResolvedValue({ id: "w1" }), update: vi.fn().mockResolvedValue({}) },
       walletTransaction: { create: vi.fn().mockResolvedValue({}) },

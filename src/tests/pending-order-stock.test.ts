@@ -70,7 +70,7 @@ describe("failPendingOrderAndReleaseStock", () => {
     expect(mockTx.product.update).toHaveBeenCalledTimes(2);
     expect(mockTx.product.update).toHaveBeenNthCalledWith(1, {
       where: { id: "product-1" },
-      data: { stock: { increment: 3 } },
+      data: { stock: { increment: 3 }, stockVersion: { increment: 1 } },
     });
   });
 });

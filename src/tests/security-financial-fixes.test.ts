@@ -491,13 +491,13 @@ describe("payment_intent.canceled", () => {
     expect(mockProductUpdate).toHaveBeenCalledWith(
       expect.objectContaining({
         where: { id: "prod_1" },
-        data: { stock: { increment: 2 } },
+        data: { stock: { increment: 2 }, stockVersion: { increment: 1 } },
       }),
     );
     expect(mockProductUpdate).toHaveBeenCalledWith(
       expect.objectContaining({
         where: { id: "prod_2" },
-        data: { stock: { increment: 1 } },
+        data: { stock: { increment: 1 }, stockVersion: { increment: 1 } },
       }),
     );
 

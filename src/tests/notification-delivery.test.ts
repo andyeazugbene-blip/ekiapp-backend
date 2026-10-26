@@ -11,6 +11,7 @@ const { prismaMock, txMock, sendPushToUser } = vi.hoisted(() => {
     prismaMock: {
       notificationDelivery: { updateMany: vi.fn(), findMany: vi.fn(), findUnique: vi.fn() },
       message: { findUnique: vi.fn() },
+      product: { findUnique: vi.fn() },
       user: { findUnique: vi.fn() },
       communicationLog: { update: vi.fn() },
       $transaction: vi.fn(async (fn: (tx: typeof txMock) => Promise<unknown>) => fn(txMock)),
@@ -47,6 +48,9 @@ beforeEach(() => {
   txMock.communicationLog.create.mockResolvedValue({ id: "log-1" });
   txMock.notificationDelivery.updateMany.mockResolvedValue({ count: 1 });
   prismaMock.communicationLog.update.mockResolvedValue({ id: "log-1" });
+  prismaMock.product.findUnique.mockResolvedValue({
+    id: "product-1", vendor: { userId: "vendor-1" }, isActive: true, status: "PUBLISHED", stock: 0, stockVersion: 4,
+  });
 });
 
 describe("notification push delivery", () => {
@@ -78,6 +82,39 @@ describe("notification push delivery", () => {
       where: { id: "delivery-1", status: "SENT" },
       data: expect.objectContaining({ status: "DELIVERED", lastError: null }),
     });
+  });
+
+  it("rechecks vendor ownership and stock episode before sending R17", async () => {
+    vi.stubEnv("R17_STOCK_DEPLETED_ENABLED", "true");
+    prismaMock.user.findUnique.mockResolvedValue({ id: "vendor-1", role: "VENDOR", isSuspended: false });
+    prismaMock.notificationDelivery.findMany.mockResolvedValue([{
+      ...delivery,
+      notification: {
+        ...delivery.notification, userId: "vendor-1", title: "Rice is out of stock", body: "Restock it when available.",
+        data: { type: "product_stock_depleted", productId: "product-1", stockVersion: 4, destination: "inventory_detail" },
+      },
+    }]);
+    sendPushToUser.mockResolvedValue({ tokens: 1, accepted: 1, rejected: 0, ticketIds: ["ticket-1"] });
+    const result = await notificationDeliveryService.dispatchBatch(10, now);
+    expect(result).toMatchObject({ claimed: 1, sent: 1 });
+    expect(sendPushToUser).toHaveBeenCalledWith("vendor-1", expect.objectContaining({ title: "Rice is out of stock" }), { logId: "log-1" });
+    vi.unstubAllEnvs();
+  });
+
+  it("cancels R17 when the stock episode changed before provider delivery", async () => {
+    vi.stubEnv("R17_STOCK_DEPLETED_ENABLED", "true");
+    prismaMock.user.findUnique.mockResolvedValue({ id: "vendor-1", role: "VENDOR", isSuspended: false });
+    prismaMock.product.findUnique.mockResolvedValue({
+      id: "product-1", vendor: { userId: "vendor-1" }, isActive: true, status: "PUBLISHED", stock: 0, stockVersion: 5,
+    });
+    prismaMock.notificationDelivery.findMany.mockResolvedValue([{
+      ...delivery,
+      notification: { ...delivery.notification, userId: "vendor-1", data: { type: "product_stock_depleted", productId: "product-1", stockVersion: 4 } },
+    }]);
+    const result = await notificationDeliveryService.dispatchBatch(10, now);
+    expect(result).toMatchObject({ claimed: 1, cancelled: 1 });
+    expect(sendPushToUser).not.toHaveBeenCalled();
+    vi.unstubAllEnvs();
   });
 
   it("requeues a failed provider receipt with backoff unless the attempt limit is reached", async () => {

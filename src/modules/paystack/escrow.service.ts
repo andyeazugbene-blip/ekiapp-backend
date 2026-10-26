@@ -90,7 +90,7 @@ export const escrowService = {
           for (const item of order.items) {
             await tx.product.update({
               where: { id: item.productId },
-              data: { stock: { increment: item.quantity } },
+              data: { stock: { increment: item.quantity }, stockVersion: { increment: 1 } },
             });
           }
         });

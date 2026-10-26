@@ -25,6 +25,8 @@ import { emailTemplates } from "../../lib/email-templates";
 import { notificationsService } from "../notifications/notifications.service";
 import { communicationService } from "../communications/communication.service";
 import { assertVendorsPurchasable } from "../products/seller-readiness";
+import { enqueueProductStockDepleted } from "../products/product-stock-events";
+import { dispatchNotificationsAfterCommit } from "../events/dispatch-notifications";
 
 interface VendorGroup {
   vendorId: string;
@@ -392,11 +394,13 @@ class PaymentsService {
       for (const item of pricedItems) {
         const result = await tx.product.updateMany({
           where: { id: item.productId, isActive: true, stock: { gte: item.quantity } },
-          data: { stock: { decrement: item.quantity } },
+          data: { stock: { decrement: item.quantity }, stockVersion: { increment: 1 } },
         });
         if (result.count !== 1) {
           throw new AppError(`Insufficient stock for "${item.productTitle}"`, 409);
         }
+        const stock = await tx.product.findUnique({ where: { id: item.productId }, select: { id: true, stock: true, stockVersion: true, status: true, isActive: true } });
+        if (stock) await enqueueProductStockDepleted(tx, { product: stock, stockDecrementedBy: item.quantity, actorId: buyerId, actorType: "user" });
       }
 
       // Debit buyer wallet if applicable
@@ -622,6 +626,8 @@ class PaymentsService {
       });
     }
 
+    void dispatchNotificationsAfterCommit();
+
     // ─── Step 4: Stripe call OUTSIDE transaction (if needed) ───────────────
 
     if (stripeAmount === 0) {
@@ -775,7 +781,7 @@ class PaymentsService {
         for (const item of pricedItems) {
           await tx.product.update({
             where: { id: item.productId },
-            data: { stock: { increment: item.quantity } },
+            data: { stock: { increment: item.quantity }, stockVersion: { increment: 1 } },
           });
         }
 
