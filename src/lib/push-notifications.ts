@@ -43,6 +43,21 @@ export const pushNotifications = {
     });
   },
 
+  /** Exact R28 push for a customer-visible reply from general Eki Support. */
+  supportReply(userId: string, conversationId: string, messageId: string, notificationId?: string): void {
+    sendPushToUser(userId, {
+      title: "Eki Support has replied",
+      body: "Open your case to read the update.",
+      data: {
+        type: "support_response_received",
+        destination: "support_conversation",
+        conversationId,
+        messageId,
+        ...(notificationId ? { notificationId } : {}),
+      },
+    });
+  },
+
   /** Vendor: payout approved */
   payoutApproved(vendorUserId: string, amount: number, currency: string): void {
     sendPushToUser(vendorUserId, {

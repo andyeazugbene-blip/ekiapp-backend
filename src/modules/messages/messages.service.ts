@@ -5,12 +5,17 @@ import { CURSOR_ORDER_BY } from "../../shared/constants";
 import { AppError } from "../../shared/errors/app-error";
 import { adminRolesService } from "../admin/admin-roles.service";
 import { recordAudit } from "../../shared/utils/audit";
+import { eventsService, EVENT_NAMES } from "../events/events.service";
+import { eventOutboxService } from "../events/event-outbox.service";
+import { registerCoreEventHandlers } from "../events/core-event-handlers";
 import type {
   CreateConversationInput,
   ListConversationsQuery,
   ListMessagesQuery,
   SendMessageInput,
 } from "./messages.types";
+
+registerCoreEventHandlers();
 
 type ParticipantRecord = {
   id: string;
@@ -467,23 +472,36 @@ export const messagesService = {
     // status — closing/reopening is an explicit, audited admin action.
     const reopens = conversation.status === "CLOSED" && sender?.role !== "ADMIN";
 
-    const [message] = await prisma.$transaction([
-      prisma.message.create({
+    const isGeneralSupportReply = sender?.role === "ADMIN" && conversation.type === "SUPPORT";
+    const message = await prisma.$transaction(async (tx) => {
+      const created = await tx.message.create({
         data: {
           conversationId,
           senderId: userId,
           text: input.text,
           attachments: input.attachments ?? [],
         },
-      }),
-      prisma.conversation.update({
+      });
+      await tx.conversation.update({
         where: { id: conversationId },
         data: {
           lastMessageAt: new Date(),
           ...(reopens ? { status: "OPEN", closedAt: null, closedById: null } : {}),
         },
-      }),
-    ]);
+      });
+      if (isGeneralSupportReply) {
+        await eventsService.enqueueTransactional(tx, {
+          name: EVENT_NAMES.support_response_received,
+          actorType: "admin",
+          actorId: userId,
+          entityType: "Conversation",
+          entityId: conversationId,
+          source: "messages.sendMessage",
+          payload: { conversationId, messageId: created.id },
+        }, { dedupeKey: `support-response:${created.id}`, schemaVersion: 1 });
+      }
+      return created;
+    });
 
     if (reopens) {
       await recordAudit({
@@ -502,8 +520,20 @@ export const messagesService = {
     const senderName =
       sender?.role === "ADMIN" ? SUPPORT_DISPLAY_NAME : (sender?.vendor?.storeName ?? sender?.name ?? "Eki");
 
-    await notificationsServiceSafe(recipientId, conversationId, message.id, senderName);
-    pushNotifications.newMessage(recipientId, senderName, conversationId);
+    if (!isGeneralSupportReply) {
+      await notificationsServiceSafe(recipientId, conversationId, message.id, senderName);
+    } else {
+      // Best-effort immediate materialization; the existing authenticated
+      // outbox sweep retries this candidate path if the process exits here.
+      await eventOutboxService.dispatchRegisteredBatch(20).catch(() => undefined);
+      const candidate = await prisma.notification.findUnique({
+        where: { dedupeKey: `R28_SUPPORT_THREAD_REPLY:${message.id}` },
+        select: { id: true },
+      }).catch(() => null);
+      if (candidate) pushNotifications.supportReply(recipientId, conversationId, message.id, candidate.id);
+      else pushNotifications.newMessage(recipientId, senderName, conversationId);
+    }
+    if (!isGeneralSupportReply) pushNotifications.newMessage(recipientId, senderName, conversationId);
 
     return serializeMessage(message.id);
   },
