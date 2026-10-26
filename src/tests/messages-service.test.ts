@@ -15,7 +15,8 @@ vi.mock("../lib/prisma", () => ({
     order: { findUnique: vi.fn() },
     conversation: { findUnique: vi.fn(), create: vi.fn(), update: vi.fn(), findMany: vi.fn() },
     message: { create: vi.fn(), findUnique: vi.fn(), findMany: vi.fn(), count: vi.fn(), updateMany: vi.fn() },
-    notification: { create: vi.fn().mockResolvedValue({}) },
+    notification: { create: vi.fn().mockResolvedValue({}), findUnique: vi.fn().mockResolvedValue(null) },
+    event: { upsert: vi.fn().mockResolvedValue({}), updateMany: vi.fn().mockResolvedValue({ count: 0 }), findMany: vi.fn().mockResolvedValue([]) },
     userBlock: { findUnique: vi.fn().mockResolvedValue(null) },
     // Support-thread permission checks (adminRolesService.assertPermission) —
     // used when a non-participant admin accesses a SUPPORT conversation.
@@ -44,7 +45,23 @@ function mockUsers(map: Record<string, any>) {
   m.user.findUnique.mockImplementation(({ where }: any) => Promise.resolve(map[where.id] ?? null));
 }
 
-beforeEach(() => vi.clearAllMocks());
+function mockTransaction() {
+  m.$transaction.mockImplementation((input: any) => {
+    if (typeof input === "function") {
+      return input({
+        message: { create: m.message.create },
+        conversation: { update: m.conversation.update },
+        event: { upsert: m.event.upsert },
+      });
+    }
+    return Promise.all(input);
+  });
+}
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  mockTransaction();
+});
 
 describe("createConversation — order-scoped BUYER_VENDOR authorization", () => {
   it("rejects when the order doesn't actually belong to this buyer/vendor pair", async () => {
@@ -161,7 +178,7 @@ describe("createConversation — dedup (reuses an existing conversation, never c
       if (where.id === "existing-conv") return Promise.resolve({ id: "existing-conv", orderId: "order-1", participantA: BUYER.id, participantB: OTHER_VENDOR_USER.id, messages: [], lastMessageAt: new Date(), updatedAt: new Date(), createdAt: new Date() });
       return Promise.resolve(null);
     });
-    m.$transaction.mockImplementation((ops: any[]) => Promise.all(ops));
+    mockTransaction();
     m.message.create.mockResolvedValue({ id: "msg-1", conversationId: "existing-conv", senderId: BUYER.id, text: "hi" });
     m.message.findUnique.mockResolvedValue({ id: "msg-1", conversationId: "existing-conv", senderId: BUYER.id, text: "hi" });
 
@@ -190,7 +207,7 @@ describe("sendMessage / listMessages / markConversationRead — participant-only
 
   it("sendMessage: a real participant can send, and it bumps lastMessageAt", async () => {
     m.conversation.findUnique.mockResolvedValue(CONVERSATION);
-    m.$transaction.mockImplementation((ops: any[]) => Promise.all(ops));
+    mockTransaction();
     m.message.create.mockResolvedValue({ id: "msg-2", conversationId: "conv-1", senderId: BUYER.id, text: "hello" });
     m.message.findUnique.mockResolvedValue({ id: "msg-2", conversationId: "conv-1", senderId: BUYER.id, text: "hello" });
     m.user.findUnique.mockResolvedValue(BUYER);
@@ -251,7 +268,7 @@ describe("startSupportConversation — the buyer-facing 'Contact us' entry point
       return Promise.resolve({ id: "support-conv-1", orderId: "", participantA: BUYER.id, participantB: ADMIN.id, messages: [], lastMessageAt: new Date(), updatedAt: new Date(), createdAt: new Date() });
     });
     m.conversation.create.mockResolvedValue({ id: "support-conv-1" });
-    m.$transaction.mockImplementation((ops: any[]) => Promise.all(ops));
+    mockTransaction();
     m.message.create.mockResolvedValue({ id: "msg-support-1", conversationId: "support-conv-1", senderId: BUYER.id, text: "I need help with my order" });
     m.message.findUnique.mockResolvedValue({ id: "msg-support-1", conversationId: "support-conv-1", senderId: BUYER.id, text: "I need help with my order" });
 
@@ -305,25 +322,32 @@ describe("SUPPORT conversation access — any support.mutate/support.read admin,
     m.conversation.findUnique.mockResolvedValue(SUPPORT_CONVERSATION);
     m.adminRoleAssignment.findMany.mockResolvedValue([{ role: { permissions: ["support.mutate"] } }]);
     mockUsers({ [BUYER.id]: BUYER, [ADMIN.id]: ADMIN, [OTHER_ADMIN_ID]: { id: OTHER_ADMIN_ID, name: "Second Admin", role: "ADMIN", vendor: null } });
-    m.$transaction.mockImplementation((ops: any[]) => Promise.all(ops));
+    mockTransaction();
     m.message.create.mockResolvedValue({ id: "msg-reply-1", conversationId: "support-conv-2", senderId: OTHER_ADMIN_ID, text: "On it!" });
     m.message.findUnique.mockResolvedValue({ id: "msg-reply-1", conversationId: "support-conv-2", senderId: OTHER_ADMIN_ID, text: "On it!" });
 
     await messagesService.sendMessage(OTHER_ADMIN_ID, "support-conv-2", { text: "On it!" });
 
-    // The buyer notification must go to the real buyer, never to
-    // whichever id happened to be resolved as the original fixed
-    // participantB, and never to the replying admin.
-    expect(m.notification.create).toHaveBeenCalledWith(expect.objectContaining({
-      data: expect.objectContaining({ userId: BUYER.id, type: "NEW_MESSAGE" }),
+    // The real reply event must be persisted atomically with the message;
+    // the outbox consumer independently resolves the buyer recipient.
+    expect(m.event.upsert).toHaveBeenCalledWith(expect.objectContaining({
+      where: { dedupeKey: "support-response:msg-reply-1" },
+      create: expect.objectContaining({
+        name: "support_response_received",
+        entityType: "Conversation",
+        entityId: "support-conv-2",
+        payload: { conversationId: "support-conv-2", messageId: "msg-reply-1" },
+        deliveryStatus: "PENDING",
+      }),
     }));
+    expect(m.notification.create).not.toHaveBeenCalled();
   });
 
   it("sendMessage: an admin.* wildcard permission also qualifies", async () => {
     m.conversation.findUnique.mockResolvedValue(SUPPORT_CONVERSATION);
     m.adminRoleAssignment.findMany.mockResolvedValue([{ role: { permissions: ["admin.*"] } }]);
     mockUsers({ [BUYER.id]: BUYER, [ADMIN.id]: ADMIN, [OTHER_ADMIN_ID]: { id: OTHER_ADMIN_ID, name: "Super Admin", role: "ADMIN", vendor: null } });
-    m.$transaction.mockImplementation((ops: any[]) => Promise.all(ops));
+    mockTransaction();
     m.message.create.mockResolvedValue({ id: "msg-reply-2", conversationId: "support-conv-2", senderId: OTHER_ADMIN_ID, text: "Handled." });
     m.message.findUnique.mockResolvedValue({ id: "msg-reply-2", conversationId: "support-conv-2", senderId: OTHER_ADMIN_ID, text: "Handled." });
 
@@ -425,7 +449,7 @@ describe("reopen on new participant message", () => {
   const CLOSED = { id: "conv-c", type: "SUPPORT", status: "CLOSED", participantA: BUYER.id, participantB: ADMIN.id };
 
   beforeEach(() => {
-    m.$transaction.mockImplementation((ops: any[]) => Promise.all(ops));
+    mockTransaction();
     m.message.create.mockResolvedValue({ id: "msg-r", conversationId: "conv-c", senderId: BUYER.id, text: "hello again" });
     m.message.findUnique.mockResolvedValue({ id: "msg-r", conversationId: "conv-c", senderId: BUYER.id, text: "hello again" });
   });
