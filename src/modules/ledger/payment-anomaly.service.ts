@@ -2,6 +2,7 @@ import { Prisma } from "@prisma/client";
 
 import { prisma } from "../../lib/prisma";
 import { AppError } from "../../shared/errors/app-error";
+import { notificationsService } from "../notifications/notifications.service";
 
 /**
  * Admin duplicate-payment / financial-inconsistency queue (architecture
@@ -20,6 +21,13 @@ import { AppError } from "../../shared/errors/app-error";
 // bound on how far back to look for NEW anomalies to act on, not a
 // business rule about when a payment is "too old" to matter.
 const LEDGER_SCAN_WINDOW_DAYS = 90;
+
+// R40 remains off until its policy, admin destination, and runtime delivery
+// have been approved and verified. The scanner still records real anomalies
+// while this gate is closed; only outbound notifications are suppressed.
+function r40NotificationsEnabled(): boolean {
+  return process.env.R40_PAYMENT_ANOMALY_ALERTS_ENABLED === "true";
+}
 
 interface Finding {
   kind: "DUPLICATE_PROVIDER_REF" | "MULTIPLE_SUCCESSFUL_ATTEMPTS" | "MISSING_LEDGER_ENTRY";
@@ -186,6 +194,36 @@ export const paymentAnomalyService = {
           evidence: finding.evidence as Prisma.InputJsonValue,
         },
       });
+    }
+
+    // R40: notify administrative users about verified payment/ledger
+    // anomalies. Notification.dedupeKey is unique, so repeated scheduled or
+    // manual scans do not produce another push. The scan only inspects
+    // payment and ledger rows; notifications it creates cannot feed back into
+    // its own detector.
+    if (findings.length > 0 && r40NotificationsEnabled()) {
+      const admins = await prisma.user.findMany({
+        where: { role: "ADMIN" },
+        select: { id: true },
+      });
+      for (const admin of admins) {
+        for (const finding of findings) {
+          await notificationsService.enqueue({
+            userId: admin.id,
+            type: "ADMIN_BROADCAST",
+            title: "Critical payment anomaly requires review",
+            body: `${finding.kind.replaceAll("_", " ")} detected for ${finding.businessRefType} ${finding.businessRefId}.`,
+            data: {
+              event: "critical_payment_anomaly",
+              destination: "admin_case",
+              anomalyKey: finding.dedupeKey,
+              businessRefType: finding.businessRefType,
+              businessRefId: finding.businessRefId,
+            },
+            dedupeKey: `R40_PAYMENT_ANOMALY:${admin.id}:${finding.dedupeKey}`,
+          });
+        }
+      }
     }
 
     return { found: findings.length };
