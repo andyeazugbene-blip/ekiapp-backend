@@ -20,6 +20,7 @@ const { prismaMock, txMock, sendPushToUser } = vi.hoisted(() => {
     user: { findUnique: vi.fn(), findMany: vi.fn() },
     paymentAnomaly: { findUnique: vi.fn(), findMany: vi.fn(), upsert: vi.fn() },
     vendor: { findUnique: vi.fn() },
+    order: { findUnique: vi.fn() },
     communityCampaign: { findUnique: vi.fn() },
     communityBuyPaymentAuthorisation: { findUnique: vi.fn() },
     campaignContribution: { findMany: vi.fn() },
@@ -59,6 +60,7 @@ const { prismaMock, txMock, sendPushToUser } = vi.hoisted(() => {
     user: { findUnique: vi.fn(), findMany: vi.fn() },
     paymentAnomaly: { findUnique: vi.fn(), findMany: vi.fn(), upsert: vi.fn() },
     vendor: { findUnique: vi.fn() },
+    order: { findUnique: vi.fn() },
     communityCampaign: { findUnique: vi.fn() },
     communityBuyPaymentAuthorisation: { findUnique: vi.fn() },
     campaignContribution: { findMany: vi.fn() },
@@ -88,6 +90,7 @@ describe("event to notification pipeline integration", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.stubEnv("R28_GENERAL_SUPPORT_NOTIFICATIONS_ENABLED", "true");
+    vi.stubEnv("R12_FIRST_PAID_ORDER_ENABLED", "false");
     vi.stubEnv("R34_COMMUNITY_BUY_BELOW_MINIMUM_ENABLED", "true");
     vi.stubEnv("R26_PAYOUT_CONFIRMED_ENABLED", "true");
     vi.stubEnv("R36_COMMUNITY_BUY_PAYMENT_ACTION_REQUIRED_ENABLED", "false");
@@ -114,6 +117,42 @@ describe("event to notification pipeline integration", () => {
       organiser: { userId: "buyer-1" },
     });
     registerCoreEventHandlers();
+  });
+
+  it("routes a transactional paid-order event to one vendor candidate and durable push", async () => {
+    vi.stubEnv("R12_FIRST_PAID_ORDER_ENABLED", "true");
+    txMock.order.findUnique.mockResolvedValue({
+      id: "order-12", orderNumber: "EKI-12", status: "PAID", vendorConfirmedAt: null,
+      vendorId: "vendor-12", items: [],
+    });
+    prismaMock.order.findUnique.mockResolvedValue({ status: "PAID", vendorConfirmedAt: null, vendorId: "vendor-12", items: [] });
+    txMock.vendor.findUnique.mockResolvedValue({ userId: "vendor-user-12" });
+    prismaMock.vendor.findUnique.mockResolvedValue({ userId: "vendor-user-12" });
+    txMock.user.findUnique.mockResolvedValue({ id: "vendor-user-12", role: "VENDOR", isSuspended: false });
+    prismaMock.user.findUnique.mockResolvedValue({ id: "vendor-user-12", role: "VENDOR", isSuspended: false });
+
+    const event = await prismaMock.$transaction((tx: typeof txMock) => eventOutboxService.enqueue(tx, {
+      name: EVENT_NAMES.payment_succeeded,
+      actorType: "stripe", entityType: "Order", entityId: "order-12",
+      payload: { orderId: "order-12", stripeEventId: "evt-12" },
+    }, { dedupeKey: "payment-succeeded:evt-12:order-12", schemaVersion: 1 }));
+    const outboxResult = await eventOutboxService.dispatchRegisteredBatch(10, new Date("2026-10-27T12:00:00Z"));
+    expect(outboxResult).toMatchObject({ claimed: 1, delivered: 1 });
+    expect(txMock.notification.create).toHaveBeenCalledWith({ data: expect.objectContaining({
+      userId: "vendor-user-12", title: "You have a new paid order",
+      body: "Review the order and confirm fulfilment.", dedupeKey: "R12_FIRST_PAID_ORDER:order-12",
+      data: expect.objectContaining({ ruleKey: "R12_FIRST_PAID_ORDER", eventId: event.id, destination: "order_detail", orderId: "order-12" }),
+    }) });
+    const delivery = await notificationDeliveryService.dispatchBatch(10, new Date("2026-10-27T12:00:01Z"));
+    expect(delivery).toMatchObject({ claimed: 1, sent: 1 });
+    expect(sendPushToUser).toHaveBeenCalledWith("vendor-user-12", expect.objectContaining({
+      title: "You have a new paid order", body: "Review the order and confirm fulfilment.",
+      data: expect.objectContaining({ type: "vendor_order_paid", destination: "order_detail", orderId: "order-12" }),
+    }), { logId: "log-1" });
+
+    vi.stubEnv("R12_FIRST_PAID_ORDER_ENABLED", "false");
+    await eventOutboxService.dispatchRegisteredBatch(10, new Date("2026-10-27T12:01:00Z"));
+    expect(txMock.notification.create).toHaveBeenCalledTimes(1);
   });
 
   it("validates and enqueues a domain event, resolves R28, creates one idempotent candidate, delivers push, and records outcomes", async () => {
@@ -393,7 +432,7 @@ describe("event to notification pipeline integration", () => {
   it("routes a real supplier reconfirmation request through the outbox, candidate and durable push delivery", async () => {
     vi.stubEnv("R37_SUPPLIER_RECONFIRMATION_ENABLED", "true");
     const requestedAt = new Date("2026-10-26T11:00:00Z");
-    const deadline = new Date("2026-10-26T23:00:00Z");
+    const deadline = new Date("2026-10-27T23:00:00Z");
     const campaign = {
       id: "campaign-1", title: "Rice", status: "AWAITING_SUPPLIER_RECONFIRMATION",
       reconfirmationDeadline: deadline, reconfirmationRequestedAt: requestedAt, reconfirmationQuantity: 4,

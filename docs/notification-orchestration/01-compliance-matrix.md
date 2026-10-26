@@ -24,7 +24,7 @@ Status values follow the spec's own progression: **Proposed → Backend mapped �
 
 | Rule | Status | Evidence |
 |---|---|---|
-| R12 First paid order created | **Implemented (legacy)** | "vendor-new-order notification" — [payments.service.ts:900](../../src/modules/payments/payments.service.ts). Not re-verified for exact P0/immediate timing this pass. |
+| R12 First paid order created | **Transactional event/candidate/delivery implemented; gated pending authenticated order-detail runtime QA** | Stripe `payment_intent.succeeded` now enqueues a versioned `payment_succeeded` event in the same transaction that changes the real order to `PAID`, deduped by Stripe event and order. Consumer resolves the actual vendor through order/vendor item assignment, checks VENDOR role and suspension, and creates the exact v2 copy with `order_detail` destination and durable push delivery. Send time rechecks current paid status, vendor owner and unacknowledged state. Existing buyer payment confirmation remains separate; `R12_FIRST_PAID_ORDER_ENABLED` defaults off. End-to-end outbox/candidate/push test added. |
 | R13 Order acceptance outstanding | **Implemented (legacy)** | `order-unacknowledged-sweep` (handoff O-02) — [internal.routes.ts:450](../../src/modules/internal/internal.routes.ts), confirmed live (`"firstReminders":2,"escalations":2"` in the manual sweep run on 2026-10-25). |
 | R14 Order preparation overdue | **Blocked pending real preparation deadline** | The order model has no preparation due timestamp or preparation-specific deadline. R13 is acceptance, while R15 derives an assumed dispatch window from `vendorConfirmedAt`; neither is proof of preparation being overdue. No deadline or cadence was invented. |
 | R15 Dispatch not confirmed | **Implemented (legacy)** | `order-dispatch-due-sweep` (handoff O-04) — [order-acceptance-notifications.service.ts](../../src/modules/orders/order-acceptance-notifications.service.ts). Comment in that file notes **no real `dispatchDueAt` column exists** — the "due" timing is an assumed window, not a verified deadline. Spec explicitly requires "deadline messages derive from real entity timestamps" — this is a known gap in the existing (pre-spec) implementation, not introduced by this pass. |
@@ -82,11 +82,13 @@ Status values follow the spec's own progression: **Proposed → Backend mapped �
 ## Summary counts
 
 - **Implemented, QA passed (spec-shaped):** 11 of 40 — R01, R03, R05, R06, R11, R16, R30, R31, R32, R33, R38
-- **Implemented on backend and mobile source; backend tests/typechecks pass, mobile runtime QA and production timing remain outstanding:** 3 of 40 — R10, R18, R35
-- **Implemented (legacy, not re-platformed):** R07–R09, R12–R13, R15, R20–R22, R26
-- **Implemented on backend but gated pending route/runtime/approval:** R25, R29, R34, R37, R40
-- **Partial or scoped:** R04, R17, R23, R27, R36, R39–R40
-- **Blocked on source semantics or a real signal:** R02, R14, R24
-- **Implemented source with native device QA pending:** R19, R28
+- **Implemented, focused backend QA passed (spec-shaped):** 11 of 40 — R01, R03, R05, R06, R11, R16, R30–R33, R38
+- **Implemented on backend and mobile source; runtime/device QA or verified timing outstanding:** 5 of 40 — R10, R18, R19, R28, R35
+- **Implemented (legacy, not re-platformed):** 9 of 40 — R07–R09, R13, R15, R20–R22, R26
+- **Implemented on backend but gated pending route/runtime/approval:** 6 of 40 — R12, R25, R29, R34, R37, R40
+- **Partial or scoped:** 5 of 40 — R04, R17, R23, R27, R36
+- **Blocked on source semantics or an approved business mechanism:** 4 of 40 — R02, R14, R24, R39
+
+These six disjoint groups cover R01–R40 exactly once. “Focused backend QA passed” does not imply mobile device QA, client approval, or production enablement.
 
 The authoritative v2 specification is checked in at `Eki-Notification-Orchestration-Spec-v2.md`. The original 210-event catalogue remains a separate missing source. These are implementation mappings, not a claim of approval or enablement; rules with unverified policy, copy, timing, or signals remain gated.

@@ -23,6 +23,12 @@ interface NotificationRuleDefinition {
  */
 export const NOTIFICATION_EVENT_RULES: readonly NotificationRuleDefinition[] = [
   {
+    eventName: EVENT_NAMES.payment_succeeded,
+    key: "R12_FIRST_PAID_ORDER",
+    version: 1,
+    enabled: () => process.env.R12_FIRST_PAID_ORDER_ENABLED === "true",
+  },
+  {
     eventName: EVENT_NAMES.support_response_received,
     key: "R28_SUPPORT_RESPONSE",
     version: 1,

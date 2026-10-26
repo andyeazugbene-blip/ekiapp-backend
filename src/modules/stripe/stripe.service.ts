@@ -318,6 +318,12 @@ class StripeWebhookService {
             data: { status: "PAID" },
           });
 
+          await eventsService.enqueueTransactional(tx, {
+            name: EVENT_NAMES.payment_succeeded, actorType: "stripe", entityType: "Order", entityId: order.id,
+            source: "stripe_webhook", secondaryEntities: { buyerId, vendorId: order.vendorId ?? order.items[0]?.vendorId ?? null },
+            payload: { orderId: order.id, stripeEventId: event.id },
+          }, { dedupeKey: `payment-succeeded:${event.id}:${order.id}`, schemaVersion: 1 });
+
           const vendorId = order.vendorId ?? order.items[0]?.vendorId;
           if (vendorId && order.payment.vendorEarningsAmount > 0) {
             let w = await tx.wallet.findUnique({ where: { vendorId } });
@@ -378,14 +384,7 @@ class StripeWebhookService {
     // Fire notifications AFTER transaction commits
     if (paidOrders.length > 0) {
       this.sendSuccessNotifications(buyerId, paidOrders);
-      for (const o of paidOrders) {
-        // At-least-once: consumers dedupe on payload.stripeEventId.
-        eventsService.emit({
-          name: EVENT_NAMES.payment_succeeded, actorType: "stripe", entityType: "Order", entityId: o.id,
-          source: "stripe_webhook", secondaryEntities: { buyerId, vendorId: o.vendorId },
-          payload: { stripeEventId: event.id },
-        });
-      }
+      void dispatchNotificationsAfterCommit();
     }
     referralsService.creditReferralBonusOnFirstOrder(buyerId).catch((err) => {
       logger.error("Referral bonus credit failed", { buyerId, error: String(err) });
