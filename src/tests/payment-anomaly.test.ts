@@ -15,11 +15,17 @@ vi.mock("../lib/prisma", () => ({
     checkout: { findMany: vi.fn() },
     payment: { findMany: vi.fn() },
     ledgerEntry: { findMany: vi.fn() },
+    user: { findMany: vi.fn() },
     paymentAnomaly: { upsert: vi.fn(), findMany: vi.fn(), findUnique: vi.fn(), update: vi.fn() },
   },
 }));
 
+vi.mock("../modules/notifications/notifications.service", () => ({
+  notificationsService: { enqueue: vi.fn().mockResolvedValue(undefined) },
+}));
+
 import { prisma } from "../lib/prisma";
+import { notificationsService } from "../modules/notifications/notifications.service";
 import { paymentAnomalyService } from "../modules/ledger/payment-anomaly.service";
 
 const m = vi.mocked(prisma, true);
@@ -35,6 +41,40 @@ beforeEach(() => {
   m.checkout.findMany.mockResolvedValue([] as never);
   m.payment.findMany.mockResolvedValue([] as never);
   m.ledgerEntry.findMany.mockResolvedValue([] as never);
+  m.user.findMany.mockResolvedValue([] as never);
+});
+
+describe("paymentAnomalyService.scan — R40 administrative incident alerts", () => {
+  it("alerts only ADMIN accounts and gives each finding a stable dedupe key", async () => {
+    m.subscriptionPaymentAttempt.groupBy.mockImplementation(async (args: any) => args.by[0] === "stripePaymentIntentId"
+      ? [{ stripePaymentIntentId: "pi_critical", _count: { _all: 2 } }] as never
+      : [] as never);
+    m.subscriptionPaymentAttempt.findMany.mockResolvedValue([
+      { stripePaymentIntentId: "pi_critical" }, { stripePaymentIntentId: "pi_critical" },
+    ] as never);
+    m.user.findMany.mockResolvedValue([{ id: "admin-1" }] as never);
+
+    await paymentAnomalyService.scan();
+    await paymentAnomalyService.scan();
+
+    expect(m.user.findMany).toHaveBeenCalledWith({ where: { role: "ADMIN" }, select: { id: true } });
+    expect(notificationsService.enqueue).toHaveBeenCalledTimes(2);
+    expect(notificationsService.enqueue).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      userId: "admin-1",
+      type: "ADMIN_BROADCAST",
+      data: expect.objectContaining({ event: "critical_payment_anomaly", destination: "admin_case" }),
+      dedupeKey: "R40_PAYMENT_ANOMALY:admin-1:DUPLICATE_PROVIDER_REF:SubscriptionPaymentAttempt:pi_critical",
+    }));
+    expect(notificationsService.enqueue).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      dedupeKey: "R40_PAYMENT_ANOMALY:admin-1:DUPLICATE_PROVIDER_REF:SubscriptionPaymentAttempt:pi_critical",
+    }));
+  });
+
+  it("does not query or notify admins when a scan finds no verified anomaly", async () => {
+    await paymentAnomalyService.scan();
+    expect(m.user.findMany).not.toHaveBeenCalled();
+    expect(notificationsService.enqueue).not.toHaveBeenCalled();
+  });
 });
 
 describe("paymentAnomalyService.scan — DUPLICATE_PROVIDER_REF", () => {
