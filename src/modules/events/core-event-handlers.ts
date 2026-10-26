@@ -182,6 +182,51 @@ export async function handleCommunityBuyMinimumReached(tx: Prisma.TransactionCli
   }
 }
 
+/** R36: route a real Community Buy authentication requirement to its participant. */
+export async function handleCommunityBuyPaymentActionRequired(tx: Prisma.TransactionClient, event: Event): Promise<void> {
+  const rule = resolveNotificationRule(event);
+  if (!rule?.enabled) return;
+  const authorisationId = requiredId(event.payload, "authorisationId");
+  const authorisation = await tx.communityBuyPaymentAuthorisation.findUnique({
+    where: { id: authorisationId },
+    select: { id: true, holdStatus: true, campaignId: true, contribution: { select: { participant: { select: { userId: true } } } } },
+  });
+  if (!authorisation || authorisation.holdStatus !== "REQUIRES_ACTION") return;
+  const recipient = await tx.user.findUnique({
+    where: { id: authorisation.contribution.participant.userId },
+    select: { id: true, role: true, isSuspended: true },
+  });
+  if (!recipient || recipient.role !== "BUYER" || recipient.isSuspended) return;
+
+  const dedupeKey = `R36_COMMUNITY_BUY_PAYMENT_ACTION_REQUIRED:${authorisation.id}`;
+  const created = await notificationsService.create({
+    userId: recipient.id,
+    type: "COMMUNITY_CAMPAIGN_UPDATE",
+    title: "Your Community Buy payment needs attention",
+    body: "Complete the required secure payment step.",
+    data: {
+      type: "community_buy_payment_action_required",
+      audience: "participant",
+      ruleKey: rule.key,
+      ruleVersion: rule.version,
+      eventId: event.id,
+      templateVersion: 1,
+      destination: "community_buy_campaign",
+      campaignId: authorisation.campaignId,
+      authorisationId: authorisation.id,
+    },
+    dedupeKey,
+  }, tx);
+  const candidate = created ?? await tx.notification.findUnique({ where: { dedupeKey }, select: { id: true } });
+  if (candidate) {
+    await tx.notificationDelivery.upsert({
+      where: { notificationId_channel: { notificationId: candidate.id, channel: "push" } },
+      create: { notificationId: candidate.id, channel: "push" },
+      update: {},
+    });
+  }
+}
+
 /** R25: a real Stripe payout hold requires the vendor to review next steps. */
 export async function handlePayoutActionRequired(tx: Prisma.TransactionClient, event: Event): Promise<void> {
   const rule = resolveNotificationRule(event);
@@ -263,6 +308,7 @@ export function registerCoreEventHandlers(): void {
   eventOutboxService.registerHandler(EVENT_NAMES.support_response_received, handleSupportResponseReceived);
   eventOutboxService.registerHandler(EVENT_NAMES.product_stock_depleted, handleProductStockDepleted);
   eventOutboxService.registerHandler(EVENT_NAMES.community_buy_minimum_reached, handleCommunityBuyMinimumReached);
+  eventOutboxService.registerHandler(EVENT_NAMES.community_buy_payment_action_required, handleCommunityBuyPaymentActionRequired);
   eventOutboxService.registerHandler(EVENT_NAMES.payout_action_required, handlePayoutActionRequired);
   eventOutboxService.registerHandler(EVENT_NAMES.payout_confirmed, handlePayoutConfirmed);
   registered = true;

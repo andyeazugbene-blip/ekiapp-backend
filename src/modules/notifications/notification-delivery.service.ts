@@ -79,6 +79,23 @@ async function communityBuyMinimumStillEligible(delivery: NotificationDelivery &
   return thresholdStillMet;
 }
 
+async function communityBuyPaymentActionStillEligible(delivery: NotificationDelivery & { notification: { userId: string; readAt: Date | null; data: unknown } }): Promise<boolean> {
+  if (process.env.R36_COMMUNITY_BUY_PAYMENT_ACTION_REQUIRED_ENABLED !== "true") return false;
+  const data = delivery.notification.data;
+  if (!isRecord(data) || data.type !== "community_buy_payment_action_required" || typeof data.authorisationId !== "string"
+    || typeof data.campaignId !== "string" || delivery.notification.readAt) return false;
+  const [authorisation, recipient] = await Promise.all([
+    prisma.communityBuyPaymentAuthorisation.findUnique({
+      where: { id: data.authorisationId },
+      select: { holdStatus: true, campaignId: true, contribution: { select: { participant: { select: { userId: true } } } } },
+    }),
+    prisma.user.findUnique({ where: { id: delivery.notification.userId }, select: { id: true, role: true, isSuspended: true } }),
+  ]);
+  return Boolean(authorisation && authorisation.holdStatus === "REQUIRES_ACTION" && authorisation.campaignId === data.campaignId
+    && authorisation.contribution.participant.userId === delivery.notification.userId
+    && recipient && recipient.role === "BUYER" && !recipient.isSuspended);
+}
+
 async function payoutActionStillEligible(delivery: NotificationDelivery & { notification: { userId: string; readAt: Date | null; data: unknown } }): Promise<boolean> {
   if (process.env.R25_PAYOUT_ACTION_REQUIRED_ENABLED !== "true") return false;
   const data = delivery.notification.data;
@@ -119,6 +136,10 @@ async function notificationStillEligible(delivery: NotificationDelivery & { noti
   if (data.type === "community_campaign_update" && data.event === "minimum_reached" && data.ruleKey === "R35_COMMUNITY_BUY_MINIMUM_REACHED") {
     const rule = resolveNotificationRule({ name: EVENT_NAMES.community_buy_minimum_reached, schemaVersion: Number(data.ruleVersion) });
     return Boolean(rule?.enabled && await communityBuyMinimumStillEligible(delivery));
+  }
+  if (data.type === "community_buy_payment_action_required" && data.ruleKey === "R36_COMMUNITY_BUY_PAYMENT_ACTION_REQUIRED") {
+    const rule = resolveNotificationRule({ name: EVENT_NAMES.community_buy_payment_action_required, schemaVersion: Number(data.ruleVersion) });
+    return Boolean(rule?.enabled && await communityBuyPaymentActionStillEligible(delivery));
   }
   if (data.type === "payout_action_required" && data.ruleKey === "R25_PAYOUT_ACTION_REQUIRED") {
     const rule = resolveNotificationRule({ name: EVENT_NAMES.payout_action_required, schemaVersion: Number(data.ruleVersion) });

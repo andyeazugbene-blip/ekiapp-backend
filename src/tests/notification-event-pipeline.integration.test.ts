@@ -19,6 +19,7 @@ const { prismaMock, txMock, sendPushToUser } = vi.hoisted(() => {
     },
     user: { findUnique: vi.fn() },
     communityCampaign: { findUnique: vi.fn() },
+    communityBuyPaymentAuthorisation: { findUnique: vi.fn() },
     payoutRequest: { findUnique: vi.fn() },
     notification: {
       create: vi.fn(async ({ data }: any) => {
@@ -50,6 +51,7 @@ const { prismaMock, txMock, sendPushToUser } = vi.hoisted(() => {
     message: txMock.message,
     user: { findUnique: vi.fn() },
     communityCampaign: { findUnique: vi.fn() },
+    communityBuyPaymentAuthorisation: { findUnique: vi.fn() },
     payoutRequest: { findUnique: vi.fn() },
     product: { findUnique: vi.fn() },
     communicationLog: { update: vi.fn().mockResolvedValue({}) },
@@ -72,6 +74,7 @@ describe("event to notification pipeline integration", () => {
     vi.clearAllMocks();
     vi.stubEnv("R28_GENERAL_SUPPORT_NOTIFICATIONS_ENABLED", "true");
     vi.stubEnv("R26_PAYOUT_CONFIRMED_ENABLED", "true");
+    vi.stubEnv("R36_COMMUNITY_BUY_PAYMENT_ACTION_REQUIRED_ENABLED", "false");
     sendPushToUser.mockResolvedValue({ tokens: 1, accepted: 1, rejected: 0, ticketIds: ["expo-ticket-1"] });
     txMock.user.findUnique.mockImplementation(async ({ where }: any) => ({
       id: where.id,
@@ -182,5 +185,38 @@ describe("event to notification pipeline integration", () => {
     expect(prismaMock.notificationDelivery.updateMany).toHaveBeenLastCalledWith(expect.objectContaining({
       where: { id: "delivery-1", status: "SENT" }, data: expect.objectContaining({ status: "DELIVERED" }),
     }));
+  });
+
+  it("delivers a gated R36 secure-payment-action notification while the hold still requires action", async () => {
+    vi.stubEnv("R36_COMMUNITY_BUY_PAYMENT_ACTION_REQUIRED_ENABLED", "true");
+    const authorisation = {
+      id: "auth-1", holdStatus: "REQUIRES_ACTION", campaignId: "campaign-1",
+      contribution: { participant: { userId: "buyer-1" } },
+    };
+    txMock.communityBuyPaymentAuthorisation.findUnique.mockResolvedValue(authorisation);
+    prismaMock.communityBuyPaymentAuthorisation.findUnique.mockResolvedValue(authorisation);
+    txMock.user.findUnique.mockResolvedValue({ id: "buyer-1", role: "BUYER", isSuspended: false });
+    prismaMock.user.findUnique.mockResolvedValue({ id: "buyer-1", role: "BUYER", isSuspended: false });
+
+    const event = await prismaMock.$transaction((tx: typeof txMock) => eventOutboxService.enqueue(tx, {
+      name: EVENT_NAMES.community_buy_payment_action_required,
+      actorType: "system", entityType: "CommunityBuyPaymentAuthorisation", entityId: "auth-1",
+      payload: { authorisationId: "auth-1", campaignId: "campaign-1", contributionId: "contribution-1" },
+    }, { dedupeKey: "community-buy-payment-action-required:auth-1", schemaVersion: 1 }));
+    const outboxResult = await eventOutboxService.dispatchRegisteredBatch(10, new Date("2026-10-26T12:00:00Z"));
+    expect(outboxResult).toMatchObject({ claimed: 1, delivered: 1 });
+    expect(txMock.notification.create).toHaveBeenCalledWith({ data: expect.objectContaining({
+      userId: "buyer-1", title: "Your Community Buy payment needs attention",
+      body: "Complete the required secure payment step.",
+      dedupeKey: "R36_COMMUNITY_BUY_PAYMENT_ACTION_REQUIRED:auth-1",
+      data: expect.objectContaining({ ruleKey: "R36_COMMUNITY_BUY_PAYMENT_ACTION_REQUIRED", eventId: event.id, destination: "community_buy_campaign", authorisationId: "auth-1" }),
+    }) });
+
+    const deliveryResult = await notificationDeliveryService.dispatchBatch(10, new Date("2026-10-26T12:00:00Z"));
+    expect(deliveryResult).toMatchObject({ claimed: 1, sent: 1 });
+    expect(sendPushToUser).toHaveBeenCalledWith("buyer-1", expect.objectContaining({
+      title: "Your Community Buy payment needs attention",
+      data: expect.objectContaining({ destination: "community_buy_campaign", campaignId: "campaign-1", authorisationId: "auth-1" }),
+    }), { logId: "log-1" });
   });
 });
