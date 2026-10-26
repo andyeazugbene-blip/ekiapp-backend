@@ -37,6 +37,7 @@ import { notificationsService } from "../modules/notifications/notifications.ser
 
 const m = vi.mocked(prisma, true);
 const mNotify = vi.mocked(notificationsService, true);
+const transactionEventUpsert = vi.fn();
 const CAMPAIGN_ID = "camp-decide-1";
 
 function baseCampaign(overrides: Partial<any> = {}) {
@@ -62,6 +63,11 @@ beforeEach(() => {
   m.marketConfiguration.findUnique.mockResolvedValue({ countryCode: "GB", communityBuyFeeBps: 500 } as any);
   m.communityBuyPaymentAuthorisation.findMany.mockResolvedValue([]); // no holds to capture by default
   m.communityCampaign.updateMany.mockResolvedValue({ count: 1 } as any);
+  transactionEventUpsert.mockResolvedValue({ id: "event-r35" });
+  m.$transaction.mockImplementation(async (callback: any) => callback({
+    communityCampaign: { updateMany: m.communityCampaign.updateMany },
+    event: { upsert: transactionEventUpsert },
+  }));
 });
 
 describe("evaluateAuthorisationDecisions() — spec §11.3 step 7-8 (AT-10, AT-11)", () => {
@@ -75,6 +81,13 @@ describe("evaluateAuthorisationDecisions() — spec §11.3 step 7-8 (AT-10, AT-1
     expect(result.proceeded).toBe(1);
     expect(result.decisionRequired).toBe(0);
     expect(m.communityCampaign.updateMany).toHaveBeenCalledWith(expect.objectContaining({ data: { status: "PAYMENT_CAPTURE" } }));
+    expect(transactionEventUpsert).toHaveBeenCalledWith(expect.objectContaining({
+      where: { dedupeKey: `R35_COMMUNITY_BUY_MINIMUM_REACHED:${CAMPAIGN_ID}` },
+      create: expect.objectContaining({
+        name: "community_buy_minimum_reached",
+        payload: { campaignId: CAMPAIGN_ID, confirmedShares: 11, minimumShares: 10 },
+      }),
+    }));
   });
 
   it("AT-11: below minimum enters DECISION_REQUIRED with a timestamp for the 24h window, not RESCUE_WINDOW", async () => {

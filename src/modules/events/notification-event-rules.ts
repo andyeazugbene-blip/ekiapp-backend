@@ -34,6 +34,12 @@ export const NOTIFICATION_EVENT_RULES: readonly NotificationRuleDefinition[] = [
     version: 1,
     enabled: () => process.env.R17_STOCK_DEPLETED_ENABLED === "true",
   },
+  {
+    eventName: EVENT_NAMES.community_buy_minimum_reached,
+    key: "R35_COMMUNITY_BUY_MINIMUM_REACHED",
+    version: 1,
+    enabled: () => true,
+  },
 ];
 
 export function resolveNotificationRule(event: Pick<Event, "name" | "schemaVersion">): ResolvedNotificationRule | null {

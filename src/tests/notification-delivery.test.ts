@@ -12,6 +12,7 @@ const { prismaMock, txMock, sendPushToUser } = vi.hoisted(() => {
       notificationDelivery: { updateMany: vi.fn(), findMany: vi.fn(), findUnique: vi.fn() },
       message: { findUnique: vi.fn() },
       product: { findUnique: vi.fn() },
+      communityCampaign: { findUnique: vi.fn() },
       user: { findUnique: vi.fn() },
       communicationLog: { update: vi.fn() },
       $transaction: vi.fn(async (fn: (tx: typeof txMock) => Promise<unknown>) => fn(txMock)),
@@ -51,6 +52,9 @@ beforeEach(() => {
   prismaMock.communicationLog.update.mockResolvedValue({ id: "log-1" });
   prismaMock.product.findUnique.mockResolvedValue({
     id: "product-1", vendor: { userId: "vendor-1" }, isActive: true, status: "PUBLISHED", stock: 0, stockVersion: 4,
+  });
+  prismaMock.communityCampaign.findUnique.mockResolvedValue({
+    status: "LIVE", minimumShares: 5, confirmedShares: 6, organiser: { userId: "buyer-1" },
   });
 });
 
@@ -116,6 +120,54 @@ describe("notification push delivery", () => {
     expect(result).toMatchObject({ claimed: 1, cancelled: 1 });
     expect(sendPushToUser).not.toHaveBeenCalled();
     vi.unstubAllEnvs();
+  });
+
+  it("cancels R35 if the campaign closes before the scheduled send", async () => {
+    prismaMock.notificationDelivery.findMany.mockResolvedValue([{
+      ...delivery,
+      notification: {
+        ...delivery.notification,
+        title: "Your Community Buy reached its minimum",
+        body: "Review the campaign's next step.",
+        data: {
+          type: "community_campaign_update", event: "minimum_reached", ruleKey: "R35_COMMUNITY_BUY_MINIMUM_REACHED",
+          ruleVersion: 1, campaignId: "campaign-1", confirmedShares: 6, minimumShares: 5,
+        },
+      },
+    }] as never);
+    prismaMock.communityCampaign.findUnique.mockResolvedValue({
+      status: "CANCELLED", minimumShares: 5, confirmedShares: 6, organiser: { userId: "buyer-1" },
+    } as never);
+
+    const result = await notificationDeliveryService.dispatchBatch(10, now);
+    expect(result).toMatchObject({ claimed: 1, cancelled: 1 });
+    expect(sendPushToUser).not.toHaveBeenCalled();
+  });
+
+  it("keeps an authorisation-mode R35 notice eligible through successful capture into fulfilment", async () => {
+    prismaMock.notificationDelivery.findMany.mockResolvedValue([{
+      ...delivery,
+      notification: {
+        ...delivery.notification,
+        title: "Your Community Buy reached its minimum",
+        body: "Review the campaign's next step.",
+        data: {
+          type: "community_campaign_update", event: "minimum_reached", ruleKey: "R35_COMMUNITY_BUY_MINIMUM_REACHED",
+          ruleVersion: 1, campaignId: "campaign-1", confirmedShares: 5, minimumShares: 5,
+        },
+      },
+    }] as never);
+    prismaMock.communityCampaign.findUnique.mockResolvedValue({
+      status: "FULFILLING", paymentMode: "AUTHORISE_THEN_CAPTURE", minimumShares: 5, confirmedShares: 0,
+      organiser: { userId: "buyer-1" },
+    } as never);
+    sendPushToUser.mockResolvedValue({ tokens: 1, accepted: 1, rejected: 0, ticketIds: ["ticket-r35"] });
+
+    const result = await notificationDeliveryService.dispatchBatch(10, now);
+    expect(result).toMatchObject({ claimed: 1, sent: 1 });
+    expect(sendPushToUser).toHaveBeenCalledWith("buyer-1", expect.objectContaining({
+      title: "Your Community Buy reached its minimum",
+    }), { logId: "log-1" });
   });
 
   it("requeues a failed provider receipt with backoff unless the attempt limit is reached", async () => {

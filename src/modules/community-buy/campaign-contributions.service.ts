@@ -19,6 +19,7 @@ import { organiserFeeService } from "./organiser-fee.service";
 import { upsertParticipantWithAttribution } from "./campaign-participant-attribution.service";
 import { buyerCountryService } from "./buyer-country.service";
 import { notifyProgressMilestone } from "./campaign-notifications";
+import { dispatchNotificationsAfterCommit } from "../events/dispatch-notifications";
 
 /**
  * Client decision (2026-09-22, buyer-country acceptance fix) — a buyer may
@@ -280,6 +281,17 @@ async function createPledge(
     if (!fresh.termsLockedAt) {
       await tx.communityCampaign.update({ where: { id: campaignId }, data: { termsLockedAt: new Date() } });
     }
+    const minimumShares = fresh.minimumShares;
+    if (minimumShares && fresh.confirmedShares < minimumShares && fresh.confirmedShares + quantity >= minimumShares) {
+      await eventsService.enqueueTransactional(tx, {
+        name: EVENT_NAMES.community_buy_minimum_reached,
+        actorType: "system",
+        entityType: "CommunityCampaign",
+        entityId: campaignId,
+        source: "community_buy_pledge",
+        payload: { campaignId, confirmedShares: fresh.confirmedShares + quantity, minimumShares },
+      }, { dedupeKey: `R35_COMMUNITY_BUY_MINIMUM_REACHED:${campaignId}`, schemaVersion: 1 });
+    }
     return contribution;
   });
 
@@ -294,6 +306,7 @@ async function createPledge(
   }
 
   const contribution = await prisma.campaignContribution.findUniqueOrThrow({ where: { id: claimed.id }, include: { participant: true } });
+  void dispatchNotificationsAfterCommit();
   void notifyProgressMilestone(campaignId);
   await notificationsService.enqueue({
     userId: contribution.participant.userId,

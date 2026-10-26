@@ -4,7 +4,7 @@ const { createCandidate } = vi.hoisted(() => ({ createCandidate: vi.fn() }));
 vi.mock("../modules/notifications/notifications.service", () => ({ notificationsService: { create: createCandidate } }));
 vi.mock("../lib/prisma", () => ({ prisma: {} }));
 
-import { handleProductStockDepleted, handleSupportResponseReceived } from "../modules/events/core-event-handlers";
+import { handleCommunityBuyMinimumReached, handleProductStockDepleted, handleSupportResponseReceived } from "../modules/events/core-event-handlers";
 
 const supportMessage = {
   id: "message-1",
@@ -108,6 +108,54 @@ describe("R17 stock-depleted outbox handler", () => {
     await handleProductStockDepleted(staleTx, event);
     expect(createCandidate).not.toHaveBeenCalled();
     vi.unstubAllEnvs();
+  });
+});
+
+describe("R35 Community Buy minimum-reached outbox handler", () => {
+  it("creates one exact organiser candidate from confirmed minimum state", async () => {
+    createCandidate.mockResolvedValue({ id: "notification-r35" });
+    const tx = {
+      communityCampaign: { findUnique: vi.fn().mockResolvedValue({
+        id: "campaign-1", title: "Rice", status: "LIVE", minimumShares: 5, confirmedShares: 6,
+        organiser: { userId: "organiser-1" },
+      }) },
+      user: { findUnique: vi.fn().mockResolvedValue({ id: "organiser-1", role: "BUYER", isSuspended: false }) },
+      notification: { findUnique: vi.fn() },
+      notificationDelivery: { upsert: vi.fn() },
+    } as never;
+    const event = {
+      id: "event-r35", name: "community_buy_minimum_reached", schemaVersion: 1,
+      payload: { campaignId: "campaign-1", confirmedShares: 6, minimumShares: 5 },
+    } as never;
+
+    await handleCommunityBuyMinimumReached(tx, event);
+
+    expect(createCandidate).toHaveBeenCalledWith(expect.objectContaining({
+      userId: "organiser-1",
+      title: "Your Community Buy reached its minimum",
+      body: "Review the campaign's next step.",
+      dedupeKey: "R35_COMMUNITY_BUY_MINIMUM_REACHED:campaign-1",
+      data: expect.objectContaining({
+        ruleKey: "R35_COMMUNITY_BUY_MINIMUM_REACHED", ruleVersion: 1, eventId: "event-r35",
+        destination: "community_buy_campaign", audience: "organiser", campaignId: "campaign-1", confirmedShares: 6, minimumShares: 5,
+      }),
+    }), tx);
+    expect((tx as any).notificationDelivery.upsert).toHaveBeenCalled();
+  });
+
+  it("suppresses a threshold event if the minimum changed or the campaign closed", async () => {
+    const event = {
+      id: "event-r35", name: "community_buy_minimum_reached", schemaVersion: 1,
+      payload: { campaignId: "campaign-1", confirmedShares: 6, minimumShares: 5 },
+    } as never;
+    const tx = {
+      communityCampaign: { findUnique: vi.fn().mockResolvedValue({
+        id: "campaign-1", status: "CANCELLED", minimumShares: 7, confirmedShares: 6, organiser: { userId: "organiser-1" },
+      }) },
+      user: { findUnique: vi.fn() }, notification: { findUnique: vi.fn() }, notificationDelivery: { upsert: vi.fn() },
+    } as never;
+    await handleCommunityBuyMinimumReached(tx, event);
+    expect(createCandidate).not.toHaveBeenCalled();
   });
 });
 
