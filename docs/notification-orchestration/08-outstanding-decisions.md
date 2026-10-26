@@ -1,6 +1,6 @@
 # Outstanding Decisions — Genuinely the Client's to Make
 
-Two business/infrastructure choices and two missing artifacts/access items remain. The R06 and R39 questions from the earlier version are resolved by existing code and the locked referral decision; they are no longer client decisions.
+Business/infrastructure choices and one missing source artifact remain. The R06 question is answered by the existing Stripe Identity flow. R39's vendor referral credit is recorded as earned/owed; it is not an applied Membership credit, so billing-provider application remains unimplemented.
 
 ## 1. WhatsApp provider
 
@@ -12,20 +12,20 @@ The spec's 4h/24h/72h cadence needs a cron that runs more often than once a day.
 - Stay on daily cron: cadence degrades to "fires on the first daily check after the threshold passes" — still correct and bounded, just not real-time.
 - Add a sub-daily cron (needs a plan that supports it): true spec-compliant 4h/24h/72h timing.
 
-## 3. Original v2 specification and legacy catalogue
+## 3. Original 210-event legacy catalogue
 
-The current workspace does not contain the authoritative Notification Orchestration Developer Specification v2.0 or the original 210-event catalogue. The R01–R40 matrix and the earlier v1 gap analysis are secondary sources; they do not contain the full trigger/copy/recipient/destination evidence needed to safely finish every rule or reconcile each catalogue ID. Provide or point to those exact source files so implementation can continue without guessing client-defined behavior.
+The authoritative v2 Google Doc export is now copied to `docs/notification-orchestration/Eki-Notification-Orchestration-Spec-v2.md`. The original 210-event catalogue remains unavailable. Do not infer its IDs, event mappings, copy, routes, or stop conditions; reconcile it only when the original source is provided.
 
 ## 4. Applying vendor referral Membership credits
 
 The referral ledger records an earned free-month credit and notifies the referrer, but does not mutate Stripe subscription dates or invoices. Confirm the approved Stripe coupon/invoice-credit mechanism before implementing that financial side effect; do not infer billing changes from `Referral.creditedAt` alone.
 
-## 5. Mobile runtime QA and R04 copy approval
+## 5. Mobile runtime QA and gated-rule verification
 
-Semantic route keys now have role-gated mappings or explicit fallbacks in source, including the R40 payment-anomaly queue. Notification taps are held until authentication restores the recipient's role, and duplicate live/cold-start responses are deduplicated. Typechecking and preview CI do not verify native notification delivery, background behavior, or route ownership on iOS/Android devices. Generic support-case detail is still unavailable because the client app and backend expose only Community Buy support cases; other roles fall back to their support entry point. R04's detector is implemented but its AutomationRule defaults to DRAFT until the exact v2 copy and policy are checked.
+The mobile source includes semantic routes or role-safe fallbacks, but typechecking and preview CI do not verify native notification delivery, background behavior, or route ownership on iOS/Android devices. R28 deep-links only to Community Buy cases returned by the authenticated reporter's own-case API; generic support-case detail is not available. R04's exact copy is now available in v2, but its AutomationRule remains DRAFT pending verified trigger mapping, Acquisition WhatsApp ownership/co-ordination, and timing support.
 
 ## 6. Remaining engineering work and gated rules
 
 The rules formerly listed as “not verified” have now been inspected and their evidence or gaps recorded in `01-compliance-matrix.md`. Open engineering work includes the spec-shaped event/outbox/candidate/delivery pipeline, scheduler timing, distinct zero-stock semantics, dispute due-time reminders, and cross-product scope for Community Buy-only behaviors. R02, R14, R18, and R24 remain blocked on a real lifecycle/signal or client policy; none should be enabled from inferred state. Continue implementation where behavior is verified, and keep the affected rules gated until source semantics, tests, and approval are complete.
 
-The v2 specification and original 210-event catalogue are still the required sources for exact rule semantics, event IDs, recipient/copy mappings, and completion claims. Their required filenames are the client's `Notification Orchestration Developer Specification v2.0` and the original 210-event legacy catalogue/handbook; neither is present in the current workspace search.
+The v2 specification now supplies the proposed rule semantics and copy, but explicitly requires production event mapping and QA. The original 210-event legacy catalogue/handbook remains the single missing source artifact.

@@ -163,7 +163,9 @@ describe("supportCaseService.adminUpdate — NOTIF-08: customer notified when a 
     expect(mNotify.enqueue).toHaveBeenCalledWith(
       expect.objectContaining({
         userId: "buyer-1",
-        data: { type: "support_case_response", campaignId: "camp-1", caseId: "case-1" },
+        title: "Eki Support has replied",
+        body: "Open your case to read the update.",
+        data: { type: "support_case_response", destination: "support_case", campaignId: "camp-1", caseId: "case-1" },
         dedupeKey: expect.stringMatching(/^R28_SUPPORT_RESPONSE:case-1:2026-10-01T00:00:00\.000Z:[a-f0-9]{16}$/),
       }),
     );
@@ -183,6 +185,15 @@ describe("supportCaseService.adminUpdate — NOTIF-08: customer notified when a 
     m.communityBuySupportCase.update.mockResolvedValue({} as never);
 
     await supportCaseService.adminUpdate("admin-1", "case-1", { customerVisibleResponse: "Same answer." });
+
+    expect(mNotify.enqueue).not.toHaveBeenCalled();
+  });
+
+  it("does NOT notify for a response change after the case is closed", async () => {
+    m.communityBuySupportCase.findUnique.mockResolvedValue({ id: "case-1", participantId: "buyer-1", campaignId: "camp-1", customerVisibleResponse: null, status: "CLOSED" } as never);
+    m.communityBuySupportCase.update.mockResolvedValue({} as never);
+
+    await supportCaseService.adminUpdate("admin-1", "case-1", { customerVisibleResponse: "A later internal update." });
 
     expect(mNotify.enqueue).not.toHaveBeenCalled();
   });

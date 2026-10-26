@@ -2,11 +2,13 @@
 
 **Date:** 2026-10-26
 **Author:** Mouad (with Claude Code assistance)
-**Latest work:** completed R10 backend/mobile source changes on 2026-10-26. Backend branch `feat/store-share-reminder-r10` has commit `f9dcce9`, pushed to open PR #8. Mobile branch `feat/store-share-reminder-mobile` has commit `ff87a48`; pushing it was rejected by automatic approval review because it could not verify trusted authorization to publish mobile source. The existing uncommitted `android/app/src/main/AndroidManifest.xml` change remains untouched and is not included in that commit.
+**Authoritative source:** the client supplied the Google Doc export on 2026-10-26. A byte-for-byte working copy is stored at [`Eki-Notification-Orchestration-Spec-v2.md`](Eki-Notification-Orchestration-Spec-v2.md). The document identifies itself as an implementation draft and says production event mapping and live QA are still required; each R01–R40 entry is proposed, not proof of an implemented backend event.
+
+**Latest work:** R28 now uses the spec's exact response copy, reporter ownership, case-specific destination, closed-case stop, and response-version deduplication. Push tap read acknowledgement and own-case-only expansion are implemented in the mobile PR #5 branch. Backend focused tests/build and mobile typecheck pass; no native device QA was performed. Prior R10 and PR #8 entries below are historical status, not current branch state. The existing uncommitted `android/app/src/main/AndroidManifest.xml` change remains untouched.
 
 R06 now stops when the existing Stripe Identity session ID shows verification has started; R07/R08 were verified against the real `requires_input`/`verified` webhook paths and tests. R04's existing `Product.DRAFT` state was found (the previous matrix claim that no draft state exists was incorrect), and R28 was rechecked against Community Buy support: changed customer-visible replies notify the case reporter. General support-case coverage remains unverified.
 
-**Completion status:** the full specification is not complete. R10 now has owner-verified event emission and a mapped tap route, but native device QA and sub-daily scheduling remain outstanding. The local repositories do not contain the original v2 specification document or the 210-event legacy catalogue; the compliance matrix and older handoff gap analysis are secondary evidence, not substitutes for those source documents. See `07-test-report.md` for current verification and `08-outstanding-decisions.md` for external dependencies.
+**Completion status:** the full specification is not complete. The original 210-event legacy catalogue is still absent; R01–R40 require implementation evidence and applicable QA. Sub-daily scheduling, the shared candidate/delivery pipeline, policy/owner mapping, and native device QA remain incomplete. See `07-test-report.md` for current verification and `08-outstanding-decisions.md` for external dependencies.
 
 ## How to read the other files in this directory
 

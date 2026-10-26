@@ -1,6 +1,14 @@
 # Test Report
 
-## Latest verification — 2026-10-26 R10 changes
+## Latest verification — 2026-10-26 R28 specification alignment
+
+- Backend `src/tests/community-buy-support-case.test.ts` and `src/tests/notifications-dedupe.test.ts`: **27 tests passed**. Coverage includes exact R28 copy, reporter recipient, stable response-version dedupe, no notification for a closed case, notification row ID in push data, and existing duplicate push suppression.
+- Backend `npm run build`: **passed**.
+- Mobile `npm run typecheck`: **passed** after adding case-specific R28 routing, own-case verification before expansion, and read acknowledgement after authentication restoration.
+- No schema or migration changes were made. No native device QA or full backend suite was run for this slice.
+- GitHub was unreachable from this environment during publication; this local feature commit has no PR or CI result yet.
+
+## Historical verification — 2026-10-26 R10 changes
 
 - Backend `npx tsc --noEmit`: **passed**.
 - Backend `npm run build`: **passed**.
