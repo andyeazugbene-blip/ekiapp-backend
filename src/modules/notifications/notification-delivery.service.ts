@@ -102,7 +102,8 @@ async function buyerOrderConfirmationStillEligible(delivery: NotificationDeliver
     prisma.order.findUnique({ where: { id: data.orderId }, select: { buyerId: true, status: true } }),
     prisma.user.findUnique({ where: { id: delivery.notification.userId }, select: { id: true, role: true, isSuspended: true } }),
   ]);
-  return Boolean(order?.status === "CONFIRMED" && order.buyerId === delivery.notification.userId
+  return Boolean(order && ["CONFIRMED", "PROCESSING", "DISPATCHED", "IN_TRANSIT", "DELIVERED", "COMPLETED", "AUTO_RELEASED", "VENDOR_CONFIRMED", "DISPUTED"].includes(order.status)
+    && order.buyerId === delivery.notification.userId
     && recipient?.id === delivery.notification.userId && recipient.role === "BUYER" && !recipient.isSuspended);
 }
 
@@ -116,7 +117,8 @@ async function dispatchedOrderStillEligible(delivery: NotificationDelivery & { n
     prisma.order.findUnique({ where: { id: data.orderId }, select: { buyerId: true, status: true } }),
     prisma.user.findUnique({ where: { id: delivery.notification.userId }, select: { id: true, role: true, isSuspended: true } }),
   ]);
-  return Boolean(order?.status === "DISPATCHED" && order.buyerId === delivery.notification.userId
+  return Boolean(order && ["DISPATCHED", "IN_TRANSIT", "DELIVERED", "COMPLETED", "AUTO_RELEASED", "DISPUTED"].includes(order.status)
+    && order.buyerId === delivery.notification.userId
     && recipient?.id === delivery.notification.userId && recipient.role === "BUYER" && !recipient.isSuspended);
 }
 

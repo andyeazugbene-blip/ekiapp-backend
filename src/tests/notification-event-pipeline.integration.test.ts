@@ -123,8 +123,8 @@ describe("event to notification pipeline integration", () => {
 
   it("routes a transactional verified dispatch event to the buyer with the R22 copy", async () => {
     vi.stubEnv("R22_ORDER_DISPATCHED_ENABLED", "true");
-    txMock.order.findUnique.mockResolvedValue({ id: "order-22", orderNumber: "EKI-22", buyerId: "buyer-22", status: "DISPATCHED" });
-    prismaMock.order.findUnique.mockResolvedValue({ buyerId: "buyer-22", status: "DISPATCHED" });
+    txMock.order.findUnique.mockResolvedValue({ id: "order-22", orderNumber: "EKI-22", buyerId: "buyer-22", status: "DELIVERED" });
+    prismaMock.order.findUnique.mockResolvedValue({ buyerId: "buyer-22", status: "DELIVERED" });
     txMock.user.findUnique.mockResolvedValue({ id: "buyer-22", role: "BUYER", isSuspended: false });
     prismaMock.user.findUnique.mockResolvedValue({ id: "buyer-22", role: "BUYER", isSuspended: false });
 
@@ -149,8 +149,8 @@ describe("event to notification pipeline integration", () => {
 
   it("routes a transactional vendor-acceptance event to the buyer with the R21 v2 copy", async () => {
     vi.stubEnv("R21_ORDER_CONFIRMED_ENABLED", "true");
-    txMock.order.findUnique.mockResolvedValue({ id: "order-21", orderNumber: "EKI-21", buyerId: "buyer-21", status: "CONFIRMED" });
-    prismaMock.order.findUnique.mockResolvedValue({ buyerId: "buyer-21", status: "CONFIRMED" });
+    txMock.order.findUnique.mockResolvedValue({ id: "order-21", orderNumber: "EKI-21", buyerId: "buyer-21", status: "PROCESSING" });
+    prismaMock.order.findUnique.mockResolvedValue({ buyerId: "buyer-21", status: "PROCESSING" });
     txMock.user.findUnique.mockResolvedValue({ id: "buyer-21", role: "BUYER", isSuspended: false });
     prismaMock.user.findUnique.mockResolvedValue({ id: "buyer-21", role: "BUYER", isSuspended: false });
 

@@ -58,7 +58,7 @@ export async function handleOrderConfirmed(tx: Prisma.TransactionClient, event: 
   if (!rule?.enabled) return;
   const orderId = requiredId(event.payload, "orderId");
   const order = await tx.order.findUnique({ where: { id: orderId }, select: { id: true, orderNumber: true, buyerId: true, status: true } });
-  if (!order || order.status !== "CONFIRMED") return;
+  if (!order || !["CONFIRMED", "PROCESSING", "DISPATCHED", "IN_TRANSIT", "DELIVERED", "COMPLETED", "AUTO_RELEASED", "VENDOR_CONFIRMED", "DISPUTED"].includes(order.status)) return;
   const recipient = await tx.user.findUnique({ where: { id: order.buyerId }, select: { id: true, role: true, isSuspended: true } });
   if (!recipient || recipient.role !== "BUYER" || recipient.isSuspended) return;
 
@@ -89,7 +89,7 @@ export async function handleOrderDispatched(tx: Prisma.TransactionClient, event:
   if (!rule?.enabled) return;
   const orderId = requiredId(event.payload, "orderId");
   const order = await tx.order.findUnique({ where: { id: orderId }, select: { id: true, orderNumber: true, buyerId: true, status: true } });
-  if (!order || order.status !== "DISPATCHED") return;
+  if (!order || !["DISPATCHED", "IN_TRANSIT", "DELIVERED", "COMPLETED", "AUTO_RELEASED", "DISPUTED"].includes(order.status)) return;
   const recipient = await tx.user.findUnique({ where: { id: order.buyerId }, select: { id: true, role: true, isSuspended: true } });
   if (!recipient || recipient.role !== "BUYER" || recipient.isSuspended) return;
 
