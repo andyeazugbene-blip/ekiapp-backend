@@ -2,6 +2,22 @@
 
 ## Latest verification — 2026-10-26 R28 specification alignment
 
+### Follow-up verification — general support outbox and durable push (PRs #23/#24)
+
+- Backend focused `core-event-handlers.test.ts`, `notification-delivery.test.ts`, and `event-outbox.test.ts`: **16 tests passed**. Coverage includes exact R28 copy and recipient, suppression for read/closed/internal/non-support messages, delivery send-time rechecks, no-token retry, provider receipt success, and receipt-failure retry.
+- Backend `npm run build`: **passed**.
+- `npx prisma validate`: **passed**; `prisma migrate diff --from-empty --to-schema-datamodel prisma/schema.prisma --script` generated SQL for the new delivery table.
+- Full migration-directory diff was **not validated**: Prisma requires a configured shadow database for `--from-migrations`, and none is configured in this environment. No migration was applied to any database.
+- Mobile `npm run typecheck`: **passed** after mapping the v2 `support_case` destination to authenticated general support messages and Community Buy reporter-owned cases.
+- No device QA or full backend test suite was run for this slice. PR #23 and PR #24 CI/preview results are reported from the live GitHub check state, not inferred from local runs.
+
+### CI regression correction — 2026-10-26 follow-up branch
+
+- Live GitHub CI for merged PR #23 failed 9 tests in `messages-service.test.ts`: each failure was the stale test mock trying to iterate a Prisma callback transaction as an array. Updated the test transaction mock to support both callback and array forms, and changed the support-reply assertion to verify atomic outbox enqueue.
+- Backend `src/tests/messages-service.test.ts`: **36 tests passed** after the correction.
+- Backend `npm run build` and `npx prisma validate`: **passed**.
+- PR #23 was merged externally despite its failed `test` job; PR #24 was merged externally after Vercel checks passed and had no GitHub `test` check on its head. A follow-up branch carries the callback-mock correction and aligns R28's merged payload with the v2 `support_case` destination used by mobile PR #5.
+
 - Backend `src/tests/community-buy-support-case.test.ts` and `src/tests/notifications-dedupe.test.ts`: **27 tests passed**. Coverage includes exact R28 copy, reporter recipient, stable response-version dedupe, no notification for a closed case, notification row ID in push data, and existing duplicate push suppression.
 - Backend `npm run build`: **passed**.
 - Mobile `npm run typecheck`: **passed** after adding case-specific R28 routing, own-case verification before expansion, and read acknowledgement after authentication restoration.

@@ -18,7 +18,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 async function supportReplyStillEligible(delivery: NotificationDelivery & { notification: { userId: string; readAt: Date | null; data: unknown } }): Promise<boolean> {
   const data = delivery.notification.data;
-  if (!isRecord(data) || data.type !== "support_response_received"
+  if (!isRecord(data) || data.type !== "support_case_response"
     || typeof data.conversationId !== "string" || typeof data.messageId !== "string"
     || delivery.notification.readAt) return false;
 
