@@ -1,23 +1,17 @@
 import { Worker, type Job } from "bullmq";
 
 import { logger } from "../lib/logger";
-import { prisma } from "../lib/prisma";
 import { getRedisConnection } from "../lib/redis";
 import { QUEUE_NAMES } from "../queues";
-import type { CreateNotificationInput } from "../modules/notifications/notifications.service";
+import { notificationsService, type CreateNotificationInput } from "../modules/notifications/notifications.service";
 
-async function processNotification(job: Job<CreateNotificationInput>): Promise<void> {
-  const { userId, type, title, body, data } = job.data;
+export async function processNotification(job: Job<CreateNotificationInput>): Promise<void> {
+  const { userId, type } = job.data;
 
-  await prisma.notification.create({
-    data: {
-      userId,
-      type,
-      title,
-      body,
-      data: data ?? undefined,
-    },
-  });
+  // Use the shared idempotent creator. enqueue() may already have persisted
+  // this notification before adding the best-effort BullMQ job; bypassing
+  // the service here dropped dedupeKey and created a second inbox row.
+  await notificationsService.create(job.data);
 
   logger.info("Notification created by worker", { jobId: job.id, type, userId });
 }
