@@ -12,6 +12,7 @@ import { logger } from "../../lib/logger";
 import { CURSOR_ORDER_BY } from "../../shared/constants";
 import { calculateWithdrawalFee } from "../../shared/pricing";
 import { notificationsService } from "../notifications/notifications.service";
+import { eventsService } from "../events/events.service";
 import { resolveVendorWithdrawalFeeBps } from "../subscriptions/subscription-plan-utils";
 import { AppError } from "../../shared/errors/app-error";
 import { emailTemplates } from "../../lib/email-templates";
@@ -29,6 +30,24 @@ async function getVendorForUser(userId: string): Promise<{ id: string }> {
   const vendor = await prisma.vendor.findUnique({ where: { userId }, select: { id: true } });
   if (!vendor) throw new AppError("Vendor profile required", 403);
   return vendor;
+}
+
+async function putPayoutOnHold(payoutRequestId: string, holdReason: string): Promise<PayoutRequest> {
+  return prisma.$transaction(async (tx) => {
+    const held = await tx.payoutRequest.update({
+      where: { id: payoutRequestId },
+      data: { status: PayoutRequestStatus.ON_HOLD, holdReason },
+    });
+    await eventsService.enqueueTransactional(tx, {
+      name: "payout_action_required",
+      actorType: "system",
+      entityType: "PayoutRequest",
+      entityId: held.id,
+      source: "stripe_connect_payout",
+      payload: { payoutRequestId: held.id },
+    }, { dedupeKey: `payout_action_required:${held.id}` });
+    return held;
+  });
 }
 
 // Acceptance audit fix: a suspended vendor must not be able to request a
@@ -460,10 +479,7 @@ export const payoutsService = {
       select: { stripeAccountId: true, stripePayoutsEnabled: true },
     });
     if (!vendor?.stripeAccountId || !vendor?.stripePayoutsEnabled) {
-      const held = await prisma.payoutRequest.update({
-        where: { id: payoutRequestId },
-        data: { status: PayoutRequestStatus.ON_HOLD, holdReason: "Vendor's Stripe Connect account is not connected or not enabled for payouts." },
-      });
+      const held = await putPayoutOnHold(payoutRequestId, "Vendor's Stripe Connect account is not connected or not enabled for payouts.");
       logger.warn("Stripe Connect: vendor not eligible for auto-transfer — held for manual review", { payoutId: processing.id, vendorId: processing.vendorId });
       return held;
     }
@@ -490,10 +506,7 @@ export const payoutsService = {
       // assume the transfer definitely didn't happen either. ON_HOLD is
       // safe to retry: retrying replays the same idempotency key above.
       const message = stripeError instanceof Error ? stripeError.message : String(stripeError);
-      const held = await prisma.payoutRequest.update({
-        where: { id: payoutRequestId },
-        data: { status: PayoutRequestStatus.ON_HOLD, holdReason: `Transfer failed or could not be confirmed: ${message}` },
-      });
+      const held = await putPayoutOnHold(payoutRequestId, `Transfer failed or could not be confirmed: ${message}`);
       logger.error("Stripe Connect auto-transfer failed — held for retry", { payoutId: processing.id, vendorId: processing.vendorId, error: message });
       return held;
     }

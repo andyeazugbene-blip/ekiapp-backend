@@ -13,6 +13,7 @@ const { prismaMock, txMock, sendPushToUser } = vi.hoisted(() => {
       message: { findUnique: vi.fn() },
       product: { findUnique: vi.fn() },
       communityCampaign: { findUnique: vi.fn() },
+      payoutRequest: { findUnique: vi.fn() },
       user: { findUnique: vi.fn() },
       communicationLog: { update: vi.fn() },
       $transaction: vi.fn(async (fn: (tx: typeof txMock) => Promise<unknown>) => fn(txMock)),
@@ -87,6 +88,39 @@ describe("notification push delivery", () => {
       where: { id: "delivery-1", status: "SENT" },
       data: expect.objectContaining({ status: "DELIVERED", lastError: null }),
     });
+  });
+
+  it("rechecks R25 payout ownership and ON_HOLD state before push", async () => {
+    vi.stubEnv("R25_PAYOUT_ACTION_REQUIRED_ENABLED", "true");
+    prismaMock.payoutRequest.findUnique.mockResolvedValue({ status: "ON_HOLD", vendor: { userId: "vendor-1" } } as never);
+    prismaMock.user.findUnique.mockResolvedValue({ id: "vendor-1", role: "VENDOR", isSuspended: false } as never);
+    prismaMock.notificationDelivery.findMany.mockResolvedValue([{
+      ...delivery,
+      notification: {
+        ...delivery.notification, userId: "vendor-1", title: "Your payout needs attention",
+        body: "Review the secure payment-provider requirement.",
+        data: { type: "payout_action_required", ruleKey: "R25_PAYOUT_ACTION_REQUIRED", ruleVersion: 1, payoutRequestId: "payout-1", destination: "membership" },
+      },
+    }] as never);
+    sendPushToUser.mockResolvedValue({ tokens: 1, accepted: 1, rejected: 0, ticketIds: ["ticket-r25"] });
+    const result = await notificationDeliveryService.dispatchBatch(10, now);
+    expect(result).toMatchObject({ claimed: 1, sent: 1 });
+    expect(sendPushToUser).toHaveBeenCalledWith("vendor-1", expect.objectContaining({ title: "Your payout needs attention" }), { logId: "log-1" });
+    vi.unstubAllEnvs();
+  });
+
+  it("cancels R25 after payout resolution", async () => {
+    vi.stubEnv("R25_PAYOUT_ACTION_REQUIRED_ENABLED", "true");
+    prismaMock.payoutRequest.findUnique.mockResolvedValue({ status: "PAID", vendor: { userId: "vendor-1" } } as never);
+    prismaMock.user.findUnique.mockResolvedValue({ id: "vendor-1", role: "VENDOR", isSuspended: false } as never);
+    prismaMock.notificationDelivery.findMany.mockResolvedValue([{
+      ...delivery,
+      notification: { ...delivery.notification, userId: "vendor-1", data: { type: "payout_action_required", ruleKey: "R25_PAYOUT_ACTION_REQUIRED", ruleVersion: 1, payoutRequestId: "payout-1" } },
+    }] as never);
+    const result = await notificationDeliveryService.dispatchBatch(10, now);
+    expect(result).toMatchObject({ claimed: 1, cancelled: 1 });
+    expect(sendPushToUser).not.toHaveBeenCalled();
+    vi.unstubAllEnvs();
   });
 
   it("rechecks vendor ownership and stock episode before sending R17", async () => {

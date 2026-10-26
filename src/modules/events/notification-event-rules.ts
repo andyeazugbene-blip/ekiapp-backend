@@ -40,6 +40,12 @@ export const NOTIFICATION_EVENT_RULES: readonly NotificationRuleDefinition[] = [
     version: 1,
     enabled: () => true,
   },
+  {
+    eventName: EVENT_NAMES.payout_action_required,
+    key: "R25_PAYOUT_ACTION_REQUIRED",
+    version: 1,
+    enabled: () => process.env.R25_PAYOUT_ACTION_REQUIRED_ENABLED === "true",
+  },
 ];
 
 export function resolveNotificationRule(event: Pick<Event, "name" | "schemaVersion">): ResolvedNotificationRule | null {

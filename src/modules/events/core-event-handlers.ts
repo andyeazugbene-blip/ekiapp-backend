@@ -182,12 +182,56 @@ export async function handleCommunityBuyMinimumReached(tx: Prisma.TransactionCli
   }
 }
 
+/** R25: a real Stripe payout hold requires the vendor to review next steps. */
+export async function handlePayoutActionRequired(tx: Prisma.TransactionClient, event: Event): Promise<void> {
+  const rule = resolveNotificationRule(event);
+  if (!rule?.enabled) return;
+  const payoutRequestId = requiredId(event.payload, "payoutRequestId");
+  const payout = await tx.payoutRequest.findUnique({
+    where: { id: payoutRequestId },
+    select: { id: true, vendorId: true, status: true, vendor: { select: { userId: true } } },
+  });
+  if (!payout || payout.status !== "ON_HOLD") return;
+  const recipient = await tx.user.findUnique({
+    where: { id: payout.vendor.userId },
+    select: { id: true, role: true, isSuspended: true },
+  });
+  if (!recipient || recipient.role !== "VENDOR" || recipient.isSuspended) return;
+
+  const dedupeKey = `R25_PAYOUT_ACTION_REQUIRED:${payout.id}`;
+  const created = await notificationsService.create({
+    userId: recipient.id,
+    type: "PAYOUT_REQUESTED",
+    title: "Your payout needs attention",
+    body: "Review the secure payment-provider requirement.",
+    data: {
+      type: "payout_action_required",
+      ruleKey: rule.key,
+      ruleVersion: rule.version,
+      eventId: event.id,
+      templateVersion: 1,
+      destination: "membership",
+      payoutRequestId: payout.id,
+    },
+    dedupeKey,
+  }, tx);
+  const candidate = created ?? await tx.notification.findUnique({ where: { dedupeKey }, select: { id: true } });
+  if (candidate) {
+    await tx.notificationDelivery.upsert({
+      where: { notificationId_channel: { notificationId: candidate.id, channel: "push" } },
+      create: { notificationId: candidate.id, channel: "push" },
+      update: {},
+    });
+  }
+}
+
 let registered = false;
 export function registerCoreEventHandlers(): void {
   if (registered) return;
   eventOutboxService.registerHandler(EVENT_NAMES.support_response_received, handleSupportResponseReceived);
   eventOutboxService.registerHandler(EVENT_NAMES.product_stock_depleted, handleProductStockDepleted);
   eventOutboxService.registerHandler(EVENT_NAMES.community_buy_minimum_reached, handleCommunityBuyMinimumReached);
+  eventOutboxService.registerHandler(EVENT_NAMES.payout_action_required, handlePayoutActionRequired);
   registered = true;
 }
 
