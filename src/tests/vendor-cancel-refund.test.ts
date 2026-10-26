@@ -15,8 +15,15 @@ vi.mock("../lib/prisma", () => ({
     vendor: { findUnique: vi.fn() },
     order: { findUnique: vi.fn(), update: vi.fn(), findUniqueOrThrow: vi.fn() },
     user: { findUnique: vi.fn() },
+    $transaction: vi.fn(),
   },
 }));
+
+vi.mock("../modules/events/dispatch-notifications", () => ({ dispatchNotificationsAfterCommit: vi.fn() }));
+vi.mock("../modules/events/events.service", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../modules/events/events.service")>();
+  return { ...actual, eventsService: { ...actual.eventsService, enqueueTransactional: vi.fn().mockResolvedValue({ id: "event-1" }) } };
+});
 
 vi.mock("../lib/logger", () => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
@@ -60,7 +67,10 @@ function baseOrder(overrides: Record<string, unknown> = {}) {
   };
 }
 
-beforeEach(() => vi.clearAllMocks());
+beforeEach(() => {
+  vi.clearAllMocks();
+  m.$transaction.mockImplementation((fn: (tx: unknown) => unknown) => fn({ order: { update: m.order.update } }));
+});
 
 describe("updateVendorOrderStatus — CANCELLED with a paid order triggers a real refund", () => {
   it("calls executeOrderRefund with finalStatus CANCELLED, and skips the generic status write", async () => {
