@@ -227,6 +227,69 @@ export async function handleCommunityBuyPaymentActionRequired(tx: Prisma.Transac
   }
 }
 
+/** R37: ask the currently assigned supplier to reconfirm a real reduced quantity. */
+export async function handleSupplierReconfirmationRequested(tx: Prisma.TransactionClient, event: Event): Promise<void> {
+  const rule = resolveNotificationRule(event);
+  if (!rule?.enabled) return;
+  const campaignId = requiredId(event.payload, "campaignId");
+  const payload = event.payload as Record<string, unknown>;
+  const quantity = payload.quantity;
+  const deadline = typeof payload.deadline === "string" ? new Date(payload.deadline) : null;
+  const requestedAt = typeof payload.requestedAt === "string" ? new Date(payload.requestedAt) : null;
+  if (!Number.isSafeInteger(quantity) || Number(quantity) < 1 || !deadline || Number.isNaN(deadline.getTime())
+    || !requestedAt || Number.isNaN(requestedAt.getTime())) {
+    throw new AppError("Invalid supplier reconfirmation event payload", 400);
+  }
+
+  const campaign = await tx.communityCampaign.findUnique({
+    where: { id: campaignId },
+    select: {
+      id: true, status: true, title: true, reconfirmationDeadline: true,
+      reconfirmationRequestedAt: true, reconfirmationQuantity: true,
+      supplierAccount: { select: { userId: true } },
+      supplier: { select: { vendor: { select: { userId: true } } } },
+    },
+  });
+  if (!campaign || campaign.status !== "AWAITING_SUPPLIER_RECONFIRMATION"
+    || campaign.reconfirmationDeadline?.getTime() !== deadline.getTime()
+    || campaign.reconfirmationRequestedAt?.getTime() !== requestedAt.getTime()
+    || campaign.reconfirmationQuantity !== quantity || deadline <= new Date()) return;
+
+  const recipientUserId = campaign.supplierAccount?.userId ?? campaign.supplier?.vendor.userId;
+  if (!recipientUserId) return;
+  const recipient = await tx.user.findUnique({ where: { id: recipientUserId }, select: { id: true, isSuspended: true } });
+  if (!recipient || recipient.isSuspended) return;
+
+  const dedupeKey = `R37_SUPPLIER_RECONFIRMATION:${campaign.id}:${requestedAt.toISOString()}`;
+  const created = await notificationsService.create({
+    userId: recipient.id,
+    type: "COMMUNITY_CAMPAIGN_UPDATE",
+    title: "Please confirm your Community Buy supply",
+    body: "Review quantity and fulfilment terms.",
+    data: {
+      type: "supplier_reconfirmation_requested",
+      audience: "supplier",
+      ruleKey: rule.key,
+      ruleVersion: rule.version,
+      eventId: event.id,
+      templateVersion: 1,
+      destination: "community_buy_campaign",
+      campaignId: campaign.id,
+      quantity: Number(quantity),
+      requestedAt: requestedAt.toISOString(),
+      deadline: deadline.toISOString(),
+    },
+    dedupeKey,
+  }, tx);
+  const candidate = created ?? await tx.notification.findUnique({ where: { dedupeKey }, select: { id: true } });
+  if (candidate) {
+    await tx.notificationDelivery.upsert({
+      where: { notificationId_channel: { notificationId: candidate.id, channel: "push" } },
+      create: { notificationId: candidate.id, channel: "push" },
+      update: {},
+    });
+  }
+}
 /** R25: a real Stripe payout hold requires the vendor to review next steps. */
 export async function handlePayoutActionRequired(tx: Prisma.TransactionClient, event: Event): Promise<void> {
   const rule = resolveNotificationRule(event);
@@ -309,6 +372,7 @@ export function registerCoreEventHandlers(): void {
   eventOutboxService.registerHandler(EVENT_NAMES.product_stock_depleted, handleProductStockDepleted);
   eventOutboxService.registerHandler(EVENT_NAMES.community_buy_minimum_reached, handleCommunityBuyMinimumReached);
   eventOutboxService.registerHandler(EVENT_NAMES.community_buy_payment_action_required, handleCommunityBuyPaymentActionRequired);
+  eventOutboxService.registerHandler(EVENT_NAMES.community_buy_supplier_reconfirmation_requested, handleSupplierReconfirmationRequested);
   eventOutboxService.registerHandler(EVENT_NAMES.payout_action_required, handlePayoutActionRequired);
   eventOutboxService.registerHandler(EVENT_NAMES.payout_confirmed, handlePayoutConfirmed);
   registered = true;

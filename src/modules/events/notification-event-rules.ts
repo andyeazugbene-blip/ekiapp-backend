@@ -47,6 +47,12 @@ export const NOTIFICATION_EVENT_RULES: readonly NotificationRuleDefinition[] = [
     enabled: () => process.env.R36_COMMUNITY_BUY_PAYMENT_ACTION_REQUIRED_ENABLED === "true",
   },
   {
+    eventName: EVENT_NAMES.community_buy_supplier_reconfirmation_requested,
+    key: "R37_SUPPLIER_RECONFIRMATION",
+    version: 1,
+    enabled: () => process.env.R37_SUPPLIER_RECONFIRMATION_ENABLED === "true",
+  },
+  {
     eventName: EVENT_NAMES.payout_action_required,
     key: "R25_PAYOUT_ACTION_REQUIRED",
     version: 1,

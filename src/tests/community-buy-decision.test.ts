@@ -153,6 +153,14 @@ describe("decide() — spec §16 POST /decision (AT-12, AT-14, AT-17)", () => {
     const call = m.communityCampaign.updateMany.mock.calls.find((c) => c[0].data.status === "AWAITING_SUPPLIER_RECONFIRMATION");
     expect(call).toBeTruthy();
     expect(call![0].data.reconfirmationQuantity).toBe(7);
+    expect(transactionEventUpsert).toHaveBeenCalledWith(expect.objectContaining({
+      where: { dedupeKey: expect.stringMatching(/^community-buy-supplier-reconfirmation:camp-decide-1:/) },
+      create: expect.objectContaining({
+        name: "community_buy_supplier_reconfirmation_requested",
+        schemaVersion: 1,
+        payload: expect.objectContaining({ campaignId: CAMPAIGN_ID, quantity: 7, deadline: expect.any(String), requestedAt: expect.any(String) }),
+      }),
+    }));
   });
 
   // M3 gap 6 — the supplier must see the economics (estimated captured
