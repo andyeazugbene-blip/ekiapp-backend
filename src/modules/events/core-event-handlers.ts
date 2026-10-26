@@ -225,6 +225,58 @@ export async function handlePayoutActionRequired(tx: Prisma.TransactionClient, e
   }
 }
 
+/** R29: notify the current owner when a Stripe-confirmed Membership invoice is past due. */
+export async function handleVendorMembershipPaymentFailed(tx: Prisma.TransactionClient, event: Event): Promise<void> {
+  const rule = resolveNotificationRule(event);
+  if (!rule?.enabled) return;
+  const payload = event.payload;
+  const subscriptionId = requiredId(payload, "subscriptionId");
+  const vendorId = requiredId(payload, "vendorId");
+  const stripeEventId = requiredId(payload, "stripeEventId");
+  const invoiceId = requiredId(payload, "invoiceId");
+  const subscription = await tx.vendorSubscription.findUnique({
+    where: { id: subscriptionId },
+    select: { id: true, vendorId: true, status: true },
+  });
+  if (!subscription || subscription.vendorId !== vendorId || subscription.status !== "PAST_DUE") return;
+  const vendor = await tx.vendor.findUnique({ where: { id: subscription.vendorId }, select: { userId: true } });
+  if (!vendor) return;
+  const recipient = await tx.user.findUnique({
+    where: { id: vendor.userId },
+    select: { id: true, role: true, isSuspended: true },
+  });
+  if (!recipient || recipient.role !== "VENDOR" || recipient.isSuspended) return;
+
+  const dedupeKey = `R29_MEMBERSHIP_PAYMENT_FAILED:${stripeEventId}`;
+  const created = await notificationsService.create({
+    userId: recipient.id,
+    type: "SUBSCRIPTION_UPDATE",
+    title: "Your Eki Membership payment needs attention",
+    body: "Update your billing details.",
+    data: {
+      type: "subscription_update",
+      event: "vendor_subscription_payment_failed",
+      ruleKey: rule.key,
+      ruleVersion: rule.version,
+      eventId: event.id,
+      templateVersion: 1,
+      destination: "membership",
+      vendorSubscriptionId: subscription.id,
+      invoiceId,
+      stripeEventId,
+    },
+    dedupeKey,
+  }, tx);
+  const candidate = created ?? await tx.notification.findUnique({ where: { dedupeKey }, select: { id: true } });
+  if (candidate) {
+    await tx.notificationDelivery.upsert({
+      where: { notificationId_channel: { notificationId: candidate.id, channel: "push" } },
+      create: { notificationId: candidate.id, channel: "push" },
+      update: {},
+    });
+  }
+}
+
 /** R26: a confirmed payout gets one vendor-targeted candidate. */
 export async function handlePayoutConfirmed(tx: Prisma.TransactionClient, event: Event): Promise<void> {
   const rule = resolveNotificationRule(event);
@@ -264,6 +316,7 @@ export function registerCoreEventHandlers(): void {
   eventOutboxService.registerHandler(EVENT_NAMES.product_stock_depleted, handleProductStockDepleted);
   eventOutboxService.registerHandler(EVENT_NAMES.community_buy_minimum_reached, handleCommunityBuyMinimumReached);
   eventOutboxService.registerHandler(EVENT_NAMES.payout_action_required, handlePayoutActionRequired);
+  eventOutboxService.registerHandler(EVENT_NAMES.vendor_membership_payment_failed, handleVendorMembershipPaymentFailed);
   eventOutboxService.registerHandler(EVENT_NAMES.payout_confirmed, handlePayoutConfirmed);
   registered = true;
 }

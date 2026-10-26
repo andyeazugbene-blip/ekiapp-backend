@@ -106,6 +106,7 @@ export const EVENT_NAMES = {
   support_response_received: "support_response_received",
   // Stripe Connect payout entered ON_HOLD and needs vendor action.
   payout_action_required: "payout_action_required",
+  vendor_membership_payment_failed: "vendor_membership_payment_failed",
   payout_confirmed: "payout_confirmed",
 } as const;
 

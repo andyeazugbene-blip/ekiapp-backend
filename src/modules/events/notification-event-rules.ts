@@ -47,6 +47,12 @@ export const NOTIFICATION_EVENT_RULES: readonly NotificationRuleDefinition[] = [
     enabled: () => process.env.R25_PAYOUT_ACTION_REQUIRED_ENABLED === "true",
   },
   {
+    eventName: EVENT_NAMES.vendor_membership_payment_failed,
+    key: "R29_MEMBERSHIP_PAYMENT_FAILED",
+    version: 1,
+    enabled: () => process.env.R29_MEMBERSHIP_PAYMENT_FAILED_ENABLED === "true",
+  },
+  {
     eventName: EVENT_NAMES.payout_confirmed,
     key: "R26_PAYOUT_CONFIRMED",
     version: 1,
