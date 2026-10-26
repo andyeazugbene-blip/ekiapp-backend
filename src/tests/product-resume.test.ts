@@ -17,8 +17,10 @@ vi.mock("../lib/prisma", () => ({
   prisma: {
     vendor: { findUnique: m.vendorFindUnique },
     product: { findUnique: m.productFindUnique, update: m.productUpdate },
+    $transaction: vi.fn((fn: (tx: any) => unknown) => fn({ product: { update: m.productUpdate } })),
   },
 }));
+vi.mock("../modules/products/product-publication-events", () => ({ enqueueProductPublished: vi.fn() }));
 
 import { productsService } from "../modules/products/products.service";
 

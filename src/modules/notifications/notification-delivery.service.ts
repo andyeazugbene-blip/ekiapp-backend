@@ -59,6 +59,21 @@ async function productStockAlertStillEligible(delivery: NotificationDelivery & {
     && product.stock === 0 && product.stockVersion === data.stockVersion);
 }
 
+async function productPublicationStillEligible(delivery: NotificationDelivery & { notification: { userId: string; readAt: Date | null; data: unknown } }): Promise<boolean> {
+  if (process.env.R09_PUBLICATION_CONFIRMED_ENABLED !== "true") return false;
+  const data = delivery.notification.data;
+  if (!isRecord(data) || data.type !== "product_published" || typeof data.productId !== "string"
+    || typeof data.vendorId !== "string" || typeof data.publishedAt !== "string" || delivery.notification.readAt) return false;
+  const [product, recipient] = await Promise.all([
+    prisma.product.findUnique({ where: { id: data.productId }, include: { vendor: { select: { id: true, userId: true } } } }),
+    prisma.user.findUnique({ where: { id: delivery.notification.userId }, select: { id: true, role: true, isSuspended: true } }),
+  ]);
+  return Boolean(product && product.vendorId === data.vendorId && product.vendor.id === data.vendorId
+    && product.isActive && product.status === "PUBLISHED" && product.publishedAt?.toISOString() === data.publishedAt
+    && product.vendor.userId === delivery.notification.userId && recipient?.id === delivery.notification.userId
+    && recipient.role === "VENDOR" && !recipient.isSuspended);
+}
+
 async function productInventoryConflictStillEligible(delivery: NotificationDelivery & { notification: { userId: string; readAt: Date | null; data: unknown } }): Promise<boolean> {
   if (process.env.R18_STOCK_CONFLICT_ENABLED !== "true") return false;
   const data = delivery.notification.data;
@@ -227,6 +242,10 @@ async function supplierReconfirmationStillEligible(delivery: NotificationDeliver
 async function notificationStillEligible(delivery: NotificationDelivery & { notification: { userId: string; readAt: Date | null; data: unknown } }): Promise<boolean> {
   const data = delivery.notification.data;
   if (!isRecord(data)) return false;
+  if (data.type === "product_published" && data.ruleKey === "R09_PUBLICATION_CONFIRMED") {
+    const rule = resolveNotificationRule({ name: EVENT_NAMES.product_published, schemaVersion: Number(data.ruleVersion) });
+    return Boolean(rule?.enabled && await productPublicationStillEligible(delivery));
+  }
   if (data.type === "critical_incident" && data.ruleKey === "R40_CRITICAL_INCIDENT") {
     return criticalIncidentStillEligible(delivery);
   }

@@ -8,6 +8,49 @@ import { resolveNotificationRule } from "./notification-event-rules";
 import { COMMUNITY_BUY_ORGANISER_DECISION_WINDOW_MS } from "../community-buy/community-buy-timing";
 import { getCurrentInventoryConflict } from "../products/inventory-conflict";
 
+/** R09: notify once for the vendor's first genuinely published foodstuff. */
+export async function handleProductPublished(tx: Prisma.TransactionClient, event: Event): Promise<void> {
+  const rule = resolveNotificationRule(event);
+  if (!rule?.enabled) return;
+  const productId = requiredId(event.payload, "productId");
+  const vendorId = requiredId(event.payload, "vendorId");
+  const payload = event.payload as Record<string, unknown>;
+  if (typeof payload.publishedAt !== "string" || Number.isNaN(Date.parse(payload.publishedAt))) {
+    throw new AppError("Invalid product publication timestamp", 400);
+  }
+  const product = await tx.product.findUnique({ where: { id: productId }, include: { vendor: { select: { id: true, userId: true } } } });
+  if (!product || product.vendorId !== vendorId || product.vendor.id !== vendorId || !product.isActive || product.status !== "PUBLISHED"
+    || product.publishedAt?.toISOString() !== payload.publishedAt) return;
+  const recipient = await tx.user.findUnique({ where: { id: product.vendor.userId }, select: { id: true, role: true, isSuspended: true } });
+  if (!recipient || recipient.role !== "VENDOR" || recipient.isSuspended) return;
+
+  const dedupeKey = `R09_PUBLICATION_CONFIRMED:${vendorId}`;
+  const created = await notificationsService.create({
+    userId: recipient.id,
+    type: "AUTOMATION_MESSAGE",
+    title: "Your foodstuff is now visible",
+    body: "Share your store with buyers.",
+    data: {
+      type: "product_published",
+      ruleKey: rule.key,
+      ruleVersion: rule.version,
+      eventId: event.id,
+      templateVersion: 1,
+      destination: "store_share",
+      productId: product.id,
+      vendorId,
+      publishedAt: payload.publishedAt,
+    },
+    dedupeKey,
+  }, tx);
+  const candidate = created ?? await tx.notification.findUnique({ where: { dedupeKey }, select: { id: true } });
+  if (candidate) await tx.notificationDelivery.upsert({
+    where: { notificationId_channel: { notificationId: candidate.id, channel: "push" } },
+    create: { notificationId: candidate.id, channel: "push" },
+    update: {},
+  });
+}
+
 function requiredId(payload: unknown, field: string): string {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) throw new AppError("Invalid support response event payload", 400);
   const value = (payload as Record<string, unknown>)[field];
@@ -507,6 +550,7 @@ export async function handleCommunityBuyBelowMinimum(tx: Prisma.TransactionClien
 let registered = false;
 export function registerCoreEventHandlers(): void {
   if (registered) return;
+  eventOutboxService.registerHandler(EVENT_NAMES.product_published, handleProductPublished);
   eventOutboxService.registerHandler(EVENT_NAMES.support_response_received, handleSupportResponseReceived);
   eventOutboxService.registerHandler(EVENT_NAMES.product_stock_depleted, handleProductStockDepleted);
   eventOutboxService.registerHandler(EVENT_NAMES.product_inventory_conflict_detected, handleProductInventoryConflictDetected);

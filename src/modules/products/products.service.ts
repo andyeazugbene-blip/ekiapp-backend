@@ -1,4 +1,3 @@
-import { eventsService, EVENT_NAMES } from "../events/events.service";
 import { vendorMilestoneNotificationsService } from "../vendors/vendor-milestone-notifications.service";
 import type { Product, ProductStatus } from "@prisma/client";
 
@@ -9,6 +8,7 @@ import { AppError } from "../../shared/errors/app-error";
 import { subscriptionsService } from "../subscriptions/subscriptions.service";
 import { isSellerReadinessGateEnabled, purchasableVendorWhere } from "./seller-readiness";
 import { enqueueProductStockDepleted } from "./product-stock-events";
+import { enqueueProductPublished } from "./product-publication-events";
 import { dispatchNotificationsAfterCommit } from "../events/dispatch-notifications";
 import type {
   CreateProductInput,
@@ -113,8 +113,9 @@ export const productsService = {
     // Product currency ALWAYS inherits from vendor — input.currency is ignored
     for (let attempt = 0; attempt < 5; attempt++) {
       try {
-        const created = await prisma.product.create({
-          data: {
+        const created = await prisma.$transaction(async (tx) => {
+          const product = await tx.product.create({
+            data: {
             productCode: await nextProductCode(),
             vendorId: vendor.id,
             title: input.title,
@@ -131,18 +132,18 @@ export const productsService = {
             status,
             isActive: status === "PUBLISHED",
             publishedAt: status === "PUBLISHED" ? new Date() : null,
-          },
+            },
+          });
+          if (product.isActive && product.status === "PUBLISHED") {
+            await enqueueProductPublished(tx, product, { actorType: "vendor", actorId: userId, source: "vendor_app" });
+          }
+          return product;
         });
         if (created.isActive) {
-          eventsService.emit({
-            name: EVENT_NAMES.product_published, actorType: "vendor", actorId: userId, entityType: "Product", entityId: created.id,
-            source: "vendor_app", secondaryEntities: { vendorId: vendor.id },
-          });
-          // Handoff V-05 "store.ready" — the product-side half of the
-          // product+delivery-zone pair; see vendor-milestone-notifications
-          // .service.ts for why this call site and delivery-zones.service.ts
-          // both call it (idempotent either way).
-          void vendorMilestoneNotificationsService.maybeSendStoreReady(vendor.id);
+          void dispatchNotificationsAfterCommit();
+          if (process.env.R09_PUBLICATION_CONFIRMED_ENABLED !== "true") {
+            void vendorMilestoneNotificationsService.maybeSendStoreReady(vendor.id);
+          }
         }
         return created;
       } catch (error: any) {
@@ -199,6 +200,7 @@ export const productsService = {
         : {};
 
     const stockChanged = typeof rest.stock === "number" && rest.stock !== product.stock;
+    const becamePublished = !product.isActive || product.status !== "PUBLISHED";
     const updatedProduct = await prisma.$transaction(async (tx) => {
       const data = {
         ...rest,
@@ -221,14 +223,22 @@ export const productsService = {
         });
         if (!claimed.count) throw new AppError("Product stock changed concurrently. Refresh and try again.", 409, null, "STOCK_CHANGED");
         const current = await tx.product.findUniqueOrThrow({ where: { id: productId } });
+        if (becamePublished && current.isActive && current.status === "PUBLISHED") {
+          await enqueueProductPublished(tx, current, { actorType: "vendor", actorId: userId, source: "vendor_app" });
+        }
         if (product.stock > 0 && current.stock === 0) {
           await enqueueProductStockDepleted(tx, { product: current, stockDecrementedBy: product.stock, actorId: userId, actorType: "user" });
         }
         return current;
       }
-      return tx.product.update({ where: { id: productId }, data });
+      const current = await tx.product.update({ where: { id: productId }, data });
+      if (becamePublished && current.isActive && current.status === "PUBLISHED") {
+        await enqueueProductPublished(tx, current, { actorType: "vendor", actorId: userId, source: "vendor_app" });
+      }
+      return current;
     });
-    if (stockChanged && product.stock > 0 && updatedProduct.stock === 0) void dispatchNotificationsAfterCommit();
+    if ((becamePublished && updatedProduct.isActive && updatedProduct.status === "PUBLISHED")
+      || (stockChanged && product.stock > 0 && updatedProduct.stock === 0)) void dispatchNotificationsAfterCommit();
     return updatedProduct;
   },
 
@@ -283,10 +293,18 @@ export const productsService = {
 
     const complete = isProductComplete({ images: product.images, priceInCents: product.priceInCents });
     const status = computeProductStatus({ complete });
-    return prisma.product.update({
-      where: { id: productId },
-      data: { status, isActive: status === "PUBLISHED", ...(status === "PUBLISHED" ? { publishedAt: new Date() } : {}) },
+    const updated = await prisma.$transaction(async (tx) => {
+      const current = await tx.product.update({
+        where: { id: productId },
+        data: { status, isActive: status === "PUBLISHED", ...(status === "PUBLISHED" ? { publishedAt: new Date() } : {}) },
+      });
+      if (current.isActive && current.status === "PUBLISHED") {
+        await enqueueProductPublished(tx, current, { actorType: "vendor", actorId: userId, source: "vendor_app_resume" });
+      }
+      return current;
     });
+    if (updated.isActive && updated.status === "PUBLISHED") void dispatchNotificationsAfterCommit();
+    return updated;
   },
 
   async listActiveProducts(

@@ -1,12 +1,15 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
-vi.mock("../lib/prisma", () => ({
-  prisma: {
+vi.mock("../lib/prisma", () => {
+  const prisma: any = {
     vendor: { findUnique: vi.fn() },
     vendorSubscription: { findUnique: vi.fn() },
     product: { count: vi.fn(), create: vi.fn(), findFirst: vi.fn() },
-  },
-}));
+  };
+  prisma.$transaction = vi.fn((fn: (tx: any) => unknown) => fn({ product: prisma.product }));
+  return { prisma };
+});
+vi.mock("../modules/products/product-publication-events", () => ({ enqueueProductPublished: vi.fn() }));
 
 import { prisma } from "../lib/prisma";
 import { productsService } from "../modules/products/products.service";

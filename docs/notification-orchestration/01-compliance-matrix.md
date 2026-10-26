@@ -16,7 +16,7 @@ Status values follow the spec's own progression: **Proposed → Backend mapped �
 | R06 Verification not started when eligible | **Implemented; stop condition corrected and focused test added** | `VERIFICATION_REMINDER` now stops once a Stripe Identity session ID exists, using the real `Vendor.stripeVerificationSessionId` written by `createStripeVerificationSession()`. It still excludes verified vendors and requires product + delivery setup. Tests cover both reminder eligibility and the submitted/session stop condition. |
 | R07 Verification requires correction | **Implemented (legacy); QA passed** | Stripe Identity `requires_input` webhook persists `stripeIdentityStatus` and sends `vendor_verification_rejected` to the vendor with the provider's reason. Evidence/tests: [stripe-identity.service.ts](../../src/modules/verification/stripe-identity.service.ts), [stripe-identity.test.ts](../../src/tests/stripe-identity.test.ts). The mobile handler routes that type to the rejected verification screen. |
 | R08 Verification approved | **Implemented (legacy); QA passed** | Stripe Identity `verified` webhook persists the verified state and sends `vendor_verification_approved`; it also triggers eligible product activation. Evidence/tests: [stripe-identity.service.ts](../../src/modules/verification/stripe-identity.service.ts), [stripe-identity.test.ts](../../src/tests/stripe-identity.test.ts). The mobile handler routes the approval notification. |
-| R09 Publication confirmed → share store | **Implemented (legacy), not spec-shaped** | `vendor_store_ready` one-time milestone — [vendor-milestone-notifications.service.ts](../../src/modules/vendors/vendor-milestone-notifications.service.ts) `maybeSendStoreReady`. Fires once, outside `automationService`/`AutomationRule` — not admin-visible in the Automation Centre the way R01–R06/R11 are. |
+| R09 Publication confirmed → share store | **Transactional event, candidate, and durable delivery implemented; gate off pending mobile runtime QA** | Real transitions into `PUBLISHED` from vendor create/edit, automatic activation, resume, and admin restore enqueue versioned `product_published` events in the same transaction as the listing change. The consumer rechecks publication timestamp, listing and vendor ownership, creates one exact-copy candidate per vendor activation (`Your foodstuff is now visible` / `Share your store with buyers.`), and persists push delivery; send time repeats publication, owner, role, and suspension checks. `store_share` maps to the authenticated vendor sharing screen in mobile `app/_layout.tsx`. Focused outbox-to-push integration test passes. `R09_PUBLICATION_CONFIRMED_ENABLED` defaults off; the existing store-ready message remains fallback while gated. |
 | R10 Store live, never shared | **Implemented; backend tests pass, mobile runtime QA pending** | Backend: `STORE_SHARE_REMINDER` uses the shared P2 4h/24h/72h framework and the later of the first active product's real `publishedAt` and first delivery zone `createdAt` as `readySince`. Active legacy products without `publishedAt` are not assigned a guessed date and are skipped. `store_shared` is distinct from `store_viewed`; the public endpoint requires the authenticated store owner for `share` events. Mobile calls it only when the native share API reports `sharedAction` and opens `/(vendor)/share-store-link` when `automation_store_share_reminder` is tapped. `store_viewed` remains a bounded grandfather fallback for events before 2026-10-26. Device-level share-result behavior still needs iOS/Android QA. The daily Vercel cron cannot guarantee 4h/24h/72h send timing; see `04-scheduler-report.md`. |
 | R11 First Sale Campaign not started | **Implemented, QA passed** | `FIRST_SALE` (narrowed), PR #6. Stop condition substituted (first paid order, not "campaign started" — no such campaign concept exists). |
 
@@ -81,12 +81,11 @@ Status values follow the spec's own progression: **Proposed → Backend mapped �
 
 ## Summary counts
 
-- **Implemented, QA passed (spec-shaped):** 11 of 40 — R01, R03, R05, R06, R11, R16, R30, R31, R32, R33, R38
-- **Implemented on backend and mobile source; backend tests/typechecks pass, mobile runtime QA and production timing remain outstanding:** 3 of 40 — R10, R18, R35
-- **Implemented (legacy, not re-platformed):** R07–R09, R12–R13, R15, R20–R22, R26
-- **Implemented on backend but gated pending route/runtime/approval:** R25, R29, R34, R37, R40
-- **Partial or scoped:** R04, R17, R23, R27, R36, R39–R40
-- **Blocked on source semantics or a real signal:** R02, R14, R24
-- **Implemented source with native device QA pending:** R19, R28
+- **Implemented, QA passed (spec-shaped):** 10 of 40 — R01, R03, R05, R11, R16, R30–R33, R38
+- **Implemented with route/source code; mobile runtime, native device, or timing QA remains:** 7 of 40 — R06, R10, R17–R19, R28, R35
+- **Implemented (legacy, not re-platformed):** 9 of 40 — R07–R08, R12–R13, R15, R20–R22, R26
+- **Backend event/candidate/delivery implemented but safely gated:** 7 of 40 — R09, R25, R29, R34, R36–R37, R40
+- **Partial or scoped:** 3 of 40 — R04, R23, R27
+- **Blocked on real source semantics or an approved business mechanism:** 4 of 40 — R02, R14, R24, R39
 
 The authoritative v2 specification is checked in at `Eki-Notification-Orchestration-Spec-v2.md`. The original 210-event catalogue remains a separate missing source. These are implementation mappings, not a claim of approval or enablement; rules with unverified policy, copy, timing, or signals remain gated.

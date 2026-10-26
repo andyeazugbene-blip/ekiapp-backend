@@ -23,6 +23,12 @@ interface NotificationRuleDefinition {
  */
 export const NOTIFICATION_EVENT_RULES: readonly NotificationRuleDefinition[] = [
   {
+    eventName: EVENT_NAMES.product_published,
+    key: "R09_PUBLICATION_CONFIRMED",
+    version: 1,
+    enabled: () => process.env.R09_PUBLICATION_CONFIRMED_ENABLED === "true",
+  },
+  {
     eventName: EVENT_NAMES.support_response_received,
     key: "R28_SUPPORT_RESPONSE",
     version: 1,
