@@ -22,8 +22,10 @@ The referral ledger records an earned free-month credit and notifies the referre
 
 ## 5. Mobile runtime QA and R04 copy approval
 
-The authenticated tap routes and screen mappings are implemented in source, including R40's payment-anomaly destination. Cold-start and background behavior still needs iOS/Android device QA; typechecking and preview CI do not verify native tap delivery. R04's detector is implemented but its AutomationRule defaults to DRAFT until the exact v2 copy and policy are checked.
+Semantic route keys now have role-gated mappings or explicit fallbacks in source, including the R40 payment-anomaly queue. Notification taps are held until authentication restores the recipient's role, and duplicate live/cold-start responses are deduplicated. Typechecking and preview CI do not verify native notification delivery, background behavior, or route ownership on iOS/Android devices. Generic support-case detail is still unavailable because the client app and backend expose only Community Buy support cases; other roles fall back to their support entry point. R04's detector is implemented but its AutomationRule defaults to DRAFT until the exact v2 copy and policy are checked.
 
-## Remaining rules to verify
+## 6. Remaining engineering work and gated rules
 
-14 of the 40 rules (listed in `01-compliance-matrix.md`) remain individually unverified. They are outstanding engineering work, not client decisions; continue investigating them using the supplied source spec once available.
+The rules formerly listed as “not verified” have now been inspected and their evidence or gaps recorded in `01-compliance-matrix.md`. Open engineering work includes the spec-shaped event/outbox/candidate/delivery pipeline, scheduler timing, distinct zero-stock semantics, dispute due-time reminders, and cross-product scope for Community Buy-only behaviors. R02, R14, R18, and R24 remain blocked on a real lifecycle/signal or client policy; none should be enabled from inferred state. Continue implementation where behavior is verified, and keep the affected rules gated until source semantics, tests, and approval are complete.
+
+The v2 specification and original 210-event catalogue are still the required sources for exact rule semantics, event IDs, recipient/copy mappings, and completion claims. Their required filenames are the client's `Notification Orchestration Developer Specification v2.0` and the original 210-event legacy catalogue/handbook; neither is present in the current workspace search.
