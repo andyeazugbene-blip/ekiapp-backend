@@ -62,7 +62,7 @@ export const NOTIFICATION_EVENT_RULES: readonly NotificationRuleDefinition[] = [
     eventName: EVENT_NAMES.community_buy_minimum_reached,
     key: "R35_COMMUNITY_BUY_MINIMUM_REACHED",
     version: 1,
-    enabled: () => true,
+    enabled: () => process.env.R35_COMMUNITY_BUY_MINIMUM_REACHED_ENABLED === "true",
   },
   {
     eventName: EVENT_NAMES.community_buy_payment_action_required,

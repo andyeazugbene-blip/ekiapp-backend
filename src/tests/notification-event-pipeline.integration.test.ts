@@ -94,6 +94,7 @@ describe("event to notification pipeline integration", () => {
     vi.stubEnv("R21_ORDER_CONFIRMED_ENABLED", "false");
     vi.stubEnv("R22_ORDER_DISPATCHED_ENABLED", "false");
     vi.stubEnv("R34_COMMUNITY_BUY_BELOW_MINIMUM_ENABLED", "true");
+    vi.stubEnv("R35_COMMUNITY_BUY_MINIMUM_REACHED_ENABLED", "false");
     vi.stubEnv("R26_PAYOUT_CONFIRMED_ENABLED", "true");
     vi.stubEnv("R36_COMMUNITY_BUY_PAYMENT_ACTION_REQUIRED_ENABLED", "false");
     vi.stubEnv("R29_MEMBERSHIP_PAYMENT_FAILED_ENABLED", "false");
@@ -306,6 +307,7 @@ describe("event to notification pipeline integration", () => {
   });
 
   it("routes confirmed Community Buy minimum events to the organiser through the durable delivery path", async () => {
+    vi.stubEnv("R35_COMMUNITY_BUY_MINIMUM_REACHED_ENABLED", "true");
     const event = await prismaMock.$transaction((tx: typeof txMock) => eventOutboxService.enqueue(tx, {
       name: EVENT_NAMES.community_buy_minimum_reached,
       actorType: "system",
@@ -327,6 +329,22 @@ describe("event to notification pipeline integration", () => {
       title: "Your Community Buy reached its minimum",
       data: expect.objectContaining({ destination: "community_buy_campaign", audience: "organiser", campaignId: "campaign-1" }),
     }), { logId: "log-1" });
+  });
+
+  it("keeps Community Buy minimum notifications gated off by default", async () => {
+    const event = await prismaMock.$transaction((tx: typeof txMock) => eventOutboxService.enqueue(tx, {
+      name: EVENT_NAMES.community_buy_minimum_reached,
+      actorType: "system",
+      entityType: "CommunityCampaign",
+      entityId: "campaign-1",
+      payload: { campaignId: "campaign-1", confirmedShares: 6, minimumShares: 5 },
+    }, { dedupeKey: "R35_COMMUNITY_BUY_MINIMUM_REACHED:campaign-1", schemaVersion: 1 }));
+
+    const result = await eventOutboxService.dispatchRegisteredBatch(10, new Date("2026-10-26T12:00:00Z"));
+
+    expect(result).toMatchObject({ claimed: 1, delivered: 1 });
+    expect(txMock.notification.create).not.toHaveBeenCalled();
+    expect(event.deliveryStatus).toBe("DELIVERED");
   });
 
   it("routes a real below-minimum rescue-window event to the organiser and rechecks before delivery", async () => {
