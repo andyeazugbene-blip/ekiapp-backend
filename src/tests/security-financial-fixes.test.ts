@@ -730,6 +730,7 @@ describe("Webhook processing — backend unavailable mid-delivery (reliability s
     const walletTxCreateTx = vi.fn().mockResolvedValue({});
     $transaction.mockImplementationOnce(async (cb: (tx: unknown) => unknown) => {
       const tx = {
+        event: { upsert: vi.fn().mockResolvedValue({ id: "event-paid-order" }) },
         webhookEvent: {
           create: vi.fn().mockResolvedValue({}), // event id free again — the earlier attempt was rolled back
           update: vi.fn().mockResolvedValue({}),
