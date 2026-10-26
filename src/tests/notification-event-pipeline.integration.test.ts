@@ -154,6 +154,59 @@ describe("event to notification pipeline integration", () => {
     }), { logId: "log-1" });
   });
 
+  it.each([
+    {
+      name: EVENT_NAMES.verification_completed,
+      gate: "R08_VERIFICATION_APPROVED_ENABLED",
+      ruleKey: "R08_VERIFICATION_APPROVED",
+      type: "vendor_verification_approved",
+      title: "Your verification is complete",
+      body: "We are checking which foodstuff can now be published.",
+      status: "VERIFIED",
+      identityStatus: "verified",
+      dedupe: "R08_VERIFICATION_APPROVED",
+    },
+    {
+      name: EVENT_NAMES.verification_requires_input,
+      gate: "R07_VERIFICATION_REQUIRES_CORRECTION_ENABLED",
+      ruleKey: "R07_VERIFICATION_REQUIRES_CORRECTION",
+      type: "vendor_verification_rejected",
+      title: "Your verification needs attention",
+      body: "Review the secure step that needs correcting.",
+      status: "REJECTED",
+      identityStatus: "requires_input",
+      dedupe: "R07_VERIFICATION_REQUIRES_CORRECTION",
+    },
+  ])("routes $ruleKey from the transactional Stripe Identity event to durable push", async (rule) => {
+    vi.stubEnv(rule.gate, "true");
+    const vendor = {
+      id: "vendor-identity", userId: "vendor-user-identity", verificationStatus: rule.status,
+      stripeVerificationSessionId: "vs-identity", stripeIdentityStatus: rule.identityStatus,
+    };
+    txMock.vendor.findUnique.mockResolvedValue(vendor);
+    prismaMock.vendor.findUnique.mockResolvedValue(vendor);
+    txMock.user.findUnique.mockResolvedValue({ id: vendor.userId, role: "VENDOR", isSuspended: false });
+    prismaMock.user.findUnique.mockResolvedValue({ id: vendor.userId, role: "VENDOR", isSuspended: false });
+
+    const event = await prismaMock.$transaction((tx: typeof txMock) => eventOutboxService.enqueue(tx, {
+      name: rule.name,
+      actorType: "stripe", entityType: "Vendor", entityId: vendor.id,
+      payload: { vendorId: vendor.id, sessionId: "vs-identity" },
+    }, { dedupeKey: `stripe-identity:${rule.ruleKey}:vs-identity`, schemaVersion: 1 }));
+    const outboxResult = await eventOutboxService.dispatchRegisteredBatch(10, new Date("2026-10-27T12:00:00Z"));
+    expect(outboxResult).toMatchObject({ claimed: 1, delivered: 1 });
+    expect(txMock.notification.create).toHaveBeenCalledWith({ data: expect.objectContaining({
+      userId: vendor.userId, title: rule.title, body: rule.body,
+      dedupeKey: `${rule.dedupe}:${vendor.id}:vs-identity`,
+      data: expect.objectContaining({ ruleKey: rule.ruleKey, ruleVersion: 1, eventId: event.id, destination: "verification", sessionId: "vs-identity" }),
+    }) });
+    const deliveryResult = await notificationDeliveryService.dispatchBatch(10, new Date("2026-10-27T12:00:01Z"));
+    expect(deliveryResult).toMatchObject({ claimed: 1, sent: 1 });
+    expect(sendPushToUser).toHaveBeenCalledWith(vendor.userId, expect.objectContaining({
+      title: rule.title, body: rule.body, data: expect.objectContaining({ type: rule.type, destination: "verification" }),
+    }), { logId: "log-1" });
+  });
+
   it("validates and enqueues a domain event, resolves R28, creates one idempotent candidate, delivers push, and records outcomes", async () => {
     const event = await prismaMock.$transaction((tx: typeof txMock) => eventOutboxService.enqueue(tx, {
       name: EVENT_NAMES.support_response_received,

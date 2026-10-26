@@ -23,6 +23,18 @@ interface NotificationRuleDefinition {
  */
 export const NOTIFICATION_EVENT_RULES: readonly NotificationRuleDefinition[] = [
   {
+    eventName: EVENT_NAMES.verification_completed,
+    key: "R08_VERIFICATION_APPROVED",
+    version: 1,
+    enabled: () => process.env.R08_VERIFICATION_APPROVED_ENABLED === "true",
+  },
+  {
+    eventName: EVENT_NAMES.verification_requires_input,
+    key: "R07_VERIFICATION_REQUIRES_CORRECTION",
+    version: 1,
+    enabled: () => process.env.R07_VERIFICATION_REQUIRES_CORRECTION_ENABLED === "true",
+  },
+  {
     eventName: EVENT_NAMES.product_published,
     key: "R09_PUBLICATION_CONFIRMED",
     version: 1,

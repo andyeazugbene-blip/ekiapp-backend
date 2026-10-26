@@ -9,15 +9,21 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 vi.mock("../lib/prisma", () => ({
-  prisma: { vendor: { findUnique: vi.fn(), update: vi.fn() } },
+  prisma: { vendor: { findUnique: vi.fn(), update: vi.fn() }, $transaction: vi.fn() },
 }));
 vi.mock("../lib/logger", () => ({ logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } }));
 vi.mock("../lib/stripe", () => ({ stripe: { identity: { verificationSessions: { create: vi.fn() } } } }));
 vi.mock("../modules/communications/communication.service", () => ({ communicationService: { send: vi.fn().mockResolvedValue(undefined) } }));
+vi.mock("../modules/events/dispatch-notifications", () => ({ dispatchNotificationsAfterCommit: vi.fn() }));
+vi.mock("../modules/events/events.service", () => ({
+  EVENT_NAMES: { verification_completed: "verification_completed", verification_requires_input: "verification_requires_input" },
+  eventsService: { enqueueTransactional: vi.fn().mockResolvedValue({ id: "outbox-event" }) },
+}));
 
 import { prisma } from "../lib/prisma";
 import { stripe } from "../lib/stripe";
 import { communicationService } from "../modules/communications/communication.service";
+import { eventsService } from "../modules/events/events.service";
 import { stripeIdentityService } from "../modules/verification/stripe-identity.service";
 
 const m = vi.mocked(prisma, true) as any;
@@ -25,6 +31,13 @@ const s = vi.mocked(stripe, true) as any;
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.mocked(eventsService.enqueueTransactional).mockResolvedValue({ id: "outbox-event" } as never);
+  vi.stubEnv("R07_VERIFICATION_REQUIRES_CORRECTION_ENABLED", "false");
+  vi.stubEnv("R08_VERIFICATION_APPROVED_ENABLED", "false");
+  m.$transaction.mockImplementation((fn: (tx: unknown) => unknown) => fn({
+    vendor: { update: m.vendor.update },
+    event: { upsert: vi.fn(async ({ create }: { create: unknown }) => ({ id: "outbox-event", ...(create as object) })) },
+  }));
 });
 
 describe("stripeIdentityService.createVerificationSession", () => {
@@ -83,6 +96,9 @@ describe("stripeIdentityService.handleVerificationCompleted — webhook safety",
       recipientId: "user-1",
       variables: { store_name: "Amaka's Kitchen" },
     }));
+    expect(eventsService.enqueueTransactional).toHaveBeenCalledWith(expect.any(Object), expect.objectContaining({
+      name: "verification_completed", payload: { vendorId: "vendor-1", sessionId: "vs_1" },
+    }), { dedupeKey: "verification-approved:vs_1", schemaVersion: 1 });
   });
 
   it("marks the vendor REJECTED with the real Stripe failure reason (never a made-up one), and sends the rejection communication with that reason", async () => {
@@ -101,6 +117,9 @@ describe("stripeIdentityService.handleVerificationCompleted — webhook safety",
       eventKey: "vendor_verification_rejected",
       variables: expect.objectContaining({ reason: "The provided document has expired" }),
     }));
+    expect(eventsService.enqueueTransactional).toHaveBeenCalledWith(expect.any(Object), expect.objectContaining({
+      name: "verification_requires_input", payload: { vendorId: "vendor-1", sessionId: "vs_1" },
+    }), { dedupeKey: "verification-requires-input:vs_1", schemaVersion: 1 });
   });
 
   it("falls back to the error code when Stripe gives no human-readable reason, and to a generic message when neither exists", async () => {

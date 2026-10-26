@@ -59,6 +59,26 @@ async function productStockAlertStillEligible(delivery: NotificationDelivery & {
     && product.stock === 0 && product.stockVersion === data.stockVersion);
 }
 
+async function verificationStatusStillEligible(delivery: NotificationDelivery & { notification: { userId: string; readAt: Date | null; data: unknown } }, ruleKey: string): Promise<boolean> {
+  const data = delivery.notification.data;
+  if (!isRecord(data) || typeof data.vendorId !== "string" || typeof data.sessionId !== "string" || delivery.notification.readAt) return false;
+  const isApproved = ruleKey === "R08_VERIFICATION_APPROVED";
+  const rule = resolveNotificationRule({
+    name: isApproved ? EVENT_NAMES.verification_completed : EVENT_NAMES.verification_requires_input,
+    schemaVersion: Number(data.ruleVersion),
+  });
+  if (!rule?.enabled || rule.key !== ruleKey) return false;
+  const [vendor, recipient] = await Promise.all([
+    prisma.vendor.findUnique({ where: { id: data.vendorId }, select: { userId: true, verificationStatus: true, stripeVerificationSessionId: true, stripeIdentityStatus: true } }),
+    prisma.user.findUnique({ where: { id: delivery.notification.userId }, select: { id: true, role: true, isSuspended: true } }),
+  ]);
+  return Boolean(vendor && vendor.userId === delivery.notification.userId
+    && vendor.stripeVerificationSessionId === data.sessionId
+    && vendor.verificationStatus === (isApproved ? "VERIFIED" : "REJECTED")
+    && vendor.stripeIdentityStatus === (isApproved ? "verified" : "requires_input")
+    && recipient?.id === delivery.notification.userId && recipient.role === "VENDOR" && !recipient.isSuspended);
+}
+
 async function productPublicationStillEligible(delivery: NotificationDelivery & { notification: { userId: string; readAt: Date | null; data: unknown } }): Promise<boolean> {
   if (process.env.R09_PUBLICATION_CONFIRMED_ENABLED !== "true") return false;
   const data = delivery.notification.data;
@@ -242,6 +262,12 @@ async function supplierReconfirmationStillEligible(delivery: NotificationDeliver
 async function notificationStillEligible(delivery: NotificationDelivery & { notification: { userId: string; readAt: Date | null; data: unknown } }): Promise<boolean> {
   const data = delivery.notification.data;
   if (!isRecord(data)) return false;
+  if (data.ruleKey === "R08_VERIFICATION_APPROVED" && data.type === "vendor_verification_approved") {
+    return verificationStatusStillEligible(delivery, "R08_VERIFICATION_APPROVED");
+  }
+  if (data.ruleKey === "R07_VERIFICATION_REQUIRES_CORRECTION" && data.type === "vendor_verification_rejected") {
+    return verificationStatusStillEligible(delivery, "R07_VERIFICATION_REQUIRES_CORRECTION");
+  }
   if (data.type === "product_published" && data.ruleKey === "R09_PUBLICATION_CONFIRMED") {
     const rule = resolveNotificationRule({ name: EVENT_NAMES.product_published, schemaVersion: Number(data.ruleVersion) });
     return Boolean(rule?.enabled && await productPublicationStillEligible(delivery));

@@ -8,6 +8,52 @@ import { resolveNotificationRule } from "./notification-event-rules";
 import { COMMUNITY_BUY_ORGANISER_DECISION_WINDOW_MS } from "../community-buy/community-buy-timing";
 import { getCurrentInventoryConflict } from "../products/inventory-conflict";
 
+async function handleVerificationStatus(tx: Prisma.TransactionClient, event: Event, input: {
+  eventName: string; ruleKey: string; notificationType: string; title: string; body: string; dedupePrefix: string;
+  requiredStatus: string; requiredIdentityStatus: string; destination: string;
+}): Promise<void> {
+  const rule = resolveNotificationRule(event);
+  if (!rule?.enabled) return;
+  const vendorId = requiredId(event.payload, "vendorId");
+  const sessionId = requiredId(event.payload, "sessionId");
+  const vendor = await tx.vendor.findUnique({ where: { id: vendorId }, select: { id: true, userId: true, verificationStatus: true, stripeVerificationSessionId: true, stripeIdentityStatus: true } });
+  if (!vendor || vendor.verificationStatus !== input.requiredStatus || vendor.stripeVerificationSessionId !== sessionId
+    || vendor.stripeIdentityStatus !== input.requiredIdentityStatus) return;
+  const recipient = await tx.user.findUnique({ where: { id: vendor.userId }, select: { id: true, role: true, isSuspended: true } });
+  if (!recipient || recipient.role !== "VENDOR" || recipient.isSuspended) return;
+  const dedupeKey = `${input.dedupePrefix}:${vendor.id}:${sessionId}`;
+  const created = await notificationsService.create({
+    userId: recipient.id,
+    type: input.notificationType as never,
+    title: input.title,
+    body: input.body,
+    data: { type: input.eventName, ruleKey: rule.key, ruleVersion: rule.version, eventId: event.id, templateVersion: 1, destination: input.destination, vendorId, sessionId },
+    dedupeKey,
+  }, tx);
+  const candidate = created ?? await tx.notification.findUnique({ where: { dedupeKey }, select: { id: true } });
+  if (candidate) await tx.notificationDelivery.upsert({
+    where: { notificationId_channel: { notificationId: candidate.id, channel: "push" } },
+    create: { notificationId: candidate.id, channel: "push" },
+    update: {},
+  });
+}
+
+export async function handleVerificationApproved(tx: Prisma.TransactionClient, event: Event): Promise<void> {
+  await handleVerificationStatus(tx, event, {
+    eventName: "vendor_verification_approved", ruleKey: "R08_VERIFICATION_APPROVED", notificationType: "VERIFICATION_APPROVED",
+    title: "Your verification is complete", body: "We are checking which foodstuff can now be published.",
+    dedupePrefix: "R08_VERIFICATION_APPROVED", requiredStatus: "VERIFIED", requiredIdentityStatus: "verified", destination: "verification",
+  });
+}
+
+export async function handleVerificationRequiresCorrection(tx: Prisma.TransactionClient, event: Event): Promise<void> {
+  await handleVerificationStatus(tx, event, {
+    eventName: "vendor_verification_rejected", ruleKey: "R07_VERIFICATION_REQUIRES_CORRECTION", notificationType: "VERIFICATION_REJECTED",
+    title: "Your verification needs attention", body: "Review the secure step that needs correcting.",
+    dedupePrefix: "R07_VERIFICATION_REQUIRES_CORRECTION", requiredStatus: "REJECTED", requiredIdentityStatus: "requires_input", destination: "verification",
+  });
+}
+
 /** R09: notify once for the vendor's first genuinely published foodstuff. */
 export async function handleProductPublished(tx: Prisma.TransactionClient, event: Event): Promise<void> {
   const rule = resolveNotificationRule(event);
@@ -550,6 +596,8 @@ export async function handleCommunityBuyBelowMinimum(tx: Prisma.TransactionClien
 let registered = false;
 export function registerCoreEventHandlers(): void {
   if (registered) return;
+  eventOutboxService.registerHandler(EVENT_NAMES.verification_completed, handleVerificationApproved);
+  eventOutboxService.registerHandler(EVENT_NAMES.verification_requires_input, handleVerificationRequiresCorrection);
   eventOutboxService.registerHandler(EVENT_NAMES.product_published, handleProductPublished);
   eventOutboxService.registerHandler(EVENT_NAMES.support_response_received, handleSupportResponseReceived);
   eventOutboxService.registerHandler(EVENT_NAMES.product_stock_depleted, handleProductStockDepleted);

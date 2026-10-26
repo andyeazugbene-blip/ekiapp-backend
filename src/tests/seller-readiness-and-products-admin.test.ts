@@ -29,6 +29,7 @@ vi.mock("../lib/prisma", () => ({
     // unaffected unless a test explicitly configures a grace period.
     adminPlatformSetting: { count: vi.fn().mockResolvedValue(5), findUnique: vi.fn().mockResolvedValue(null), findMany: vi.fn().mockResolvedValue([]), upsert: vi.fn() },
     vendorSubscription: { findMany: vi.fn().mockResolvedValue([]) },
+    $transaction: vi.fn((fn: (tx: any) => unknown) => fn({ product: { updateMany: m.productUpdateMany } })),
   },
 }));
 vi.mock("../lib/stripe", () => ({ stripe: { paymentIntents: { create: vi.fn() } } }));
@@ -36,6 +37,8 @@ vi.mock("../lib/logger", () => ({ logger: { info: vi.fn(), warn: vi.fn(), error:
 vi.mock("../lib/email", () => ({ sendEmail: m.sendEmail }));
 vi.mock("../modules/notifications/notifications.service", () => ({ notificationsService: { enqueue: m.enqueue, create: vi.fn() } }));
 vi.mock("../modules/subscriptions/subscriptions.service", () => ({ subscriptionsService: {} }));
+vi.mock("../modules/products/product-publication-events", () => ({ enqueueProductPublished: vi.fn() }));
+vi.mock("../modules/events/dispatch-notifications", () => ({ dispatchNotificationsAfterCommit: vi.fn() }));
 vi.mock("../modules/promos/promos.service", () => ({ promosService: {} }));
 vi.mock("../shared/utils/audit", async () => {
   const actual = await vi.importActual<typeof import("../shared/utils/audit")>("../shared/utils/audit");
@@ -60,6 +63,7 @@ const READY = { verificationStatus: "VERIFIED", isSuspended: false, closedAt: nu
 
 beforeEach(() => {
   vi.clearAllMocks();
+  (pm as any).$transaction = vi.fn((fn: (tx: any) => unknown) => fn({ product: { updateMany: m.productUpdateMany } }));
   process.env.SELLER_PAYMENT_READINESS_GATE = "true";
 });
 afterEach(() => {
