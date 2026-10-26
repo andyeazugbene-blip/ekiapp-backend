@@ -40,19 +40,29 @@ export async function handleSupportResponseReceived(tx: Prisma.TransactionClient
   const recipient = a?.role === "ADMIN" ? b : a;
   if (!recipient || recipient.role === "ADMIN") return;
 
-  await notificationsService.create({
+  const dedupeKey = `R28_SUPPORT_THREAD_REPLY:${messageId}`;
+  const created = await notificationsService.create({
     userId: recipient.id,
     type: "NEW_MESSAGE",
     title: "Eki Support has replied",
     body: "Open your case to read the update.",
     data: {
       type: "support_response_received",
+      templateVersion: 1,
       destination: "support_conversation",
       conversationId,
       messageId,
     },
-    dedupeKey: `R28_SUPPORT_THREAD_REPLY:${messageId}`,
+    dedupeKey,
   }, tx);
+  const candidate = created ?? await tx.notification.findUnique({ where: { dedupeKey }, select: { id: true } });
+  if (candidate) {
+    await tx.notificationDelivery.upsert({
+      where: { notificationId_channel: { notificationId: candidate.id, channel: "push" } },
+      create: { notificationId: candidate.id, channel: "push" },
+      update: {},
+    });
+  }
 }
 
 let registered = false;

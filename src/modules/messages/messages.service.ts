@@ -8,6 +8,7 @@ import { recordAudit } from "../../shared/utils/audit";
 import { eventsService, EVENT_NAMES } from "../events/events.service";
 import { eventOutboxService } from "../events/event-outbox.service";
 import { registerCoreEventHandlers } from "../events/core-event-handlers";
+import { notificationDeliveryService } from "../notifications/notification-delivery.service";
 import type {
   CreateConversationInput,
   ListConversationsQuery,
@@ -497,6 +498,7 @@ export const messagesService = {
           entityType: "Conversation",
           entityId: conversationId,
           source: "messages.sendMessage",
+          consentContext: { purpose: "support_transactional", marketing: false },
           payload: { conversationId, messageId: created.id },
         }, { dedupeKey: `support-response:${created.id}`, schemaVersion: 1 });
       }
@@ -530,7 +532,7 @@ export const messagesService = {
         where: { dedupeKey: `R28_SUPPORT_THREAD_REPLY:${message.id}` },
         select: { id: true },
       }).catch(() => null);
-      if (candidate) pushNotifications.supportReply(recipientId, conversationId, message.id, candidate.id);
+      if (candidate) await notificationDeliveryService.dispatchBatch(20).catch(() => undefined);
       else pushNotifications.newMessage(recipientId, senderName, conversationId);
     }
     if (!isGeneralSupportReply) pushNotifications.newMessage(recipientId, senderName, conversationId);

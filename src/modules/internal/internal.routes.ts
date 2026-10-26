@@ -26,8 +26,11 @@ import { orderAcceptanceNotificationsService } from "../orders/order-acceptance-
 import { capturePendingReviewService } from "../community-buy/capture-pending-review.service";
 import { membershipGraceService } from "../subscriptions/membership-grace.service";
 import { eventOutboxService } from "../events/event-outbox.service";
+import { registerCoreEventHandlers } from "../events/core-event-handlers";
+import { notificationDeliveryService } from "../notifications/notification-delivery.service";
 
 export const internalRouter = Router();
+registerCoreEventHandlers();
 
 function requireCronSecret(req: Request, res: Response): boolean {
   const secret = process.env.CRON_SECRET;
@@ -97,6 +100,10 @@ async function runAutomationSweep() {
 // outbox remains idle for event names without an explicitly reviewed handler.
 async function runEventOutboxSweep() {
   return eventOutboxService.dispatchRegisteredBatch(100);
+}
+
+async function runNotificationDeliverySweep() {
+  return notificationDeliveryService.dispatchBatch(100);
 }
 
 // Regular Deliveries: generates renewals due today, then attempts payment
@@ -427,6 +434,7 @@ function makeJobHandler(name: string, run: () => Promise<Record<string, unknown>
 const jobs: [string, string, () => Promise<Record<string, unknown>>][] = [
   ["verification-proof-cleanup", "verification proof cleanup", runVerificationProofCleanup],
   ["event-outbox", "transactional event outbox", runEventOutboxSweep],
+  ["notification-deliveries", "notification push deliveries", runNotificationDeliverySweep],
   ["run-scheduled-communications", "scheduled communications run", runScheduledCommunications],
   ["automation-sweep", "automation sweep", runAutomationSweep],
   ["renewals-sweep", "renewals sweep", runRenewalsSweep],
