@@ -40,6 +40,7 @@ const delivery = {
 beforeEach(() => {
   vi.clearAllMocks();
   vi.stubEnv("R28_GENERAL_SUPPORT_NOTIFICATIONS_ENABLED", "true");
+  vi.stubEnv("R35_COMMUNITY_BUY_MINIMUM_REACHED_ENABLED", "false");
   prismaMock.notificationDelivery.updateMany.mockResolvedValue({ count: 1 });
   prismaMock.notificationDelivery.findMany.mockResolvedValue([delivery]);
   prismaMock.message.findUnique.mockResolvedValue({
@@ -198,6 +199,7 @@ describe("notification push delivery", () => {
   });
 
   it("keeps an authorisation-mode R35 notice eligible through successful capture into fulfilment", async () => {
+    vi.stubEnv("R35_COMMUNITY_BUY_MINIMUM_REACHED_ENABLED", "true");
     prismaMock.notificationDelivery.findMany.mockResolvedValue([{
       ...delivery,
       notification: {

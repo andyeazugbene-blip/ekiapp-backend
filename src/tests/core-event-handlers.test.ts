@@ -38,6 +38,7 @@ const outboxEvent = {
 beforeEach(() => {
   vi.clearAllMocks();
   vi.stubEnv("R28_GENERAL_SUPPORT_NOTIFICATIONS_ENABLED", "true");
+  vi.stubEnv("R35_COMMUNITY_BUY_MINIMUM_REACHED_ENABLED", "false");
 });
 
 describe("R28 general support response outbox handler", () => {
@@ -165,6 +166,7 @@ describe("R17 stock-depleted outbox handler", () => {
 
 describe("R35 Community Buy minimum-reached outbox handler", () => {
   it("creates one exact organiser candidate from confirmed minimum state", async () => {
+    vi.stubEnv("R35_COMMUNITY_BUY_MINIMUM_REACHED_ENABLED", "true");
     createCandidate.mockResolvedValue({ id: "notification-r35" });
     const tx = {
       communityCampaign: { findUnique: vi.fn().mockResolvedValue({
