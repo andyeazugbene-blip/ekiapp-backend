@@ -901,12 +901,18 @@ enum PaymentAnomalyKind {
   DUPLICATE_PROVIDER_REF
   MULTIPLE_SUCCESSFUL_ATTEMPTS
   MISSING_LEDGER_ENTRY
+  OUTBOX_EVENT_FAILURE
+}
+
+enum PaymentAnomalySeverity {
+  CRITICAL
 }
 
 enum PaymentAnomalyStatus {
   OPEN
   REVIEWED
   ESCALATED
+  RESOLVED
 }
 
 /**
@@ -921,6 +927,7 @@ enum PaymentAnomalyStatus {
 model PaymentAnomaly {
   id              String               @id @default(cuid())
   kind            PaymentAnomalyKind
+  severity        PaymentAnomalySeverity @default(CRITICAL)
   dedupeKey       String               @unique
   businessRefType String
   businessRefId   String
@@ -928,6 +935,7 @@ model PaymentAnomaly {
   status          PaymentAnomalyStatus @default(OPEN)
   reviewedById    String?
   reviewedAt      DateTime?
+  resolvedAt      DateTime?
   note            String?
   lastSeenAt      DateTime             @default(now())
   createdAt       DateTime             @default(now())

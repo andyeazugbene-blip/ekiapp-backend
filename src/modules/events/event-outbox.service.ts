@@ -1,8 +1,10 @@
 import type { Event, Prisma } from "@prisma/client";
 
 import { prisma } from "../../lib/prisma";
+import { logger } from "../../lib/logger";
 import { AppError } from "../../shared/errors/app-error";
 import { EVENT_NAMES, type EmitEventInput } from "./events.service";
+import { ensureCriticalIncidentCandidates, criticalIncidentAlertsEnabled, materializeOpenCriticalIncidents } from "../ledger/critical-incident-notifications";
 
 const MAX_ATTEMPTS = 8;
 const STALE_LOCK_MS = 5 * 60 * 1000;
@@ -133,18 +135,39 @@ export const eventOutboxService = {
       } catch (error) {
         const attempt = candidate.deliveryAttempt + 1;
         const dead = attempt >= MAX_ATTEMPTS || error instanceof AppError;
-        await prisma.event.updateMany({
-          where: { id: candidate.id, deliveryStatus: "PROCESSING" },
-          data: {
-            deliveryStatus: dead ? "DEAD" : "PENDING",
-            lockedAt: null,
-            availableAt: dead ? now : new Date(now.getTime() + retryDelayMs(attempt)),
-            lastDeliveryError: errorText(error),
-          },
-        });
+        const failure = errorText(error);
+        if (dead) {
+          await prisma.$transaction(async (tx) => {
+            const marked = await tx.event.updateMany({
+              where: { id: candidate.id, deliveryStatus: "PROCESSING" },
+              data: { deliveryStatus: "DEAD", lockedAt: null, availableAt: now, lastDeliveryError: failure },
+            });
+            if (!marked.count) return;
+            const dedupeKey = `OUTBOX_EVENT_FAILURE:${candidate.id}`;
+            const incident = await tx.paymentAnomaly.upsert({
+              where: { dedupeKey },
+              update: { evidence: { eventId: candidate.id, eventName: candidate.name, attempts: attempt, error: failure }, lastSeenAt: now },
+              create: {
+                kind: "OUTBOX_EVENT_FAILURE", severity: "CRITICAL", dedupeKey,
+                businessRefType: "Event", businessRefId: candidate.id,
+                evidence: { eventId: candidate.id, eventName: candidate.name, attempts: attempt, error: failure },
+              },
+            });
+            if (criticalIncidentAlertsEnabled()) await ensureCriticalIncidentCandidates(tx, incident);
+          });
+        } else {
+          await prisma.event.updateMany({
+            where: { id: candidate.id, deliveryStatus: "PROCESSING" },
+            data: { deliveryStatus: "PENDING", lockedAt: null, availableAt: new Date(now.getTime() + retryDelayMs(attempt)), lastDeliveryError: failure },
+          });
+        }
         if (dead) result.dead += 1;
         else result.retried += 1;
       }
+    }
+    if (criticalIncidentAlertsEnabled()) {
+      try { await materializeOpenCriticalIncidents(boundedLimit); }
+      catch (error) { logger.warn("Critical incident notification materialization failed", { error: errorText(error) }); }
     }
     return result;
   },

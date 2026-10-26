@@ -3,11 +3,16 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const { prismaMock, txMock } = vi.hoisted(() => {
   const txMock = {
     event: { findUnique: vi.fn(), update: vi.fn(), updateMany: vi.fn() },
+    paymentAnomaly: { upsert: vi.fn() },
+    user: { findMany: vi.fn() },
+    notification: { create: vi.fn(), findUnique: vi.fn() },
+    notificationDelivery: { upsert: vi.fn() },
   };
   return {
     txMock,
     prismaMock: {
       event: { upsert: vi.fn(), updateMany: vi.fn(), findMany: vi.fn() },
+      paymentAnomaly: { findMany: vi.fn() },
       $transaction: vi.fn(async (fn: (tx: typeof txMock) => Promise<unknown>) => fn(txMock)),
     },
   };
@@ -30,6 +35,16 @@ beforeEach(() => {
   txMock.event.findUnique.mockResolvedValue({ ...event, deliveryStatus: "PROCESSING" });
   txMock.event.update.mockResolvedValue({ ...event, deliveryStatus: "DELIVERED" });
   txMock.event.updateMany.mockResolvedValue({ count: 1 });
+  txMock.paymentAnomaly.upsert.mockResolvedValue({
+    id: "incident-1", dedupeKey: "OUTBOX_EVENT_FAILURE:event-1", kind: "OUTBOX_EVENT_FAILURE", severity: "CRITICAL",
+    status: "OPEN", businessRefType: "Event", businessRefId: "event-1",
+  });
+  txMock.user.findMany.mockResolvedValue([{ id: "admin-1" }]);
+  txMock.notification.create.mockResolvedValue({ id: "notification-1" });
+  txMock.notification.findUnique.mockResolvedValue({ id: "notification-1" });
+  txMock.notificationDelivery.upsert.mockResolvedValue({ id: "delivery-1" });
+  prismaMock.paymentAnomaly.findMany.mockResolvedValue([]);
+  vi.stubEnv("R40_PAYMENT_ANOMALY_ALERTS_ENABLED", "false");
 });
 
 describe("event outbox envelope", () => {
@@ -95,8 +110,37 @@ describe("event outbox consumer", () => {
     const handler = vi.fn().mockRejectedValue(new Error("permanent consumer failure"));
     const result = await eventOutboxService.dispatchBatch({ payment_succeeded: handler }, 10, new Date("2026-01-01T00:01:00Z"));
     expect(result).toMatchObject({ claimed: 1, dead: 1 });
-    expect(prismaMock.event.updateMany).toHaveBeenLastCalledWith(expect.objectContaining({
+    expect(txMock.event.updateMany).toHaveBeenLastCalledWith(expect.objectContaining({
       data: expect.objectContaining({ deliveryStatus: "DEAD", lastDeliveryError: "permanent consumer failure" }),
     }));
+    expect(txMock.paymentAnomaly.upsert).toHaveBeenCalledWith(expect.objectContaining({
+      where: { dedupeKey: "OUTBOX_EVENT_FAILURE:event-1" },
+      create: expect.objectContaining({ kind: "OUTBOX_EVENT_FAILURE", severity: "CRITICAL", businessRefType: "Event" }),
+    }));
+  });
+
+  it("persists a gated, durable R40 incident candidate for a terminal outbox failure", async () => {
+    vi.stubEnv("R40_PAYMENT_ANOMALY_ALERTS_ENABLED", "true");
+    prismaMock.event.updateMany.mockReset();
+    prismaMock.event.updateMany.mockResolvedValue({ count: 0 });
+    txMock.event.updateMany.mockReset();
+    txMock.event.updateMany.mockResolvedValue({ count: 1 });
+    prismaMock.event.findMany.mockResolvedValue([{ ...event, deliveryAttempt: 7 }] as never);
+    prismaMock.event.updateMany.mockResolvedValueOnce({ count: 0 }).mockResolvedValueOnce({ count: 1 });
+    const handler = vi.fn().mockRejectedValue(new Error("permanent consumer failure"));
+
+    const result = await eventOutboxService.dispatchBatch({ payment_succeeded: handler }, 10, new Date("2026-01-01T00:01:00Z"));
+
+    expect(result).toMatchObject({ dead: 1 });
+    expect(txMock.user.findMany).toHaveBeenCalledWith({ where: { role: "ADMIN", isSuspended: false }, select: { id: true } });
+    expect(txMock.notification.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        title: "A critical Eki process needs attention",
+        body: "Open the incident and review the failed job.",
+        dedupeKey: "R40_CRITICAL_INCIDENT:admin-1:OUTBOX_EVENT_FAILURE:event-1",
+        data: expect.objectContaining({ destination: "admin_case", incidentKind: "OUTBOX_EVENT_FAILURE", severity: "CRITICAL" }),
+      }),
+    }));
+    expect(txMock.notificationDelivery.upsert).toHaveBeenCalledWith(expect.objectContaining({ create: expect.objectContaining({ channel: "push" }) }));
   });
 });

@@ -54,6 +54,7 @@ import {
   adminListPaymentAnomalies,
   adminReviewPaymentAnomaly,
   adminEscalatePaymentAnomaly,
+  adminResolvePaymentAnomaly,
 } from "../ledger/ledger.controller";
 import {
   adminScanFulfilmentDelays,
@@ -502,6 +503,7 @@ adminRouter.post("/payment-anomalies/scan", asyncHandler(requireAdminPermission(
 adminRouter.get("/payment-anomalies", asyncHandler(requireAdminPermission("reports.read")), asyncHandler(adminListPaymentAnomalies));
 adminRouter.post("/payment-anomalies/:id/review", asyncHandler(requireAdminPermission("reports.mutate")), asyncHandler(adminReviewPaymentAnomaly));
 adminRouter.post("/payment-anomalies/:id/escalate", asyncHandler(requireAdminPermission("reports.mutate")), asyncHandler(adminEscalatePaymentAnomaly));
+adminRouter.post("/payment-anomalies/:id/resolve", asyncHandler(requireAdminPermission("reports.mutate")), asyncHandler(adminResolvePaymentAnomaly));
 
 // Supplier-fulfilment delay queue (architecture doc §15.3).
 adminRouter.post("/fulfilment-delays/scan", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(adminScanFulfilmentDelays));
