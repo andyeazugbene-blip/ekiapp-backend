@@ -50,6 +50,18 @@ async function putPayoutOnHold(payoutRequestId: string, holdReason: string): Pro
   });
 }
 
+async function enqueuePayoutConfirmed(tx: Prisma.TransactionClient, payout: PayoutRequest, adminId: string): Promise<void> {
+  await eventsService.enqueueTransactional(tx, {
+    name: "payout_confirmed",
+    actorType: "admin",
+    actorId: adminId,
+    entityType: "PayoutRequest",
+    entityId: payout.id,
+    source: "payout_provider_confirmation",
+    payload: { payoutRequestId: payout.id },
+  }, { dedupeKey: `payout_confirmed:${payout.id}` });
+}
+
 // Acceptance audit fix: a suspended vendor must not be able to request a
 // new payout — same 404-as-not-found convention used elsewhere for a
 // suspended vendor's own write attempts.
@@ -84,7 +96,7 @@ async function getVendorUserId(vendorId: string): Promise<string | null> {
 /** Fires only once a payout is genuinely PAID — shared by the Stripe and manual paths so both notify identically. */
 async function sendPayoutPaidNotificationAndReceipt(payout: PayoutRequest): Promise<void> {
   const vendorUserId = await getVendorUserId(payout.vendorId);
-  if (vendorUserId) {
+  if (vendorUserId && process.env.R26_PAYOUT_CONFIRMED_ENABLED !== "true") {
     await notificationsService.enqueue({
       userId: vendorUserId,
       type: NotificationType.PAYOUT_PAID,
@@ -399,6 +411,7 @@ export const payoutsService = {
             throw new AppError(`Payout must be approved before being marked paid (currently ${current.status})`, 400);
           }
           const payoutRecord = await tx.payoutRequest.findUniqueOrThrow({ where: { id: payoutRequestId } });
+          await enqueuePayoutConfirmed(tx, payoutRecord, adminId);
           const walletUpdate = await tx.wallet.updateMany({
             where: { vendorId: payoutRecord.vendorId, availableBalance: { gte: payoutRecord.amount } },
             data: { availableBalance: { decrement: payoutRecord.amount } },
@@ -511,9 +524,13 @@ export const payoutsService = {
       return held;
     }
 
-    const paid = await prisma.payoutRequest.update({
-      where: { id: payoutRequestId },
-      data: { status: PayoutRequestStatus.PAID, paidAt: new Date(), stripeTransferId: transferId, holdReason: null },
+    const paid = await prisma.$transaction(async (tx) => {
+      const payout = await tx.payoutRequest.update({
+        where: { id: payoutRequestId },
+        data: { status: PayoutRequestStatus.PAID, paidAt: new Date(), stripeTransferId: transferId, holdReason: null },
+      });
+      await enqueuePayoutConfirmed(tx, payout, adminId);
+      return payout;
     });
     logger.info("Stripe Connect auto-transfer completed", { payoutId: paid.id, vendorId: paid.vendorId, stripeTransferId: transferId });
 

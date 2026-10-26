@@ -129,6 +129,9 @@ describe("payoutsService.adminMarkPaid — Stripe path safety (P0-2)", () => {
     );
     // Notified only after confirmed PAID.
     expect(notificationsService.enqueue).toHaveBeenCalled();
+    expect(eventsService.enqueueTransactional).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      name: "payout_confirmed", entityType: "PayoutRequest", entityId: "payout-1", payload: { payoutRequestId: "payout-1" },
+    }), { dedupeKey: "payout_confirmed:payout-1" });
   });
 
   it("2. Stripe failure (decline): moves to ON_HOLD with the reason preserved, never PAID, wallet already-debited amount is NOT reversed", async () => {
@@ -343,6 +346,9 @@ describe("payoutsService.adminMarkPaid — manual (non-Stripe) payout methods ar
     expect(result.status).toBe("PAID");
     expect(mTransferCreate).not.toHaveBeenCalled();
     expect(m.wallet.updateMany).toHaveBeenCalledTimes(1);
+    expect(eventsService.enqueueTransactional).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      name: "payout_confirmed", entityId: "payout-1",
+    }), { dedupeKey: "payout_confirmed:payout-1" });
   });
 
   it("bank transfer: rejects a repeat mark-paid on an already-PAID request", async () => {
