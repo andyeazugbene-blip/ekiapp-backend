@@ -35,6 +35,10 @@ vi.mock("../modules/notifications/notifications.service", () => ({
   notificationsService: { enqueue: vi.fn() },
 }));
 
+vi.mock("../modules/events/events.service", () => ({
+  eventsService: { enqueueTransactional: vi.fn().mockResolvedValue({ id: "event-1" }) },
+}));
+
 vi.mock("../lib/email-queue", () => ({
   enqueueEmail: vi.fn().mockResolvedValue(undefined),
 }));
@@ -46,6 +50,7 @@ vi.mock("../modules/subscriptions/subscription-plan-utils", () => ({
 import { prisma } from "../lib/prisma";
 import { stripe } from "../lib/stripe";
 import { notificationsService } from "../modules/notifications/notifications.service";
+import { eventsService } from "../modules/events/events.service";
 import { payoutsService } from "../modules/payouts/payouts.service";
 
 const m = vi.mocked(prisma, true);
@@ -138,6 +143,12 @@ describe("payoutsService.adminMarkPaid — Stripe path safety (P0-2)", () => {
     const result = await payoutsService.adminMarkPaid("admin-1", "payout-1");
 
     expect(result.status).toBe("ON_HOLD");
+    expect(eventsService.enqueueTransactional).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
+      name: "payout_action_required",
+      entityType: "PayoutRequest",
+      entityId: "payout-1",
+      payload: { payoutRequestId: "payout-1" },
+    }), { dedupeKey: "payout_action_required:payout-1" });
     expect(result.holdReason).toContain("declined");
     // The debit already happened as part of committing to this attempt — it
     // is not reversed automatically; an admin resolves ON_HOLD explicitly.

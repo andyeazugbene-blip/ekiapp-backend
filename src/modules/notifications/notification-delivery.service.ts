@@ -79,6 +79,19 @@ async function communityBuyMinimumStillEligible(delivery: NotificationDelivery &
   return thresholdStillMet;
 }
 
+async function payoutActionStillEligible(delivery: NotificationDelivery & { notification: { userId: string; readAt: Date | null; data: unknown } }): Promise<boolean> {
+  if (process.env.R25_PAYOUT_ACTION_REQUIRED_ENABLED !== "true") return false;
+  const data = delivery.notification.data;
+  if (!isRecord(data) || data.type !== "payout_action_required" || typeof data.payoutRequestId !== "string"
+    || delivery.notification.readAt) return false;
+  const [payout, recipient] = await Promise.all([
+    prisma.payoutRequest.findUnique({ where: { id: data.payoutRequestId }, select: { status: true, vendor: { select: { userId: true } } } }),
+    prisma.user.findUnique({ where: { id: delivery.notification.userId }, select: { id: true, role: true, isSuspended: true } }),
+  ]);
+  return Boolean(payout && payout.status === "ON_HOLD" && recipient && recipient.role === "VENDOR"
+    && !recipient.isSuspended && payout.vendor.userId === recipient.id);
+}
+
 async function notificationStillEligible(delivery: NotificationDelivery & { notification: { userId: string; readAt: Date | null; data: unknown } }): Promise<boolean> {
   const data = delivery.notification.data;
   if (!isRecord(data)) return false;
@@ -93,6 +106,10 @@ async function notificationStillEligible(delivery: NotificationDelivery & { noti
   if (data.type === "community_campaign_update" && data.event === "minimum_reached" && data.ruleKey === "R35_COMMUNITY_BUY_MINIMUM_REACHED") {
     const rule = resolveNotificationRule({ name: EVENT_NAMES.community_buy_minimum_reached, schemaVersion: Number(data.ruleVersion) });
     return Boolean(rule?.enabled && await communityBuyMinimumStillEligible(delivery));
+  }
+  if (data.type === "payout_action_required" && data.ruleKey === "R25_PAYOUT_ACTION_REQUIRED") {
+    const rule = resolveNotificationRule({ name: EVENT_NAMES.payout_action_required, schemaVersion: Number(data.ruleVersion) });
+    return Boolean(rule?.enabled && await payoutActionStillEligible(delivery));
   }
   return false;
 }

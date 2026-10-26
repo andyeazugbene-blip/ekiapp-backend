@@ -4,7 +4,7 @@ const { createCandidate } = vi.hoisted(() => ({ createCandidate: vi.fn() }));
 vi.mock("../modules/notifications/notifications.service", () => ({ notificationsService: { create: createCandidate } }));
 vi.mock("../lib/prisma", () => ({ prisma: {} }));
 
-import { handleCommunityBuyMinimumReached, handleProductStockDepleted, handleSupportResponseReceived } from "../modules/events/core-event-handlers";
+import { handleCommunityBuyMinimumReached, handlePayoutActionRequired, handleProductStockDepleted, handleSupportResponseReceived } from "../modules/events/core-event-handlers";
 
 const supportMessage = {
   id: "message-1",
@@ -68,6 +68,33 @@ describe("R28 general support response outbox handler", () => {
     ["non-support thread", { ...supportMessage, conversation: { ...supportMessage.conversation, type: "BUYER_VENDOR" } }],
   ])("does not create a candidate for a %s", async (_label, message) => {
     await handleSupportResponseReceived(makeTx(message), outboxEvent);
+    expect(createCandidate).not.toHaveBeenCalled();
+  });
+});
+
+describe("R25 payout action-required outbox handler", () => {
+  it("creates the exact candidate only for the vendor while their payout remains ON_HOLD", async () => {
+    vi.stubEnv("R25_PAYOUT_ACTION_REQUIRED_ENABLED", "true");
+    createCandidate.mockResolvedValue({ id: "notification-r25" });
+    const tx = {
+      payoutRequest: { findUnique: vi.fn().mockResolvedValue({ id: "payout-1", vendorId: "vendor-1", status: "ON_HOLD", vendor: { userId: "vendor-user" } }) },
+      user: { findUnique: vi.fn().mockResolvedValue({ id: "vendor-user", role: "VENDOR", isSuspended: false }) },
+      notification: { findUnique: vi.fn() },
+      notificationDelivery: { upsert: vi.fn() },
+    } as never;
+    await handlePayoutActionRequired(tx, { id: "event-r25", name: "payout_action_required", schemaVersion: 1, payload: { payoutRequestId: "payout-1" } } as never);
+    expect(createCandidate).toHaveBeenCalledWith(expect.objectContaining({
+      userId: "vendor-user",
+      title: "Your payout needs attention",
+      body: "Review the secure payment-provider requirement.",
+      dedupeKey: "R25_PAYOUT_ACTION_REQUIRED:payout-1",
+      data: expect.objectContaining({ ruleKey: "R25_PAYOUT_ACTION_REQUIRED", destination: "membership", payoutRequestId: "payout-1" }),
+    }), tx);
+  });
+
+  it("remains disabled by default", async () => {
+    vi.stubEnv("R25_PAYOUT_ACTION_REQUIRED_ENABLED", "false");
+    await handlePayoutActionRequired({} as never, { name: "payout_action_required", schemaVersion: 1 } as never);
     expect(createCandidate).not.toHaveBeenCalled();
   });
 });
