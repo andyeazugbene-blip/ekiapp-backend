@@ -8,15 +8,24 @@
  *   - HSTS present on TLS-fronted responses (helmet default)
  *   - CORS rejects untrusted origins in production
  */
-import { describe, it, expect, beforeAll, afterEach, vi } from "vitest";
+import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from "vitest";
 import request from "supertest";
 import type { Express } from "express";
 
 let app: Express;
+const originalEnvironment = {
+  nodeEnv: process.env.NODE_ENV,
+  jwtSecret: process.env.JWT_SECRET,
+  corsOrigins: process.env.CORS_ORIGINS,
+  turnstileDisabled: process.env.TURNSTILE_DISABLED,
+};
 
 beforeAll(async () => {
   // Force production-style CORS allowlist for these tests.
   process.env.NODE_ENV = "production";
+  // Production validation requires a strong secret even though this test
+  // uses no real credentials or provider calls.
+  process.env.JWT_SECRET = "security-headers-test-secret-at-least-32-chars";
   process.env.CORS_ORIGINS = "https://culinarytales.app,https://www.culinarytales.app";
   // Avoid Turnstile blackout when test sends bodies with no token.
   process.env.TURNSTILE_DISABLED = "true";
@@ -24,6 +33,17 @@ beforeAll(async () => {
   const mod = await import("../app");
   app = mod.app;
 }, 30_000);
+
+afterAll(() => {
+  if (originalEnvironment.nodeEnv === undefined) delete process.env.NODE_ENV;
+  else process.env.NODE_ENV = originalEnvironment.nodeEnv;
+  if (originalEnvironment.jwtSecret === undefined) delete process.env.JWT_SECRET;
+  else process.env.JWT_SECRET = originalEnvironment.jwtSecret;
+  if (originalEnvironment.corsOrigins === undefined) delete process.env.CORS_ORIGINS;
+  else process.env.CORS_ORIGINS = originalEnvironment.corsOrigins;
+  if (originalEnvironment.turnstileDisabled === undefined) delete process.env.TURNSTILE_DISABLED;
+  else process.env.TURNSTILE_DISABLED = originalEnvironment.turnstileDisabled;
+});
 
 afterEach(() => {
   vi.clearAllMocks();

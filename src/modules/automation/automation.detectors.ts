@@ -203,6 +203,59 @@ async function detectFirstProductReminder(): Promise<number> {
 }
 
 /**
+ * DRAFT_PRODUCT_REMINDER (R04): remind the owner of an actually incomplete
+ * Product draft. `Product.status` alone is insufficient because complete
+ * products can deliberately remain unpublished; use the same completeness
+ * predicate as products.service (images.length > 0 && priceInCents > 0).
+ * The draft's updatedAt is the inactivity clock, so saving meaningful edits
+ * restarts the P2 window. A completed draft or any transition out of DRAFT
+ * is excluded on the next sweep. New rule records are DRAFT until client
+ * copy and policy are checked against the authoritative v2 document.
+ */
+async function detectDraftProductReminder(): Promise<number> {
+  const gate = await getRuleGate("DRAFT_PRODUCT_REMINDER");
+  if (gate.state !== "ACTIVE") return 0;
+
+  const drafts = await prisma.product.findMany({
+    where: { status: "DRAFT", isActive: false, vendor: { isSuspended: false, isTest: false } },
+    select: {
+      id: true,
+      vendorId: true,
+      title: true,
+      images: true,
+      priceInCents: true,
+      updatedAt: true,
+      vendor: { select: { userId: true, storeName: true } },
+    },
+    take: 500,
+  });
+
+  let scheduled = 0;
+  for (const product of drafts) {
+    const complete = (product.images?.length ?? 0) > 0 && product.priceInCents > 0;
+    if (complete) continue;
+    const hoursSinceUpdate = (Date.now() - product.updatedAt.getTime()) / HOUR_MS;
+    scheduled += await scheduleP2Touches({
+      type: "DRAFT_PRODUCT_REMINDER",
+      recipientUserId: product.vendor.userId,
+      vendorId: product.vendorId,
+      subjectPrefix: product.id,
+      hoursSinceEligible: hoursSinceUpdate,
+      requiresMarketingConsent: false,
+      title: "Finish your foodstuff draft",
+      body: "Your foodstuff draft is incomplete. Finish the missing details when you're ready.",
+      data: {
+        destination: "foodstuff_editor",
+        productId: product.id,
+        product_title: product.title,
+        store_name: product.vendor.storeName,
+      },
+    });
+  }
+  return scheduled;
+}
+
+/**
  * DELIVERY_SETUP_REMINDER (spec R05): "Delivery setup missing." Candidates:
  * has at least one active product, no DeliveryZone yet. Stops once a
  * delivery zone exists.
@@ -976,6 +1029,7 @@ export const automationDetectors = {
       ["LOW_STOCK_ALERT", detectLowStockAlert],
       ["REGISTRATION_REMINDER", detectRegistrationReminder],
       ["FIRST_PRODUCT_REMINDER", detectFirstProductReminder],
+      ["DRAFT_PRODUCT_REMINDER", detectDraftProductReminder],
       ["DELIVERY_SETUP_REMINDER", detectDeliverySetupReminder],
       ["VERIFICATION_REMINDER", detectVerificationReminder],
       ["FIRST_SALE", detectFirstSale],

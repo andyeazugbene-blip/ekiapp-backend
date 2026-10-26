@@ -2126,6 +2126,9 @@ enum AutomationType {
   // candidate query itself excludes verified users, same self-cancelling
   // pattern as FIRST_SALE excluding vendors who already sold.
   REGISTRATION_REMINDER
+  // Notification Orchestration Spec v2, R04. New rules are seeded DRAFT
+  // until the authoritative copy/policy has been verified.
+  DRAFT_PRODUCT_REMINDER
 }
 
 enum AutomationRunStatus {
