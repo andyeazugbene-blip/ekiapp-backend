@@ -76,8 +76,8 @@ const META: Record<AutomationType, RuleMeta> = {
   DELIVERY_SETUP_REMINDER: { name: "Delivery setup reminder (R05)", purpose: "Nudge a vendor with a product but no delivery zone to finish delivery/collection setup.", trigger: "Daily sweep: has an active product, no DeliveryZone yet, touched at 4h/24h/72h since store creation (max 3 sends).", audience: "Vendors (operational, no marketing consent required).", feature: "Vendor onboarding", exclusions: ["Vendor suspended", "No active product yet (handled by FIRST_PRODUCT_REMINDER first)", "Delivery zone already exists"], stop: ["Delivery zone created"] },
   // Spec R06.
   VERIFICATION_REMINDER: { name: "Verification reminder (R06)", purpose: "Nudge a vendor who is eligible to verify (has product + delivery) but hasn't been verified yet.", trigger: "Daily sweep: has an active product and a delivery zone, verificationStatus != VERIFIED, touched at 4h/24h/72h since store creation (max 3 sends).", audience: "Vendors (operational, no marketing consent required).", feature: "Vendor onboarding", exclusions: ["Vendor suspended", "Product or delivery not set up yet", "Already verified"], stop: ["Verified (this codebase has no separate 'submitted' state — see detectVerificationReminder's doc comment)"] },
-  // R04 is source-gated: the trigger is implemented, but the exact client
-  // template/policy is missing, so new AutomationRule rows remain DRAFT.
+  // R04 trigger and v2 copy are mapped, but Acquisition WhatsApp ownership,
+  // sub-daily timing, and live route delivery are not yet verified.
   DRAFT_PRODUCT_REMINDER: { name: "Incomplete foodstuff draft (R04)", purpose: "Help a vendor finish an incomplete product draft.", trigger: "Daily sweep: Product.status is DRAFT and the existing completeness check fails (missing image or non-positive price); P2 touches at 4h/24h/72h since the draft's last update (max 3).", audience: "The owning vendor account.", feature: "Vendor onboarding", exclusions: ["Suspended or test vendor", "Product is complete", "Product is no longer DRAFT"], stop: ["Product becomes complete or leaves DRAFT"] },
   // Spec R10. Migrated 2026-10-25 from a non-toggleable, non-admin-visible
   // send (handoff V-06) onto this framework.
@@ -85,6 +85,12 @@ const META: Record<AutomationType, RuleMeta> = {
 };
 
 const RULE_INCLUDE_NOTE = "Enforced by the engine: state, frequency cap, quiet hours, channels. Other fields describe the rule and are not executable.";
+
+// The v2 mapping still assigns R04 to Acquisition WhatsApp and requires 4h
+// recovery timing plus live route QA. The current app owner and daily sweep
+// do not satisfy those requirements, so an environment approval flag alone
+// must not activate this rule.
+const R04_ENABLEMENT_DEPENDENCIES_VERIFIED = false;
 
 function ruleDefaults(type: AutomationType) {
   const meta = META[type];
@@ -111,10 +117,10 @@ function ruleDefaults(type: AutomationType) {
   };
 }
 
-/** R04 copy/policy is provisional until the client's v2 source is verified. */
+/** Keep R04 fail-closed until channel ownership, cadence, and route are approved. */
 export function assertRuleCanBeActivated(key: string, target: AutomationRuleState): void {
-  if (key === "DRAFT_PRODUCT_REMINDER" && target === "ACTIVE" && process.env.R04_ENABLEMENT_APPROVED !== "true") {
-    throw new AppError("R04 cannot be enabled until its exact client copy and policy are approved", 409);
+  if (key === "DRAFT_PRODUCT_REMINDER" && target === "ACTIVE" && !R04_ENABLEMENT_DEPENDENCIES_VERIFIED) {
+    throw new AppError("R04 cannot be enabled until Acquisition WhatsApp coordination, sub-daily timing, and route delivery are verified", 409);
   }
 }
 
