@@ -92,6 +92,7 @@ describe("event to notification pipeline integration", () => {
     vi.stubEnv("R28_GENERAL_SUPPORT_NOTIFICATIONS_ENABLED", "true");
     vi.stubEnv("R12_FIRST_PAID_ORDER_ENABLED", "false");
     vi.stubEnv("R21_ORDER_CONFIRMED_ENABLED", "false");
+    vi.stubEnv("R22_ORDER_DISPATCHED_ENABLED", "false");
     vi.stubEnv("R34_COMMUNITY_BUY_BELOW_MINIMUM_ENABLED", "true");
     vi.stubEnv("R26_PAYOUT_CONFIRMED_ENABLED", "true");
     vi.stubEnv("R36_COMMUNITY_BUY_PAYMENT_ACTION_REQUIRED_ENABLED", "false");
@@ -118,6 +119,32 @@ describe("event to notification pipeline integration", () => {
       organiser: { userId: "buyer-1" },
     });
     registerCoreEventHandlers();
+  });
+
+  it("routes a transactional verified dispatch event to the buyer with the R22 copy", async () => {
+    vi.stubEnv("R22_ORDER_DISPATCHED_ENABLED", "true");
+    txMock.order.findUnique.mockResolvedValue({ id: "order-22", orderNumber: "EKI-22", buyerId: "buyer-22", status: "DISPATCHED" });
+    prismaMock.order.findUnique.mockResolvedValue({ buyerId: "buyer-22", status: "DISPATCHED" });
+    txMock.user.findUnique.mockResolvedValue({ id: "buyer-22", role: "BUYER", isSuspended: false });
+    prismaMock.user.findUnique.mockResolvedValue({ id: "buyer-22", role: "BUYER", isSuspended: false });
+
+    const event = await prismaMock.$transaction((tx: typeof txMock) => eventOutboxService.enqueue(tx, {
+      name: EVENT_NAMES.order_dispatched, actorType: "vendor", entityType: "Order", entityId: "order-22",
+      payload: { orderId: "order-22", fromStatus: "CONFIRMED" },
+    }, { dedupeKey: "order-dispatched:order-22", schemaVersion: 1 }));
+    const outbox = await eventOutboxService.dispatchRegisteredBatch(10, new Date("2026-10-27T12:00:00Z"));
+    expect(outbox).toMatchObject({ claimed: 1, delivered: 1 });
+    expect(txMock.notification.create).toHaveBeenCalledWith({ data: expect.objectContaining({
+      userId: "buyer-22", title: "Your foodstuff is on its way", body: "View the latest delivery information.",
+      dedupeKey: "R22_ORDER_DISPATCHED:order-22",
+      data: expect.objectContaining({ ruleKey: "R22_ORDER_DISPATCHED", eventId: event.id, destination: "order_detail", orderId: "order-22" }),
+    }) });
+    const delivery = await notificationDeliveryService.dispatchBatch(10, new Date("2026-10-27T12:00:01Z"));
+    expect(delivery).toMatchObject({ claimed: 1, sent: 1 });
+    expect(sendPushToUser).toHaveBeenCalledWith("buyer-22", expect.objectContaining({
+      title: "Your foodstuff is on its way", body: "View the latest delivery information.",
+      data: expect.objectContaining({ type: "buyer_order_dispatched", destination: "order_detail", orderId: "order-22" }),
+    }), { logId: "log-1" });
   });
 
   it("routes a transactional vendor-acceptance event to the buyer with the R21 v2 copy", async () => {

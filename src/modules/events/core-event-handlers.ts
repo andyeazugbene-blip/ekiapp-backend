@@ -83,6 +83,37 @@ export async function handleOrderConfirmed(tx: Prisma.TransactionClient, event: 
   });
 }
 
+/** R22: tell the buyer when the vendor confirms dispatch. */
+export async function handleOrderDispatched(tx: Prisma.TransactionClient, event: Event): Promise<void> {
+  const rule = resolveNotificationRule(event);
+  if (!rule?.enabled) return;
+  const orderId = requiredId(event.payload, "orderId");
+  const order = await tx.order.findUnique({ where: { id: orderId }, select: { id: true, orderNumber: true, buyerId: true, status: true } });
+  if (!order || order.status !== "DISPATCHED") return;
+  const recipient = await tx.user.findUnique({ where: { id: order.buyerId }, select: { id: true, role: true, isSuspended: true } });
+  if (!recipient || recipient.role !== "BUYER" || recipient.isSuspended) return;
+
+  const dedupeKey = `R22_ORDER_DISPATCHED:${order.id}`;
+  const created = await notificationsService.create({
+    userId: recipient.id,
+    type: "ORDER_PAID",
+    title: "Your foodstuff is on its way",
+    body: "View the latest delivery information.",
+    data: {
+      type: "buyer_order_dispatched", ruleKey: rule.key, ruleVersion: rule.version,
+      eventId: event.id, templateVersion: 1, destination: "order_detail", orderId: order.id,
+      orderNumber: order.orderNumber,
+    },
+    dedupeKey,
+  }, tx);
+  const candidate = created ?? await tx.notification.findUnique({ where: { dedupeKey }, select: { id: true } });
+  if (candidate) await tx.notificationDelivery.upsert({
+    where: { notificationId_channel: { notificationId: candidate.id, channel: "push" } },
+    create: { notificationId: candidate.id, channel: "push" },
+    update: {},
+  });
+}
+
 /**
  * R28 consumer for the real general SUPPORT conversation model. This only
  * materializes the in-app candidate. Outbox delivery and candidate creation
@@ -577,6 +608,7 @@ export function registerCoreEventHandlers(): void {
   if (registered) return;
   eventOutboxService.registerHandler(EVENT_NAMES.payment_succeeded, handleFirstPaidOrder);
   eventOutboxService.registerHandler(EVENT_NAMES.order_accepted, handleOrderConfirmed);
+  eventOutboxService.registerHandler(EVENT_NAMES.order_dispatched, handleOrderDispatched);
   eventOutboxService.registerHandler(EVENT_NAMES.support_response_received, handleSupportResponseReceived);
   eventOutboxService.registerHandler(EVENT_NAMES.product_stock_depleted, handleProductStockDepleted);
   eventOutboxService.registerHandler(EVENT_NAMES.product_inventory_conflict_detected, handleProductInventoryConflictDetected);

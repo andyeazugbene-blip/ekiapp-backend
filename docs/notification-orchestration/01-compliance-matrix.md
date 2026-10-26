@@ -39,7 +39,7 @@ Status values follow the spec's own progression: **Proposed → Backend mapped �
 | R19 Payment authentication required (3DS) | **Native checkout path implemented; QA pending** | Stripe maps `requires_action` to `REQUIRES_ACTION`; the mobile checkout presents Stripe PaymentSheet with the client secret and Stripe return URL, so authentication is handled in the live checkout rather than by a later push. No separate 3DS push path was found. Native iOS/Android challenge and return testing is still required. |
 | R20 Payment failed (ordinary checkout) | **Implemented (legacy)** | `CHECKOUT_PAYMENT_FOLLOW_UP` type exists and is tested — distinct from `PAYMENT_RECOVERY` (Foodstuff Subscription-only), matching the spec's own distinction. |
 | R21 Order confirmed | **Transactional acceptance event/candidate/delivery implemented; gated pending authenticated buyer order-detail runtime QA** | The real vendor `PENDING`/paid-order → `CONFIRMED` transition now commits a versioned `order_accepted` event transactionally. The consumer resolves the real buyer, checks BUYER role and suspension, creates an idempotent candidate with exact v2 copy and `order_detail` destination, and persists push delivery. Send time rechecks the order is still `CONFIRMED` and belongs to that buyer. `R21_ORDER_CONFIRMED_ENABLED` defaults off; the existing confirmation notice remains fallback. End-to-end outbox-to-push test added. |
-| R22 Order dispatched | **Implemented (legacy); QA pending** | `ordersService` sends buyer `order_status` and `buyer_order_shipped` when an order transitions to `DISPATCHED`; the mobile tap handler routes both to the buyer order. No mobile device tap QA in this pass. |
+| R22 Order dispatched | **Transactional event/candidate/delivery implemented; gated pending authenticated buyer order-detail runtime QA** | Vendor dispatch now commits the real order transition and versioned `order_dispatched` event in one transaction. The consumer resolves the actual buyer, checks buyer role/suspension, creates one exact v2 candidate and durable push delivery; send time rechecks current `DISPATCHED` state and ownership. `R22_ORDER_DISPATCHED_ENABLED` defaults off; legacy shipped notification/email remain fallback while gated. Mobile `order_detail` routes to the buyer tracking screen. End-to-end outbox-to-push test added. |
 | R23 Collection ready | **Implemented for Community Buy only; general order scope unverified** | Community Buy fulfilment sends “ready for collection” notifications to organiser and participants when fulfilment becomes ready. The ordinary order model has no equivalent collection-ready transition in this path. Do not count this as general-order coverage without the source mapping. |
 | R24 Delivery exception | **Blocked pending a real exception signal and policy** | Shipment/order statuses expose normal progression, but no verified carrier exception state, exception producer, or exception notification was found. Do not infer an exception from a delayed delivery. |
 
@@ -83,8 +83,8 @@ Status values follow the spec's own progression: **Proposed → Backend mapped �
 
 - **Implemented, focused backend QA passed (spec-shaped):** 11 of 40 — R01, R03, R05, R06, R11, R16, R30–R33, R38
 - **Implemented on backend and mobile source; runtime/device QA or verified timing outstanding:** 5 of 40 — R10, R18, R19, R28, R35
-- **Implemented (legacy, not re-platformed):** 8 of 40 — R07–R09, R13, R15, R20, R22, R26
-- **Implemented on backend but gated pending route/runtime/approval:** 7 of 40 — R12, R21, R25, R29, R34, R37, R40
+- **Implemented (legacy, not re-platformed):** 7 of 40 — R07–R09, R13, R15, R20, R26
+- **Implemented on backend but gated pending route/runtime/approval:** 8 of 40 — R12, R21–R22, R25, R29, R34, R37, R40
 - **Partial or scoped:** 5 of 40 — R04, R17, R23, R27, R36
 - **Blocked on source semantics or an approved business mechanism:** 4 of 40 — R02, R14, R24, R39
 
