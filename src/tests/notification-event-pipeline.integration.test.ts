@@ -19,6 +19,7 @@ const { prismaMock, txMock, sendPushToUser } = vi.hoisted(() => {
     },
     user: { findUnique: vi.fn() },
     communityCampaign: { findUnique: vi.fn() },
+    payoutRequest: { findUnique: vi.fn() },
     notification: {
       create: vi.fn(async ({ data }: any) => {
         notificationRow = { id: "notification-1", readAt: null, ...data };
@@ -49,6 +50,7 @@ const { prismaMock, txMock, sendPushToUser } = vi.hoisted(() => {
     message: txMock.message,
     user: { findUnique: vi.fn() },
     communityCampaign: { findUnique: vi.fn() },
+    payoutRequest: { findUnique: vi.fn() },
     product: { findUnique: vi.fn() },
     communicationLog: { update: vi.fn().mockResolvedValue({}) },
     $transaction: vi.fn(async (fn: (tx: typeof txMock) => Promise<unknown>) => fn(txMock)),
@@ -69,6 +71,7 @@ describe("event to notification pipeline integration", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.stubEnv("R28_GENERAL_SUPPORT_NOTIFICATIONS_ENABLED", "true");
+    vi.stubEnv("R26_PAYOUT_CONFIRMED_ENABLED", "true");
     sendPushToUser.mockResolvedValue({ tokens: 1, accepted: 1, rejected: 0, ticketIds: ["expo-ticket-1"] });
     txMock.user.findUnique.mockImplementation(async ({ where }: any) => ({
       id: where.id,
@@ -153,5 +156,31 @@ describe("event to notification pipeline integration", () => {
       title: "Your Community Buy reached its minimum",
       data: expect.objectContaining({ destination: "community_buy_campaign", audience: "organiser", campaignId: "campaign-1" }),
     }), { logId: "log-1" });
+  });
+
+  it("delivers an R26 candidate only after the payout is PAID and confirms its provider receipt", async () => {
+    txMock.payoutRequest.findUnique.mockResolvedValue({ id: "payout-2", status: "PAID", vendor: { userId: "vendor-1" } });
+    prismaMock.payoutRequest.findUnique.mockResolvedValue({ status: "PAID", vendor: { userId: "vendor-1" } });
+    txMock.user.findUnique.mockImplementation(async ({ where }: any) => ({ id: where.id, role: "VENDOR", isSuspended: false }));
+    prismaMock.user.findUnique.mockImplementation(async ({ where }: any) => ({ id: where.id, role: "VENDOR", isSuspended: false }));
+    const event = await prismaMock.$transaction((tx: typeof txMock) => eventOutboxService.enqueue(tx, {
+      name: EVENT_NAMES.payout_confirmed,
+      actorType: "admin",
+      entityType: "PayoutRequest",
+      entityId: "payout-2",
+      payload: { payoutRequestId: "payout-2" },
+    }, { dedupeKey: "payout_confirmed:payout-2", schemaVersion: 1 }));
+    const outboxResult = await eventOutboxService.dispatchRegisteredBatch(10, new Date("2026-10-26T12:00:00Z"));
+    expect(outboxResult).toMatchObject({ claimed: 1, delivered: 1 });
+    expect(txMock.notification.create).toHaveBeenCalledWith({ data: expect.objectContaining({
+      userId: "vendor-1", title: "Your payout has been completed", body: "View the transaction details.",
+      data: expect.objectContaining({ ruleKey: "R26_PAYOUT_CONFIRMED", eventId: event.id, payoutRequestId: "payout-2" }),
+    }) });
+    const deliveryResult = await notificationDeliveryService.dispatchBatch(10, new Date("2026-10-26T12:00:00Z"));
+    expect(deliveryResult).toMatchObject({ claimed: 1, sent: 1 });
+    await notificationDeliveryService.recordReceipt("log-1", true, "ok");
+    expect(prismaMock.notificationDelivery.updateMany).toHaveBeenLastCalledWith(expect.objectContaining({
+      where: { id: "delivery-1", status: "SENT" }, data: expect.objectContaining({ status: "DELIVERED" }),
+    }));
   });
 });

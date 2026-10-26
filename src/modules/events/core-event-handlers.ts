@@ -225,6 +225,38 @@ export async function handlePayoutActionRequired(tx: Prisma.TransactionClient, e
   }
 }
 
+/** R26: a confirmed payout gets one vendor-targeted candidate. */
+export async function handlePayoutConfirmed(tx: Prisma.TransactionClient, event: Event): Promise<void> {
+  const rule = resolveNotificationRule(event);
+  if (!rule?.enabled) return;
+  const payoutRequestId = requiredId(event.payload, "payoutRequestId");
+  const payout = await tx.payoutRequest.findUnique({
+    where: { id: payoutRequestId },
+    select: { id: true, status: true, vendor: { select: { userId: true } } },
+  });
+  if (!payout || payout.status !== "PAID") return;
+  const recipient = await tx.user.findUnique({ where: { id: payout.vendor.userId }, select: { id: true, role: true, isSuspended: true } });
+  if (!recipient || recipient.role !== "VENDOR" || recipient.isSuspended) return;
+  const dedupeKey = `R26_PAYOUT_CONFIRMED:${payout.id}`;
+  const created = await notificationsService.create({
+    userId: recipient.id,
+    type: "PAYOUT_PAID",
+    title: "Your payout has been completed",
+    body: "View the transaction details.",
+    data: {
+      type: "payout_confirmed", ruleKey: rule.key, ruleVersion: rule.version,
+      eventId: event.id, templateVersion: 1, destination: "membership", payoutRequestId: payout.id,
+    },
+    dedupeKey,
+  }, tx);
+  const candidate = created ?? await tx.notification.findUnique({ where: { dedupeKey }, select: { id: true } });
+  if (candidate) await tx.notificationDelivery.upsert({
+    where: { notificationId_channel: { notificationId: candidate.id, channel: "push" } },
+    create: { notificationId: candidate.id, channel: "push" },
+    update: {},
+  });
+}
+
 let registered = false;
 export function registerCoreEventHandlers(): void {
   if (registered) return;
@@ -232,6 +264,7 @@ export function registerCoreEventHandlers(): void {
   eventOutboxService.registerHandler(EVENT_NAMES.product_stock_depleted, handleProductStockDepleted);
   eventOutboxService.registerHandler(EVENT_NAMES.community_buy_minimum_reached, handleCommunityBuyMinimumReached);
   eventOutboxService.registerHandler(EVENT_NAMES.payout_action_required, handlePayoutActionRequired);
+  eventOutboxService.registerHandler(EVENT_NAMES.payout_confirmed, handlePayoutConfirmed);
   registered = true;
 }
 

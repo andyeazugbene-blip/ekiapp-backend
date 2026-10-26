@@ -4,7 +4,7 @@ const { createCandidate } = vi.hoisted(() => ({ createCandidate: vi.fn() }));
 vi.mock("../modules/notifications/notifications.service", () => ({ notificationsService: { create: createCandidate } }));
 vi.mock("../lib/prisma", () => ({ prisma: {} }));
 
-import { handleCommunityBuyMinimumReached, handlePayoutActionRequired, handleProductStockDepleted, handleSupportResponseReceived } from "../modules/events/core-event-handlers";
+import { handleCommunityBuyMinimumReached, handlePayoutActionRequired, handlePayoutConfirmed, handleProductStockDepleted, handleSupportResponseReceived } from "../modules/events/core-event-handlers";
 
 const supportMessage = {
   id: "message-1",
@@ -95,6 +95,31 @@ describe("R25 payout action-required outbox handler", () => {
   it("remains disabled by default", async () => {
     vi.stubEnv("R25_PAYOUT_ACTION_REQUIRED_ENABLED", "false");
     await handlePayoutActionRequired({} as never, { name: "payout_action_required", schemaVersion: 1 } as never);
+    expect(createCandidate).not.toHaveBeenCalled();
+  });
+});
+
+describe("R26 payout confirmed outbox handler", () => {
+  it("creates the exact candidate for the owning vendor after PAID", async () => {
+    vi.stubEnv("R26_PAYOUT_CONFIRMED_ENABLED", "true");
+    createCandidate.mockResolvedValue({ id: "notification-r26" });
+    const tx = {
+      payoutRequest: { findUnique: vi.fn().mockResolvedValue({ id: "payout-2", status: "PAID", vendor: { userId: "vendor-user" } }) },
+      user: { findUnique: vi.fn().mockResolvedValue({ id: "vendor-user", role: "VENDOR", isSuspended: false }) },
+      notification: { findUnique: vi.fn() },
+      notificationDelivery: { upsert: vi.fn() },
+    } as never;
+    await handlePayoutConfirmed(tx, { id: "event-r26", name: "payout_confirmed", schemaVersion: 1, payload: { payoutRequestId: "payout-2" } } as never);
+    expect(createCandidate).toHaveBeenCalledWith(expect.objectContaining({
+      userId: "vendor-user", title: "Your payout has been completed", body: "View the transaction details.",
+      dedupeKey: "R26_PAYOUT_CONFIRMED:payout-2",
+      data: expect.objectContaining({ ruleKey: "R26_PAYOUT_CONFIRMED", destination: "membership", payoutRequestId: "payout-2" }),
+    }), tx);
+  });
+
+  it("does not create a candidate while the rule gate is off", async () => {
+    vi.stubEnv("R26_PAYOUT_CONFIRMED_ENABLED", "false");
+    await handlePayoutConfirmed({} as never, { name: "payout_confirmed", schemaVersion: 1 } as never);
     expect(createCandidate).not.toHaveBeenCalled();
   });
 });

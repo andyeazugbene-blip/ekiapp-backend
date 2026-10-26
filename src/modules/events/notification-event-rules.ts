@@ -46,6 +46,12 @@ export const NOTIFICATION_EVENT_RULES: readonly NotificationRuleDefinition[] = [
     version: 1,
     enabled: () => process.env.R25_PAYOUT_ACTION_REQUIRED_ENABLED === "true",
   },
+  {
+    eventName: EVENT_NAMES.payout_confirmed,
+    key: "R26_PAYOUT_CONFIRMED",
+    version: 1,
+    enabled: () => process.env.R26_PAYOUT_CONFIRMED_ENABLED === "true",
+  },
 ];
 
 export function resolveNotificationRule(event: Pick<Event, "name" | "schemaVersion">): ResolvedNotificationRule | null {
