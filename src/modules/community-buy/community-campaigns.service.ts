@@ -1,4 +1,5 @@
 import { eventsService, EVENT_NAMES } from "../events/events.service";
+import { dispatchNotificationsAfterCommit } from "../events/dispatch-notifications";
 import { emitCampaignLifecycleEvent } from "./community-buy-events";
 import { prisma } from "../../lib/prisma";
 import { logger } from "../../lib/logger";
@@ -2198,12 +2199,32 @@ export const communityCampaignsService = {
         await this.chargePledgesAfterSuccess(campaign.id);
       } else {
         const rescueEndsAt = new Date(Date.now() + (campaign.rescueDurationMinutes ?? 2880) * 60 * 1000);
-        const claim = await prisma.communityCampaign.updateMany({
-          where: { id: campaign.id, status: "LIVE" },
-          data: { status: "RESCUE_WINDOW", rescueEndsAt },
+        const claim = await prisma.$transaction(async (tx) => {
+          const transition = await tx.communityCampaign.updateMany({
+            where: { id: campaign.id, status: "LIVE" },
+            data: { status: "RESCUE_WINDOW", rescueEndsAt },
+          });
+          if (transition.count === 1) {
+            await eventsService.enqueueTransactional(tx, {
+              name: EVENT_NAMES.community_buy_below_minimum,
+              actorType: "system",
+              entityType: "CommunityCampaign",
+              entityId: campaign.id,
+              source: "community_buy_deadline",
+              payload: {
+                campaignId: campaign.id,
+                minimumShares: minimum,
+                confirmedShares: campaign.confirmedShares,
+                remainingShares: Math.max(0, minimum - campaign.confirmedShares),
+                rescueDeadline: rescueEndsAt.toISOString(),
+              },
+            }, { dedupeKey: `R34_COMMUNITY_BUY_BELOW_MINIMUM:${campaign.id}` });
+          }
+          return transition;
         });
         if (claim.count !== 1) continue;
         rescued++;
+        void dispatchNotificationsAfterCommit();
         await this.notifyRescueOpened(campaign.id, rescueEndsAt);
       }
     }
@@ -2314,7 +2335,12 @@ export const communityCampaignsService = {
     if (!campaign) return;
     const remaining = Math.max(0, (campaign.minimumShares ?? 0) - campaign.confirmedShares);
     const body = `${campaign.title} needs ${remaining} more share(s) to proceed. The organiser has until ${rescueEndsAt.toISOString()} to act.`;
-    await notifyCampaign(campaign.organiser.userId, "rescue_opened", "Campaign needs more participants", body, campaignId, undefined, "organiser");
+    // Once the gated v2 R34 candidate is enabled, it owns the organiser's
+    // notice. Keep the legacy notice for participants so enabling R34 cannot
+    // double-notify its organiser.
+    if (process.env.R34_COMMUNITY_BUY_BELOW_MINIMUM_ENABLED !== "true") {
+      await notifyCampaign(campaign.organiser.userId, "rescue_opened", "Campaign needs more participants", body, campaignId, undefined, "organiser");
+    }
     for (const p of campaign.participants) {
       await notifyCampaign(p.userId, "rescue_opened", "Campaign needs more participants", body, campaignId);
     }

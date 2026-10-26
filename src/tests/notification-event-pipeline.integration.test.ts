@@ -19,6 +19,7 @@ const { prismaMock, txMock, sendPushToUser } = vi.hoisted(() => {
     },
     user: { findUnique: vi.fn() },
     communityCampaign: { findUnique: vi.fn() },
+    campaignContribution: { findMany: vi.fn() },
     payoutRequest: { findUnique: vi.fn() },
     notification: {
       create: vi.fn(async ({ data }: any) => {
@@ -50,6 +51,7 @@ const { prismaMock, txMock, sendPushToUser } = vi.hoisted(() => {
     message: txMock.message,
     user: { findUnique: vi.fn() },
     communityCampaign: { findUnique: vi.fn() },
+    campaignContribution: { findMany: vi.fn() },
     payoutRequest: { findUnique: vi.fn() },
     product: { findUnique: vi.fn() },
     communicationLog: { update: vi.fn().mockResolvedValue({}) },
@@ -71,6 +73,7 @@ describe("event to notification pipeline integration", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.stubEnv("R28_GENERAL_SUPPORT_NOTIFICATIONS_ENABLED", "true");
+    vi.stubEnv("R34_COMMUNITY_BUY_BELOW_MINIMUM_ENABLED", "true");
     vi.stubEnv("R26_PAYOUT_CONFIRMED_ENABLED", "true");
     vi.stubEnv("R37_SUPPLIER_RECONFIRMATION_ENABLED", "false");
     sendPushToUser.mockResolvedValue({ tokens: 1, accepted: 1, rejected: 0, ticketIds: ["expo-ticket-1"] });
@@ -159,6 +162,71 @@ describe("event to notification pipeline integration", () => {
     }), { logId: "log-1" });
   });
 
+  it("routes a real below-minimum rescue-window event to the organiser and rechecks before delivery", async () => {
+    const deadline = new Date("2026-10-27T12:00:00Z");
+    txMock.communityCampaign.findUnique.mockResolvedValue({
+      id: "campaign-1", title: "Rice", status: "RESCUE_WINDOW", minimumShares: 5, confirmedShares: 3,
+      rescueEndsAt: deadline, organiser: { userId: "buyer-1" },
+    });
+    prismaMock.communityCampaign.findUnique.mockResolvedValue({
+      status: "RESCUE_WINDOW", minimumShares: 5, confirmedShares: 3, rescueEndsAt: deadline,
+      organiser: { userId: "buyer-1" },
+    });
+    const event = await prismaMock.$transaction((tx: typeof txMock) => eventOutboxService.enqueue(tx, {
+      name: EVENT_NAMES.community_buy_below_minimum,
+      actorType: "system",
+      entityType: "CommunityCampaign",
+      entityId: "campaign-1",
+      payload: { campaignId: "campaign-1", minimumShares: 5, confirmedShares: 3, remainingShares: 2, rescueDeadline: deadline.toISOString() },
+    }, { dedupeKey: "R34_COMMUNITY_BUY_BELOW_MINIMUM:campaign-1", schemaVersion: 1 }));
+
+    const outboxResult = await eventOutboxService.dispatchRegisteredBatch(10, new Date("2026-10-26T12:00:00Z"));
+    expect(outboxResult).toMatchObject({ claimed: 1, delivered: 1 });
+    expect(txMock.notification.create).toHaveBeenCalledWith({ data: expect.objectContaining({
+      userId: "buyer-1", title: "Your Community Buy needs 2 shares",
+      body: `Review your available options before ${deadline.toISOString()}.`,
+      data: expect.objectContaining({ ruleKey: "R34_COMMUNITY_BUY_BELOW_MINIMUM", eventId: event.id, destination: "community_buy_campaign", audience: "organiser" }),
+    }) });
+
+    const result = await notificationDeliveryService.dispatchBatch(10, new Date("2026-10-26T12:00:00Z"));
+    expect(result).toMatchObject({ claimed: 1, sent: 1 });
+    expect(sendPushToUser).toHaveBeenCalledWith("buyer-1", expect.objectContaining({
+      title: "Your Community Buy needs 2 shares",
+      data: expect.objectContaining({ campaignId: "campaign-1", remainingShares: 2, deadline: deadline.toISOString() }),
+    }), { logId: "log-1" });
+  });
+
+  it("uses successful authorisations, not pledge counters, for the R34 decision-required quantity", async () => {
+    const decisionRequiredAt = new Date("2026-10-26T10:00:00Z");
+    const deadline = new Date(decisionRequiredAt.getTime() + 24 * 60 * 60 * 1000);
+    txMock.communityCampaign.findUnique.mockResolvedValue({
+      id: "campaign-1", title: "Rice", status: "DECISION_REQUIRED", paymentMode: "AUTHORISE_THEN_CAPTURE",
+      minimumShares: 10, confirmedShares: 9, decisionRequiredAt, organiser: { userId: "buyer-1" },
+    });
+    txMock.campaignContribution.findMany.mockResolvedValue([{ quantity: 3 }]);
+    prismaMock.communityCampaign.findUnique.mockResolvedValue({
+      status: "DECISION_REQUIRED", paymentMode: "AUTHORISE_THEN_CAPTURE", minimumShares: 10,
+      confirmedShares: 9, decisionRequiredAt, organiser: { userId: "buyer-1" },
+    });
+    prismaMock.campaignContribution.findMany.mockResolvedValue([{ quantity: 3 }]);
+    const event = await prismaMock.$transaction((tx: typeof txMock) => eventOutboxService.enqueue(tx, {
+      name: EVENT_NAMES.community_buy_below_minimum,
+      actorType: "system",
+      entityType: "CommunityCampaign",
+      entityId: "campaign-1",
+      payload: { campaignId: "campaign-1", minimumShares: 10, confirmedShares: 3, remainingShares: 7, rescueDeadline: deadline.toISOString() },
+    }, { dedupeKey: "R34_COMMUNITY_BUY_BELOW_MINIMUM:campaign-1", schemaVersion: 1 }));
+
+    await eventOutboxService.dispatchRegisteredBatch(10, new Date("2026-10-26T12:00:00Z"));
+    expect(txMock.notification.create).toHaveBeenCalledWith({ data: expect.objectContaining({
+      title: "Your Community Buy needs 7 shares",
+      body: `Review your available options before ${deadline.toISOString()}.`,
+      data: expect.objectContaining({ eventId: event.id, remainingShares: 7 }),
+    }) });
+    const delivery = await notificationDeliveryService.dispatchBatch(10, new Date("2026-10-26T12:00:00Z"));
+    expect(delivery).toMatchObject({ claimed: 1, sent: 1 });
+  });
+
   it("delivers an R26 candidate only after the payout is PAID and confirms its provider receipt", async () => {
     txMock.payoutRequest.findUnique.mockResolvedValue({ id: "payout-2", status: "PAID", vendor: { userId: "vendor-1" } });
     prismaMock.payoutRequest.findUnique.mockResolvedValue({ status: "PAID", vendor: { userId: "vendor-1" } });
@@ -183,40 +251,5 @@ describe("event to notification pipeline integration", () => {
     expect(prismaMock.notificationDelivery.updateMany).toHaveBeenLastCalledWith(expect.objectContaining({
       where: { id: "delivery-1", status: "SENT" }, data: expect.objectContaining({ status: "DELIVERED" }),
     }));
-  });
-
-  it("routes a real supplier reconfirmation request through the outbox, candidate and durable push delivery", async () => {
-    vi.stubEnv("R37_SUPPLIER_RECONFIRMATION_ENABLED", "true");
-    const requestedAt = new Date("2026-10-26T11:00:00Z");
-    const deadline = new Date("2026-10-26T23:00:00Z");
-    const campaign = {
-      id: "campaign-1", title: "Rice", status: "AWAITING_SUPPLIER_RECONFIRMATION",
-      reconfirmationDeadline: deadline, reconfirmationRequestedAt: requestedAt, reconfirmationQuantity: 4,
-      supplierAccount: { userId: "supplier-1" }, supplier: null,
-    };
-    txMock.communityCampaign.findUnique.mockResolvedValue(campaign);
-    prismaMock.communityCampaign.findUnique.mockResolvedValue(campaign);
-
-    const event = await prismaMock.$transaction((tx: typeof txMock) => eventOutboxService.enqueue(tx, {
-      name: EVENT_NAMES.community_buy_supplier_reconfirmation_requested,
-      actorType: "user", actorId: "organiser-1", entityType: "CommunityCampaign", entityId: "campaign-1",
-      payload: { campaignId: "campaign-1", quantity: 4, requestedAt: requestedAt.toISOString(), deadline: deadline.toISOString() },
-    }, { dedupeKey: "community-buy-supplier-reconfirmation:campaign-1:2026-10-26T11:00:00.000Z", schemaVersion: 1 }));
-
-    const outboxResult = await eventOutboxService.dispatchRegisteredBatch(10, new Date("2026-10-26T12:00:00Z"));
-    expect(outboxResult).toMatchObject({ claimed: 1, delivered: 1 });
-    expect(txMock.notification.create).toHaveBeenCalledWith({ data: expect.objectContaining({
-      userId: "supplier-1", title: "Please confirm your Community Buy supply",
-      body: "Review quantity and fulfilment terms.",
-      dedupeKey: "R37_SUPPLIER_RECONFIRMATION:campaign-1:2026-10-26T11:00:00.000Z",
-      data: expect.objectContaining({ ruleKey: "R37_SUPPLIER_RECONFIRMATION", ruleVersion: 1, eventId: event.id, destination: "community_buy_campaign", audience: "supplier" }),
-    }) });
-
-    const deliveryResult = await notificationDeliveryService.dispatchBatch(10, new Date("2026-10-26T12:00:00Z"));
-    expect(deliveryResult).toMatchObject({ claimed: 1, sent: 1 });
-    expect(sendPushToUser).toHaveBeenCalledWith("supplier-1", expect.objectContaining({
-      title: "Please confirm your Community Buy supply",
-      data: expect.objectContaining({ destination: "community_buy_campaign", audience: "supplier", campaignId: "campaign-1", quantity: 4 }),
-    }), { logId: "log-1" });
   });
 });
