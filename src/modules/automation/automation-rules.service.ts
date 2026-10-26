@@ -111,6 +111,13 @@ function ruleDefaults(type: AutomationType) {
   };
 }
 
+/** R04 copy/policy is provisional until the client's v2 source is verified. */
+export function assertRuleCanBeActivated(key: string, target: AutomationRuleState): void {
+  if (key === "DRAFT_PRODUCT_REMINDER" && target === "ACTIVE" && process.env.R04_ENABLEMENT_APPROVED !== "true") {
+    throw new AppError("R04 cannot be enabled until its exact client copy and policy are approved", 409);
+  }
+}
+
 function parseDate(value: unknown): Date | undefined {
   if (typeof value !== "string" || !value) return undefined;
   const d = new Date(value);
@@ -230,6 +237,7 @@ export const automationRulesService = {
     }
     if (patch.state !== undefined) {
       if (!AUTOMATION_RULE_STATES.includes(patch.state as AutomationRuleState)) throw new AppError("Invalid state", 400);
+      assertRuleCanBeActivated(before.key, patch.state as AutomationRuleState);
       data.state = patch.state as AutomationRuleState;
       data.stateReason = reason;
     }
@@ -264,6 +272,7 @@ export const automationRulesService = {
     const reason = requireAuditReason(reasonRaw);
     const before = await automationRulesService.getRuleOrThrow(id);
     const target: AutomationRuleState = action === "pause" ? "PAUSED" : action === "archive" ? "ARCHIVED" : "ACTIVE";
+    assertRuleCanBeActivated(before.key, target);
     if (before.state === target) throw new AppError(`Rule is already ${target.toLowerCase()}`, 409);
     if (action === "resume" && before.state === "ARCHIVED") throw new AppError("Archived rules cannot be resumed; duplicate it instead", 409);
     const after = await prisma.automationRule.update({
