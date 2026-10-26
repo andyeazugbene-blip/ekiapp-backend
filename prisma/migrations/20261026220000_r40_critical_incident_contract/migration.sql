@@ -1,0 +1,8 @@
+CREATE TYPE "PaymentAnomalySeverity" AS ENUM ('CRITICAL');
+
+ALTER TYPE "PaymentAnomalyKind" ADD VALUE IF NOT EXISTS 'OUTBOX_EVENT_FAILURE';
+ALTER TYPE "PaymentAnomalyStatus" ADD VALUE IF NOT EXISTS 'RESOLVED';
+
+ALTER TABLE "PaymentAnomaly"
+ADD COLUMN "severity" "PaymentAnomalySeverity" NOT NULL DEFAULT 'CRITICAL',
+ADD COLUMN "resolvedAt" TIMESTAMP(3);

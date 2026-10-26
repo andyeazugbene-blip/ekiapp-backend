@@ -17,7 +17,8 @@ const { prismaMock, txMock, sendPushToUser } = vi.hoisted(() => {
         conversation: { id: "conversation-1", type: "SUPPORT", status: "OPEN", participantA: "admin-1", participantB: "buyer-1" },
       }),
     },
-    user: { findUnique: vi.fn() },
+    user: { findUnique: vi.fn(), findMany: vi.fn() },
+    paymentAnomaly: { findUnique: vi.fn(), findMany: vi.fn(), upsert: vi.fn() },
     vendor: { findUnique: vi.fn() },
     communityCampaign: { findUnique: vi.fn() },
     communityBuyPaymentAuthorisation: { findUnique: vi.fn() },
@@ -55,7 +56,8 @@ const { prismaMock, txMock, sendPushToUser } = vi.hoisted(() => {
       findUnique: vi.fn(async () => ({ id: "delivery-1", attempt: 1, status: "SENT" })),
     },
     message: txMock.message,
-    user: { findUnique: vi.fn() },
+    user: { findUnique: vi.fn(), findMany: vi.fn() },
+    paymentAnomaly: { findUnique: vi.fn(), findMany: vi.fn(), upsert: vi.fn() },
     vendor: { findUnique: vi.fn() },
     communityCampaign: { findUnique: vi.fn() },
     communityBuyPaymentAuthorisation: { findUnique: vi.fn() },
@@ -80,6 +82,7 @@ import { registerCoreEventHandlers } from "../modules/events/core-event-handlers
 import { EVENT_NAMES } from "../modules/events/events.service";
 import { notificationDeliveryService } from "../modules/notifications/notification-delivery.service";
 import { inventoryCountsService } from "../modules/products/inventory-counts.service";
+import { ensureCriticalIncidentCandidates } from "../modules/ledger/critical-incident-notifications";
 
 describe("event to notification pipeline integration", () => {
   beforeEach(() => {
@@ -90,6 +93,7 @@ describe("event to notification pipeline integration", () => {
     vi.stubEnv("R36_COMMUNITY_BUY_PAYMENT_ACTION_REQUIRED_ENABLED", "false");
     vi.stubEnv("R29_MEMBERSHIP_PAYMENT_FAILED_ENABLED", "false");
     vi.stubEnv("R37_SUPPLIER_RECONFIRMATION_ENABLED", "false");
+    vi.stubEnv("R40_PAYMENT_ANOMALY_ALERTS_ENABLED", "false");
     sendPushToUser.mockResolvedValue({ tokens: 1, accepted: 1, rejected: 0, ticketIds: ["expo-ticket-1"] });
     txMock.user.findUnique.mockImplementation(async ({ where }: any) => ({
       id: where.id,
@@ -419,6 +423,35 @@ describe("event to notification pipeline integration", () => {
       title: "Please confirm your Community Buy supply",
       data: expect.objectContaining({ destination: "community_buy_campaign", audience: "supplier", campaignId: "campaign-1", quantity: 4 }),
     }), { logId: "log-1" });
+  });
+
+  it("delivers the approved R40 incident copy to an active admin through durable push delivery", async () => {
+    vi.stubEnv("R40_PAYMENT_ANOMALY_ALERTS_ENABLED", "true");
+    const incident = { id: "incident-1", dedupeKey: "OUTBOX_EVENT_FAILURE:event-1", kind: "OUTBOX_EVENT_FAILURE", severity: "CRITICAL", status: "OPEN", businessRefType: "Event", businessRefId: "event-1" };
+    txMock.user.findMany.mockResolvedValue([{ id: "admin-1" }]);
+    prismaMock.user.findUnique.mockResolvedValue({ id: "admin-1", role: "ADMIN", isSuspended: false });
+    prismaMock.paymentAnomaly.findUnique.mockResolvedValue(incident);
+    await ensureCriticalIncidentCandidates(txMock, incident as any);
+
+    const result = await notificationDeliveryService.dispatchBatch(10, new Date("2026-10-26T12:00:00Z"));
+    expect(result).toMatchObject({ claimed: 1, sent: 1 });
+    expect(sendPushToUser).toHaveBeenCalledWith("admin-1", expect.objectContaining({
+      title: "A critical Eki process needs attention", body: "Open the incident and review the failed job.",
+      data: expect.objectContaining({ destination: "admin_case", incidentId: "incident-1", severity: "CRITICAL" }),
+    }), { logId: "log-1" });
+  });
+
+  it("cancels an R40 delivery after the admin resolves its incident", async () => {
+    vi.stubEnv("R40_PAYMENT_ANOMALY_ALERTS_ENABLED", "true");
+    const incident = { id: "incident-2", dedupeKey: "OUTBOX_EVENT_FAILURE:event-2", kind: "OUTBOX_EVENT_FAILURE", severity: "CRITICAL", status: "OPEN", businessRefType: "Event", businessRefId: "event-2" };
+    txMock.user.findMany.mockResolvedValue([{ id: "admin-1" }]);
+    await ensureCriticalIncidentCandidates(txMock, incident as any);
+    prismaMock.paymentAnomaly.findUnique.mockResolvedValue({ ...incident, status: "RESOLVED" });
+    prismaMock.user.findUnique.mockResolvedValue({ id: "admin-1", role: "ADMIN", isSuspended: false });
+
+    const result = await notificationDeliveryService.dispatchBatch(10, new Date("2026-10-26T12:00:00Z"));
+    expect(result).toMatchObject({ claimed: 1, cancelled: 1 });
+    expect(sendPushToUser).not.toHaveBeenCalled();
   });
 
   it("cancels an R29 delivery if payment is resolved before the send-time check", async () => {

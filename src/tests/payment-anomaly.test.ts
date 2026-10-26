@@ -17,11 +17,14 @@ vi.mock("../lib/prisma", () => ({
     ledgerEntry: { findMany: vi.fn() },
     user: { findMany: vi.fn() },
     paymentAnomaly: { upsert: vi.fn(), findMany: vi.fn(), findUnique: vi.fn(), update: vi.fn() },
+    notification: { create: vi.fn(), findUnique: vi.fn() },
+    notificationDelivery: { upsert: vi.fn() },
+    $transaction: vi.fn(),
   },
 }));
 
 vi.mock("../modules/notifications/notifications.service", () => ({
-  notificationsService: { enqueue: vi.fn().mockResolvedValue(undefined) },
+  notificationsService: { create: vi.fn().mockResolvedValue({ id: "notification-1" }), enqueue: vi.fn().mockResolvedValue(undefined) },
 }));
 
 import { prisma } from "../lib/prisma";
@@ -34,6 +37,7 @@ afterEach(() => vi.unstubAllEnvs());
 
 beforeEach(() => {
   vi.clearAllMocks();
+  m.$transaction.mockImplementation(async (fn: any) => fn(prisma as any));
   m.subscriptionPaymentAttempt.groupBy.mockResolvedValue([] as never);
   m.campaignChargeAttempt.groupBy.mockResolvedValue([] as never);
   m.campaignContribution.groupBy.mockResolvedValue([] as never);
@@ -44,6 +48,10 @@ beforeEach(() => {
   m.payment.findMany.mockResolvedValue([] as never);
   m.ledgerEntry.findMany.mockResolvedValue([] as never);
   m.user.findMany.mockResolvedValue([] as never);
+  m.paymentAnomaly.findMany.mockResolvedValue([] as never);
+  m.notification.create.mockResolvedValue({ id: "notification-1" } as never);
+  m.notification.findUnique.mockResolvedValue({ id: "notification-1" } as never);
+  m.notificationDelivery.upsert.mockResolvedValue({ id: "delivery-1" } as never);
 });
 
 describe("paymentAnomalyService.scan — R40 administrative incident alerts", () => {
@@ -57,7 +65,7 @@ describe("paymentAnomalyService.scan — R40 administrative incident alerts", ()
 
     expect(m.paymentAnomaly.upsert).toHaveBeenCalled();
     expect(m.user.findMany).not.toHaveBeenCalled();
-    expect(notificationsService.enqueue).not.toHaveBeenCalled();
+    expect(notificationsService.create).not.toHaveBeenCalled();
     vi.unstubAllEnvs();
   });
 
@@ -70,28 +78,32 @@ describe("paymentAnomalyService.scan — R40 administrative incident alerts", ()
       { stripePaymentIntentId: "pi_critical" }, { stripePaymentIntentId: "pi_critical" },
     ] as never);
     m.user.findMany.mockResolvedValue([{ id: "admin-1" }] as never);
+    m.paymentAnomaly.findMany.mockResolvedValue([{
+      id: "incident-1", dedupeKey: "DUPLICATE_PROVIDER_REF:SubscriptionPaymentAttempt:pi_critical",
+      kind: "DUPLICATE_PROVIDER_REF", severity: "CRITICAL", status: "OPEN",
+      businessRefType: "SubscriptionPaymentAttempt", businessRefId: "pi_critical",
+    }] as never);
 
     await paymentAnomalyService.scan();
-    await paymentAnomalyService.scan();
 
-    expect(m.user.findMany).toHaveBeenCalledWith({ where: { role: "ADMIN" }, select: { id: true } });
-    expect(notificationsService.enqueue).toHaveBeenCalledTimes(2);
-    expect(notificationsService.enqueue).toHaveBeenNthCalledWith(1, expect.objectContaining({
+    expect(m.user.findMany).toHaveBeenCalledWith({ where: { role: "ADMIN", isSuspended: false }, select: { id: true } });
+    expect(notificationsService.create).toHaveBeenCalledTimes(1);
+    expect(notificationsService.create).toHaveBeenCalledWith(expect.objectContaining({
       userId: "admin-1",
       type: "ADMIN_BROADCAST",
-      data: expect.objectContaining({ event: "critical_payment_anomaly", destination: "admin_case" }),
-      dedupeKey: "R40_PAYMENT_ANOMALY:admin-1:DUPLICATE_PROVIDER_REF:SubscriptionPaymentAttempt:pi_critical",
-    }));
-    expect(notificationsService.enqueue).toHaveBeenNthCalledWith(2, expect.objectContaining({
-      dedupeKey: "R40_PAYMENT_ANOMALY:admin-1:DUPLICATE_PROVIDER_REF:SubscriptionPaymentAttempt:pi_critical",
-    }));
+      title: "A critical Eki process needs attention",
+      body: "Open the incident and review the failed job.",
+      data: expect.objectContaining({ event: "critical_incident", destination: "admin_case", severity: "CRITICAL" }),
+      dedupeKey: "R40_CRITICAL_INCIDENT:admin-1:DUPLICATE_PROVIDER_REF:SubscriptionPaymentAttempt:pi_critical",
+    }), expect.anything());
+    expect(m.notificationDelivery.upsert).toHaveBeenCalledWith(expect.objectContaining({ create: expect.objectContaining({ channel: "push" }) }));
     vi.unstubAllEnvs();
   });
 
   it("does not query or notify admins when a scan finds no verified anomaly", async () => {
     await paymentAnomalyService.scan();
     expect(m.user.findMany).not.toHaveBeenCalled();
-    expect(notificationsService.enqueue).not.toHaveBeenCalled();
+    expect(notificationsService.create).not.toHaveBeenCalled();
   });
 });
 
@@ -226,5 +238,17 @@ describe("paymentAnomalyService.markReviewed / escalate", () => {
     );
     // No other model was ever touched by this call.
     expect(m.payment.findMany).not.toHaveBeenCalled();
+  });
+
+  it("resolves an incident with an attributable admin and stops future sends", async () => {
+    m.paymentAnomaly.findUnique.mockResolvedValue({ id: "anom-3" } as never);
+    m.paymentAnomaly.update.mockResolvedValue({ id: "anom-3", status: "RESOLVED" } as never);
+
+    await paymentAnomalyService.resolve("anom-3", "admin-1", "reconciled and fixed");
+
+    expect(m.paymentAnomaly.update).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: "anom-3" },
+      data: expect.objectContaining({ status: "RESOLVED", reviewedById: "admin-1", resolvedAt: expect.any(Date), note: "reconciled and fixed" }),
+    }));
   });
 });
