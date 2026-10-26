@@ -58,7 +58,7 @@ export async function handleOrderConfirmed(tx: Prisma.TransactionClient, event: 
   if (!rule?.enabled) return;
   const orderId = requiredId(event.payload, "orderId");
   const order = await tx.order.findUnique({ where: { id: orderId }, select: { id: true, orderNumber: true, buyerId: true, status: true } });
-  if (!order || order.status !== "PAID") return;
+  if (!order || order.status !== "CONFIRMED") return;
   const recipient = await tx.user.findUnique({ where: { id: order.buyerId }, select: { id: true, role: true, isSuspended: true } });
   if (!recipient || recipient.role !== "BUYER" || recipient.isSuspended) return;
 
@@ -576,7 +576,7 @@ let registered = false;
 export function registerCoreEventHandlers(): void {
   if (registered) return;
   eventOutboxService.registerHandler(EVENT_NAMES.payment_succeeded, handleFirstPaidOrder);
-  eventOutboxService.registerHandler(EVENT_NAMES.order_confirmed, handleOrderConfirmed);
+  eventOutboxService.registerHandler(EVENT_NAMES.order_accepted, handleOrderConfirmed);
   eventOutboxService.registerHandler(EVENT_NAMES.support_response_received, handleSupportResponseReceived);
   eventOutboxService.registerHandler(EVENT_NAMES.product_stock_depleted, handleProductStockDepleted);
   eventOutboxService.registerHandler(EVENT_NAMES.product_inventory_conflict_detected, handleProductInventoryConflictDetected);

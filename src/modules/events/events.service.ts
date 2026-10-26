@@ -39,7 +39,6 @@ export const EVENT_NAMES = {
   payment_failed: "payment_failed",
   // Order
   order_created: "order_created",
-  order_confirmed: "order_confirmed",
   order_accepted: "order_accepted",
   order_dispatched: "order_dispatched",
   order_delivered: "order_delivered",

@@ -120,16 +120,16 @@ describe("event to notification pipeline integration", () => {
     registerCoreEventHandlers();
   });
 
-  it("routes a transactional order-confirmed event to the buyer with the v2 copy", async () => {
+  it("routes a transactional vendor-acceptance event to the buyer with the R21 v2 copy", async () => {
     vi.stubEnv("R21_ORDER_CONFIRMED_ENABLED", "true");
-    txMock.order.findUnique.mockResolvedValue({ id: "order-21", orderNumber: "EKI-21", buyerId: "buyer-21", status: "PAID" });
-    prismaMock.order.findUnique.mockResolvedValue({ buyerId: "buyer-21", status: "PAID" });
+    txMock.order.findUnique.mockResolvedValue({ id: "order-21", orderNumber: "EKI-21", buyerId: "buyer-21", status: "CONFIRMED" });
+    prismaMock.order.findUnique.mockResolvedValue({ buyerId: "buyer-21", status: "CONFIRMED" });
     txMock.user.findUnique.mockResolvedValue({ id: "buyer-21", role: "BUYER", isSuspended: false });
     prismaMock.user.findUnique.mockResolvedValue({ id: "buyer-21", role: "BUYER", isSuspended: false });
 
     const event = await prismaMock.$transaction((tx: typeof txMock) => eventOutboxService.enqueue(tx, {
-      name: EVENT_NAMES.order_confirmed, actorType: "stripe", entityType: "Order", entityId: "order-21",
-      payload: { orderId: "order-21", stripeEventId: "evt-21" },
+      name: EVENT_NAMES.order_accepted, actorType: "vendor", entityType: "Order", entityId: "order-21",
+      payload: { orderId: "order-21", fromStatus: "PAID" },
     }, { dedupeKey: "order-confirmed:evt-21:order-21", schemaVersion: 1 }));
     const outbox = await eventOutboxService.dispatchRegisteredBatch(10, new Date("2026-10-27T12:00:00Z"));
     expect(outbox).toMatchObject({ claimed: 1, delivered: 1 });

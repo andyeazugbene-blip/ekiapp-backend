@@ -29,7 +29,7 @@ export const NOTIFICATION_EVENT_RULES: readonly NotificationRuleDefinition[] = [
     enabled: () => process.env.R12_FIRST_PAID_ORDER_ENABLED === "true",
   },
   {
-    eventName: EVENT_NAMES.order_confirmed,
+    eventName: EVENT_NAMES.order_accepted,
     key: "R21_ORDER_CONFIRMED",
     version: 1,
     enabled: () => process.env.R21_ORDER_CONFIRMED_ENABLED === "true",

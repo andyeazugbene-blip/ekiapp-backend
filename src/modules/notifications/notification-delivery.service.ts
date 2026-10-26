@@ -96,13 +96,13 @@ async function buyerOrderConfirmationStillEligible(delivery: NotificationDeliver
   const data = delivery.notification.data;
   if (!isRecord(data) || typeof data.orderId !== "string" || delivery.notification.readAt
     || process.env.R21_ORDER_CONFIRMED_ENABLED !== "true") return false;
-  const rule = resolveNotificationRule({ name: EVENT_NAMES.order_confirmed, schemaVersion: Number(data.ruleVersion) });
+  const rule = resolveNotificationRule({ name: EVENT_NAMES.order_accepted, schemaVersion: Number(data.ruleVersion) });
   if (!rule?.enabled || rule.key !== "R21_ORDER_CONFIRMED") return false;
   const [order, recipient] = await Promise.all([
     prisma.order.findUnique({ where: { id: data.orderId }, select: { buyerId: true, status: true } }),
     prisma.user.findUnique({ where: { id: delivery.notification.userId }, select: { id: true, role: true, isSuspended: true } }),
   ]);
-  return Boolean(order?.status === "PAID" && order.buyerId === delivery.notification.userId
+  return Boolean(order?.status === "CONFIRMED" && order.buyerId === delivery.notification.userId
     && recipient?.id === delivery.notification.userId && recipient.role === "BUYER" && !recipient.isSuspended);
 }
 

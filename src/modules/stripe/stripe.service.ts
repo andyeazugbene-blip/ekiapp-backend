@@ -323,17 +323,6 @@ class StripeWebhookService {
             source: "stripe_webhook", secondaryEntities: { buyerId, vendorId: order.vendorId ?? order.items[0]?.vendorId ?? null },
             payload: { orderId: order.id, stripeEventId: event.id },
           }, { dedupeKey: `payment-succeeded:${event.id}:${order.id}`, schemaVersion: 1 });
-          await eventsService.enqueueTransactional(tx, {
-            name: EVENT_NAMES.order_confirmed, actorType: "stripe", entityType: "Order", entityId: order.id,
-            source: "stripe_webhook", secondaryEntities: { buyerId, vendorId: order.vendorId ?? order.items[0]?.vendorId ?? null },
-            payload: { orderId: order.id, stripeEventId: event.id },
-          }, { dedupeKey: `order-confirmed:${event.id}:${order.id}`, schemaVersion: 1 });
-          await eventsService.enqueueTransactional(tx, {
-            name: EVENT_NAMES.order_confirmed, actorType: "stripe", entityType: "Order", entityId: order.id,
-            source: "stripe_webhook", secondaryEntities: { buyerId, vendorId: order.vendorId ?? order.items[0]?.vendorId ?? null },
-            payload: { orderId: order.id, stripeEventId: event.id },
-          }, { dedupeKey: `order-confirmed:${event.id}:${order.id}`, schemaVersion: 1 });
-
           const vendorId = order.vendorId ?? order.items[0]?.vendorId;
           if (vendorId && order.payment.vendorEarningsAmount > 0) {
             let w = await tx.wallet.findUnique({ where: { vendorId } });
@@ -828,7 +817,7 @@ class StripeWebhookService {
           ? `${copy.body} You have ${graceDays} day${graceDays === 1 ? "" : "s"} to update it before your store's selling capabilities are paused. Your store and data are never deleted.`
           : copy.body;
         if (process.env.R29_MEMBERSHIP_PAYMENT_FAILED_ENABLED !== "true") {
-    if (process.env.R21_ORDER_CONFIRMED_ENABLED !== "true") notificationsService.enqueue({
+    notificationsService.enqueue({
             userId: vendor.userId,
             type: "SUBSCRIPTION_UPDATE",
             title: copy.title,
