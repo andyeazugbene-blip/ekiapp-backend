@@ -18,9 +18,11 @@ const { prismaMock, txMock, sendPushToUser } = vi.hoisted(() => {
       }),
     },
     user: { findUnique: vi.fn() },
+    vendor: { findUnique: vi.fn() },
     communityCampaign: { findUnique: vi.fn() },
     campaignContribution: { findMany: vi.fn() },
     payoutRequest: { findUnique: vi.fn() },
+    vendorSubscription: { findUnique: vi.fn() },
     notification: {
       create: vi.fn(async ({ data }: any) => {
         notificationRow = { id: "notification-1", readAt: null, ...data };
@@ -50,9 +52,11 @@ const { prismaMock, txMock, sendPushToUser } = vi.hoisted(() => {
     },
     message: txMock.message,
     user: { findUnique: vi.fn() },
+    vendor: { findUnique: vi.fn() },
     communityCampaign: { findUnique: vi.fn() },
     campaignContribution: { findMany: vi.fn() },
     payoutRequest: { findUnique: vi.fn() },
+    vendorSubscription: { findUnique: vi.fn() },
     product: { findUnique: vi.fn() },
     communicationLog: { update: vi.fn().mockResolvedValue({}) },
     $transaction: vi.fn(async (fn: (tx: typeof txMock) => Promise<unknown>) => fn(txMock)),
@@ -75,6 +79,7 @@ describe("event to notification pipeline integration", () => {
     vi.stubEnv("R28_GENERAL_SUPPORT_NOTIFICATIONS_ENABLED", "true");
     vi.stubEnv("R34_COMMUNITY_BUY_BELOW_MINIMUM_ENABLED", "true");
     vi.stubEnv("R26_PAYOUT_CONFIRMED_ENABLED", "true");
+    vi.stubEnv("R29_MEMBERSHIP_PAYMENT_FAILED_ENABLED", "false");
     vi.stubEnv("R37_SUPPLIER_RECONFIRMATION_ENABLED", "false");
     sendPushToUser.mockResolvedValue({ tokens: 1, accepted: 1, rejected: 0, ticketIds: ["expo-ticket-1"] });
     txMock.user.findUnique.mockImplementation(async ({ where }: any) => ({
@@ -251,5 +256,91 @@ describe("event to notification pipeline integration", () => {
     expect(prismaMock.notificationDelivery.updateMany).toHaveBeenLastCalledWith(expect.objectContaining({
       where: { id: "delivery-1", status: "SENT" }, data: expect.objectContaining({ status: "DELIVERED" }),
     }));
+  });
+
+  it("routes a Stripe Membership failure through the outbox and durable push delivery", async () => {
+    vi.stubEnv("R29_MEMBERSHIP_PAYMENT_FAILED_ENABLED", "true");
+    txMock.vendorSubscription.findUnique.mockResolvedValue({ id: "vendor-sub-1", vendorId: "vendor-1", status: "PAST_DUE" });
+    prismaMock.vendorSubscription.findUnique.mockResolvedValue({ status: "PAST_DUE", vendorId: "vendor-1" });
+    txMock.vendor.findUnique.mockResolvedValue({ userId: "vendor-1" });
+    prismaMock.vendor.findUnique.mockResolvedValue({ userId: "vendor-1" });
+    txMock.user.findUnique.mockResolvedValue({ id: "vendor-1", role: "VENDOR", isSuspended: false });
+    prismaMock.user.findUnique.mockResolvedValue({ id: "vendor-1", role: "VENDOR", isSuspended: false });
+
+    const event = await prismaMock.$transaction((tx: typeof txMock) => eventOutboxService.enqueue(tx, {
+      name: EVENT_NAMES.vendor_membership_payment_failed,
+      actorType: "stripe", actorId: "evt-invoice-failed-1", entityType: "VendorSubscription", entityId: "vendor-sub-1",
+      payload: { subscriptionId: "vendor-sub-1", vendorId: "vendor-1", stripeEventId: "evt-invoice-failed-1", invoiceId: "in-1" },
+    }, { dedupeKey: "vendor-membership-payment-failed:evt-invoice-failed-1", schemaVersion: 1 }));
+
+    const outboxResult = await eventOutboxService.dispatchRegisteredBatch(10, new Date("2026-10-26T12:00:00Z"));
+    expect(outboxResult).toMatchObject({ claimed: 1, delivered: 1 });
+    expect(txMock.notification.create).toHaveBeenCalledWith({ data: expect.objectContaining({
+      userId: "vendor-1", title: "Your Eki Membership payment needs attention", body: "Update your billing details.",
+      data: expect.objectContaining({ ruleKey: "R29_MEMBERSHIP_PAYMENT_FAILED", eventId: event.id, destination: "membership", invoiceId: "in-1" }),
+    }) });
+
+    const deliveryResult = await notificationDeliveryService.dispatchBatch(10, new Date("2026-10-26T12:00:00Z"));
+    expect(deliveryResult).toMatchObject({ claimed: 1, sent: 1 });
+    expect(sendPushToUser).toHaveBeenCalledWith("vendor-1", expect.objectContaining({
+      title: "Your Eki Membership payment needs attention",
+      data: expect.objectContaining({ destination: "membership", vendorSubscriptionId: "vendor-sub-1" }),
+    }), { logId: "log-1" });
+  });
+
+  it("routes a real supplier reconfirmation request through the outbox, candidate and durable push delivery", async () => {
+    vi.stubEnv("R37_SUPPLIER_RECONFIRMATION_ENABLED", "true");
+    const requestedAt = new Date("2026-10-26T11:00:00Z");
+    const deadline = new Date("2026-10-26T23:00:00Z");
+    const campaign = {
+      id: "campaign-1", title: "Rice", status: "AWAITING_SUPPLIER_RECONFIRMATION",
+      reconfirmationDeadline: deadline, reconfirmationRequestedAt: requestedAt, reconfirmationQuantity: 4,
+      supplierAccount: { userId: "supplier-1" }, supplier: null,
+    };
+    txMock.communityCampaign.findUnique.mockResolvedValue(campaign);
+    prismaMock.communityCampaign.findUnique.mockResolvedValue(campaign);
+
+    const event = await prismaMock.$transaction((tx: typeof txMock) => eventOutboxService.enqueue(tx, {
+      name: EVENT_NAMES.community_buy_supplier_reconfirmation_requested,
+      actorType: "user", actorId: "organiser-1", entityType: "CommunityCampaign", entityId: "campaign-1",
+      payload: { campaignId: "campaign-1", quantity: 4, requestedAt: requestedAt.toISOString(), deadline: deadline.toISOString() },
+    }, { dedupeKey: "community-buy-supplier-reconfirmation:campaign-1:2026-10-26T11:00:00.000Z", schemaVersion: 1 }));
+
+    const outboxResult = await eventOutboxService.dispatchRegisteredBatch(10, new Date("2026-10-26T12:00:00Z"));
+    expect(outboxResult).toMatchObject({ claimed: 1, delivered: 1 });
+    expect(txMock.notification.create).toHaveBeenCalledWith({ data: expect.objectContaining({
+      userId: "supplier-1", title: "Please confirm your Community Buy supply",
+      body: "Review quantity and fulfilment terms.",
+      dedupeKey: "R37_SUPPLIER_RECONFIRMATION:campaign-1:2026-10-26T11:00:00.000Z",
+      data: expect.objectContaining({ ruleKey: "R37_SUPPLIER_RECONFIRMATION", ruleVersion: 1, eventId: event.id, destination: "community_buy_campaign", audience: "supplier" }),
+    }) });
+
+    const deliveryResult = await notificationDeliveryService.dispatchBatch(10, new Date("2026-10-26T12:00:00Z"));
+    expect(deliveryResult).toMatchObject({ claimed: 1, sent: 1 });
+    expect(sendPushToUser).toHaveBeenCalledWith("supplier-1", expect.objectContaining({
+      title: "Please confirm your Community Buy supply",
+      data: expect.objectContaining({ destination: "community_buy_campaign", audience: "supplier", campaignId: "campaign-1", quantity: 4 }),
+    }), { logId: "log-1" });
+  });
+
+  it("cancels an R29 delivery if payment is resolved before the send-time check", async () => {
+    vi.stubEnv("R29_MEMBERSHIP_PAYMENT_FAILED_ENABLED", "true");
+    txMock.vendorSubscription.findUnique.mockResolvedValue({ id: "vendor-sub-1", vendorId: "vendor-1", status: "PAST_DUE" });
+    txMock.vendor.findUnique.mockResolvedValue({ userId: "vendor-1" });
+    txMock.user.findUnique.mockResolvedValue({ id: "vendor-1", role: "VENDOR", isSuspended: false });
+    const event = await prismaMock.$transaction((tx: typeof txMock) => eventOutboxService.enqueue(tx, {
+      name: EVENT_NAMES.vendor_membership_payment_failed,
+      actorType: "stripe", actorId: "evt-invoice-failed-2", entityType: "VendorSubscription", entityId: "vendor-sub-1",
+      payload: { subscriptionId: "vendor-sub-1", vendorId: "vendor-1", stripeEventId: "evt-invoice-failed-2", invoiceId: "in-2" },
+    }, { dedupeKey: "vendor-membership-payment-failed:evt-invoice-failed-2", schemaVersion: 1 }));
+    await eventOutboxService.dispatchRegisteredBatch(10, new Date("2026-10-26T12:00:00Z"));
+    expect(txMock.notification.create).toHaveBeenCalledWith({ data: expect.objectContaining({
+      data: expect.objectContaining({ eventId: event.id, ruleKey: "R29_MEMBERSHIP_PAYMENT_FAILED" }),
+    }) });
+
+    prismaMock.vendorSubscription.findUnique.mockResolvedValue({ status: "ACTIVE", vendorId: "vendor-1" });
+    const result = await notificationDeliveryService.dispatchBatch(10, new Date("2026-10-26T12:00:00Z"));
+    expect(result).toMatchObject({ claimed: 1, cancelled: 1 });
+    expect(sendPushToUser).not.toHaveBeenCalled();
   });
 });

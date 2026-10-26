@@ -46,6 +46,7 @@ import { notificationsService } from "../modules/notifications/notifications.ser
 const m = vi.mocked(prisma, true) as any;
 const constructEvent = stripe.webhooks.constructEvent as unknown as ReturnType<typeof vi.fn>;
 const enqueue = notificationsService.enqueue as unknown as ReturnType<typeof vi.fn>;
+const transactionalEventUpsert = vi.fn().mockResolvedValue({ id: "event-r29" });
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -62,6 +63,8 @@ function mockClaimSucceeds() {
         create: vi.fn().mockResolvedValue({}),
         update: vi.fn().mockResolvedValue({}),
       },
+      vendorSubscription: { update: m.vendorSubscription.update },
+      event: { upsert: transactionalEventUpsert },
     }),
   );
 }
@@ -84,7 +87,7 @@ describe("invoice.payment_failed — vendor subscription", () => {
     constructEvent.mockReturnValue({
       id: "evt_inv_failed_1",
       type: "invoice.payment_failed",
-      data: { object: { parent: { subscription_details: { subscription: "sub_1" } } } },
+      data: { object: { id: "in_1", parent: { subscription_details: { subscription: "sub_1" } } } },
     });
     m.vendorSubscription.findUnique.mockResolvedValue({ id: "vs-1", vendorId: "vendor-1" });
     m.vendor.findUnique.mockResolvedValue({ userId: "user-1" });
@@ -94,6 +97,13 @@ describe("invoice.payment_failed — vendor subscription", () => {
     expect(result.received).toBe(true);
     expect(result.duplicate).toBeUndefined();
     expect(m.vendorSubscription.update).toHaveBeenCalledWith({ where: { id: "vs-1" }, data: { status: "PAST_DUE" } });
+    expect(transactionalEventUpsert).toHaveBeenCalledWith(expect.objectContaining({
+      where: { dedupeKey: "vendor-membership-payment-failed:evt_inv_failed_1" },
+      create: expect.objectContaining({
+        name: "vendor_membership_payment_failed", schemaVersion: 1,
+        payload: { subscriptionId: "vs-1", vendorId: "vendor-1", stripeEventId: "evt_inv_failed_1", invoiceId: "in_1" },
+      }),
+    }));
     expect(enqueue).toHaveBeenCalledWith(
       expect.objectContaining({ userId: "user-1", type: "SUBSCRIPTION_UPDATE" }),
     );
