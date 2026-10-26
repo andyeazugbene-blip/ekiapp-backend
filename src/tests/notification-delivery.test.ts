@@ -30,12 +30,13 @@ const delivery = {
   notification: {
     id: "notification-1", userId: "buyer-1", title: "Eki Support has replied",
     body: "Open your case to read the update.", readAt: null,
-    data: { type: "support_case_response", destination: "support_case", conversationId: "conversation-1", messageId: "message-1" },
+    data: { type: "support_case_response", ruleKey: "R28_SUPPORT_RESPONSE", ruleVersion: 1, destination: "support_case", conversationId: "conversation-1", messageId: "message-1" },
   },
 };
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.stubEnv("R28_GENERAL_SUPPORT_NOTIFICATIONS_ENABLED", "true");
   prismaMock.notificationDelivery.updateMany.mockResolvedValue({ count: 1 });
   prismaMock.notificationDelivery.findMany.mockResolvedValue([delivery]);
   prismaMock.message.findUnique.mockResolvedValue({
@@ -91,7 +92,7 @@ describe("notification push delivery", () => {
       ...delivery,
       notification: {
         ...delivery.notification, userId: "vendor-1", title: "Rice is out of stock", body: "Restock it when available.",
-        data: { type: "product_stock_depleted", productId: "product-1", stockVersion: 4, destination: "inventory_detail" },
+        data: { type: "product_stock_depleted", ruleKey: "R17_STOCK_DEPLETED", ruleVersion: 1, productId: "product-1", stockVersion: 4, destination: "inventory_detail" },
       },
     }]);
     sendPushToUser.mockResolvedValue({ tokens: 1, accepted: 1, rejected: 0, ticketIds: ["ticket-1"] });
@@ -109,7 +110,7 @@ describe("notification push delivery", () => {
     });
     prismaMock.notificationDelivery.findMany.mockResolvedValue([{
       ...delivery,
-      notification: { ...delivery.notification, userId: "vendor-1", data: { type: "product_stock_depleted", productId: "product-1", stockVersion: 4 } },
+      notification: { ...delivery.notification, userId: "vendor-1", data: { type: "product_stock_depleted", ruleKey: "R17_STOCK_DEPLETED", ruleVersion: 1, productId: "product-1", stockVersion: 4 } },
     }]);
     const result = await notificationDeliveryService.dispatchBatch(10, now);
     expect(result).toMatchObject({ claimed: 1, cancelled: 1 });

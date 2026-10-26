@@ -4,6 +4,7 @@ import { AppError } from "../../shared/errors/app-error";
 import { notificationsService } from "../notifications/notifications.service";
 import { eventOutboxService } from "./event-outbox.service";
 import { EVENT_NAMES } from "./events.service";
+import { resolveNotificationRule } from "./notification-event-rules";
 
 function requiredId(payload: unknown, field: string): string {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) throw new AppError("Invalid support response event payload", 400);
@@ -18,6 +19,8 @@ function requiredId(payload: unknown, field: string): string {
  * commit together; external push remains a post-commit delivery concern.
  */
 export async function handleSupportResponseReceived(tx: Prisma.TransactionClient, event: Event): Promise<void> {
+  const rule = resolveNotificationRule(event);
+  if (!rule?.enabled) return;
   const conversationId = requiredId(event.payload, "conversationId");
   const messageId = requiredId(event.payload, "messageId");
   const message = await tx.message.findUnique({
@@ -48,6 +51,9 @@ export async function handleSupportResponseReceived(tx: Prisma.TransactionClient
     body: "Open your case to read the update.",
     data: {
       type: "support_case_response",
+      ruleKey: rule.key,
+      ruleVersion: rule.version,
+      eventId: event.id,
       templateVersion: 1,
       destination: "support_case",
       conversationId,
@@ -67,7 +73,8 @@ export async function handleSupportResponseReceived(tx: Prisma.TransactionClient
 
 /** R17 rule handler: exact vendor alert for an active listing that truly reached zero. */
 export async function handleProductStockDepleted(tx: Prisma.TransactionClient, event: Event): Promise<void> {
-  if (process.env.R17_STOCK_DEPLETED_ENABLED !== "true") return;
+  const rule = resolveNotificationRule(event);
+  if (!rule?.enabled) return;
   const productId = requiredId(event.payload, "productId");
   const stockVersion = event.payload && typeof event.payload === "object" && !Array.isArray(event.payload)
     ? (event.payload as Record<string, unknown>).stockVersion
@@ -94,6 +101,9 @@ export async function handleProductStockDepleted(tx: Prisma.TransactionClient, e
     body: "Restock it when available.",
     data: {
       type: "product_stock_depleted",
+      ruleKey: rule.key,
+      ruleVersion: rule.version,
+      eventId: event.id,
       templateVersion: 1,
       destination: "inventory_detail",
       productId: product.id,
