@@ -87,8 +87,14 @@ export async function requireDisputeParty(
 
 function notify(userId: string | null | undefined, title: string, body: string, disputeId: string, orderId: string, event: string): Promise<unknown> {
   if (!userId) return Promise.resolve();
+  const data = {
+    orderId,
+    disputeId,
+    event,
+    ...(event === "dispute_evidence_requested" ? { destination: "support_case" } : {}),
+  };
   return notificationsService
-    .enqueue({ userId, type: "ORDER_PAID" as never, title, body, data: { orderId, disputeId, event } as never })
+    .enqueue({ userId, type: "ORDER_PAID" as never, title, body, data: data as never })
     .catch(() => undefined);
 }
 

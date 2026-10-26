@@ -199,7 +199,10 @@ describe("admin actions", () => {
     const r = await disputeV2Service.adminRequestEvidence("admin", "d1", { from: "VENDOR", reason: "Please send the dispatch photo", dueInDays: 2 });
     expect(r.after.evidenceRequestedFrom).toBe("VENDOR");
     expect(enqueue).toHaveBeenCalledTimes(1);
-    expect(enqueue).toHaveBeenCalledWith(expect.objectContaining({ userId: VENDOR_USER }));
+    expect(enqueue).toHaveBeenCalledWith(expect.objectContaining({
+      userId: VENDOR_USER,
+      data: expect.objectContaining({ event: "dispute_evidence_requested", disputeId: "d1", destination: "support_case" }),
+    }));
   });
 });
 
