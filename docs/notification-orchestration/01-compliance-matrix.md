@@ -83,8 +83,8 @@ Status values follow the spec's own progression: **Proposed → Backend mapped �
 
 - **Implemented, focused backend QA passed (spec-shaped):** 11 of 40 — R01, R03, R05, R06, R11, R16, R30–R33, R38
 - **Implemented on backend and mobile source; runtime/device QA or verified timing outstanding:** 5 of 40 — R10, R18, R19, R28, R35
-- **Implemented (legacy, not re-platformed):** 7 of 40 — R07–R09, R13, R15, R20, R26
-- **Implemented on backend but gated pending route/runtime/approval:** 8 of 40 — R12, R21–R22, R25, R29, R34, R37, R40
+- **Implemented (legacy, not re-platformed):** 6 of 40 — R07–R09, R13, R15, R20
+- **Implemented on backend but gated pending route/runtime/approval:** 9 of 40 — R12, R21–R22, R25–R26, R29, R34, R37, R40
 - **Partial or scoped:** 5 of 40 — R04, R17, R23, R27, R36
 - **Blocked on source semantics or an approved business mechanism:** 4 of 40 — R02, R14, R24, R39
 
