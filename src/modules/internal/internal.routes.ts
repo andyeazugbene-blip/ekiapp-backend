@@ -25,6 +25,7 @@ import { supportRetentionService } from "../messages/support-retention.service";
 import { orderAcceptanceNotificationsService } from "../orders/order-acceptance-notifications.service";
 import { capturePendingReviewService } from "../community-buy/capture-pending-review.service";
 import { membershipGraceService } from "../subscriptions/membership-grace.service";
+import { eventOutboxService } from "../events/event-outbox.service";
 
 export const internalRouter = Router();
 
@@ -90,6 +91,12 @@ async function runScheduledCommunications() {
 // Deliveries or Community Buy data (those are wired in with those modules).
 async function runAutomationSweep() {
   return automationDetectors.runSweep();
+}
+
+// Durable event consumers are registered by name in the event module. The
+// outbox remains idle for event names without an explicitly reviewed handler.
+async function runEventOutboxSweep() {
+  return eventOutboxService.dispatchRegisteredBatch(100);
 }
 
 // Regular Deliveries: generates renewals due today, then attempts payment
@@ -419,6 +426,7 @@ function makeJobHandler(name: string, run: () => Promise<Record<string, unknown>
 
 const jobs: [string, string, () => Promise<Record<string, unknown>>][] = [
   ["verification-proof-cleanup", "verification proof cleanup", runVerificationProofCleanup],
+  ["event-outbox", "transactional event outbox", runEventOutboxSweep],
   ["run-scheduled-communications", "scheduled communications run", runScheduledCommunications],
   ["automation-sweep", "automation sweep", runAutomationSweep],
   ["renewals-sweep", "renewals sweep", runRenewalsSweep],

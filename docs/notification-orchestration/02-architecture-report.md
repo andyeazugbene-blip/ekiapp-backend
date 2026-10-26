@@ -15,9 +15,9 @@ Domain transaction + outbox → event publisher → versioned validator → cand
 
 | Pipeline stage | Spec contract | Current equivalent | Status |
 |---|---|---|---|
-| Transactional outbox | `DomainEvent` | `Event` table — [events.service.ts](../../src/modules/events/events.service.ts) `emit()` writes it already | **Exists, unconsumed.** Nothing drains this table. This is the real seed for Phase 1, not new infrastructure. |
-| Event publisher/consumer | reliable, at-least-once | None — no queue, no worker process | **Not started.** Vercel serverless has no long-running consumer; see scheduler report for the real constraint. |
-| Versioned event validation | `version` field, migration on meaning change | None | **Not started.** |
+| Transactional outbox | `DomainEvent` | Existing `Event` table — [event-outbox.service.ts](../../src/modules/events/event-outbox.service.ts) adds schema version, unique dedupe key, delivery state, attempts, lease, and error fields. `eventsService.enqueueTransactional(tx, input, {dedupeKey})` writes through the caller's business transaction. | **Foundation implemented; producers still need reviewed per-event mappings.** Existing `emit()` callers remain log-only and were not silently changed. |
+| Event publisher/consumer | reliable, at-least-once | `eventOutboxService.dispatchBatch()` claims by compare-and-swap, recovers stale leases, runs DB-only consumers and commits consumer writes with DELIVERED state, retries exponentially, and dead-letters after 8 failures. `/api/internal/jobs/event-outbox` invokes registered consumers through the existing authenticated daily sweep. | **Consumer foundation implemented; no notification handlers are registered yet.** Events without a reviewed handler stay pending and are reported as unhandled. No unsupported event→rule mapping was invented. |
+| Versioned event validation | `version` field, migration on meaning change | Outbox ingress/dispatch validate schema version 1, canonical event names from `EVENT_NAMES`, object payload shape, and valid occurrence dates. Unknown names/versions are rejected; malformed persisted records are dead-lettered. | **Envelope validation implemented; event-specific schemas remain to be mapped from the missing authoritative source.** |
 | Notification candidate | `NotificationCandidate` (due_at, expires_at, state, task_episode_key) | `AutomationRun` (no `task_episode_key`, no `expires_at`) | **Partial.** `AutomationRun` already has most of the shape (id, type≈rule_id, recipientUserId, status, dedupeKey≈idempotency); missing `task_episode_key` and `expires_at`. |
 | Recipient/role resolution | explicit | Implicit in each detector's query | **Implemented, not centralized.** Works; not a shared service. |
 | Eligibility/consent | `Preference` (per-channel, per-category consent, timezone) | `User.marketingConsentAt` (one boolean-ish timestamp, no per-channel granularity), country-based quiet-hours heuristic (no real timezone) | **Partial, real gap.** No per-channel consent, no real per-user timezone. |
@@ -30,12 +30,12 @@ Domain transaction + outbox → event publisher → versioned validator → cand
 | Click/completion attribution | `Outcome` table | None | **Not started.** |
 | Audit history | full | `AutomationRun` + `AuditLog` + `CommunicationLog` | **Implemented, fragmented across 3 tables rather than one `Outcome`/audit model.** |
 
-## Why this is not done in one pass
+## Remaining architecture work
 
-Per the ADR: Vercel serverless has no persistent consumer process, so "event-driven" here must mean **poll-and-drain on the existing cron for P2/P3, synchronous direct calls for P0/P1** (already how most P0/P1 events work today) — not a literal message bus. Building `task_episode_key` cross-channel suppression is specified but **unimplementable until a WhatsApp provider is chosen** — the field can exist, it has nothing to coordinate against yet.
+The current deployment is Vercel serverless, so the outbox is drained by an authenticated poll on the existing cron rather than a persistent process. The new schema migration is additive and has not been applied to production. Domain producers must be moved into `enqueueTransactional` only where an existing real transaction and approved event contract are confirmed. The candidate lifecycle can reuse `AutomationRun`; per-channel `NotificationDelivery`, cross-channel task-episode coordination, and notification handlers still need implementation. WhatsApp provider receipt and cooldown behavior remain blocked until a provider is selected.
 
 ## What this pass actually did toward the target
 
-1. Confirmed the `Event`/outbox seed already exists and is the right Phase-0 foundation (no new table needed to start).
-2. Implemented the spec's **P2 cadence model** (4h/24h/72h, max 3 sends, attempt-every-due-threshold idempotency) for the 5 vendor-onboarding rules — this is the first real instance of spec-shaped timing logic in the codebase, reusable for the next rules.
-3. Did **not** add `task_episode_key`, `Preference`, or `Outcome` tables this pass — adding them without a consumer or a WhatsApp integration to use them would be schema for its own sake, not a safe increment. They're the next concrete step once a WhatsApp decision is made.
+1. Extended the existing `Event` table with an opt-in transactional outbox lifecycle while preserving all prior append-only event writes as `LOG_ONLY`.
+2. Added an idempotent transactional enqueue API, v1 envelope validation, compare-and-swap claims, stale-lease recovery, exponential retry, dead-letter status, an authenticated internal sweep route, and tests for duplicate-safe enqueue, claim/consume, retry, and dead-letter behavior.
+3. Did not add a parallel `NotificationCandidate` table: `AutomationRun` is the current candidate record and should be evolved. No domain producer or handler has been mapped to notification rules yet because the authoritative v2 event contract is still missing.

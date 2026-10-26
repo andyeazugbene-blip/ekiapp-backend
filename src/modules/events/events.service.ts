@@ -155,6 +155,20 @@ function logEmitFailure(name: string, error: unknown): void {
 
 export const eventsService = {
   /**
+   * Transactional outbox path for domain changes that have a reviewed
+   * consumer. Call inside the same Prisma transaction as the business write.
+   * Existing `emit()` callers remain append-only until migrated deliberately.
+   */
+  async enqueueTransactional(
+    tx: Prisma.TransactionClient,
+    input: EmitEventInput,
+    options: { dedupeKey: string; schemaVersion?: number },
+  ) {
+    const { eventOutboxService } = await import("./event-outbox.service.js");
+    return eventOutboxService.enqueue(tx, input, options);
+  },
+
+  /**
    * Fire-and-forget. Returns void synchronously; the DB write is not awaited by
    * the caller and any failure (including a synchronous throw) is swallowed and
    * logged. Never put this on the critical path of a business operation.
