@@ -5,6 +5,7 @@ import { notificationsService } from "../notifications/notifications.service";
 import { eventOutboxService } from "./event-outbox.service";
 import { EVENT_NAMES } from "./events.service";
 import { resolveNotificationRule } from "./notification-event-rules";
+import { COMMUNITY_BUY_ORGANISER_DECISION_WINDOW_MS } from "../community-buy/community-buy-timing";
 
 function requiredId(payload: unknown, field: string): string {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) throw new AppError("Invalid support response event payload", 400);
@@ -373,6 +374,53 @@ export async function handlePayoutConfirmed(tx: Prisma.TransactionClient, event:
   });
 }
 
+/** R34: notify the organiser during the real below-minimum rescue window. */
+export async function handleCommunityBuyBelowMinimum(tx: Prisma.TransactionClient, event: Event): Promise<void> {
+  const rule = resolveNotificationRule(event);
+  if (!rule?.enabled) return;
+  const campaignId = requiredId(event.payload, "campaignId");
+  const campaign = await tx.communityCampaign.findUnique({
+    where: { id: campaignId },
+    select: { id: true, title: true, status: true, paymentMode: true, minimumShares: true, confirmedShares: true, rescueEndsAt: true, decisionRequiredAt: true, organiser: { select: { userId: true } } },
+  });
+  if (!campaign || campaign.minimumShares == null) return;
+  const actualQuantity = campaign.paymentMode === "AUTHORISE_THEN_CAPTURE"
+    ? (await tx.campaignContribution.findMany({
+      where: { campaignId: campaign.id, paymentAuthorisation: { holdStatus: "HOLD_SUCCEEDED" } },
+      select: { quantity: true },
+    })).reduce((sum, contribution) => sum + contribution.quantity, 0)
+    : campaign.confirmedShares;
+  const deadline = campaign.status === "RESCUE_WINDOW" ? campaign.rescueEndsAt
+    : campaign.status === "DECISION_REQUIRED" && campaign.decisionRequiredAt
+      ? new Date(campaign.decisionRequiredAt.getTime() + COMMUNITY_BUY_ORGANISER_DECISION_WINDOW_MS)
+      : null;
+  if (!deadline || deadline <= new Date() || actualQuantity >= campaign.minimumShares) return;
+  const recipient = await tx.user.findUnique({ where: { id: campaign.organiser.userId }, select: { id: true, role: true, isSuspended: true } });
+  if (!recipient || recipient.role !== "BUYER" || recipient.isSuspended) return;
+  const remaining = campaign.minimumShares - actualQuantity;
+  const dedupeKey = `R34_COMMUNITY_BUY_BELOW_MINIMUM:${campaign.id}`;
+  const created = await notificationsService.create({
+    userId: recipient.id,
+    type: "COMMUNITY_CAMPAIGN_UPDATE",
+    title: `Your Community Buy needs ${remaining} shares`,
+    body: `Review your available options before ${deadline.toISOString()}.`,
+    data: {
+      type: "community_campaign_update", event: "below_minimum", audience: "organiser",
+      ruleKey: rule.key, ruleVersion: rule.version, eventId: event.id, templateVersion: 1,
+      destination: "community_buy_campaign", campaignId: campaign.id, remainingShares: remaining,
+      deadline: deadline.toISOString(),
+    },
+    dedupeKey,
+  }, tx);
+  const candidate = created ?? await tx.notification.findUnique({ where: { dedupeKey }, select: { id: true } });
+  if (candidate) await tx.notificationDelivery.upsert({
+    where: { notificationId_channel: { notificationId: candidate.id, channel: "push" } },
+    create: { notificationId: candidate.id, channel: "push" },
+    update: {},
+  });
+}
+
+
 let registered = false;
 export function registerCoreEventHandlers(): void {
   if (registered) return;
@@ -382,6 +430,7 @@ export function registerCoreEventHandlers(): void {
   eventOutboxService.registerHandler(EVENT_NAMES.community_buy_supplier_reconfirmation_requested, handleSupplierReconfirmationRequested);
   eventOutboxService.registerHandler(EVENT_NAMES.payout_action_required, handlePayoutActionRequired);
   eventOutboxService.registerHandler(EVENT_NAMES.vendor_membership_payment_failed, handleVendorMembershipPaymentFailed);
+  eventOutboxService.registerHandler(EVENT_NAMES.community_buy_below_minimum, handleCommunityBuyBelowMinimum);
   eventOutboxService.registerHandler(EVENT_NAMES.payout_confirmed, handlePayoutConfirmed);
   registered = true;
 }

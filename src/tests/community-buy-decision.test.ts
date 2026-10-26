@@ -100,6 +100,13 @@ describe("evaluateAuthorisationDecisions() — spec §11.3 step 7-8 (AT-10, AT-1
     const call = m.communityCampaign.updateMany.mock.calls.find((c) => c[0].data.status === "DECISION_REQUIRED");
     expect(call).toBeTruthy();
     expect(call![0].data.decisionRequiredAt).toBeInstanceOf(Date);
+    expect(transactionEventUpsert).toHaveBeenCalledWith(expect.objectContaining({
+      where: { dedupeKey: `R34_COMMUNITY_BUY_BELOW_MINIMUM:${CAMPAIGN_ID}` },
+      create: expect.objectContaining({
+        name: "community_buy_below_minimum", schemaVersion: 1,
+        payload: expect.objectContaining({ campaignId: CAMPAIGN_ID, minimumShares: 10, confirmedShares: 3, remainingShares: 7 }),
+      }),
+    }));
   });
 
   // M3 gap 6 — the organiser must see the actual authorised/minimum numbers and a real deadline, not just "you have 24 hours."

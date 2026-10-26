@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("../lib/prisma", () => ({
   prisma: {
     communityCampaign: { findMany: vi.fn(), update: vi.fn(), updateMany: vi.fn(), findUnique: vi.fn(), findUniqueOrThrow: vi.fn(), create: vi.fn() },
+    event: { upsert: vi.fn() },
     campaignContribution: { findMany: vi.fn(), update: vi.fn(), updateMany: vi.fn(), findUnique: vi.fn(), findUniqueOrThrow: vi.fn(), create: vi.fn(), groupBy: vi.fn(), aggregate: vi.fn(), count: vi.fn() },
     campaignChargeAttempt: { create: vi.fn(), update: vi.fn(), count: vi.fn(), updateMany: vi.fn(), findFirst: vi.fn() },
     campaignRefund: { create: vi.fn(), findMany: vi.fn(), findUnique: vi.fn(), findUniqueOrThrow: vi.fn(), update: vi.fn(), updateMany: vi.fn(), groupBy: vi.fn() },
@@ -174,6 +175,8 @@ describe("communityCampaignsService.closeDueCampaigns — doc §7 deadline evalu
     ] as never);
     m.communityCampaign.findUnique.mockResolvedValue({ id: "camp-3", title: "Two shares", minimumShares: 3, confirmedShares: 2, organiser: { userId: "organiser-1" }, participants: [] } as never);
     m.communityCampaign.updateMany.mockResolvedValue({ count: 1 } as never);
+    m.event.upsert.mockResolvedValue({ id: "event-r34" } as never);
+    m.$transaction.mockImplementation(async (callback: any) => callback(m));
 
     const result = await communityCampaignsService.closeDueCampaigns();
 
@@ -182,6 +185,14 @@ describe("communityCampaignsService.closeDueCampaigns — doc §7 deadline evalu
       expect.objectContaining({ where: { id: "camp-3", status: "LIVE" }, data: expect.objectContaining({ status: "RESCUE_WINDOW" }) }),
     );
     expect(m.campaignSupplierPayment.create).not.toHaveBeenCalled();
+    expect(m.event.upsert).toHaveBeenCalledWith(expect.objectContaining({
+      where: { dedupeKey: "R34_COMMUNITY_BUY_BELOW_MINIMUM:camp-3" },
+      create: expect.objectContaining({
+        name: "community_buy_below_minimum", schemaVersion: 1, deliveryStatus: "PENDING",
+        entityType: "CommunityCampaign", entityId: "camp-3",
+        payload: expect.objectContaining({ campaignId: "camp-3", minimumShares: 3, confirmedShares: 2, remainingShares: 1 }),
+      }),
+    }));
   });
 
   // Reliability scenario #13 (architecture doc §18): "campaign closes while
