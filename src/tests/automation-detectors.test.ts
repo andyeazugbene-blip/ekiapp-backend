@@ -11,6 +11,7 @@ vi.mock("../lib/prisma", () => ({
     orderItem: { findFirst: vi.fn().mockResolvedValue(null) },
     event: { count: vi.fn().mockResolvedValue(0) },
     automationRun: { findMany: vi.fn().mockResolvedValue([]) },
+    automationRule: { findUnique: vi.fn(), updateMany: vi.fn().mockResolvedValue({ count: 1 }) },
   },
 }));
 
@@ -34,10 +35,71 @@ beforeEach(() => {
   vi.clearAllMocks();
   vi.useFakeTimers();
   vi.setSystemTime(NOW);
+  m.automationRule.findUnique.mockImplementation(async ({ where }: any) => ({
+    state: where.key === "DRAFT_PRODUCT_REMINDER" ? "DRAFT" : "ACTIVE",
+    timing: null,
+  }) as never);
 });
 
 afterEach(() => {
   vi.useRealTimers();
+});
+
+describe("automationDetectors.runSweep — R04 incomplete product drafts", () => {
+  const draft = (ageHours: number, overrides: Record<string, unknown> = {}) => ({
+    id: "draft-1",
+    vendorId: "vendor-1",
+    title: "Egusi",
+    images: [],
+    priceInCents: 0,
+    updatedAt: new Date(NOW.getTime() - ageHours * 60 * 60 * 1000),
+    vendor: { userId: "vendor-user-1", storeName: "Mama Eki" },
+    ...overrides,
+  });
+
+  function returnDrafts(rows: unknown[]) {
+    m.product.findMany.mockImplementation(async (args: any) => args.where?.status === "DRAFT" ? rows as never : [] as never);
+    m.automationRule.findUnique.mockResolvedValue({ state: "ACTIVE", timing: null } as never);
+  }
+
+  it("schedules one task episode per incomplete draft at the 4h, 24h, and 72h P2 thresholds", async () => {
+    returnDrafts([draft(80)]);
+
+    const results = await automationDetectors.runSweep();
+
+    const calls = mockScheduleAutomation.mock.calls.map(([input]: any[]) => input).filter((input) => input.type === "DRAFT_PRODUCT_REMINDER");
+    expect(results.DRAFT_PRODUCT_REMINDER).toBe(3);
+    expect(calls.map((input) => input.subjectKey)).toEqual([
+      "draft-1:touch1", "draft-1:touch2", "draft-1:touch3",
+    ]);
+    expect(calls[0]).toEqual(expect.objectContaining({
+      recipientUserId: "vendor-user-1",
+      vendorId: "vendor-1",
+      data: expect.objectContaining({ destination: "foodstuff_editor", productId: "draft-1", touch_number: 1 }),
+    }));
+  });
+
+  it("does not remind for a complete product intentionally left in DRAFT", async () => {
+    returnDrafts([draft(80, { images: ["https://example.test/image.jpg"], priceInCents: 500 })]);
+
+    const results = await automationDetectors.runSweep();
+
+    expect(results.DRAFT_PRODUCT_REMINDER).toBe(0);
+    expect(mockScheduleAutomation).not.toHaveBeenCalledWith(expect.objectContaining({ type: "DRAFT_PRODUCT_REMINDER" }));
+  });
+
+  it("keeps the rule disabled while its new admin rule is DRAFT", async () => {
+    returnDrafts([draft(80)]);
+    m.automationRule.findUnique.mockImplementation(async ({ where }: any) => ({
+      state: where.key === "DRAFT_PRODUCT_REMINDER" ? "DRAFT" : "ACTIVE",
+      timing: null,
+    }) as never);
+
+    const results = await automationDetectors.runSweep();
+
+    expect(results.DRAFT_PRODUCT_REMINDER).toBe(0);
+    expect(mockScheduleAutomation).not.toHaveBeenCalledWith(expect.objectContaining({ type: "DRAFT_PRODUCT_REMINDER" }));
+  });
 });
 
 describe("automationDetectors.runSweep — CART_RECOVERY (per-vendor reminder delay; bounded two-touch schedule, fixed 2026-10-22)", () => {

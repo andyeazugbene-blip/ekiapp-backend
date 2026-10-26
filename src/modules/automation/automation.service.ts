@@ -75,6 +75,14 @@ export const DEFAULT_TEMPLATES: Record<AutomationType, { title: string; body: st
     channels: ["push", "in_app", "email"],
     recipientType: "VENDOR",
   },
+  // R04 candidate copy is intentionally generic pending the authoritative
+  // v2 template. The corresponding AutomationRule is created DRAFT.
+  DRAFT_PRODUCT_REMINDER: {
+    title: "Finish your foodstuff draft",
+    body: "Your foodstuff draft is incomplete. Finish the missing details when you're ready.",
+    channels: ["push", "in_app"],
+    recipientType: "VENDOR",
+  },
   // Spec R10: "Store live, never shared." Migrated 2026-10-25 from the
   // non-toggleable "handoff V-06" send — now push+in_app+email like the
   // rest of this file's onboarding types (was push+in_app only before).
