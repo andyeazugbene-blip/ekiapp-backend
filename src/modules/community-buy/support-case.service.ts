@@ -1,4 +1,5 @@
 import type { SupportCaseStatus, SupportCaseType } from "@prisma/client";
+import { createHash } from "node:crypto";
 
 import { prisma } from "../../lib/prisma";
 import { logger } from "../../lib/logger";
@@ -128,12 +129,23 @@ export const supportCaseService = {
 
     if (respondedNow) {
       try {
+        // A response is one notification episode. Include the case's prior
+        // version so the same text may be sent again after a later response
+        // cycle, while concurrent/retried writes of this version dedupe.
+        const responseHash = createHash("sha256")
+          .update(input.customerVisibleResponse!.trim())
+          .digest("hex")
+          .slice(0, 16);
+        const priorVersion = existing.updatedAt instanceof Date
+          ? existing.updatedAt.toISOString()
+          : "legacy";
         await notificationsService.enqueue({
           userId: existing.participantId,
           type: "COMMUNITY_CAMPAIGN_UPDATE",
           title: "Your support case has a response",
           body: input.customerVisibleResponse!.length > 140 ? `${input.customerVisibleResponse!.slice(0, 140)}…` : input.customerVisibleResponse!,
           data: { type: "support_case_response", campaignId: existing.campaignId, caseId },
+          dedupeKey: `R28_SUPPORT_RESPONSE:${caseId}:${priorVersion}:${responseHash}`,
         });
       } catch (error) {
         logger.error("Support case response notification failed (non-blocking)", {
