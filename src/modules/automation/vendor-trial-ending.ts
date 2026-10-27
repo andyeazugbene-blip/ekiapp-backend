@@ -36,14 +36,13 @@ export async function notifyVendorTrialEnding(stripeSubscription: Stripe.Subscri
 export async function detectVendorTrialEnding(now = new Date()): Promise<number> {
   if (process.env.R30_TRIAL_ENDING_ENABLED !== "true") return 0;
   const sevenDays = 7 * 24 * 60 * 60 * 1000;
-  const trialEndsBy = new Date(now.getTime() + sevenDays);
   const subscriptions = await prisma.vendorSubscription.findMany({
     where: {
       status: "ACTIVE",
       plan: { not: "FREE" },
       cancelledAt: null,
       trialStartedAt: { not: null },
-      trialEndsAt: { gt: now, lte: trialEndsBy },
+      trialEndsAt: { gt: now },
     },
     select: {
       id: true, vendorId: true, plan: true, trialEndsAt: true,
@@ -61,6 +60,7 @@ export async function detectVendorTrialEnding(now = new Date()): Promise<number>
     const trialEnd = sub.trialEndsAt;
     const vendor = vendors.find((item) => item.id === sub.vendorId);
     if (!trialEnd || !vendor) continue;
+    const scheduledFor = new Date(trialEnd.getTime() - sevenDays);
     const planName = sub.sellerPlan?.name ?? String(sub.plan);
     const planPrice = sub.sellerPlan && sub.sellerPlan.monthlyPriceCents > 0
       ? `${formatMoney(sub.sellerPlan.monthlyPriceCents, sub.sellerPlan.currency)}/month`
@@ -72,12 +72,13 @@ export async function detectVendorTrialEnding(now = new Date()): Promise<number>
       vendorId: sub.vendorId,
       subjectKey: `${sub.id}:${trialEnd.getTime()}`,
       requiresMarketingConsent: false,
+      scheduledFor,
       title: "Your Eki Membership trial is ending",
       body: "Review your actual billing date and terms.",
       data: {
         trial_end_date: trialEndDate, plan_name: planName, plan_price: planPrice,
         vendor_subscription_id: sub.id, store_name: vendor.storeName,
-        destination: "membership", trial_end: trialEnd.toISOString(),
+        destination: "membership", trial_end: trialEnd.toISOString(), scheduled_for: scheduledFor.toISOString(),
       },
     });
     scheduled++;

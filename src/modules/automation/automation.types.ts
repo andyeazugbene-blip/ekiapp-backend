@@ -18,6 +18,9 @@ export interface ScheduleAutomationInput {
   requiresMarketingConsent: boolean;
   // Transactional notices (e.g. trial ending) are not held back by quiet hours.
   bypassQuietHours?: boolean;
+  // Exact due time for durable, delayed automation delivery. Only the due-run
+  // worker may dispatch a future run; callers must not send it immediately.
+  scheduledFor?: Date;
   title: string;
   body: string;
   data?: Record<string, unknown>;

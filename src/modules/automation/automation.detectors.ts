@@ -1018,6 +1018,7 @@ export const automationDetectors = {
    */
   async runSweep(): Promise<Record<string, number>> {
     const results: Record<string, number> = {};
+    results.VENDOR_TRIAL_ENDING_DUE = await automationService.dispatchDueVendorTrialEnding();
     // Order IS the coalescing priority (bug fix 2026-10-11): transactional
     // types (PAYMENT_RECOVERY, CHECKOUT_PAYMENT_FOLLOW_UP) bypass coalescing
     // entirely and their position doesn't matter; among the rest, whichever
