@@ -1,38 +1,9 @@
 name: Automation Scheduler
 
-# Bug fix 2026-10-11 ("implement an actual recurring scheduler... do not
-# stop at documentation"). vercel.json's only cron fires once a day
-# (12:00 UTC) — Vercel's Hobby plan caps cron job count and frequency to
-# once/day, so every time-windowed automation (low-stock alerts, onboarding
-# nudges, admin-scheduled broadcasts) only ever got evaluated once daily,
-# landing at a different local-time offset for every vendor. This workflow
-# hits the SAME authenticated, idempotent, per-job endpoints the daily
-# sweep already uses (internal.routes.ts), every 10 minutes, for exactly
-# the two time-sensitive jobs — leaving the heavier/non-urgent jobs
-# (renewals, reconciliation, cleanup) on the existing once-daily combined
-# sweep so they aren't hit more than necessary.
-#
-# GitHub Actions schedule caveats (stated here, not hidden): the shortest
-# interval GitHub allows is 5 minutes, and scheduled runs are "best effort"
-# — GitHub explicitly does not guarantee the exact minute, and delays of
-# several minutes are more likely during periods of high load across
-# GitHub's infrastructure. This is still a large, real improvement over a
-# single fixed daily tick, not a claim of real-time delivery.
-#
-# REQUIRED MANUAL SETUP:
-#   Settings -> Secrets and variables -> Actions -> Repository secret
-#     Name: CRON_SECRET
-#     Value: the same value already set as CRON_SECRET in the backend's
-#            Vercel project environment variables. Never print it in logs.
-#   Optionally also add a repository VARIABLE (not secret) named
-#   BACKEND_BASE_URL if the production backend URL is ever not
-#   https://ekiapp-backend.vercel.app.
-#
-# A scheduled run on 2026-10-27 received HTTP 401 from all five endpoints;
-# the Actions log showed an empty Authorization bearer value. Do not treat
-# a successful workflow conclusion as evidence that the scheduler works.
-# This workflow now fails visibly on a missing secret or failed endpoint.
-
+# GitHub scheduled runs are best effort; this is not a real-time SLA. The
+# repository owner must configure CRON_SECRET to match the backend's existing
+# Vercel value and verify successful scheduled runs before cadence gates can be
+# enabled. Never print or change either secret here.
 on:
   schedule:
     - cron: "*/10 * * * *"
@@ -45,6 +16,8 @@ jobs:
       BASE_URL: ${{ vars.BACKEND_BASE_URL || 'https://ekiapp-backend.vercel.app' }}
       CRON_SECRET: ${{ secrets.CRON_SECRET }}
     steps:
+      - uses: actions/checkout@v4
+
       - name: Require the authenticated scheduler secret
         run: |
           if [ -z "$CRON_SECRET" ]; then
@@ -53,58 +26,16 @@ jobs:
           fi
 
       - name: Automation sweep (cart recovery, low-stock alerts, onboarding nudges, win-back, referrals, reorder/checkout reminders)
-        run: |
-          code=$(curl -sS -X POST "$BASE_URL/api/internal/jobs/automation-sweep" \
-            -H "Authorization: Bearer $CRON_SECRET" \
-            -o /tmp/automation-sweep.json -w "%{http_code}")
-          echo "HTTP $code"
-          cat /tmp/automation-sweep.json
-          echo ""
-          if [ "$code" -ge 300 ]; then echo "::error::automation-sweep returned HTTP $code"; exit 1; fi
+        run: node scripts/call-internal-scheduler-endpoint.mjs automation-sweep /api/internal/jobs/automation-sweep
 
-      - name: Scheduled communications (admin "Schedule Later" broadcasts + push receipt refresh)
-        run: |
-          code=$(curl -sS -X POST "$BASE_URL/api/internal/jobs/run-scheduled-communications" \
-            -H "Authorization: Bearer $CRON_SECRET" \
-            -o /tmp/scheduled-comms.json -w "%{http_code}")
-          echo "HTTP $code"
-          cat /tmp/scheduled-comms.json
-          echo ""
-          if [ "$code" -ge 300 ]; then echo "::error::run-scheduled-communications returned HTTP $code"; exit 1; fi
+      - name: Scheduled communications (admin Schedule Later broadcasts + push receipt refresh)
+        run: node scripts/call-internal-scheduler-endpoint.mjs run-scheduled-communications /api/internal/jobs/run-scheduled-communications
 
-      # Handoff O-02 "order.unacknowledged" (P1) — a paid order a vendor
-      # hasn't accepted yet.
       - name: Unacknowledged order reminders
-        run: |
-          code=$(curl -sS -X POST "$BASE_URL/api/internal/jobs/order-unacknowledged-sweep" \
-            -H "Authorization: Bearer $CRON_SECRET" \
-            -o /tmp/order-unack.json -w "%{http_code}")
-          echo "HTTP $code"
-          cat /tmp/order-unack.json
-          echo ""
-          if [ "$code" -ge 300 ]; then echo "::error::order-unacknowledged-sweep returned HTTP $code"; exit 1; fi
+        run: node scripts/call-internal-scheduler-endpoint.mjs order-unacknowledged-sweep /api/internal/jobs/order-unacknowledged-sweep
 
-      # Handoff O-04 "order.dispatch.due" (P1) — an accepted order
-      # approaching or past its assumed dispatch window.
       - name: Dispatch-due reminders
-        run: |
-          code=$(curl -sS -X POST "$BASE_URL/api/internal/jobs/order-dispatch-due-sweep" \
-            -H "Authorization: Bearer $CRON_SECRET" \
-            -o /tmp/dispatch-due.json -w "%{http_code}")
-          echo "HTTP $code"
-          cat /tmp/dispatch-due.json
-          echo ""
-          if [ "$code" -ge 300 ]; then echo "::error::order-dispatch-due-sweep returned HTTP $code"; exit 1; fi
+        run: node scripts/call-internal-scheduler-endpoint.mjs order-dispatch-due-sweep /api/internal/jobs/order-dispatch-due-sweep
 
-      # Handoff CB-18 "capture.pending_review" — a stuck Community Buy
-      # capture means real money in an ambiguous state; this sweep only
-      # notifies the buyer and alerts ops, never retries/resolves it.
       - name: Community Buy stuck-capture review alert
-        run: |
-          code=$(curl -sS -X POST "$BASE_URL/api/internal/jobs/community-buy-capture-pending-review-sweep" \
-            -H "Authorization: Bearer $CRON_SECRET" \
-            -o /tmp/capture-pending.json -w "%{http_code}")
-          echo "HTTP $code"
-          cat /tmp/capture-pending.json
-          echo ""
-          if [ "$code" -ge 300 ]; then echo "::error::community-buy-capture-pending-review-sweep returned HTTP $code"; exit 1; fi
+        run: node scripts/call-internal-scheduler-endpoint.mjs community-buy-capture-pending-review-sweep /api/internal/jobs/community-buy-capture-pending-review-sweep

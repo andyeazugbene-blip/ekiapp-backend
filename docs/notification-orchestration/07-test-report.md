@@ -176,3 +176,22 @@ The delivery tests cover exact-task WhatsApp suppression only with an explicit 3
 - Full backend `npx vitest run --pool=threads --maxWorkers=1 --reporter=dot` (before the final critical-message regression test was added): **196 files passed, 10 files failed; 2,903 passed and 308 failed out of 3,211 tests**. All 308 failures are HTTP requests blocked by sandbox `connect EACCES 127.0.0.1` (for example `admin-organiser-stripe-connect-route`, `admin-role-matrix-http`, and `security-rbac-idor`); no test file failed collection after renaming the Node test. The final focused 63-test run includes the additional critical-message test. An initial focused Vitest attempt failed before tests due sandbox temp-file rename permissions; rerunning with repository-local `TEMP` and one thread passed.
 
 PR #45 latest-head GitHub CI: `test` passed in 1m23s (run [40507966820](https://github.com/andyeazugbene-blip/ekiapp-backend/actions/runs/40507966820)); Vercel preview and preview comments passed. The PR remains open/clean and was not merged. No production notification, WhatsApp delivery, secret/configuration change, migration, or gate activation occurred. Test results do not establish device/runtime QA, client approval, or enablement.
+
+## Scheduler transport follow-up from merged main `746a394` — 2026-10-27
+
+Code review found that a nonzero `curl` transport exit could leave the workflow with an empty HTTP status and still allow the Bash step to succeed; arbitrary response bodies were also printed. The workflow now calls `scripts/call-internal-scheduler-endpoint.mjs`, which validates the secret before making the request, treats transport/timeout errors, redirects, and all non-2xx statuses as failures, and logs neither response bodies nor caught error details. Its focused tests verify missing-secret fail-fast, transport errors without detail leakage, HTTP 401 handling without body reads, redirect rejection, and 2xx success.
+
+```
+node --test scripts/call-internal-scheduler-endpoint.node-test.mjs
+6 tests passed; 0 failed
+npm run build                         passed
+npx tsc --noEmit                      passed
+npx prisma validate                  passed (no schema change)
+node scripts/validate-notification-catalogue.mjs docs/notification-orchestration/210-event-reconciliation-template.csv --template
+                                      passed
+git diff --check                     passed
+```
+
+The six tests include the workflow entry point's nonzero exit and clear error when the credential is absent. The CI workflow now runs these Node tests. PR #46 code-head CI run [40510998294](https://github.com/andyeazugbene-blip/ekiapp-backend/actions/runs/40510998294) passed in 1m23s; the latest PR head at `3752edc` also passed full CI in [40511348200](https://github.com/andyeazugbene-blip/ekiapp-backend/actions/runs/40511348200), including unit tests, typecheck, and the six scheduler cases. Vercel preview and preview comments passed. GitHub confirmed PR #45 merged at `746a394` with CI run [40508295734](https://github.com/andyeazugbene-blip/ekiapp-backend/actions/runs/40508295734), Vercel preview, and preview comments passing. These checks do not verify that GitHub injects the owner's `CRON_SECRET` or that scheduled executions occur on time. R30 and cadence-sensitive rules remain gated.
+
+Mobile PR #5 remains open at `72355b0`; its Vercel and preview-comment checks passed, and no CI test job is listed. The clean PR QA checkout's `npm run typecheck` passed after adding a TypeScript 6 declaration for the existing global CSS import; the three repository checks `check:tab-registration`, `check:automation-managed-types-viewable`, and `check:release-config` passed. `check:domains` could not reach its remote endpoint in the prior review. The package has no unit-test runner/routing harness, so source-level mobile tests are unsupported without adding a test stack. No physical-device or native runtime QA is claimed.
