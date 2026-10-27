@@ -1,5 +1,7 @@
 # Architecture Report — Target Pipeline vs. Current State
 
+> Historical architecture snapshot from the earlier implementation pass. For current merged PR, test, scheduler, and mobile status use `11-final-verification-2026-10-27.md`; for rule-by-rule current evidence use `01-compliance-matrix.md`. Older statements below describe the state at that pass and are not a current PR inventory.
+
 Formalizes the ADR already discussed with the client (2026-10-25), with the client's "full rebuild per spec" decision on record.
 
 ## Target pipeline (spec section 4)

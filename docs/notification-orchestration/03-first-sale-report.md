@@ -1,4 +1,6 @@
-# FIRST_SALE / Vendor Onboarding — Rule-by-Rule Report
+# FIRST_SALE / Vendor Onboarding — Historical Rule-by-Rule Report
+
+> This report preserves the detailed evidence from its original onboarding pass. Its early R06/status and outcome-model statements were superseded by later implementation. Use `01-compliance-matrix.md` for current R01–R06 status and `11-final-verification-2026-10-27.md` for current repository/QA status.
 
 Covers PR #5 (merged) and PR #6 (open). Source of truth: [automation.detectors.ts](../../src/modules/automation/automation.detectors.ts).
 

@@ -1,5 +1,18 @@
 # Test Report
 
+> Current-state evidence is in the first section below. Subsequent dated sections are historical snapshots from earlier review branches; their old base SHAs and “open/pending” PR statuses are preserved as history and do not describe current GitHub state.
+
+## Current-main verification — 2026-10-27
+
+These results were run/read against backend current `main` `45b5e1578edc2803aec59d40d59c487f48ec9ff3` and supersede older snapshots below for current status. GitHub main CI run [40550238299](https://github.com/andyeazugbene-blip/ekiapp-backend/actions/runs/40550238299) succeeded; PR #47 CI run [40529302921](https://github.com/andyeazugbene-blip/ekiapp-backend/actions/runs/40529302921), Vercel preview and preview comments passed before merge.
+
+- Focused event/reminder/delivery/handler/outbox regression command: `npx vitest run src/tests/order-acceptance-notifications.test.ts src/tests/notification-event-pipeline.integration.test.ts src/tests/notification-delivery.test.ts src/tests/core-event-handlers.test.ts src/tests/event-outbox.test.ts --pool=threads --maxWorkers=1 --reporter=dot` — **5 files, 65 tests passed**.
+- `npm run build`, `npx tsc --noEmit`, and `npx prisma validate` — **passed**; no schema change in PR #47.
+- Clean mobile PR #5 checkout: `npm run typecheck`, `npm run check:tab-registration`, `npm run check:automation-managed-types-viewable`, and `npm run check:release-config` — **passed**. `npm run check:domains` — **failed to fetch** the primary, www and API health endpoints (status 0 / `fetch failed`); the three store route checks were skipped because no vendor slug was available. This is an environment/network result, not confirmation of current domain health.
+- Catalogue validator regression `node --test scripts/validate-notification-catalogue.node-test.mjs`: **4 passed**; `node scripts/validate-notification-catalogue.mjs docs/notification-orchestration/210-event-reconciliation-template.csv --template`: **passed** (16-column empty template).
+- Full backend `npx vitest run --pool=threads --maxWorkers=1 --reporter=dot`: **10 files failed, 196 passed; 236 tests failed, 2,899 passed, 72 skipped (3,207 total)**. The 236 failures were HTTP tests blocked from binding/connecting to `127.0.0.1` (`connect EACCES`); one suite's `beforeAll` hook also timed out after 30 seconds in the same constrained run. This is an environment limitation, not a code pass; those tests require CI or a host where local HTTP sockets work. Exact command/result are preserved here; the passing focused suite and GitHub CI are reported separately.
+- No native device QA or production provider delivery was performed. The latest scheduled GitHub Actions run [40513686001](https://github.com/andyeazugbene-blip/ekiapp-backend/actions/runs/40513686001) failed before API calls because the scheduler secret was unavailable to the run.
+
 ## Latest verification — 2026-10-26 R28 specification alignment
 
 ### Follow-up verification — general support outbox and durable push (PRs #23/#24)
@@ -196,7 +209,7 @@ The six tests include the workflow entry point's nonzero exit and clear error wh
 
 Mobile PR #5 remains open at `72355b0`; its Vercel and preview-comment checks passed, and no CI test job is listed. The clean PR QA checkout's `npm run typecheck` passed after adding a TypeScript 6 declaration for the existing global CSS import; the three repository checks `check:tab-registration`, `check:automation-managed-types-viewable`, and `check:release-config` passed. `check:domains` could not reach its remote endpoint in the prior review. The package has no unit-test runner/routing harness, so source-level mobile tests are unsupported without adding a test stack. No physical-device or native runtime QA is claimed.
 
-## Order reminder fail-closed follow-up — PR #47
+## Historical order reminder fail-closed follow-up — PR #47 (before merge)
 
 The order acceptance reminder service now returns explicit skip results for R13 (`business_hours_sla_required`) and R15 (`dispatch_deadline_required`) instead of sending based on elapsed-time assumptions. Focused regression coverage asserts both results. No domain fields, deadlines, notifications, or migrations were added. These tests validate fail-closed behavior only; they do not establish the missing business calendar or dispatch deadline.
 
@@ -209,4 +222,4 @@ npx prisma validate                  passed (no schema change)
 git diff --check                     passed
 ```
 
-The first focused Vitest invocation could not create a temporary file under the sandbox's default temp path; rerunning with repository-local `TEMP`/`TMP` succeeded. After rebasing PR #47 onto backend main `8243cb5`, its GitHub `test` job passed in 1m25s (run [40528973929](https://github.com/andyeazugbene-blip/ekiapp-backend/actions/runs/40528973929)); Vercel and preview comments also passed. The PR remains open and unmerged. Local/CI checks are not device QA or production runtime verification.
+The first focused Vitest invocation could not create a temporary file under the sandbox's default temp path; rerunning with repository-local `TEMP` and `TMP` succeeded. After rebasing PR #47 onto backend main `8243cb5`, its GitHub `test` job passed in 1m25s (run [40528973929](https://github.com/andyeazugbene-blip/ekiapp-backend/actions/runs/40528973929)); Vercel and preview comments also passed. GitHub later merged it at `45b5e15`; see the current-main verification at the top of this report. Local/CI checks are not device QA or production runtime verification.
