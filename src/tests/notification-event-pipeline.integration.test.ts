@@ -25,6 +25,7 @@ const { prismaMock, txMock, sendPushToUser } = vi.hoisted(() => {
     campaignContribution: { findMany: vi.fn() },
     payoutRequest: { findUnique: vi.fn() },
     vendorSubscription: { findUnique: vi.fn() },
+    checkout: { findUnique: vi.fn() },
     product: { findUnique: vi.fn() },
     productInventoryCount: { findUnique: vi.fn(), findFirst: vi.fn(), create: vi.fn() },
     orderItem: { aggregate: vi.fn() },
@@ -64,6 +65,7 @@ const { prismaMock, txMock, sendPushToUser } = vi.hoisted(() => {
     campaignContribution: { findMany: vi.fn() },
     payoutRequest: { findUnique: vi.fn() },
     vendorSubscription: { findUnique: vi.fn() },
+    checkout: { findUnique: vi.fn() },
     product: { findUnique: vi.fn() },
     productInventoryCount: { findUnique: vi.fn(), findFirst: vi.fn() },
     orderItem: { aggregate: vi.fn() },
@@ -89,6 +91,7 @@ describe("event to notification pipeline integration", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.stubEnv("R28_GENERAL_SUPPORT_NOTIFICATIONS_ENABLED", "true");
+    vi.stubEnv("R20_PAYMENT_FAILED_ENABLED", "false");
     vi.stubEnv("R09_PUBLICATION_CONFIRMED_ENABLED", "false");
     vi.stubEnv("R34_COMMUNITY_BUY_BELOW_MINIMUM_ENABLED", "true");
     vi.stubEnv("R26_PAYOUT_CONFIRMED_ENABLED", "true");
@@ -205,6 +208,45 @@ describe("event to notification pipeline integration", () => {
     expect(sendPushToUser).toHaveBeenCalledWith(vendor.userId, expect.objectContaining({
       title: rule.title, body: rule.body, data: expect.objectContaining({ type: rule.type, destination: "verification" }),
     }), { logId: "log-1" });
+  });
+
+  it("routes a confirmed failed checkout through the outbox and durable push", async () => {
+    vi.stubEnv("R20_PAYMENT_FAILED_ENABLED", "true");
+    txMock.checkout.findUnique.mockResolvedValue({ id: "checkout-20", buyerId: "buyer-20", status: "FAILED" });
+    prismaMock.checkout.findUnique.mockResolvedValue({ buyerId: "buyer-20", status: "FAILED" });
+    txMock.user.findUnique.mockResolvedValue({ id: "buyer-20", role: "BUYER", isSuspended: false });
+    prismaMock.user.findUnique.mockResolvedValue({ id: "buyer-20", role: "BUYER", isSuspended: false });
+
+    const event = await prismaMock.$transaction((tx: typeof txMock) => eventOutboxService.enqueue(tx, {
+      name: EVENT_NAMES.payment_failed, actorType: "stripe", entityType: "Checkout", entityId: "checkout-20",
+      payload: { checkoutId: "checkout-20", stripeEventId: "evt-20" },
+    }, { dedupeKey: "payment-failed:evt-20:checkout-20", schemaVersion: 1 }));
+    const outboxResult = await eventOutboxService.dispatchRegisteredBatch(10, new Date("2026-10-27T12:00:00Z"));
+    expect(outboxResult).toMatchObject({ claimed: 1, delivered: 1 });
+    expect(txMock.notification.create).toHaveBeenCalledWith({ data: expect.objectContaining({
+      userId: "buyer-20", title: "Your payment did not go through",
+      body: "Review your payment method to continue.", dedupeKey: "R20_PAYMENT_FAILED:checkout-20",
+      data: expect.objectContaining({ ruleKey: "R20_PAYMENT_FAILED", eventId: event.id, destination: "checkout", stripeEventId: "evt-20" }),
+    }) });
+    const delivery = await notificationDeliveryService.dispatchBatch(10, new Date("2026-10-27T12:00:01Z"));
+    expect(delivery).toMatchObject({ claimed: 1, sent: 1 });
+    expect(sendPushToUser).toHaveBeenCalledWith("buyer-20", expect.objectContaining({
+      title: "Your payment did not go through", data: expect.objectContaining({ destination: "checkout", checkoutId: "checkout-20" }),
+    }), { logId: "log-1" });
+  });
+
+  it("cancels R20 at send time after the checkout payment resolves", async () => {
+    vi.stubEnv("R20_PAYMENT_FAILED_ENABLED", "true");
+    prismaMock.checkout.findUnique.mockResolvedValue({ buyerId: "buyer-20", status: "SUCCEEDED" });
+    prismaMock.user.findUnique.mockResolvedValue({ id: "buyer-20", role: "BUYER", isSuspended: false });
+    prismaMock.notificationDelivery.findMany.mockResolvedValueOnce([{
+      id: "delivery-r20", attempt: 0, status: "PENDING",
+      notification: { id: "notification-r20", userId: "buyer-20", title: "Your payment did not go through", body: "Review your payment method to continue.", readAt: null, data: { type: "payment_failed", ruleKey: "R20_PAYMENT_FAILED", ruleVersion: 1, checkoutId: "checkout-20" } },
+    }]);
+
+    const result = await notificationDeliveryService.dispatchBatch(10, new Date("2026-10-27T12:00:00Z"));
+    expect(result).toMatchObject({ claimed: 1, sent: 0, cancelled: 1 });
+    expect(sendPushToUser).not.toHaveBeenCalled();
   });
 
   it("validates and enqueues a domain event, resolves R28, creates one idempotent candidate, delivers push, and records outcomes", async () => {
@@ -362,6 +404,8 @@ describe("event to notification pipeline integration", () => {
   });
 
   it("uses successful authorisations, not pledge counters, for the R34 decision-required quantity", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-10-26T12:00:00Z"));
     const decisionRequiredAt = new Date("2026-10-26T10:00:00Z");
     const deadline = new Date(decisionRequiredAt.getTime() + 24 * 60 * 60 * 1000);
     txMock.communityCampaign.findUnique.mockResolvedValue({
@@ -482,6 +526,8 @@ describe("event to notification pipeline integration", () => {
   });
 
   it("routes a real supplier reconfirmation request through the outbox, candidate and durable push delivery", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-10-26T12:00:00Z"));
     vi.stubEnv("R37_SUPPLIER_RECONFIRMATION_ENABLED", "true");
     const requestedAt = new Date("2026-10-27T11:00:00Z");
     const deadline = new Date("2026-10-27T23:00:00Z");
