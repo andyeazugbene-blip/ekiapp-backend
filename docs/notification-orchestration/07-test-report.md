@@ -136,11 +136,11 @@ This review branch reconciles the existing R30 reminder against current `main` a
 Focused command:
 
 ```
-npx vitest run src/tests/automation-centre.test.ts src/tests/vendor-subscription-webhooks.test.ts src/tests/notification-event-pipeline.integration.test.ts src/tests/notification-delivery.test.ts src/tests/shipments.test.ts --reporter=dot
-Test Files  5 passed (5)
-Tests       75 passed (75)
+npx vitest run src/tests/automation-centre.test.ts src/tests/vendor-subscription-webhooks.test.ts src/tests/notification-event-pipeline.integration.test.ts src/tests/notification-delivery.test.ts src/tests/shipments.test.ts src/tests/notification-preferences.test.ts src/tests/notifications-dedupe.test.ts src/tests/notification-outcomes.test.ts src/tests/event-outbox.test.ts --reporter=dot
+Test Files  9 passed (9)
+Tests       106 passed (106)
 ```
 
-The R30 cases verify future scheduling, exact `trialEndsAt - 7 days` timing, current-state checks, and suppression after the five-minute due-time jitter window. R24 tests cover the authenticated vendor producer transition, full outbox-to-candidate-to-push path, current buyer/shipment eligibility, and cancellation when a newer delay episode supersedes a candidate.
+The R30 cases verify future scheduling, exact `trialEndsAt - 7 days` timing, current-state checks, and suppression after the five-minute due-time jitter window. R24 tests cover the authenticated vendor producer transition, full outbox-to-candidate-to-push path, current buyer/shipment eligibility, and cancellation when a newer delay episode supersedes a candidate. Shared-pipeline coverage verifies idempotent candidate metadata, preference persistence and marketing consent, send-time opt-out enforcement, local quiet-hour deferral, WhatsApp-delivered episode suppression, delivery receipt state, and source-backed outcome attribution. Product publication is no longer treated as direct completion of an R08 verification-approved alert because that event does not prove the vendor acted on the alert. No WhatsApp provider exists/configured; tests validate suppression against recorded delivery evidence only, not provider-dependent sending.
 
 Additional checks: `npm run build` — passed; `npx tsc --noEmit` — passed; `npx prisma validate` — passed; `git diff --check` — passed. Mobile `npm run typecheck` passed during review of open mobile PR #5. This is source typechecking, not native device QA. No device, production runtime, external provider, or sub-daily scheduler verification was performed. All gates remain off.
