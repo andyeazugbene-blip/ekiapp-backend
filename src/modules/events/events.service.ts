@@ -14,6 +14,7 @@ export const EVENT_NAMES = {
   // Merchant activation
   merchant_registered: "merchant_registered",
   verification_completed: "verification_completed",
+  verification_requires_input: "verification_requires_input",
   store_ready: "store_ready",
   product_published: "product_published",
   product_stock_depleted: "product_stock_depleted",

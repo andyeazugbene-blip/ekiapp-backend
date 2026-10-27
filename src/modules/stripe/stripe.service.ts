@@ -817,7 +817,7 @@ class StripeWebhookService {
           ? `${copy.body} You have ${graceDays} day${graceDays === 1 ? "" : "s"} to update it before your store's selling capabilities are paused. Your store and data are never deleted.`
           : copy.body;
         if (process.env.R29_MEMBERSHIP_PAYMENT_FAILED_ENABLED !== "true") {
-    notificationsService.enqueue({
+          notificationsService.enqueue({
             userId: vendor.userId,
             type: "SUBSCRIPTION_UPDATE",
             title: copy.title,

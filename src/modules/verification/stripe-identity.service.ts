@@ -9,6 +9,7 @@ import { AppError } from "../../shared/errors/app-error";
 import { recordAudit } from "../../shared/utils/audit";
 import { communicationService } from "../communications/communication.service";
 import { vendorActivationService } from "../vendors/vendor-activation.service";
+import { dispatchNotificationsAfterCommit } from "../events/dispatch-notifications";
 
 export const stripeIdentityService = {
   async createVerificationSession(userId: string): Promise<{ url: string; sessionId: string }> {
@@ -81,24 +82,28 @@ export const stripeIdentityService = {
     }
 
     if (session.status === "verified") {
-      const updatedVendor = await prisma.vendor.update({
-        where: { id: vendorId },
-        data: {
-          verificationStatus: VendorVerificationStatus.VERIFIED,
-          stripeVerificationSessionId: session.id,
-          stripeIdentityStatus: "verified",
-          stripeIdentityUpdatedAt: new Date(),
-          verifiedAt: new Date(),
-          verificationFailureReason: null,
-        },
-        select: { userId: true, storeName: true, user: { select: { email: true } } },
+      const updatedVendor = await prisma.$transaction(async (tx) => {
+        const updated = await tx.vendor.update({
+          where: { id: vendorId },
+          data: {
+            verificationStatus: VendorVerificationStatus.VERIFIED,
+            stripeVerificationSessionId: session.id,
+            stripeIdentityStatus: "verified",
+            stripeIdentityUpdatedAt: new Date(),
+            verifiedAt: new Date(),
+            verificationFailureReason: null,
+          },
+          select: { id: true, userId: true, storeName: true, user: { select: { email: true } } },
+        });
+        await eventsService.enqueueTransactional(tx, {
+          name: EVENT_NAMES.verification_completed, actorType: "stripe", entityType: "Vendor", entityId: vendorId,
+          source: "stripe_identity_webhook", payload: { vendorId, sessionId: session.id },
+        }, { dedupeKey: `verification-approved:${session.id}`, schemaVersion: 1 });
+        return updated;
       });
 
       logger.info("Vendor verified via Stripe Identity", { vendorId, sessionId: session.id });
-      eventsService.emit({
-        name: EVENT_NAMES.verification_completed, actorType: "stripe", entityType: "Vendor", entityId: vendorId,
-        source: "stripe_identity_webhook", payload: { sessionId: session.id },
-      });
+      void dispatchNotificationsAfterCommit();
       await recordAudit({
         actorId: "system:stripe-identity-webhook",
         action: "VENDOR_VERIFIED",
@@ -107,11 +112,12 @@ export const stripeIdentityService = {
         metadata: { sessionId: session.id },
       }).catch((err) => logger.warn("Verification audit write failed", { vendorId, error: String(err) }));
 
-      communicationService.send({
+      if (process.env.R08_VERIFICATION_APPROVED_ENABLED !== "true") communicationService.send({
         eventKey: "vendor_verification_approved",
         recipientId: updatedVendor.userId,
         recipientEmail: updatedVendor.user.email,
         variables: { store_name: updatedVendor.storeName },
+        dedupeKey: `VENDOR_VERIFICATION_APPROVED:${session.id}`,
       }).catch((err) => logger.warn("Stripe Identity verified communication failed", { vendorId, error: String(err) }));
 
       // Vendor-activation spec: automatic verification must automatically
@@ -124,9 +130,10 @@ export const stripeIdentityService = {
     if (session.status === "requires_input") {
       const reason = session.last_error?.reason ?? session.last_error?.code ?? "Verification failed";
 
-      const updatedVendor = await prisma.vendor.update({
-        where: { id: vendorId },
-        data: {
+      const updatedVendor = await prisma.$transaction(async (tx) => {
+        const updated = await tx.vendor.update({
+          where: { id: vendorId },
+          data: {
           // requires_input is "the vendor must retry/provide more input", NOT a
           // final rejection by Stripe. The coarse Eki enum stays REJECTED only
           // because the vendor app reads it to show the retry prompt; admin
@@ -137,8 +144,14 @@ export const stripeIdentityService = {
           stripeIdentityStatus: "requires_input",
           stripeIdentityUpdatedAt: new Date(),
           verificationFailureReason: reason,
-        },
-        select: { userId: true, storeName: true, user: { select: { email: true } } },
+          },
+          select: { id: true, userId: true, storeName: true, user: { select: { email: true } } },
+        });
+        await eventsService.enqueueTransactional(tx, {
+          name: EVENT_NAMES.verification_requires_input, actorType: "stripe", entityType: "Vendor", entityId: vendorId,
+          source: "stripe_identity_webhook", payload: { vendorId, sessionId: session.id },
+        }, { dedupeKey: `verification-requires-input:${session.id}`, schemaVersion: 1 });
+        return updated;
       });
 
       logger.info("Vendor verification failed via Stripe Identity", {
@@ -155,11 +168,13 @@ export const stripeIdentityService = {
         metadata: { sessionId: session.id },
       }).catch((err) => logger.warn("Verification-failure audit write failed", { vendorId, error: String(err) }));
 
-      communicationService.send({
+      void dispatchNotificationsAfterCommit();
+      if (process.env.R07_VERIFICATION_REQUIRES_CORRECTION_ENABLED !== "true") communicationService.send({
         eventKey: "vendor_verification_rejected",
         recipientId: updatedVendor.userId,
         recipientEmail: updatedVendor.user.email,
         variables: { store_name: updatedVendor.storeName, reason },
+        dedupeKey: `VENDOR_VERIFICATION_REJECTED:${session.id}`,
       }).catch((err) => logger.warn("Stripe Identity rejected communication failed", { vendorId, error: String(err) }));
 
       return;

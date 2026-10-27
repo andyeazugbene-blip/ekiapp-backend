@@ -12,6 +12,7 @@ const m = vi.hoisted(() => ({
   deliveryZoneCount: vi.fn(),
   productFindMany: vi.fn(),
   productUpdateMany: vi.fn(),
+  publishedProductFindMany: vi.fn(),
   recordAudit: vi.fn(),
 }));
 
@@ -20,11 +21,14 @@ vi.mock("../lib/prisma", () => ({
     vendor: { findUnique: m.vendorFindUnique },
     deliveryZone: { count: m.deliveryZoneCount },
     product: { findMany: m.productFindMany, updateMany: m.productUpdateMany },
+    $transaction: vi.fn((fn: (tx: any) => unknown) => fn({ product: { updateMany: m.productUpdateMany, findMany: m.publishedProductFindMany } })),
   },
 }));
 vi.mock("../lib/logger", () => ({ logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } }));
 vi.mock("../shared/utils/audit", () => ({ recordAudit: m.recordAudit }));
-vi.mock("../modules/events/events.service", () => ({ eventsService: { emit: vi.fn() }, EVENT_NAMES: { product_published: "product_published" } }));
+vi.mock("../modules/events/events.service", () => ({ eventsService: { emit: vi.fn(), enqueueTransactional: vi.fn() }, EVENT_NAMES: { product_published: "product_published" } }));
+vi.mock("../modules/products/product-publication-events", () => ({ enqueueProductPublished: vi.fn() }));
+vi.mock("../modules/events/dispatch-notifications", () => ({ dispatchNotificationsAfterCommit: vi.fn() }));
 vi.mock("../modules/vendors/vendor-milestone-notifications.service", () => ({
   vendorMilestoneNotificationsService: { maybeSendStoreReady: vi.fn() },
 }));
@@ -52,6 +56,7 @@ beforeEach(() => {
   m.deliveryZoneCount.mockResolvedValue(1);
   m.productFindMany.mockResolvedValue([{ id: "p1", title: "Egusi", images: ["a.jpg"], priceInCents: 500 }]);
   m.productUpdateMany.mockResolvedValue({ count: 1 });
+  m.publishedProductFindMany.mockResolvedValue([{ id: "p1", vendorId: "vendor-1", publishedAt: new Date() }]);
   mockSend.mockResolvedValue({ outcome: "SENT" });
 });
 

@@ -86,6 +86,7 @@ import { registerCoreEventHandlers } from "../modules/events/core-event-handlers
 import { EVENT_NAMES } from "../modules/events/events.service";
 import { notificationDeliveryService } from "../modules/notifications/notification-delivery.service";
 import { inventoryCountsService } from "../modules/products/inventory-counts.service";
+import { enqueueProductPublished } from "../modules/products/product-publication-events";
 import { ensureCriticalIncidentCandidates } from "../modules/ledger/critical-incident-notifications";
 
 describe("event to notification pipeline integration", () => {
@@ -93,11 +94,10 @@ describe("event to notification pipeline integration", () => {
     vi.clearAllMocks();
     vi.stubEnv("R28_GENERAL_SUPPORT_NOTIFICATIONS_ENABLED", "true");
     vi.stubEnv("R20_PAYMENT_FAILED_ENABLED", "false");
-    vi.stubEnv("R12_FIRST_PAID_ORDER_ENABLED", "false");
-    vi.stubEnv("R21_ORDER_CONFIRMED_ENABLED", "false");
     vi.stubEnv("R22_ORDER_DISPATCHED_ENABLED", "false");
+    vi.stubEnv("R21_ORDER_CONFIRMED_ENABLED", "false");
+    vi.stubEnv("R09_PUBLICATION_CONFIRMED_ENABLED", "false");
     vi.stubEnv("R34_COMMUNITY_BUY_BELOW_MINIMUM_ENABLED", "true");
-    vi.stubEnv("R35_COMMUNITY_BUY_MINIMUM_REACHED_ENABLED", "false");
     vi.stubEnv("R26_PAYOUT_CONFIRMED_ENABLED", "true");
     vi.stubEnv("R36_COMMUNITY_BUY_PAYMENT_ACTION_REQUIRED_ENABLED", "false");
     vi.stubEnv("R29_MEMBERSHIP_PAYMENT_FAILED_ENABLED", "false");
@@ -123,6 +123,95 @@ describe("event to notification pipeline integration", () => {
       organiser: { userId: "buyer-1" },
     });
     registerCoreEventHandlers();
+  });
+
+  it("routes the real first product publication through R09 candidate and durable push delivery", async () => {
+    vi.stubEnv("R09_PUBLICATION_CONFIRMED_ENABLED", "true");
+    const publishedAt = new Date("2026-10-26T12:00:00.000Z");
+    const product = {
+      id: "product-r09", vendorId: "vendor-r09", title: "Rice", isActive: true, status: "PUBLISHED", publishedAt,
+      vendor: { id: "vendor-r09", userId: "vendor-user-r09" },
+    };
+    txMock.product.findUnique.mockResolvedValue(product);
+    prismaMock.product.findUnique.mockResolvedValue(product);
+    txMock.user.findUnique.mockResolvedValue({ id: "vendor-user-r09", role: "VENDOR", isSuspended: false });
+    prismaMock.user.findUnique.mockResolvedValue({ id: "vendor-user-r09", role: "VENDOR", isSuspended: false });
+
+    const event = await prismaMock.$transaction((tx: typeof txMock) => enqueueProductPublished(
+      tx as never,
+      product as never,
+      { actorType: "vendor", actorId: "vendor-user-r09", source: "vendor_app" },
+    ));
+    expect(event).toMatchObject({ name: EVENT_NAMES.product_published, schemaVersion: 1, deliveryStatus: "PENDING" });
+    if (!event) throw new Error("Expected publication outbox event");
+
+    const outboxResult = await eventOutboxService.dispatchRegisteredBatch(10, new Date("2026-10-26T12:00:01.000Z"));
+    expect(outboxResult).toMatchObject({ claimed: 1, delivered: 1 });
+    expect(txMock.notification.create).toHaveBeenCalledWith({ data: expect.objectContaining({
+      userId: "vendor-user-r09", title: "Your foodstuff is now visible", body: "Share your store with buyers.",
+      dedupeKey: "R09_PUBLICATION_CONFIRMED:vendor-r09",
+      data: expect.objectContaining({ ruleKey: "R09_PUBLICATION_CONFIRMED", ruleVersion: 1, eventId: event.id, destination: "store_share", productId: product.id }),
+    }) });
+
+    const deliveryResult = await notificationDeliveryService.dispatchBatch(10, new Date("2026-10-26T12:00:02.000Z"));
+    expect(deliveryResult).toMatchObject({ claimed: 1, sent: 1 });
+    expect(sendPushToUser).toHaveBeenCalledWith("vendor-user-r09", expect.objectContaining({
+      title: "Your foodstuff is now visible", body: "Share your store with buyers.",
+      data: expect.objectContaining({ destination: "store_share", vendorId: "vendor-r09", productId: "product-r09" }),
+    }), { logId: "log-1" });
+  });
+
+  it.each([
+    {
+      name: EVENT_NAMES.verification_completed,
+      gate: "R08_VERIFICATION_APPROVED_ENABLED",
+      ruleKey: "R08_VERIFICATION_APPROVED",
+      type: "vendor_verification_approved",
+      title: "Your verification is complete",
+      body: "We are checking which foodstuff can now be published.",
+      status: "VERIFIED",
+      identityStatus: "verified",
+      dedupe: "R08_VERIFICATION_APPROVED",
+    },
+    {
+      name: EVENT_NAMES.verification_requires_input,
+      gate: "R07_VERIFICATION_REQUIRES_CORRECTION_ENABLED",
+      ruleKey: "R07_VERIFICATION_REQUIRES_CORRECTION",
+      type: "vendor_verification_rejected",
+      title: "Your verification needs attention",
+      body: "Review the secure step that needs correcting.",
+      status: "REJECTED",
+      identityStatus: "requires_input",
+      dedupe: "R07_VERIFICATION_REQUIRES_CORRECTION",
+    },
+  ])("routes $ruleKey from the transactional Stripe Identity event to durable push", async (rule) => {
+    vi.stubEnv(rule.gate, "true");
+    const vendor = {
+      id: "vendor-identity", userId: "vendor-user-identity", verificationStatus: rule.status,
+      stripeVerificationSessionId: "vs-identity", stripeIdentityStatus: rule.identityStatus,
+    };
+    txMock.vendor.findUnique.mockResolvedValue(vendor);
+    prismaMock.vendor.findUnique.mockResolvedValue(vendor);
+    txMock.user.findUnique.mockResolvedValue({ id: vendor.userId, role: "VENDOR", isSuspended: false });
+    prismaMock.user.findUnique.mockResolvedValue({ id: vendor.userId, role: "VENDOR", isSuspended: false });
+
+    const event = await prismaMock.$transaction((tx: typeof txMock) => eventOutboxService.enqueue(tx, {
+      name: rule.name,
+      actorType: "stripe", entityType: "Vendor", entityId: vendor.id,
+      payload: { vendorId: vendor.id, sessionId: "vs-identity" },
+    }, { dedupeKey: `stripe-identity:${rule.ruleKey}:vs-identity`, schemaVersion: 1 }));
+    const outboxResult = await eventOutboxService.dispatchRegisteredBatch(10, new Date("2026-10-27T12:00:00Z"));
+    expect(outboxResult).toMatchObject({ claimed: 1, delivered: 1 });
+    expect(txMock.notification.create).toHaveBeenCalledWith({ data: expect.objectContaining({
+      userId: vendor.userId, title: rule.title, body: rule.body,
+      dedupeKey: `${rule.dedupe}:${vendor.id}:vs-identity`,
+      data: expect.objectContaining({ ruleKey: rule.ruleKey, ruleVersion: 1, eventId: event.id, destination: "verification", sessionId: "vs-identity" }),
+    }) });
+    const deliveryResult = await notificationDeliveryService.dispatchBatch(10, new Date("2026-10-27T12:00:01Z"));
+    expect(deliveryResult).toMatchObject({ claimed: 1, sent: 1 });
+    expect(sendPushToUser).toHaveBeenCalledWith(vendor.userId, expect.objectContaining({
+      title: rule.title, body: rule.body, data: expect.objectContaining({ type: rule.type, destination: "verification" }),
+    }), { logId: "log-1" });
   });
 
   it("routes a transactional verified dispatch event to the buyer with the R22 copy", async () => {
@@ -349,7 +438,6 @@ describe("event to notification pipeline integration", () => {
   });
 
   it("routes confirmed Community Buy minimum events to the organiser through the durable delivery path", async () => {
-    vi.stubEnv("R35_COMMUNITY_BUY_MINIMUM_REACHED_ENABLED", "true");
     const event = await prismaMock.$transaction((tx: typeof txMock) => eventOutboxService.enqueue(tx, {
       name: EVENT_NAMES.community_buy_minimum_reached,
       actorType: "system",
@@ -371,22 +459,6 @@ describe("event to notification pipeline integration", () => {
       title: "Your Community Buy reached its minimum",
       data: expect.objectContaining({ destination: "community_buy_campaign", audience: "organiser", campaignId: "campaign-1" }),
     }), { logId: "log-1" });
-  });
-
-  it("keeps Community Buy minimum notifications gated off by default", async () => {
-    const event = await prismaMock.$transaction((tx: typeof txMock) => eventOutboxService.enqueue(tx, {
-      name: EVENT_NAMES.community_buy_minimum_reached,
-      actorType: "system",
-      entityType: "CommunityCampaign",
-      entityId: "campaign-1",
-      payload: { campaignId: "campaign-1", confirmedShares: 6, minimumShares: 5 },
-    }, { dedupeKey: "R35_COMMUNITY_BUY_MINIMUM_REACHED:campaign-1", schemaVersion: 1 }));
-
-    const result = await eventOutboxService.dispatchRegisteredBatch(10, new Date("2026-10-26T12:00:00Z"));
-
-    expect(result).toMatchObject({ claimed: 1, delivered: 1 });
-    expect(txMock.notification.create).not.toHaveBeenCalled();
-    expect(event.deliveryStatus).toBe("DELIVERED");
   });
 
   it("routes a real below-minimum rescue-window event to the organiser and rechecks before delivery", async () => {
@@ -549,7 +621,7 @@ describe("event to notification pipeline integration", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-10-26T12:00:00Z"));
     vi.stubEnv("R37_SUPPLIER_RECONFIRMATION_ENABLED", "true");
-    const requestedAt = new Date("2026-10-26T11:00:00Z");
+    const requestedAt = new Date("2026-10-27T11:00:00Z");
     const deadline = new Date("2026-10-27T23:00:00Z");
     const campaign = {
       id: "campaign-1", title: "Rice", status: "AWAITING_SUPPLIER_RECONFIRMATION",
@@ -563,14 +635,14 @@ describe("event to notification pipeline integration", () => {
       name: EVENT_NAMES.community_buy_supplier_reconfirmation_requested,
       actorType: "user", actorId: "organiser-1", entityType: "CommunityCampaign", entityId: "campaign-1",
       payload: { campaignId: "campaign-1", quantity: 4, requestedAt: requestedAt.toISOString(), deadline: deadline.toISOString() },
-    }, { dedupeKey: "community-buy-supplier-reconfirmation:campaign-1:2026-10-26T11:00:00.000Z", schemaVersion: 1 }));
+    }, { dedupeKey: "community-buy-supplier-reconfirmation:campaign-1:2026-10-27T11:00:00.000Z", schemaVersion: 1 }));
 
     const outboxResult = await eventOutboxService.dispatchRegisteredBatch(10, new Date("2026-10-26T12:00:00Z"));
     expect(outboxResult).toMatchObject({ claimed: 1, delivered: 1 });
     expect(txMock.notification.create).toHaveBeenCalledWith({ data: expect.objectContaining({
       userId: "supplier-1", title: "Please confirm your Community Buy supply",
       body: "Review quantity and fulfilment terms.",
-      dedupeKey: "R37_SUPPLIER_RECONFIRMATION:campaign-1:2026-10-26T11:00:00.000Z",
+      dedupeKey: "R37_SUPPLIER_RECONFIRMATION:campaign-1:2026-10-27T11:00:00.000Z",
       data: expect.objectContaining({ ruleKey: "R37_SUPPLIER_RECONFIRMATION", ruleVersion: 1, eventId: event.id, destination: "community_buy_campaign", audience: "supplier" }),
     }) });
 

@@ -1,10 +1,11 @@
-import { eventsService, EVENT_NAMES } from "../events/events.service";
 import { vendorMilestoneNotificationsService } from "./vendor-milestone-notifications.service";
 
 import { logger } from "../../lib/logger";
 import { prisma } from "../../lib/prisma";
 import { recordAudit } from "../../shared/utils/audit";
 import { communicationService } from "../communications/communication.service";
+import { enqueueProductPublished } from "../products/product-publication-events";
+import { dispatchNotificationsAfterCommit } from "../events/dispatch-notifications";
 
 /**
  * Vendor-activation spec (12 Oct 2026): "Once verification succeeds, the
@@ -50,9 +51,20 @@ export const vendorActivationService = {
       }
 
       const now = new Date();
-      const result = await prisma.product.updateMany({
-        where: { vendorId, status: "PENDING_ACTIVATION", id: { in: eligible.map((p) => p.id) } },
-        data: { status: "PUBLISHED", isActive: true, publishedAt: now },
+      const result = await prisma.$transaction(async (tx) => {
+        const changed = await tx.product.updateMany({
+          where: { vendorId, status: "PENDING_ACTIVATION", id: { in: eligible.map((p) => p.id) } },
+          data: { status: "PUBLISHED", isActive: true, publishedAt: now },
+        });
+        if (changed.count === 0) return { count: 0, products: [] as Array<{ id: string; vendorId: string; publishedAt: Date | null }> };
+        const products = await tx.product.findMany({
+          where: { vendorId, id: { in: eligible.map((p) => p.id) }, status: "PUBLISHED", publishedAt: now },
+          select: { id: true, vendorId: true, publishedAt: true },
+        });
+        for (const product of products) {
+          await enqueueProductPublished(tx, product, { actorType: "system", source: "vendor_activation_auto_publish" });
+        }
+        return { count: changed.count, products };
       });
       if (result.count === 0) {
         // Lost the race to a concurrent call (e.g. the delivery-zone and
@@ -60,13 +72,10 @@ export const vendorActivationService = {
         return { published: 0 };
       }
 
-      for (const p of eligible) {
-        eventsService.emit({
-          name: EVENT_NAMES.product_published, actorType: "system", entityType: "Product", entityId: p.id,
-          source: "vendor_activation_auto_publish", secondaryEntities: { vendorId },
-        });
+      void dispatchNotificationsAfterCommit();
+      if (process.env.R09_PUBLICATION_CONFIRMED_ENABLED !== "true") {
+        void vendorMilestoneNotificationsService.maybeSendStoreReady(vendorId);
       }
-      void vendorMilestoneNotificationsService.maybeSendStoreReady(vendorId);
 
       await recordAudit({
         actorId: "system:vendor-activation",
@@ -79,7 +88,7 @@ export const vendorActivationService = {
       // Spec: "The vendor receives confirmation when their store and
       // foodstuff are genuinely live" — sent only here, after the DB write
       // that actually makes them live has committed, never speculatively.
-      communicationService
+      if (process.env.R09_PUBLICATION_CONFIRMED_ENABLED !== "true") communicationService
         .send({
           eventKey: "vendor_store_and_products_live",
           recipientId: vendor.userId,

@@ -8,6 +8,8 @@ import { CURSOR_ORDER_BY } from "../../shared/constants";
 import { AppError } from "../../shared/errors/app-error";
 import { notificationsService } from "../notifications/notifications.service";
 import { computeProductStatus, isProductComplete } from "../products/products.service";
+import { enqueueProductPublished } from "../products/product-publication-events";
+import { dispatchNotificationsAfterCommit } from "../events/dispatch-notifications";
 import {
   SELLER_READINESS_SELECT,
   SELLER_REASON_MESSAGES,
@@ -314,18 +316,26 @@ export const adminProductsService = {
       );
     }
     const status = computeProductStatus({ complete: true });
-    const res = await prisma.product.updateMany({
-      where: { id: productId, isActive: false },
-      data: {
-        isActive: status === "PUBLISHED",
-        status,
-        publishedAt: status === "PUBLISHED" ? new Date() : null,
-        adminUnpublishedAt: null,
-        adminUnpublishedReason: null,
-        adminUnpublishedById: null,
-      },
+    const publishedAt = status === "PUBLISHED" ? new Date() : null;
+    const res = await prisma.$transaction(async (tx) => {
+      const result = await tx.product.updateMany({
+        where: { id: productId, isActive: false },
+        data: {
+          isActive: status === "PUBLISHED",
+          status,
+          publishedAt,
+          adminUnpublishedAt: null,
+          adminUnpublishedReason: null,
+          adminUnpublishedById: null,
+        },
+      });
+      if (result.count && publishedAt) {
+        await enqueueProductPublished(tx, { id: product.id, vendorId: product.vendorId, publishedAt }, { actorType: "admin", source: "admin_product_restore" });
+      }
+      return result;
     });
     if (res.count !== 1) throw new AppError("Product changed while you were editing. Reload and retry.", 409);
+    if (publishedAt) void dispatchNotificationsAfterCommit();
     return {
       product,
       before: {

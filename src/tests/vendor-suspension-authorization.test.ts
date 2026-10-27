@@ -13,7 +13,8 @@ vi.mock("../lib/prisma", () => ({
   prisma: {
     vendor: { findUnique: vi.fn() },
     vendorSubscription: { findUnique: vi.fn() },
-    product: { count: vi.fn(), create: vi.fn(), update: vi.fn(), findFirst: vi.fn(), findUnique: vi.fn(), findMany: vi.fn() },
+    product: { count: vi.fn(), create: vi.fn(), update: vi.fn(), updateMany: vi.fn(), findFirst: vi.fn(), findUnique: vi.fn(), findMany: vi.fn() },
+    $transaction: vi.fn((fn: (tx: any) => unknown) => fn({ product: { create: (args: any) => (m as any).product.create(args) } })),
     order: { findUnique: vi.fn(), update: vi.fn() },
     payoutMethod: { findUnique: vi.fn() },
     payoutRequest: { create: vi.fn(), findMany: vi.fn(), aggregate: vi.fn() },
@@ -23,6 +24,8 @@ vi.mock("../lib/prisma", () => ({
 
 vi.mock("../lib/logger", () => ({ logger: { error: vi.fn(), warn: vi.fn(), info: vi.fn() } }));
 vi.mock("../modules/notifications/notifications.service", () => ({ notificationsService: { enqueue: vi.fn().mockResolvedValue(undefined) } }));
+vi.mock("../modules/products/product-publication-events", () => ({ enqueueProductPublished: vi.fn() }));
+vi.mock("../modules/events/dispatch-notifications", () => ({ dispatchNotificationsAfterCommit: vi.fn() }));
 vi.mock("../modules/communications/communication.service", () => ({ communicationService: { send: vi.fn().mockResolvedValue(undefined) } }));
 vi.mock("../shared/utils/wallet-release", () => ({ releaseVendorEarnings: vi.fn().mockResolvedValue(undefined) }));
 vi.mock("../lib/stripe", () => ({ stripe: { transfers: { create: vi.fn() }, payouts: { create: vi.fn() } } }));

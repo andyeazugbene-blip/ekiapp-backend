@@ -8,6 +8,95 @@ import { resolveNotificationRule } from "./notification-event-rules";
 import { COMMUNITY_BUY_ORGANISER_DECISION_WINDOW_MS } from "../community-buy/community-buy-timing";
 import { getCurrentInventoryConflict } from "../products/inventory-conflict";
 
+async function handleVerificationStatus(tx: Prisma.TransactionClient, event: Event, input: {
+  eventName: string; ruleKey: string; notificationType: string; title: string; body: string; dedupePrefix: string;
+  requiredStatus: string; requiredIdentityStatus: string; destination: string;
+}): Promise<void> {
+  const rule = resolveNotificationRule(event);
+  if (!rule?.enabled) return;
+  const vendorId = requiredId(event.payload, "vendorId");
+  const sessionId = requiredId(event.payload, "sessionId");
+  const vendor = await tx.vendor.findUnique({ where: { id: vendorId }, select: { id: true, userId: true, verificationStatus: true, stripeVerificationSessionId: true, stripeIdentityStatus: true } });
+  if (!vendor || vendor.verificationStatus !== input.requiredStatus || vendor.stripeVerificationSessionId !== sessionId
+    || vendor.stripeIdentityStatus !== input.requiredIdentityStatus) return;
+  const recipient = await tx.user.findUnique({ where: { id: vendor.userId }, select: { id: true, role: true, isSuspended: true } });
+  if (!recipient || recipient.role !== "VENDOR" || recipient.isSuspended) return;
+  const dedupeKey = `${input.dedupePrefix}:${vendor.id}:${sessionId}`;
+  const created = await notificationsService.create({
+    userId: recipient.id,
+    type: input.notificationType as never,
+    title: input.title,
+    body: input.body,
+    data: { type: input.eventName, ruleKey: rule.key, ruleVersion: rule.version, eventId: event.id, templateVersion: 1, destination: input.destination, vendorId, sessionId },
+    dedupeKey,
+  }, tx);
+  const candidate = created ?? await tx.notification.findUnique({ where: { dedupeKey }, select: { id: true } });
+  if (candidate) await tx.notificationDelivery.upsert({
+    where: { notificationId_channel: { notificationId: candidate.id, channel: "push" } },
+    create: { notificationId: candidate.id, channel: "push" },
+    update: {},
+  });
+}
+
+export async function handleVerificationApproved(tx: Prisma.TransactionClient, event: Event): Promise<void> {
+  await handleVerificationStatus(tx, event, {
+    eventName: "vendor_verification_approved", ruleKey: "R08_VERIFICATION_APPROVED", notificationType: "VERIFICATION_APPROVED",
+    title: "Your verification is complete", body: "We are checking which foodstuff can now be published.",
+    dedupePrefix: "R08_VERIFICATION_APPROVED", requiredStatus: "VERIFIED", requiredIdentityStatus: "verified", destination: "verification",
+  });
+}
+
+export async function handleVerificationRequiresCorrection(tx: Prisma.TransactionClient, event: Event): Promise<void> {
+  await handleVerificationStatus(tx, event, {
+    eventName: "vendor_verification_rejected", ruleKey: "R07_VERIFICATION_REQUIRES_CORRECTION", notificationType: "VERIFICATION_REJECTED",
+    title: "Your verification needs attention", body: "Review the secure step that needs correcting.",
+    dedupePrefix: "R07_VERIFICATION_REQUIRES_CORRECTION", requiredStatus: "REJECTED", requiredIdentityStatus: "requires_input", destination: "verification",
+  });
+}
+
+/** R09: notify once for the vendor's first genuinely published foodstuff. */
+export async function handleProductPublished(tx: Prisma.TransactionClient, event: Event): Promise<void> {
+  const rule = resolveNotificationRule(event);
+  if (!rule?.enabled) return;
+  const productId = requiredId(event.payload, "productId");
+  const vendorId = requiredId(event.payload, "vendorId");
+  const payload = event.payload as Record<string, unknown>;
+  if (typeof payload.publishedAt !== "string" || Number.isNaN(Date.parse(payload.publishedAt))) {
+    throw new AppError("Invalid product publication timestamp", 400);
+  }
+  const product = await tx.product.findUnique({ where: { id: productId }, include: { vendor: { select: { id: true, userId: true } } } });
+  if (!product || product.vendorId !== vendorId || product.vendor.id !== vendorId || !product.isActive || product.status !== "PUBLISHED"
+    || product.publishedAt?.toISOString() !== payload.publishedAt) return;
+  const recipient = await tx.user.findUnique({ where: { id: product.vendor.userId }, select: { id: true, role: true, isSuspended: true } });
+  if (!recipient || recipient.role !== "VENDOR" || recipient.isSuspended) return;
+
+  const dedupeKey = `R09_PUBLICATION_CONFIRMED:${vendorId}`;
+  const created = await notificationsService.create({
+    userId: recipient.id,
+    type: "AUTOMATION_MESSAGE",
+    title: "Your foodstuff is now visible",
+    body: "Share your store with buyers.",
+    data: {
+      type: "product_published",
+      ruleKey: rule.key,
+      ruleVersion: rule.version,
+      eventId: event.id,
+      templateVersion: 1,
+      destination: "store_share",
+      productId: product.id,
+      vendorId,
+      publishedAt: payload.publishedAt,
+    },
+    dedupeKey,
+  }, tx);
+  const candidate = created ?? await tx.notification.findUnique({ where: { dedupeKey }, select: { id: true } });
+  if (candidate) await tx.notificationDelivery.upsert({
+    where: { notificationId_channel: { notificationId: candidate.id, channel: "push" } },
+    create: { notificationId: candidate.id, channel: "push" },
+    update: {},
+  });
+}
+
 function requiredId(payload: unknown, field: string): string {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) throw new AppError("Invalid support response event payload", 400);
   const value = (payload as Record<string, unknown>)[field];
@@ -15,7 +104,37 @@ function requiredId(payload: unknown, field: string): string {
   return value;
 }
 
-/** R12: tell the current vendor about a newly paid, still-unacknowledged order. */
+/** R20: ask the buyer to review payment after Stripe confirms a checkout failure. */
+export async function handlePaymentFailed(tx: Prisma.TransactionClient, event: Event): Promise<void> {
+  const rule = resolveNotificationRule(event);
+  if (!rule?.enabled) return;
+  const checkoutId = requiredId(event.payload, "checkoutId");
+  const checkout = await tx.checkout.findUnique({ where: { id: checkoutId }, select: { id: true, buyerId: true, status: true } });
+  if (!checkout || checkout.status !== "FAILED") return;
+  const recipient = await tx.user.findUnique({ where: { id: checkout.buyerId }, select: { id: true, role: true, isSuspended: true } });
+  if (!recipient || recipient.role !== "BUYER" || recipient.isSuspended) return;
+
+  const dedupeKey = `R20_PAYMENT_FAILED:${checkout.id}`;
+  const created = await notificationsService.create({
+    userId: recipient.id,
+    type: "AUTOMATION_MESSAGE",
+    title: "Your payment did not go through",
+    body: "Review your payment method to continue.",
+    data: {
+      type: "payment_failed", ruleKey: rule.key, ruleVersion: rule.version,
+      eventId: event.id, templateVersion: 1, destination: "checkout", checkoutId: checkout.id,
+      stripeEventId: requiredId(event.payload, "stripeEventId"),
+    },
+    dedupeKey,
+  }, tx);
+  const candidate = created ?? await tx.notification.findUnique({ where: { dedupeKey }, select: { id: true } });
+  if (candidate) await tx.notificationDelivery.upsert({
+    where: { notificationId_channel: { notificationId: candidate.id, channel: "push" } },
+    create: { notificationId: candidate.id, channel: "push" },
+    update: {},
+  });
+}
+
 export async function handleFirstPaidOrder(tx: Prisma.TransactionClient, event: Event): Promise<void> {
   const rule = resolveNotificationRule(event);
   if (!rule?.enabled) return;
@@ -103,37 +222,6 @@ export async function handleOrderDispatched(tx: Prisma.TransactionClient, event:
       type: "buyer_order_dispatched", ruleKey: rule.key, ruleVersion: rule.version,
       eventId: event.id, templateVersion: 1, destination: "order_detail", orderId: order.id,
       orderNumber: order.orderNumber,
-    },
-    dedupeKey,
-  }, tx);
-  const candidate = created ?? await tx.notification.findUnique({ where: { dedupeKey }, select: { id: true } });
-  if (candidate) await tx.notificationDelivery.upsert({
-    where: { notificationId_channel: { notificationId: candidate.id, channel: "push" } },
-    create: { notificationId: candidate.id, channel: "push" },
-    update: {},
-  });
-}
-
-/** R20: ask the buyer to review payment after Stripe confirms a checkout failure. */
-export async function handlePaymentFailed(tx: Prisma.TransactionClient, event: Event): Promise<void> {
-  const rule = resolveNotificationRule(event);
-  if (!rule?.enabled) return;
-  const checkoutId = requiredId(event.payload, "checkoutId");
-  const checkout = await tx.checkout.findUnique({ where: { id: checkoutId }, select: { id: true, buyerId: true, status: true } });
-  if (!checkout || checkout.status !== "FAILED") return;
-  const recipient = await tx.user.findUnique({ where: { id: checkout.buyerId }, select: { id: true, role: true, isSuspended: true } });
-  if (!recipient || recipient.role !== "BUYER" || recipient.isSuspended) return;
-
-  const dedupeKey = `R20_PAYMENT_FAILED:${checkout.id}`;
-  const created = await notificationsService.create({
-    userId: recipient.id,
-    type: "AUTOMATION_MESSAGE",
-    title: "Your payment did not go through",
-    body: "Review your payment method to continue.",
-    data: {
-      type: "payment_failed", ruleKey: rule.key, ruleVersion: rule.version,
-      eventId: event.id, templateVersion: 1, destination: "checkout", checkoutId: checkout.id,
-      stripeEventId: requiredId(event.payload, "stripeEventId"),
     },
     dedupeKey,
   }, tx);
@@ -637,6 +725,9 @@ export async function handleCommunityBuyBelowMinimum(tx: Prisma.TransactionClien
 let registered = false;
 export function registerCoreEventHandlers(): void {
   if (registered) return;
+  eventOutboxService.registerHandler(EVENT_NAMES.verification_completed, handleVerificationApproved);
+  eventOutboxService.registerHandler(EVENT_NAMES.verification_requires_input, handleVerificationRequiresCorrection);
+  eventOutboxService.registerHandler(EVENT_NAMES.product_published, handleProductPublished);
   eventOutboxService.registerHandler(EVENT_NAMES.payment_succeeded, handleFirstPaidOrder);
   eventOutboxService.registerHandler(EVENT_NAMES.order_accepted, handleOrderConfirmed);
   eventOutboxService.registerHandler(EVENT_NAMES.order_dispatched, handleOrderDispatched);
