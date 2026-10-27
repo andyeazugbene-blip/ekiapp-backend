@@ -1,5 +1,7 @@
 # Database Report
 
+> This report contains historical migration snapshots from earlier PRs. The current verification found no schema change in merged PR #47; see `11-final-verification-2026-10-27.md`. Statements about older open PRs below are historical, not live PR status.
+
 ## Current notification orchestration contract — 2026-10-27
 
 The follow-up migration `20261027120000_notification_candidate_contract` adds candidate lifecycle and orchestration metadata to `Notification`/`NotificationDelivery`, role-scoped `NotificationPreference` and `NotificationOutcome` tables, and task-episode linkage on `CommunicationLog`. It is additive; no existing row is deleted or rewritten. `prisma validate` and client generation pass against the updated schema. Production migration has not been applied.

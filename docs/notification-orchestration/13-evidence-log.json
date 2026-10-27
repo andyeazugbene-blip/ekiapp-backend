@@ -1,0 +1,121 @@
+{
+  "verifiedAtUtc": "2026-10-27T18:42:02Z",
+  "scope": "Read-only current repository/PR/CI inspection plus local tests and documentation refresh; no production or native-device actions",
+  "repositories": {
+    "backend": {
+      "remote": "https://github.com/andyeazugbene-blip/ekiapp-backend",
+      "mainSha": "45b5e1578edc2803aec59d40d59c487f48ec9ff3",
+      "localStartingBranch": "fix/fail-closed-unverified-order-reminders",
+      "localStartingSha": "efbbb2fb81aaeddc6f809d7fe44c53a3e6ddf4d8",
+      "workingTreeAtInspection": "clean",
+      "openPullRequests": [],
+      "mainCi": {
+        "runId": 40550238299,
+        "url": "https://github.com/andyeazugbene-blip/ekiapp-backend/actions/runs/40550238299",
+        "conclusion": "success",
+        "headSha": "45b5e1578edc2803aec59d40d59c487f48ec9ff3"
+      },
+      "pr47": {
+        "url": "https://github.com/andyeazugbene-blip/ekiapp-backend/pull/47",
+        "state": "MERGED",
+        "mergedAtUtc": "2026-10-27T17:24:06Z",
+        "headSha": "efbbb2fb81aaeddc6f809d7fe44c53a3e6ddf4d8",
+        "headCiRunId": 40529302921,
+        "headCiConclusion": "success",
+        "vercelPreview": "success",
+        "vercelPreviewComments": "success"
+      }
+    },
+    "mobile": {
+      "remote": "https://github.com/andyeazugbene-blip/ekiapp-frontnend-application-ios-android",
+      "mainSha": "ac1cf5e8e27d71f53fc7abe290219a07fd835a5c",
+      "pr5": {
+        "url": "https://github.com/andyeazugbene-blip/ekiapp-frontnend-application-ios-android/pull/5",
+        "state": "OPEN",
+        "mergeable": "MERGEABLE",
+        "headSha": "72355b0675e0788fc263f977cbc73ba9bdc27708",
+        "baseSha": "ac1cf5e8e27d71f53fc7abe290219a07fd835a5c",
+        "reviews": 0,
+        "vercel": "success",
+        "vercelPreviewComments": "success",
+        "ciTestJob": "none listed",
+        "cleanQaCheckout": "C:/Users/Origin Systems/Desktop/ITALIAN APP/ekiapp-mobile-pr5-qa"
+      },
+      "protectedOriginalCheckout": {
+        "path": "C:/Users/Origin Systems/Desktop/ITALIAN APP/ekiapp-frontnend-application-ios-android-main/android/app/src/main/AndroidManifest.xml",
+        "workingTree": "pre-existing modified file left untouched",
+        "sha256Before": "88444E61DBF4EA8A10768C457B032BCA4713B23BBB422C35737DB731D7C52448",
+        "sha256After": "88444E61DBF4EA8A10768C457B032BCA4713B23BBB422C35737DB731D7C52448"
+      }
+    }
+  },
+  "tests": [
+    {
+      "repository": "backend current main",
+      "command": "npx vitest run src/tests/order-acceptance-notifications.test.ts src/tests/notification-event-pipeline.integration.test.ts src/tests/notification-delivery.test.ts src/tests/core-event-handlers.test.ts src/tests/event-outbox.test.ts --pool=threads --maxWorkers=1 --reporter=dot",
+      "exitCode": 0,
+      "result": "5 files passed; 65 tests passed"
+    },
+    {
+      "repository": "backend current main",
+      "command": "npm run build",
+      "result": "passed"
+    },
+    {
+      "repository": "backend current main",
+      "command": "npx tsc --noEmit",
+      "result": "passed"
+    },
+    {
+      "repository": "backend current main",
+      "command": "npx prisma validate",
+      "result": "passed; no schema change in PR #47"
+    },
+    {
+      "repository": "backend current main",
+      "commands": [
+        "node --test scripts/validate-notification-catalogue.node-test.mjs",
+        "node scripts/validate-notification-catalogue.mjs docs/notification-orchestration/210-event-reconciliation-template.csv --template"
+      ],
+      "result": "4 validator tests passed; empty source reconciliation template validated (16 columns)"
+    },
+    {
+      "repository": "mobile clean PR #5 QA checkout",
+      "commands": [
+        "npm run typecheck",
+        "npm run check:tab-registration",
+        "npm run check:automation-managed-types-viewable",
+        "npm run check:release-config"
+      ],
+      "result": "all passed"
+    },
+    {
+      "repository": "mobile clean PR #5 QA checkout",
+      "command": "npm run check:domains",
+      "result": "remote primary, www, and API health checks failed to fetch (status 0); store routes skipped because no vendor slug was available"
+    },
+    {
+      "repository": "backend current main",
+      "command": "npx vitest run --pool=threads --maxWorkers=1 --reporter=dot",
+      "exitCode": 1,
+      "result": "10 files failed, 196 passed; 236 tests failed, 2899 passed, 72 skipped (3207 total); HTTP socket tests failed with EACCES 127.0.0.1; one beforeAll hook timed out after 30 seconds",
+      "classification": "environment limitation; re-run in CI or environment allowing local HTTP sockets"
+    }
+  ],
+  "scheduler": {
+    "sourceCadence": "GitHub Actions schedule declared every 10 minutes; Vercel cron is daily at 12:00 UTC",
+    "latestInspectedScheduledRun": {
+      "runId": 40513686001,
+      "url": "https://github.com/andyeazugbene-blip/ekiapp-backend/actions/runs/40513686001",
+      "createdAtUtc": "2026-10-27T13:37:38Z",
+      "conclusion": "failure",
+      "failure": "credential unavailable before endpoint calls; job intentionally stopped"
+    }
+  },
+  "production": {
+    "deployedCommit": "not verified",
+    "runtimeDelivery": "not verified",
+    "effectiveGateValues": "not inspected",
+    "nativeIosAndroidQa": "not performed"
+  }
+}
