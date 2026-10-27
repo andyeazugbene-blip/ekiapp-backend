@@ -1335,7 +1335,7 @@ export const publicStoresService = {
         entityType: "Vendor", entityId: vendor.id, source, payload: { storeSlug: vendor.storeSlug, clientReported: true },
       });
       void recordNotificationTaskCompletion({
-        userId: vendor.userId, ruleId: "R09_PUBLICATION_CONFIRMED", entityType: "Vendor", entityId: vendor.id,
+        userId: viewerId!, ruleId: "R09_PUBLICATION_CONFIRMED", entityType: "Vendor", entityId: vendor.id,
       }).catch((error) => logger.warn("Notification task completion attribution failed", { ruleId: "R09_PUBLICATION_CONFIRMED", vendorId: vendor.id, error: String(error) }));
     }
 
