@@ -141,6 +141,6 @@ Test Files  5 passed (5)
 Tests       75 passed (75)
 ```
 
-The R30 cases verify future scheduling, exact `trialEndsAt - 7 days` timing and send-time state checks. R24 tests cover the authenticated vendor producer transition, full outbox-to-candidate-to-push path, current buyer/shipment eligibility, and cancellation when a newer delay episode supersedes a candidate.
+The R30 cases verify future scheduling, exact `trialEndsAt - 7 days` timing, current-state checks, and suppression after the five-minute due-time jitter window. R24 tests cover the authenticated vendor producer transition, full outbox-to-candidate-to-push path, current buyer/shipment eligibility, and cancellation when a newer delay episode supersedes a candidate.
 
 Additional checks: `npm run build` — passed; `npx tsc --noEmit` — passed; `npx prisma validate` — passed; `git diff --check` — passed. Mobile `npm run typecheck` passed during review of open mobile PR #5. This is source typechecking, not native device QA. No device, production runtime, external provider, or sub-daily scheduler verification was performed. All gates remain off.

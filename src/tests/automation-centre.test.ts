@@ -6,7 +6,7 @@ vi.mock("../lib/prisma", () => ({
     cart: { findMany: vi.fn() },
     vendor: { findMany: vi.fn(), findUnique: vi.fn() },
     vendorAutomationSetting: { findUnique: vi.fn() },
-    automationRun: { create: vi.fn(), update: vi.fn(), findFirst: vi.fn(), findMany: vi.fn(), findUnique: vi.fn() },
+    automationRun: { create: vi.fn(), update: vi.fn(), updateMany: vi.fn(), findFirst: vi.fn(), findMany: vi.fn(), findUnique: vi.fn() },
     automationRule: { findUnique: vi.fn(), updateMany: vi.fn() },
     communicationTemplate: { findUnique: vi.fn(), create: vi.fn() },
     communicationLog: { findMany: vi.fn() },
@@ -40,6 +40,7 @@ beforeEach(() => {
   m.communicationTemplate.create.mockResolvedValue({} as never);
   m.cart.findMany.mockResolvedValue([] as never);
   m.communicationLog.findMany.mockResolvedValue([] as never);
+  m.automationRun.findMany.mockResolvedValue([] as never);
   m.event.create.mockResolvedValue({} as never);
 });
 afterEach(() => {
@@ -206,10 +207,10 @@ describe("trial_will_end", () => {
     expect(m.automationRun.create).not.toHaveBeenCalled();
   });
 
-  it("schedules only subscriptions whose current end falls within seven days and remains in the future", async () => {
+  it("schedules subscriptions from their persisted current end without sending early", async () => {
     process.env.R30_TRIAL_ENDING_ENABLED = "true";
     const now = new Date("2026-06-15T12:00:00.000Z");
-    const trialEnd = new Date(now.getTime() + 6 * 24 * 60 * 60 * 1000);
+    const trialEnd = new Date(now.getTime() + 14 * 24 * 60 * 60 * 1000);
     m.vendorSubscription.findMany.mockResolvedValue([{
       id: "vs1", vendorId: "v1", plan: "GROWTH", trialEndsAt: trialEnd,
       sellerPlan: null,
@@ -219,10 +220,11 @@ describe("trial_will_end", () => {
 
     expect(await detectVendorTrialEnding(now)).toBe(1);
     expect(m.vendorSubscription.findMany).toHaveBeenCalledWith(expect.objectContaining({
-      where: expect.objectContaining({ status: "ACTIVE", cancelledAt: null, trialEndsAt: { gt: now, lte: new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000) } }),
+      where: expect.objectContaining({ status: "ACTIVE", cancelledAt: null, trialEndsAt: { gt: now } }),
     }));
     expect(schedule).toHaveBeenCalledWith(expect.objectContaining({
       subjectKey: `vs1:${trialEnd.getTime()}`,
+      scheduledFor: new Date(trialEnd.getTime() - 7 * 24 * 60 * 60 * 1000),
       title: "Your Eki Membership trial is ending",
       body: "Review your actual billing date and terms.",
       data: expect.objectContaining({ trial_end: trialEnd.toISOString(), destination: "membership" }),
@@ -236,18 +238,65 @@ describe("trial_will_end", () => {
     expect(m.vendorSubscription.findMany).not.toHaveBeenCalled();
   });
 
+  it("does not dispatch a scheduled trial reminder before its exact seven-day due time", async () => {
+    const now = new Date("2026-06-15T12:00:00.000Z");
+    m.automationRun.findMany.mockResolvedValue([] as never);
+
+    expect(await automationService.dispatchDueVendorTrialEnding(now)).toBe(0);
+    expect(m.automationRun.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: { type: "VENDOR_TRIAL_ENDING", status: "SCHEDULED", scheduledFor: { lte: now } },
+    }));
+    expect(m.automationRun.updateMany).not.toHaveBeenCalled();
+    expect(mSend).not.toHaveBeenCalled();
+  });
+
+  it("dispatches the queued trial reminder only after its exact due time and rechecks live state", async () => {
+    process.env.R30_TRIAL_ENDING_ENABLED = "true";
+    const scheduledFor = new Date("2026-06-15T12:00:00.000Z");
+    const trialEnd = new Date(scheduledFor.getTime() + 7 * 24 * 60 * 60 * 1000);
+    const data = {
+      vendor_subscription_id: "vs1", trial_end: trialEnd.toISOString(), scheduled_for: scheduledFor.toISOString(),
+      destination: "membership",
+    };
+    m.automationRun.findMany.mockResolvedValue([{
+      id: "run-1", type: "VENDOR_TRIAL_ENDING", recipientUserId: "u1", vendorId: "v1",
+      dedupeKey: `VENDOR_TRIAL_ENDING:vs1:${trialEnd.getTime()}`, data, scheduledFor,
+    }] as never);
+    m.automationRun.updateMany.mockResolvedValue({ count: 1 } as never);
+    m.vendorSubscription.findUnique.mockResolvedValue({
+      vendorId: "v1", plan: "GROWTH", status: "ACTIVE", cancelledAt: null, trialEndsAt: trialEnd,
+    } as never);
+    m.vendor.findUnique.mockResolvedValue({ userId: "u1", isSuspended: false } as never);
+    m.user.findUnique.mockResolvedValue({ role: "VENDOR", isSuspended: false, marketingConsentAt: null, name: "Vendor", email: "vendor@example.com", country: "GB" } as never);
+    mSend.mockResolvedValue({ outcome: "SENT" } as never);
+
+    expect(await automationService.dispatchDueVendorTrialEnding(scheduledFor)).toBe(1);
+    expect(m.automationRun.updateMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: "run-1", type: "VENDOR_TRIAL_ENDING", status: "SCHEDULED", scheduledFor: { lte: scheduledFor } },
+      data: { status: "ELIGIBILITY_CHECK" },
+    }));
+    expect(mSend).toHaveBeenCalledWith(expect.objectContaining({
+      eventKey: "automation_vendor_trial_ending", recipientId: "u1",
+      data: expect.objectContaining({ trial_end: trialEnd.toISOString(), destination: "membership" }),
+    }));
+  });
+
   it("rechecks current trial state, vendor ownership, and recipient role immediately before sending", async () => {
     process.env.R30_TRIAL_ENDING_ENABLED = "true";
-    const trialEnd = new Date("2026-06-21T12:00:00.000Z");
+    const trialEnd = new Date("2026-06-22T12:00:00.000Z");
     const input = {
       type: "VENDOR_TRIAL_ENDING", recipientUserId: "u1", vendorId: "v1", subjectKey: "vs1:1782043200000",
       requiresMarketingConsent: false, title: "Your Eki Membership trial is ending", body: "Review your actual billing date and terms.",
-      data: { vendor_subscription_id: "vs1", trial_end: trialEnd.toISOString() },
+      data: { vendor_subscription_id: "vs1", trial_end: trialEnd.toISOString(), scheduled_for: new Date(trialEnd.getTime() - 7 * 24 * 60 * 60 * 1000).toISOString() },
     } as const;
     m.vendorSubscription.findUnique.mockResolvedValue({ vendorId: "v1", plan: "GROWTH", status: "ACTIVE", cancelledAt: null, trialEndsAt: trialEnd } as never);
     m.vendor.findUnique.mockResolvedValue({ userId: "u1", isSuspended: false } as never);
     m.user.findUnique.mockResolvedValue({ role: "VENDOR", isSuspended: false } as never);
     expect(await vendorTrialEndingStillEligible(input)).toBe(true);
+
+    vi.setSystemTime(new Date("2026-06-15T12:06:00.000Z"));
+    expect(await vendorTrialEndingStillEligible(input)).toBe(false);
+    vi.setSystemTime(new Date("2026-06-15T12:00:00.000Z"));
 
     m.vendorSubscription.findUnique.mockResolvedValue({ vendorId: "v1", plan: "GROWTH", status: "CANCELLED", cancelledAt: new Date(), trialEndsAt: trialEnd } as never);
     expect(await vendorTrialEndingStillEligible(input)).toBe(false);
