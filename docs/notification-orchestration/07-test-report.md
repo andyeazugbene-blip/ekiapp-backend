@@ -209,4 +209,4 @@ npx prisma validate                  passed (no schema change)
 git diff --check                     passed
 ```
 
-The first focused Vitest invocation could not create a temporary file under the sandbox's default temp path; rerunning with repository-local `TEMP`/`TMP` succeeded. PR #47 is open and its remote checks are pending; local checks are not remote CI, device QA, or runtime verification. Backend main was `8243cb5` at the start of this rebase.
+The first focused Vitest invocation could not create a temporary file under the sandbox's default temp path; rerunning with repository-local `TEMP`/`TMP` succeeded. After rebasing PR #47 onto backend main `8243cb5`, its GitHub `test` job passed in 1m25s (run [40528973929](https://github.com/andyeazugbene-blip/ekiapp-backend/actions/runs/40528973929)); Vercel and preview comments also passed. The PR remains open and unmerged. Local/CI checks are not device QA or production runtime verification.
