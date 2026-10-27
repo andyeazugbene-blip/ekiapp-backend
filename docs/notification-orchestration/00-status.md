@@ -4,7 +4,7 @@
 **Author:** Mouad (with Claude Code assistance)
 **Authoritative source:** the client supplied the Google Doc export on 2026-10-26. A byte-for-byte working copy is stored at [`Eki-Notification-Orchestration-Spec-v2.md`](Eki-Notification-Orchestration-Spec-v2.md). The document identifies itself as an implementation draft and says production event mapping and live QA are still required; each R01–R40 entry is proposed, not proof of an implemented backend event.
 
-**Latest work:** Backend PR #38 (R07–R09 activation alerts), PR #39 (R12/R21/R22 order alerts), and PR #41 (shared candidate/preference/outcome contract and send-time policy) are merged into `main`; PR #41 merge commit is `6d27874c7dde488bf491b3dff9f8c3c75cadddea`. Existing Android manifest changes in the mobile checkout remain untouched. R07–R09 and order alert gates remain off pending native runtime QA.
+**Latest work:** Backend PRs #38 (R07–R09 activation alerts), #39 (R12/R21/R22 order alerts), #41 (shared candidate/preference/outcome contract), and #42 (status documentation) are merged into `main`; the current starting commit is `3aa4e6d`. This follow-up adds exact due-time scheduling for R30 and a scoped, gated R24 event for an authenticated vendor-reported shipment delay. The mobile Android manifest edit remains untouched. All new gates remain off pending runtime/device QA.
 
 R06 now stops when the existing Stripe Identity session ID shows verification has started; R07/R08 use the real `requires_input`/`verified` webhook paths. The shared schema now carries rule/event/role/entity/task-episode, due/expiry, priority/category, template/variant, candidate lifecycle, preference, and outcome fields. The delivery worker applies role-scoped push consent, preference quiet hours, WhatsApp episode suppression when an eligible delivered log exists, expiry, and current-state checks. Authenticated notification opens record click outcomes; source-backed completion events record direct-task completion. R04 remains disabled. General support coverage uses the existing SUPPORT conversation/Message model.
 
@@ -32,6 +32,6 @@ R06 now stops when the existing Stripe Identity session ID shows verification ha
 | 5 | Deep-link matrix | Done — verified against the actual mobile repo, not assumed |
 | 6 | Database report | Existing migrations plus new additive candidate-contract migration |
 | 7 | Test report | Updated with actual 2026-10-26 commands; full HTTP suite is sandbox-blocked |
-| 8 | Changed-files summary | Backend PR #41 merged; see its changed-files view and commit `6d27874` |
+| 8 | Changed-files summary | PRs #38, #39, #41 and #42 are merged; this follow-up's changes are on the review branch |
 | 9 | Outstanding decisions | Done — 4 real decisions, not 40 |
-| 10 | Release recommendation | #38/#39/#41 are merged with CI green. No production migration or gate enablement is included. |
+| 10 | Release recommendation | #38/#39/#41/#42 are merged. No production migration, deployment, or gate enablement is included in this follow-up. |

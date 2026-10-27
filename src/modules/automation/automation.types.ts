@@ -18,6 +18,9 @@ export interface ScheduleAutomationInput {
   requiresMarketingConsent: boolean;
   // Transactional notices (e.g. trial ending) are not held back by quiet hours.
   bypassQuietHours?: boolean;
+  // Exact due time for durable, delayed automation delivery. Only the due-run
+  // worker may dispatch a future run; callers must not send it immediately.
+  scheduledFor?: Date;
   title: string;
   body: string;
   data?: Record<string, unknown>;
@@ -61,8 +64,9 @@ export const MARKETING_AUTOMATION_TYPES: AutomationType[] = [
 // NEITHER list above and not returned by listVendorAutomations(): there is
 // no Vendor row (and so no vendorId) for its recipient YET — that's the
 // whole point of the automation — so it can't be a per-vendor Automation
-// Centre toggle like the 11 above, same reason VENDOR_TRIAL_ENDING
-// (Stripe-triggered, not detector-driven) is also absent from both lists.
+// Centre toggle like the 11 above. VENDOR_TRIAL_ENDING is also absent from
+// both lists because it is Eki-managed and triggered from persisted billing
+// state, rather than configured by the vendor.
 // It still goes through automationService.scheduleAutomation() and gets an
 // AutomationRule row via ensureRules() for admin visibility/pause control
 // — it's just not vendor-facing (there's no vendor account yet to show it

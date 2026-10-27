@@ -18,6 +18,9 @@ const { prismaMock, txMock, sendPushToUser } = vi.hoisted(() => {
       communityCampaign: { findUnique: vi.fn() },
       campaignContribution: { findMany: vi.fn() },
       payoutRequest: { findUnique: vi.fn() },
+      shipment: { findUnique: vi.fn() },
+      event: { findFirst: vi.fn() },
+      order: { findUnique: vi.fn() },
       user: { findUnique: vi.fn() },
       communicationLog: { update: vi.fn(), findFirst: vi.fn().mockResolvedValue(null) },
       $transaction: vi.fn(async (fn: (tx: typeof txMock) => Promise<unknown>) => fn(txMock)),
@@ -44,6 +47,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   vi.stubEnv("R28_GENERAL_SUPPORT_NOTIFICATIONS_ENABLED", "true");
   vi.stubEnv("R35_COMMUNITY_BUY_MINIMUM_REACHED_ENABLED", "false");
+  vi.stubEnv("R24_DELIVERY_EXCEPTION_ENABLED", "false");
   prismaMock.notificationDelivery.updateMany.mockResolvedValue({ count: 1 });
   prismaMock.notificationDelivery.findMany.mockResolvedValue([delivery]);
   prismaMock.message.findUnique.mockResolvedValue({
@@ -65,6 +69,38 @@ beforeEach(() => {
 });
 
 describe("notification push delivery", () => {
+  it("rechecks latest explicit shipment delay and buyer ownership before R24 push", async () => {
+    vi.stubEnv("R24_DELIVERY_EXCEPTION_ENABLED", "true");
+    prismaMock.shipment.findUnique.mockResolvedValue({ id: "shipment-24", orderId: "order-24", status: "DELAYED" } as never);
+    prismaMock.order.findUnique.mockResolvedValue({ buyerId: "buyer-1" } as never);
+    prismaMock.event.findFirst.mockResolvedValue({ id: "event-24" } as never);
+    prismaMock.notificationDelivery.findMany.mockResolvedValue([{
+      ...delivery,
+      notification: { ...delivery.notification, title: "Your delivery needs attention", body: "Review the available next steps.",
+        data: { type: "shipment_delayed", ruleKey: "R24_DELIVERY_EXCEPTION", ruleVersion: 1, eventId: "event-24", orderId: "order-24", shipmentId: "shipment-24" } },
+    }] as never);
+    sendPushToUser.mockResolvedValue({ tokens: 1, accepted: 1, rejected: 0, ticketIds: ["ticket-r24"] });
+    const result = await notificationDeliveryService.dispatchBatch(10, now);
+    expect(result).toMatchObject({ claimed: 1, sent: 1 });
+    expect(sendPushToUser).toHaveBeenCalledWith("buyer-1", expect.objectContaining({ title: "Your delivery needs attention" }), { logId: "log-1" });
+    vi.unstubAllEnvs();
+  });
+
+  it("cancels an R24 delay push when a newer shipment event supersedes it", async () => {
+    vi.stubEnv("R24_DELIVERY_EXCEPTION_ENABLED", "true");
+    prismaMock.shipment.findUnique.mockResolvedValue({ id: "shipment-24", orderId: "order-24", status: "DELAYED" } as never);
+    prismaMock.order.findUnique.mockResolvedValue({ buyerId: "buyer-1" } as never);
+    prismaMock.event.findFirst.mockResolvedValue({ id: "newer-event" } as never);
+    prismaMock.notificationDelivery.findMany.mockResolvedValue([{
+      ...delivery,
+      notification: { ...delivery.notification, data: { type: "shipment_delayed", ruleKey: "R24_DELIVERY_EXCEPTION", ruleVersion: 1, eventId: "event-24", orderId: "order-24", shipmentId: "shipment-24" } },
+    }] as never);
+    const result = await notificationDeliveryService.dispatchBatch(10, now);
+    expect(result).toMatchObject({ claimed: 1, cancelled: 1 });
+    expect(sendPushToUser).not.toHaveBeenCalled();
+    vi.unstubAllEnvs();
+  });
+
   it("rechecks the open unread support thread and retries when no device is registered", async () => {
     sendPushToUser.mockResolvedValue({ tokens: 0, accepted: 0, rejected: 0, ticketIds: [] });
     const result = await notificationDeliveryService.dispatchBatch(10, now);

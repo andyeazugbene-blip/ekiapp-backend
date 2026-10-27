@@ -366,7 +366,7 @@ describe("customer.subscription.updated - 14-day trial window", () => {
     expect((trialCall[0].data.trialEndsAt.getTime() - trialCall[0].data.trialStartedAt.getTime()) / 86_400_000).toBe(14);
   });
 
-  it("a non-trial subscription update does not invent trial dates", async () => {
+  it("clears stale trial dates when Stripe reports a non-trial state", async () => {
     mockClaimSucceeds();
     constructEvent.mockReturnValue({
       id: "evt_trial_2",
@@ -377,6 +377,8 @@ describe("customer.subscription.updated - 14-day trial window", () => {
     m.vendorSubscription.update.mockResolvedValue({});
     m.vendor.findUnique.mockResolvedValue({ userId: "u-1" });
     await stripeWebhookService.handleWebhook({ signature: "sig", rawBody: Buffer.from("x") });
-    expect(m.vendorSubscription.update.mock.calls.some((c: any[]) => "trialEndsAt" in c[0].data)).toBe(false);
+    expect(m.vendorSubscription.update).toHaveBeenCalledWith({
+      where: { id: "vs-1" }, data: { trialStartedAt: null, trialEndsAt: null },
+    });
   });
 });

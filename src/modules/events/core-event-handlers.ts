@@ -233,6 +233,60 @@ export async function handleOrderDispatched(tx: Prisma.TransactionClient, event:
   });
 }
 
+/** R24: notify the buyer only for the latest explicit DELAYED shipment state. */
+export async function handleShipmentDelayed(tx: Prisma.TransactionClient, event: Event): Promise<void> {
+  const rule = resolveNotificationRule(event);
+  if (!rule?.enabled) return;
+  const shipmentId = requiredId(event.payload, "shipmentId");
+  const orderId = requiredId(event.payload, "orderId");
+  const vendorId = requiredId(event.payload, "vendorId");
+  const latestEvent = await tx.event.findFirst({
+    where: { name: EVENT_NAMES.shipment_delayed, entityType: "Shipment", entityId: shipmentId },
+    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+    select: { id: true },
+  });
+  if (latestEvent?.id !== event.id) return;
+  const shipment = await tx.shipment.findUnique({
+    where: { id: shipmentId },
+    select: { id: true, status: true, vendorId: true, orderId: true },
+  });
+  if (!shipment || shipment.status !== "DELAYED" || shipment.vendorId !== vendorId
+    || shipment.orderId !== orderId) return;
+  const order = await tx.order.findUnique({ where: { id: orderId }, select: { id: true, buyerId: true, orderNumber: true } });
+  if (!order) return;
+  const recipient = await tx.user.findUnique({
+    where: { id: order.buyerId },
+    select: { id: true, role: true, isSuspended: true },
+  });
+  if (!recipient || recipient.role !== "BUYER" || recipient.isSuspended) return;
+
+  const dedupeKey = `R24_DELIVERY_EXCEPTION:${shipment.id}:${event.id}`;
+  const created = await notificationsService.create({
+    userId: recipient.id,
+    type: "ORDER_PAID",
+    title: "Your delivery needs attention",
+    body: "Review the available next steps.",
+    data: {
+      type: "shipment_delayed",
+      ruleKey: rule.key,
+      ruleVersion: rule.version,
+      eventId: event.id,
+      templateVersion: 1,
+      destination: "order_detail",
+      orderId,
+      orderNumber: order.orderNumber,
+      shipmentId,
+    },
+    dedupeKey,
+  }, tx);
+  const candidate = created ?? await tx.notification.findUnique({ where: { dedupeKey }, select: { id: true } });
+  if (candidate) await tx.notificationDelivery.upsert({
+    where: { notificationId_channel: { notificationId: candidate.id, channel: "push" } },
+    create: { notificationId: candidate.id, channel: "push" },
+    update: {},
+  });
+}
+
 /**
  * R28 consumer for the real general SUPPORT conversation model. This only
  * materializes the in-app candidate. Outbox delivery and candidate creation
@@ -732,6 +786,7 @@ export function registerCoreEventHandlers(): void {
   eventOutboxService.registerHandler(EVENT_NAMES.payment_succeeded, handleFirstPaidOrder);
   eventOutboxService.registerHandler(EVENT_NAMES.order_accepted, handleOrderConfirmed);
   eventOutboxService.registerHandler(EVENT_NAMES.order_dispatched, handleOrderDispatched);
+  eventOutboxService.registerHandler(EVENT_NAMES.shipment_delayed, handleShipmentDelayed);
   eventOutboxService.registerHandler(EVENT_NAMES.payment_failed, handlePaymentFailed);
   eventOutboxService.registerHandler(EVENT_NAMES.support_response_received, handleSupportResponseReceived);
   eventOutboxService.registerHandler(EVENT_NAMES.product_stock_depleted, handleProductStockDepleted);

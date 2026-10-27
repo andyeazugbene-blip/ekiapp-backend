@@ -2,7 +2,6 @@ import type Stripe from "stripe";
 
 import { prisma } from "../../lib/prisma";
 import { logger } from "../../lib/logger";
-import { eventsService, EVENT_NAMES } from "../events/events.service";
 import { automationService } from "./automation.service";
 
 /** Vendor free trial length in days (single source: subscriptions.service GROWTH_TRIAL_DAYS = 14). */
@@ -17,51 +16,72 @@ function formatMoney(minor: number, currency: string): string {
 }
 
 /**
- * Stripe fires customer.subscription.trial_will_end 3 days before a trial ends.
- * Notifies the vendor in-app + push + email with plan and billing info via the
- * automation engine (so it appears as an AutomationRun in the Automation
- * Centre). Idempotency is provided by the caller (WebhookEvent claim) AND by the
- * run's deterministic dedupeKey (vendorSubscriptionId + trial_end).
- * Returns "notified" | "ignored".
+ * Stripe's `trial_will_end` webhook arrives three days before trial end, which
+ * cannot satisfy R30's seven-day requirement. The webhook is deliberately a
+ * no-op; the daily detector below uses the persisted current trial end instead.
  */
 export async function notifyVendorTrialEnding(stripeSubscription: Stripe.Subscription): Promise<"notified" | "ignored"> {
-  const sub = await prisma.vendorSubscription.findUnique({
-    where: { stripeSubscriptionId: stripeSubscription.id },
-    select: { id: true, vendorId: true, plan: true, sellerPlan: { select: { name: true, monthlyPriceCents: true, currency: true } } },
+  logger.info("Ignoring Stripe trial_will_end for R30; the seven-day reminder is driven by persisted trialEndsAt", {
+    stripeSubscriptionId: stripeSubscription.id,
   });
-  if (!sub) {
-    logger.warn("customer.subscription.trial_will_end for unknown vendor subscription", { stripeSubscriptionId: stripeSubscription.id });
-    return "ignored";
+  return "ignored";
+}
+
+/**
+ * R30 due-time detector. Re-reading the current subscription on every run
+ * means cancellation, renewal, and a changed trial end automatically replace
+ * stale scheduling data. AutomationRun's unique type/subject key makes repeat
+ * sweeps and duplicate webhook events harmless.
+ */
+export async function detectVendorTrialEnding(now = new Date()): Promise<number> {
+  if (process.env.R30_TRIAL_ENDING_ENABLED !== "true") return 0;
+  const sevenDays = 7 * 24 * 60 * 60 * 1000;
+  const subscriptions = await prisma.vendorSubscription.findMany({
+    where: {
+      status: "ACTIVE",
+      plan: { not: "FREE" },
+      cancelledAt: null,
+      trialStartedAt: { not: null },
+      trialEndsAt: { gt: now },
+    },
+    select: {
+      id: true, vendorId: true, plan: true, trialEndsAt: true,
+      sellerPlan: { select: { name: true, monthlyPriceCents: true, currency: true } },
+    },
+    orderBy: { trialEndsAt: "asc" },
+    take: 500,
+  });
+  const vendors = await prisma.vendor.findMany({
+    where: { id: { in: subscriptions.map((sub) => sub.vendorId) }, isSuspended: false, closedAt: null },
+    select: { id: true, userId: true, storeName: true },
+  });
+  let scheduled = 0;
+  for (const sub of subscriptions) {
+    const trialEnd = sub.trialEndsAt;
+    const vendor = vendors.find((item) => item.id === sub.vendorId);
+    if (!trialEnd || !vendor) continue;
+    const scheduledFor = new Date(trialEnd.getTime() - sevenDays);
+    const planName = sub.sellerPlan?.name ?? String(sub.plan);
+    const planPrice = sub.sellerPlan && sub.sellerPlan.monthlyPriceCents > 0
+      ? `${formatMoney(sub.sellerPlan.monthlyPriceCents, sub.sellerPlan.currency)}/month`
+      : "your plan price";
+    const trialEndDate = trialEnd.toISOString().slice(0, 10);
+    await automationService.scheduleAutomation({
+      type: "VENDOR_TRIAL_ENDING",
+      recipientUserId: vendor.userId,
+      vendorId: sub.vendorId,
+      subjectKey: `${sub.id}:${trialEnd.getTime()}`,
+      requiresMarketingConsent: false,
+      scheduledFor,
+      title: "Your Eki Membership trial is ending",
+      body: "Review your actual billing date and terms.",
+      data: {
+        trial_end_date: trialEndDate, plan_name: planName, plan_price: planPrice,
+        vendor_subscription_id: sub.id, store_name: vendor.storeName,
+        destination: "membership", trial_end: trialEnd.toISOString(), scheduled_for: scheduledFor.toISOString(),
+      },
+    });
+    scheduled++;
   }
-  const vendor = await prisma.vendor.findUnique({ where: { id: sub.vendorId }, select: { userId: true, storeName: true } });
-  if (!vendor) return "ignored";
-
-  const trialEnd = stripeSubscription.trial_end ? new Date(stripeSubscription.trial_end * 1000) : null;
-  const planName = sub.sellerPlan?.name ?? String(sub.plan);
-  const planPrice = sub.sellerPlan && sub.sellerPlan.monthlyPriceCents > 0
-    ? `${formatMoney(sub.sellerPlan.monthlyPriceCents, sub.sellerPlan.currency)}/month`
-    : "your plan price";
-  const trialEndDate = trialEnd ? trialEnd.toISOString().slice(0, 10) : "soon";
-
-  await automationService.scheduleAutomation({
-    type: "VENDOR_TRIAL_ENDING",
-    recipientUserId: vendor.userId,
-    vendorId: sub.vendorId,
-    subjectKey: `${sub.id}:${trialEnd ? trialEnd.getTime() : "na"}`,
-    requiresMarketingConsent: false,
-    bypassQuietHours: true,
-    title: "Your Eki free trial ends soon",
-    body: `Your free trial ends on ${trialEndDate}.`,
-    data: { trial_end_date: trialEndDate, plan_name: planName, plan_price: planPrice, vendor_subscription_id: sub.id, store_name: vendor.storeName },
-  });
-  eventsService.emit({
-    name: EVENT_NAMES.vendor_trial_ending,
-    actorType: "stripe",
-    entityType: "VendorSubscription",
-    entityId: sub.id,
-    secondaryEntities: { vendorId: sub.vendorId },
-    source: "stripe_webhook",
-    payload: { trialEnd: trialEnd?.toISOString() ?? null, plan: planName },
-  });
-  return "notified";
+  return scheduled;
 }

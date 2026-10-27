@@ -59,6 +59,12 @@ export const NOTIFICATION_EVENT_RULES: readonly NotificationRuleDefinition[] = [
     enabled: () => process.env.R22_ORDER_DISPATCHED_ENABLED === "true",
   },
   {
+    eventName: EVENT_NAMES.shipment_delayed,
+    key: "R24_DELIVERY_EXCEPTION",
+    version: 1,
+    enabled: () => process.env.R24_DELIVERY_EXCEPTION_ENABLED === "true",
+  },
+  {
     eventName: EVENT_NAMES.payment_failed,
     key: "R20_PAYMENT_FAILED",
     version: 1,

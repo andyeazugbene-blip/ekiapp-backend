@@ -34,3 +34,7 @@ A cron that runs more often than once a day. On Vercel, that requires a plan tie
 - Same run, same thresholds already fired → no new rows, no new sends (DB-unique dedupe key).
 - A gap large enough to span 2+ untouched thresholds → all due thresholds fire in that one run, each with its own key — nothing is silently skipped because the cron was slow once.
 - Past the last threshold (72h) → exactly 3 total touches ever exist for that episode, confirmed by test, never a 4th.
+
+## R30 trial-ending reminder
+
+The Stripe `customer.subscription.trial_will_end` webhook arrives three days before trial end, so it cannot drive the required seven-day reminder. R30 now derives a durable `AutomationRun.scheduledFor` at exactly `VendorSubscription.trialEndsAt - 7 days`; the automation sweep stores future runs without sending and dispatches only scheduled runs at/after that timestamp. The dedupe identity includes the exact current trial end. At send time the worker rechecks that the same active, non-cancelled paid trial and owner still exist, the persisted trial end has not changed, and the scheduled time is exactly seven days before that end. Dispatch has a five-minute worker-jitter tolerance; beyond it, a missed window is suppressed rather than sent late. `R30_TRIAL_ENDING_ENABLED` remains off: the verified Vercel cron is daily and cannot establish precise due-time delivery. Sub-daily scheduler verification and runtime QA are required before activation.

@@ -157,6 +157,28 @@ async function dispatchedOrderStillEligible(delivery: NotificationDelivery & { n
     && recipient?.id === delivery.notification.userId && recipient.role === "BUYER" && !recipient.isSuspended);
 }
 
+async function delayedShipmentStillEligible(delivery: NotificationDelivery & { notification: { userId: string; readAt: Date | null; data: unknown } }): Promise<boolean> {
+  const data = delivery.notification.data;
+  if (!isRecord(data) || typeof data.shipmentId !== "string" || typeof data.orderId !== "string"
+    || typeof data.eventId !== "string" || delivery.notification.readAt
+    || process.env.R24_DELIVERY_EXCEPTION_ENABLED !== "true") return false;
+  const rule = resolveNotificationRule({ name: EVENT_NAMES.shipment_delayed, schemaVersion: Number(data.ruleVersion) });
+  if (!rule?.enabled || rule.key !== "R24_DELIVERY_EXCEPTION") return false;
+  const [shipment, recipient, latestEvent] = await Promise.all([
+    prisma.shipment.findUnique({ where: { id: data.shipmentId }, select: { id: true, orderId: true, status: true } }),
+    prisma.user.findUnique({ where: { id: delivery.notification.userId }, select: { id: true, role: true, isSuspended: true } }),
+    prisma.event.findFirst({
+      where: { name: EVENT_NAMES.shipment_delayed, entityType: "Shipment", entityId: data.shipmentId },
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }], select: { id: true },
+    }),
+  ]);
+  const order = shipment?.orderId === data.orderId
+    ? await prisma.order.findUnique({ where: { id: data.orderId }, select: { buyerId: true } }) : null;
+  return Boolean(shipment?.status === "DELAYED" && latestEvent?.id === data.eventId
+    && order?.buyerId === delivery.notification.userId
+    && recipient?.id === delivery.notification.userId && recipient.role === "BUYER" && !recipient.isSuspended);
+}
+
 async function failedCheckoutStillEligible(delivery: NotificationDelivery & { notification: { userId: string; readAt: Date | null; data: unknown } }): Promise<boolean> {
   const data = delivery.notification.data;
   if (!isRecord(data) || typeof data.checkoutId !== "string" || delivery.notification.readAt
@@ -389,6 +411,7 @@ async function notificationStillEligible(delivery: NotificationDelivery & { noti
     return Boolean(rule?.enabled && await productPublicationStillEligible(delivery));
   }
   if (data.type === "buyer_order_dispatched" && data.ruleKey === "R22_ORDER_DISPATCHED") return dispatchedOrderStillEligible(delivery);
+  if (data.type === "shipment_delayed" && data.ruleKey === "R24_DELIVERY_EXCEPTION") return delayedShipmentStillEligible(delivery);
   if (data.type === "buyer_order_confirmed" && data.ruleKey === "R21_ORDER_CONFIRMED") return buyerOrderConfirmationStillEligible(delivery);
   if (data.type === "vendor_order_paid" && data.ruleKey === "R12_FIRST_PAID_ORDER") return paidOrderStillEligible(delivery);
   if (data.type === "payment_failed" && data.ruleKey === "R20_PAYMENT_FAILED") return failedCheckoutStillEligible(delivery);

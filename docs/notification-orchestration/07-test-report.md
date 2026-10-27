@@ -128,3 +128,19 @@ Tests       63 passed (63)
 `prisma validate` and Prisma client generation passed for the additive schema migration. `git diff --check` passed. The full backend build and full suite have not been rerun from this worktree because its dependency tree is incomplete. `public-stores.test.ts` could not start: local `stripe` resolution fails because dependency `qs` is unavailable in this checkout. CI should run with the repository's locked dependency install before merge.
 
 The current follow-up does not claim native iOS/Android runtime QA, WhatsApp provider delivery, production migration, or production gate enablement.
+
+## Follow-up from main `3aa4e6d` — 2026-10-27
+
+This review branch reconciles the existing R30 reminder against current `main` and adds narrowly scoped R24 support from the persisted ordinary-shipment `DELAYED` transition. No Prisma schema change or migration was introduced.
+
+Focused command:
+
+```
+npx vitest run src/tests/automation-centre.test.ts src/tests/vendor-subscription-webhooks.test.ts src/tests/notification-event-pipeline.integration.test.ts src/tests/notification-delivery.test.ts src/tests/shipments.test.ts --reporter=dot
+Test Files  5 passed (5)
+Tests       75 passed (75)
+```
+
+The R30 cases verify future scheduling, exact `trialEndsAt - 7 days` timing, current-state checks, and suppression after the five-minute due-time jitter window. R24 tests cover the authenticated vendor producer transition, full outbox-to-candidate-to-push path, current buyer/shipment eligibility, and cancellation when a newer delay episode supersedes a candidate.
+
+Additional checks: `npm run build` — passed; `npx tsc --noEmit` — passed; `npx prisma validate` — passed; `git diff --check` — passed. Mobile `npm run typecheck` passed during review of open mobile PR #5. This is source typechecking, not native device QA. No device, production runtime, external provider, or sub-daily scheduler verification was performed. All gates remain off.
