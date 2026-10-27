@@ -505,6 +505,8 @@ describe("event to notification pipeline integration", () => {
   });
 
   it("routes a real below-minimum rescue-window event to the organiser and rechecks before delivery", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-10-26T12:00:00Z"));
     const deadline = new Date("2026-10-27T12:00:00Z");
     txMock.communityCampaign.findUnique.mockResolvedValue({
       id: "campaign-1", title: "Rice", status: "RESCUE_WINDOW", minimumShares: 5, confirmedShares: 3,

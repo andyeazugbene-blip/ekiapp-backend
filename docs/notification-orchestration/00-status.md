@@ -4,9 +4,9 @@
 **Author:** Mouad (with Claude Code assistance)
 **Authoritative source:** the client supplied the Google Doc export on 2026-10-26. A byte-for-byte working copy is stored at [`Eki-Notification-Orchestration-Spec-v2.md`](Eki-Notification-Orchestration-Spec-v2.md). The document identifies itself as an implementation draft and says production event mapping and live QA are still required; each R01–R40 entry is proposed, not proof of an implemented backend event.
 
-**Latest work:** Backend PRs #38 (R07–R09 activation alerts), #39 (R12/R21/R22 order alerts), #41 (shared candidate/preference/outcome contract), #42 (status documentation), and #43 (R30/R24) are merged into `main` at `c979a5a`. CI for #43 identified a missing `dispatchDueVendorTrialEnding` mock in the automation-detector suite; the follow-up review corrects that test double, adds shared-policy/outcome regression coverage, and is not merged. All new gates remain off pending runtime/device QA.
+**Latest verified base:** local `origin/main` is `6b09204` (PR #44, the R30 test-mock and shared-policy/outcome coverage follow-up). PR #43 and #44 were merged externally; no merge was performed in this follow-up. The current local branch adds fail-visible scheduler handling, bounded WhatsApp-delivery suppression, source-backed 210-event reconciliation tooling, and current R40 mobile runtime test instructions. Its PR/CI state could not be refreshed or published because GitHub API connectivity was unavailable. All new gates remain off pending runtime/device QA and required approvals.
 
-R06 now stops when the existing Stripe Identity session ID shows verification has started; R07/R08 use the real `requires_input`/`verified` webhook paths. The shared schema now carries rule/event/role/entity/task-episode, due/expiry, priority/category, template/variant, candidate lifecycle, preference, and outcome fields. The delivery worker applies role-scoped push consent, preference quiet hours, WhatsApp episode suppression when an eligible delivered log exists, expiry, and current-state checks. Authenticated notification opens record click outcomes; source-backed completion events record direct-task completion. R04 remains disabled. General support coverage uses the existing SUPPORT conversation/Message model.
+R06 now stops when the existing Stripe Identity session ID shows verification has started; R07/R08 use the real `requires_input`/`verified` webhook paths. The shared schema now carries rule/event/role/entity/task-episode, due/expiry, priority/category, template/variant, candidate lifecycle, preference, and outcome fields. The delivery worker applies role-scoped push consent, preference quiet hours, expiry, and current-state checks. WhatsApp can suppress push only when a positive receipt for the exact task episode falls inside an explicitly configured cooldown; the default cooldown is zero, so suppression is disabled until a provider and policy are approved. Authenticated notification opens record click outcomes; source-backed completion events record direct-task completion. R04 remains disabled. General support coverage uses the existing SUPPORT conversation/Message model.
 
 **Completion status:** the full specification is not complete. The original 210-event legacy catalogue is still absent; many R01–R40 rules need reviewed event mappings and applicable QA. The shared data contract and send-time policy are implemented, but source-backed producers, provider integrations, sub-daily scheduler cadence, billing policy, and native device QA remain incomplete. Feature gates stay disabled where route/runtime or business evidence is outstanding. See `01-compliance-matrix.md`, `07-test-report.md`, and `08-outstanding-decisions.md`.
 
@@ -20,6 +20,8 @@ R06 now stops when the existing Stripe Identity session ID shows verification ha
 - `06-database-report.md` — schema changes made, migration safety, rollback.
 - `07-test-report.md` — exact commands run, exact output, nothing fabricated.
 - `08-outstanding-decisions.md` — the handful of things only the client can decide.
+- `09-mobile-runtime-qa.md` — R40 staging/device QA steps and all semantic destinations.
+- `210-event-reconciliation.md` — missing original catalogue evidence, validated blank worksheet, and handoff requirements.
 
 ## One-line status per deliverable (full detail in each file)
 
@@ -28,10 +30,10 @@ R06 now stops when the existing Stripe Identity session ID shows verification ha
 | 1 | Compliance matrix (R01–R40) | Done this pass — built from direct repo inspection |
 | 2 | Architecture report | Updated with shared candidate, preference, delivery, and outcome contract |
 | 3 | FIRST_SALE report | Historical report — PR #6 is merged |
-| 4 | Scheduler report | Done — daily cron confirmed, 4h claim corrected |
+| 4 | Scheduler report | Updated — daily Vercel cron plus Actions 401/gaps verified; workflow now fails visibly, successful sub-daily execution still unverified |
 | 5 | Deep-link matrix | Done — verified against the actual mobile repo, not assumed |
 | 6 | Database report | Existing migrations plus new additive candidate-contract migration |
-| 7 | Test report | Updated with actual 2026-10-26 commands; full HTTP suite is sandbox-blocked |
-| 8 | Changed-files summary | PRs #38, #39, #41 and #42 are merged; this follow-up's changes are on the review branch |
-| 9 | Outstanding decisions | Done — 4 real decisions, not 40 |
-| 10 | Release recommendation | #38/#39/#41/#42 are merged. No production migration, deployment, or gate enablement is included in this follow-up. |
+| 7 | Test report | Updated with 2026-10-27 evidence; focused suites pass, full suite has 10 HTTP files blocked by sandbox EACCES |
+| 8 | Changed-files summary | PRs #38, #39, #41, #42, #43 and #44 are reported merged; scheduler/channel/catalogue/mobile documentation changes remain on the local review branch |
+| 9 | Outstanding decisions | Updated with scheduler secret verification, WhatsApp provider/cooldown, missing source, R39 billing, and native QA |
+| 10 | Release recommendation | No production migration, deployment, or gate enablement is included in this follow-up. |

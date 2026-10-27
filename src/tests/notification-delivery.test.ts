@@ -45,6 +45,7 @@ const delivery = {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.stubEnv("NOTIFICATION_WHATSAPP_TASK_COOLDOWN_SECONDS", "0");
   vi.stubEnv("R28_GENERAL_SUPPORT_NOTIFICATIONS_ENABLED", "true");
   vi.stubEnv("R35_COMMUNITY_BUY_MINIMUM_REACHED_ENABLED", "false");
   vi.stubEnv("R24_DELIVERY_EXCEPTION_ENABLED", "false");
@@ -101,20 +102,82 @@ describe("notification push delivery", () => {
   });
 
   it("suppresses push when the same task episode was already delivered by WhatsApp", async () => {
+    vi.stubEnv("NOTIFICATION_WHATSAPP_TASK_COOLDOWN_SECONDS", "3600");
     const taskEpisodeKey = "buyer-1:BUYER:Order:order-1:R21_ORDER_CONFIRMED:event-1";
     prismaMock.notificationPreference.findUnique.mockResolvedValue({ consent: "NOT_REQUIRED_FOR_SERVICE" } as never);
     prismaMock.communicationLog.findFirst.mockResolvedValue({ id: "wa-log-1" } as never);
     prismaMock.notificationDelivery.findMany.mockResolvedValue([{
       ...delivery,
       notification: { ...delivery.notification, role: "BUYER", category: "SERVICE", priority: "P1", taskEpisodeKey,
-        data: { type: "buyer_order_confirmed" } },
+        data: delivery.notification.data },
     }] as never);
     const result = await notificationDeliveryService.dispatchBatch(10, now);
     expect(result).toMatchObject({ claimed: 1, cancelled: 1 });
     expect(prismaMock.communicationLog.findFirst).toHaveBeenCalledWith({
-      where: { taskEpisodeKey, channel: "whatsapp", status: "DELIVERED" }, select: { id: true },
+      where: {
+        taskEpisodeKey, channel: "whatsapp", status: "DELIVERED",
+        deliveredAt: { gte: new Date("2026-10-26T11:00:00.000Z"), lte: now },
+      }, select: { id: true },
     });
     expect(sendPushToUser).not.toHaveBeenCalled();
+  });
+
+  it("does not suppress on WhatsApp history when no approved cooldown is configured", async () => {
+    const taskEpisodeKey = "buyer-1:BUYER:Order:order-1:R21_ORDER_CONFIRMED:event-1";
+    prismaMock.notificationPreference.findUnique.mockResolvedValue({ consent: "NOT_REQUIRED_FOR_SERVICE" } as never);
+    prismaMock.notificationDelivery.findMany.mockResolvedValue([{
+      ...delivery,
+      notification: { ...delivery.notification, role: "BUYER", category: "SERVICE", priority: "P1", taskEpisodeKey,
+        data: delivery.notification.data },
+    }] as never);
+    sendPushToUser.mockResolvedValue({ tokens: 1, accepted: 1, rejected: 0, ticketIds: ["ticket-wa-window"] });
+    const result = await notificationDeliveryService.dispatchBatch(10, now);
+    expect(result).toMatchObject({ claimed: 1, sent: 1 });
+    expect(prismaMock.communicationLog.findFirst).not.toHaveBeenCalled();
+    expect(sendPushToUser).toHaveBeenCalled();
+  });
+
+  it("does not suppress on unresolved WhatsApp provider outcomes", async () => {
+    vi.stubEnv("NOTIFICATION_WHATSAPP_TASK_COOLDOWN_SECONDS", "3600");
+    const taskEpisodeKey = "buyer-1:BUYER:Order:order-1:R21_ORDER_CONFIRMED:event-1";
+    prismaMock.notificationPreference.findUnique.mockResolvedValue({ consent: "NOT_REQUIRED_FOR_SERVICE" } as never);
+    // QUEUED/SENT/FAILED records are not a positive delivery receipt.
+    prismaMock.communicationLog.findFirst.mockResolvedValue(null);
+    prismaMock.notificationDelivery.findMany.mockResolvedValue([{
+      ...delivery,
+      notification: { ...delivery.notification, role: "BUYER", category: "SERVICE", priority: "P1", taskEpisodeKey,
+        data: delivery.notification.data },
+    }] as never);
+    sendPushToUser.mockResolvedValue({ tokens: 1, accepted: 1, rejected: 0, ticketIds: ["ticket-wa-unresolved"] });
+    const result = await notificationDeliveryService.dispatchBatch(10, now);
+    expect(prismaMock.communicationLog.findFirst).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({
+        status: "DELIVERED",
+        deliveredAt: { gte: new Date("2026-10-26T11:00:00.000Z"), lte: now },
+      }),
+    }));
+    expect(result).toMatchObject({ claimed: 1, sent: 1 });
+    expect(sendPushToUser).toHaveBeenCalled();
+  });
+
+  it("keeps critical transactional order messages independent of WhatsApp coordination", async () => {
+    vi.stubEnv("NOTIFICATION_WHATSAPP_TASK_COOLDOWN_SECONDS", "3600");
+    vi.stubEnv("R21_ORDER_CONFIRMED_ENABLED", "true");
+    prismaMock.order.findUnique.mockResolvedValue({ buyerId: "buyer-1", status: "CONFIRMED" } as never);
+    prismaMock.notificationPreference.findUnique.mockResolvedValue({ consent: "NOT_REQUIRED_FOR_SERVICE" } as never);
+    prismaMock.notificationDelivery.findMany.mockResolvedValue([{
+      ...delivery,
+      notification: {
+        ...delivery.notification, role: "BUYER", category: "SERVICE", priority: "P1",
+        taskEpisodeKey: "buyer-1:BUYER:Order:order-1:R21_ORDER_CONFIRMED:event-1",
+        data: { type: "buyer_order_confirmed", ruleKey: "R21_ORDER_CONFIRMED", ruleVersion: 1, orderId: "order-1" },
+      },
+    }] as never);
+    sendPushToUser.mockResolvedValue({ tokens: 1, accepted: 1, rejected: 0, ticketIds: ["ticket-critical-service"] });
+    const result = await notificationDeliveryService.dispatchBatch(10, now);
+    expect(result).toMatchObject({ claimed: 1, sent: 1 });
+    expect(prismaMock.communicationLog.findFirst).not.toHaveBeenCalled();
+    expect(sendPushToUser).toHaveBeenCalled();
   });
 
   it("rechecks latest explicit shipment delay and buyer ownership before R24 push", async () => {

@@ -145,4 +145,34 @@ The R30 cases verify future scheduling, exact `trialEndsAt - 7 days` timing, cur
 
 Additional checks: `npm run build` — passed; `npx tsc --noEmit` — passed; `npx prisma validate` — passed; `git diff --check` — passed. Mobile `npm run typecheck` passed during review of open mobile PR #5. This is source typechecking, not native device QA. No device, production runtime, external provider, or sub-daily scheduler verification was performed. All gates remain off.
 
-PR #43 CI failed because the detector test's mocked `automationService` did not implement the newly invoked due-R30 dispatcher. The follow-up adds that mock and asserts the sweep invokes it; the 10-suite local run above passes. GitHub CI for the follow-up review is still required.
+PR #43 CI failed because the detector test's mocked `automationService` did not implement the newly invoked due-R30 dispatcher. PR #44 added that mock and asserts the sweep invokes it; PR #44 was merged externally at `6b09204`, and its focused GitHub test passed according to the prior live check. No merge was performed in this session.
+
+## 2026-10-27 scheduler, shared-channel policy, catalogue, and mobile review
+
+**Backend source base:** local `origin/main` commit `6b09204` (PR #44). Current work is an unmerged local feature branch; GitHub was unreachable during this pass, so no current PR/check state is asserted and no PR was merged.
+
+**Scheduler evidence:** Actions run `40468800224` (2026-10-27) returned HTTP 401 from all five internal endpoints with an empty bearer value. The preceding recorded runs were about 5h37m apart despite a ten-minute cron declaration. The old workflow concealed failures with `continue-on-error`; the local follow-up now checks for an injected secret without printing it and fails on every unsuccessful endpoint. This change has not yet run in GitHub Actions. No secret value was read/changed, and R30 remains disabled.
+
+**Backend focused verification, after changes:**
+
+```
+npx vitest run --pool=threads --maxWorkers=1 \
+  src/tests/notification-delivery.test.ts \
+  src/tests/notification-event-pipeline.integration.test.ts \
+  src/tests/payment-anomaly.test.ts \
+  src/tests/event-outbox.test.ts --reporter=dot
+Test Files  4 passed (4)
+Tests       63 passed (63)
+```
+
+The delivery tests cover exact-task WhatsApp suppression only with an explicit 3,600-second window and positive `deliveredAt` bounded to the window; unset cooldown does not query/suppress, unresolved provider outcomes do not suppress, critical order service messages bypass cross-channel suppression, and previously covered opt-out/quiet-hours/receipt cases remain in the passing suite. Added a deterministic clock to an existing R34 rescue-window integration test because its hard-coded deadline expired relative to the 2026-10-27 runtime clock.
+
+- Backend `npm run build`: **passed**.
+- Backend `npx tsc --noEmit`: **passed**.
+- Backend `npx prisma validate`: **passed**; no schema change or migration was introduced.
+- Catalogue validator `node --test scripts/validate-notification-catalogue.node-test.mjs`: **4 passed**. The checked-in template validates with `--template`; a full import requires exactly 210 source-backed rows. Search of available project trees found only references/specification, not the original handbook.
+- Mobile PR #5 source worktree `npm run typecheck`: **passed**. `check:tab-registration`, `check:automation-managed-types-viewable`, and `check:release-config`: **passed**. `check:domains` could not reach the domains/API from this network-restricted environment (two fetch failures); no route health is inferred from it.
+- Mobile package has no test-runner/routing harness. No Android SDK, `adb`, emulator, or physical-device runtime QA was available. The R40 staging setup and ten-case matrix are documented in `09-mobile-runtime-qa.md`.
+- Full backend `npx vitest run --pool=threads --maxWorkers=1 --reporter=dot` (before the final critical-message regression test was added): **196 files passed, 10 files failed; 2,903 passed and 308 failed out of 3,211 tests**. All 308 failures are HTTP requests blocked by sandbox `connect EACCES 127.0.0.1` (for example `admin-organiser-stripe-connect-route`, `admin-role-matrix-http`, and `security-rbac-idor`); no test file failed collection after renaming the Node test. The final focused 63-test run includes the additional critical-message test. An initial focused Vitest attempt failed before tests due sandbox temp-file rename permissions; rerunning with repository-local `TEMP` and one thread passed.
+
+No production push, WhatsApp delivery, secret/configuration change, migration, deployment, or gate activation occurred. Test results do not establish runtime QA, client approval, or enablement.

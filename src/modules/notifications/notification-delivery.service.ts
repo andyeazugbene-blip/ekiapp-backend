@@ -383,9 +383,22 @@ async function orchestrationPolicy(delivery: NotificationDelivery & { notificati
   const data = notification.data;
   const ruleKey = isRecord(data) && typeof data.ruleKey === "string" ? data.ruleKey : "";
   const critical = ["R12_FIRST_PAID_ORDER", "R19_PAYMENT_AUTHENTICATION_REQUIRED", "R20_PAYMENT_FAILED", "R21_ORDER_CONFIRMED", "R25_PAYOUT_ACTION_REQUIRED", "R32_SUBSCRIPTION_PAYMENT_FAILED", "R36_COMMUNITY_BUY_PAYMENT_ACTION_REQUIRED", "R40_CRITICAL_INCIDENT"].includes(ruleKey);
-  if (notification.taskEpisodeKey && !critical) {
+  // Cross-channel coordination is only safe when the client has configured a
+  // cooldown. Without one, a historical WhatsApp receipt must not suppress a
+  // push indefinitely. Zero/unset intentionally disables this provider-neutral
+  // lookup until a provider and policy window are approved.
+  const whatsappCooldownSeconds = Number(process.env.NOTIFICATION_WHATSAPP_TASK_COOLDOWN_SECONDS ?? 0);
+  if (notification.taskEpisodeKey && !critical && Number.isSafeInteger(whatsappCooldownSeconds) && whatsappCooldownSeconds > 0) {
     const deliveredByWhatsApp = await prisma.communicationLog.findFirst({
-      where: { taskEpisodeKey: notification.taskEpisodeKey, channel: "whatsapp", status: "DELIVERED" },
+      where: {
+        taskEpisodeKey: notification.taskEpisodeKey,
+        channel: "whatsapp",
+        status: "DELIVERED",
+        deliveredAt: {
+          gte: new Date(now.getTime() - whatsappCooldownSeconds * 1000),
+          lte: now,
+        },
+      },
       select: { id: true },
     });
     if (deliveredByWhatsApp) return { eligible: false };
