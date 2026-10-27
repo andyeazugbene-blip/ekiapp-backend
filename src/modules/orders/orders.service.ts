@@ -1,4 +1,5 @@
 import { eventsService, EVENT_NAMES } from "../events/events.service";
+import { dispatchNotificationsAfterCommit } from "../events/dispatch-notifications";
 import type { NotificationType, Order, OrderStatus } from "@prisma/client";
 
 import { prisma } from "../../lib/prisma";
@@ -264,18 +265,42 @@ export const ordersService = {
       await executeOrderRefund(orderId, userId, undefined, "vendor_cancelled_paid_order", "CANCELLED");
       updated = await prisma.order.findUniqueOrThrow({ where: { id: orderId }, include: orderInclude });
     } else {
-      updated = await prisma.order.update({
-        where: { id: orderId },
-        data: {
-          status: newStatus,
-          ...(newStatus === "DELIVERED" ? { deliveredAt: new Date() } : {}),
-        },
-        include: orderInclude,
-      });
+      if (newStatus === "CONFIRMED" || newStatus === "DISPATCHED") {
+        updated = await prisma.$transaction(async (tx) => {
+          const result = await tx.order.update({
+            where: { id: orderId },
+            data: { status: newStatus },
+            include: orderInclude,
+          });
+          if (newStatus === "CONFIRMED") {
+            await eventsService.enqueueTransactional(tx, {
+              name: EVENT_NAMES.order_accepted, actorType: "vendor", actorId: userId, entityType: "Order", entityId: orderId,
+              source: "vendor_app", secondaryEntities: { buyerId: order.buyerId, vendorId: vendor.id },
+              payload: { orderId, fromStatus: order.status },
+            }, { dedupeKey: `order-confirmed:${orderId}`, schemaVersion: 1 });
+          } else {
+            await eventsService.enqueueTransactional(tx, {
+              name: EVENT_NAMES.order_dispatched, actorType: "vendor", actorId: userId, entityType: "Order", entityId: orderId,
+              source: "vendor_app", secondaryEntities: { buyerId: order.buyerId, vendorId: vendor.id },
+              payload: { orderId, fromStatus: order.status },
+            }, { dedupeKey: `order-dispatched:${orderId}`, schemaVersion: 1 });
+          }
+          return result;
+        });
+        void dispatchNotificationsAfterCommit();
+      } else {
+        updated = await prisma.order.update({
+          where: { id: orderId },
+          data: {
+            status: newStatus,
+            ...(newStatus === "DELIVERED" ? { deliveredAt: new Date() } : {}),
+          },
+          include: orderInclude,
+        });
+      }
     }
 
     const lifecycleEvent: Record<string, string> = {
-      CONFIRMED: EVENT_NAMES.order_accepted, DISPATCHED: EVENT_NAMES.order_dispatched,
       DELIVERED: EVENT_NAMES.order_delivered, COMPLETED: EVENT_NAMES.order_completed,
     };
     if (lifecycleEvent[newStatus]) {
@@ -287,14 +312,18 @@ export const ordersService = {
 
     // Notify buyer about status change — awaited so Vercel serverless doesn't
     // terminate the function before the Expo push fetch completes.
-    try {
-      await sendOrderStatusNotification(order, newStatus);
-    } catch (err) {
-      logger.error("Failed to send order status notification", { orderId, newStatus, error: String(err) });
+    const replacedByV2Notification = (newStatus === "CONFIRMED" && process.env.R21_ORDER_CONFIRMED_ENABLED === "true")
+      || (newStatus === "DISPATCHED" && process.env.R22_ORDER_DISPATCHED_ENABLED === "true");
+    if (!replacedByV2Notification) {
+      try {
+        await sendOrderStatusNotification(order, newStatus);
+      } catch (err) {
+        logger.error("Failed to send order status notification", { orderId, newStatus, error: String(err) });
+      }
     }
 
     // Communication module: shipped / delivered emails
-    if (newStatus === "DISPATCHED" || newStatus === "DELIVERED") {
+    if ((newStatus === "DISPATCHED" && process.env.R22_ORDER_DISPATCHED_ENABLED !== "true") || newStatus === "DELIVERED") {
       const buyer = await prisma.user.findUnique({
         where: { id: order.buyerId },
         select: { name: true, email: true },

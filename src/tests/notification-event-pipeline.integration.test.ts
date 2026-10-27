@@ -20,6 +20,7 @@ const { prismaMock, txMock, sendPushToUser } = vi.hoisted(() => {
     user: { findUnique: vi.fn(), findMany: vi.fn() },
     paymentAnomaly: { findUnique: vi.fn(), findMany: vi.fn(), upsert: vi.fn() },
     vendor: { findUnique: vi.fn() },
+    order: { findUnique: vi.fn() },
     communityCampaign: { findUnique: vi.fn() },
     communityBuyPaymentAuthorisation: { findUnique: vi.fn() },
     campaignContribution: { findMany: vi.fn() },
@@ -60,6 +61,7 @@ const { prismaMock, txMock, sendPushToUser } = vi.hoisted(() => {
     user: { findUnique: vi.fn(), findMany: vi.fn() },
     paymentAnomaly: { findUnique: vi.fn(), findMany: vi.fn(), upsert: vi.fn() },
     vendor: { findUnique: vi.fn() },
+    order: { findUnique: vi.fn() },
     communityCampaign: { findUnique: vi.fn() },
     communityBuyPaymentAuthorisation: { findUnique: vi.fn() },
     campaignContribution: { findMany: vi.fn() },
@@ -92,6 +94,8 @@ describe("event to notification pipeline integration", () => {
     vi.clearAllMocks();
     vi.stubEnv("R28_GENERAL_SUPPORT_NOTIFICATIONS_ENABLED", "true");
     vi.stubEnv("R20_PAYMENT_FAILED_ENABLED", "false");
+    vi.stubEnv("R22_ORDER_DISPATCHED_ENABLED", "false");
+    vi.stubEnv("R21_ORDER_CONFIRMED_ENABLED", "false");
     vi.stubEnv("R09_PUBLICATION_CONFIRMED_ENABLED", "false");
     vi.stubEnv("R34_COMMUNITY_BUY_BELOW_MINIMUM_ENABLED", "true");
     vi.stubEnv("R26_PAYOUT_CONFIRMED_ENABLED", "true");
@@ -208,6 +212,94 @@ describe("event to notification pipeline integration", () => {
     expect(sendPushToUser).toHaveBeenCalledWith(vendor.userId, expect.objectContaining({
       title: rule.title, body: rule.body, data: expect.objectContaining({ type: rule.type, destination: "verification" }),
     }), { logId: "log-1" });
+  });
+
+  it("routes a transactional verified dispatch event to the buyer with the R22 copy", async () => {
+    vi.stubEnv("R22_ORDER_DISPATCHED_ENABLED", "true");
+    txMock.order.findUnique.mockResolvedValue({ id: "order-22", orderNumber: "EKI-22", buyerId: "buyer-22", status: "DELIVERED" });
+    prismaMock.order.findUnique.mockResolvedValue({ buyerId: "buyer-22", status: "DELIVERED" });
+    txMock.user.findUnique.mockResolvedValue({ id: "buyer-22", role: "BUYER", isSuspended: false });
+    prismaMock.user.findUnique.mockResolvedValue({ id: "buyer-22", role: "BUYER", isSuspended: false });
+
+    const event = await prismaMock.$transaction((tx: typeof txMock) => eventOutboxService.enqueue(tx, {
+      name: EVENT_NAMES.order_dispatched, actorType: "vendor", entityType: "Order", entityId: "order-22",
+      payload: { orderId: "order-22", fromStatus: "CONFIRMED" },
+    }, { dedupeKey: "order-dispatched:order-22", schemaVersion: 1 }));
+    const outbox = await eventOutboxService.dispatchRegisteredBatch(10, new Date("2026-10-27T12:00:00Z"));
+    expect(outbox).toMatchObject({ claimed: 1, delivered: 1 });
+    expect(txMock.notification.create).toHaveBeenCalledWith({ data: expect.objectContaining({
+      userId: "buyer-22", title: "Your foodstuff is on its way", body: "View the latest delivery information.",
+      dedupeKey: "R22_ORDER_DISPATCHED:order-22",
+      data: expect.objectContaining({ ruleKey: "R22_ORDER_DISPATCHED", eventId: event.id, destination: "order_detail", orderId: "order-22" }),
+    }) });
+    const delivery = await notificationDeliveryService.dispatchBatch(10, new Date("2026-10-27T12:00:01Z"));
+    expect(delivery).toMatchObject({ claimed: 1, sent: 1 });
+    expect(sendPushToUser).toHaveBeenCalledWith("buyer-22", expect.objectContaining({
+      title: "Your foodstuff is on its way", body: "View the latest delivery information.",
+      data: expect.objectContaining({ type: "buyer_order_dispatched", destination: "order_detail", orderId: "order-22" }),
+    }), { logId: "log-1" });
+  });
+
+  it("routes a transactional vendor-acceptance event to the buyer with the R21 v2 copy", async () => {
+    vi.stubEnv("R21_ORDER_CONFIRMED_ENABLED", "true");
+    txMock.order.findUnique.mockResolvedValue({ id: "order-21", orderNumber: "EKI-21", buyerId: "buyer-21", status: "PROCESSING" });
+    prismaMock.order.findUnique.mockResolvedValue({ buyerId: "buyer-21", status: "PROCESSING" });
+    txMock.user.findUnique.mockResolvedValue({ id: "buyer-21", role: "BUYER", isSuspended: false });
+    prismaMock.user.findUnique.mockResolvedValue({ id: "buyer-21", role: "BUYER", isSuspended: false });
+
+    const event = await prismaMock.$transaction((tx: typeof txMock) => eventOutboxService.enqueue(tx, {
+      name: EVENT_NAMES.order_accepted, actorType: "vendor", entityType: "Order", entityId: "order-21",
+      payload: { orderId: "order-21", fromStatus: "PAID" },
+    }, { dedupeKey: "order-confirmed:evt-21:order-21", schemaVersion: 1 }));
+    const outbox = await eventOutboxService.dispatchRegisteredBatch(10, new Date("2026-10-27T12:00:00Z"));
+    expect(outbox).toMatchObject({ claimed: 1, delivered: 1 });
+    expect(txMock.notification.create).toHaveBeenCalledWith({ data: expect.objectContaining({
+      userId: "buyer-21", title: "Your order is confirmed", body: "Track your foodstuff order in Eki.",
+      dedupeKey: "R21_ORDER_CONFIRMED:order-21",
+      data: expect.objectContaining({ ruleKey: "R21_ORDER_CONFIRMED", eventId: event.id, destination: "order_detail", orderId: "order-21" }),
+    }) });
+    const delivery = await notificationDeliveryService.dispatchBatch(10, new Date("2026-10-27T12:00:01Z"));
+    expect(delivery).toMatchObject({ claimed: 1, sent: 1 });
+    expect(sendPushToUser).toHaveBeenCalledWith("buyer-21", expect.objectContaining({
+      title: "Your order is confirmed", body: "Track your foodstuff order in Eki.",
+      data: expect.objectContaining({ type: "buyer_order_confirmed", destination: "order_detail", orderId: "order-21" }),
+    }), { logId: "log-1" });
+  });
+
+  it("routes a transactional paid-order event to one vendor candidate and durable push", async () => {
+    vi.stubEnv("R12_FIRST_PAID_ORDER_ENABLED", "true");
+    txMock.order.findUnique.mockResolvedValue({
+      id: "order-12", orderNumber: "EKI-12", status: "PAID", vendorConfirmedAt: null,
+      vendorId: "vendor-12", items: [],
+    });
+    prismaMock.order.findUnique.mockResolvedValue({ status: "PAID", vendorConfirmedAt: null, vendorId: "vendor-12", items: [] });
+    txMock.vendor.findUnique.mockResolvedValue({ userId: "vendor-user-12" });
+    prismaMock.vendor.findUnique.mockResolvedValue({ userId: "vendor-user-12" });
+    txMock.user.findUnique.mockResolvedValue({ id: "vendor-user-12", role: "VENDOR", isSuspended: false });
+    prismaMock.user.findUnique.mockResolvedValue({ id: "vendor-user-12", role: "VENDOR", isSuspended: false });
+
+    const event = await prismaMock.$transaction((tx: typeof txMock) => eventOutboxService.enqueue(tx, {
+      name: EVENT_NAMES.payment_succeeded,
+      actorType: "stripe", entityType: "Order", entityId: "order-12",
+      payload: { orderId: "order-12", stripeEventId: "evt-12" },
+    }, { dedupeKey: "payment-succeeded:evt-12:order-12", schemaVersion: 1 }));
+    const outboxResult = await eventOutboxService.dispatchRegisteredBatch(10, new Date("2026-10-27T12:00:00Z"));
+    expect(outboxResult).toMatchObject({ claimed: 1, delivered: 1 });
+    expect(txMock.notification.create).toHaveBeenCalledWith({ data: expect.objectContaining({
+      userId: "vendor-user-12", title: "You have a new paid order",
+      body: "Review the order and confirm fulfilment.", dedupeKey: "R12_FIRST_PAID_ORDER:order-12",
+      data: expect.objectContaining({ ruleKey: "R12_FIRST_PAID_ORDER", eventId: event.id, destination: "order_detail", orderId: "order-12" }),
+    }) });
+    const delivery = await notificationDeliveryService.dispatchBatch(10, new Date("2026-10-27T12:00:01Z"));
+    expect(delivery).toMatchObject({ claimed: 1, sent: 1 });
+    expect(sendPushToUser).toHaveBeenCalledWith("vendor-user-12", expect.objectContaining({
+      title: "You have a new paid order", body: "Review the order and confirm fulfilment.",
+      data: expect.objectContaining({ type: "vendor_order_paid", destination: "order_detail", orderId: "order-12" }),
+    }), { logId: "log-1" });
+
+    vi.stubEnv("R12_FIRST_PAID_ORDER_ENABLED", "false");
+    await eventOutboxService.dispatchRegisteredBatch(10, new Date("2026-10-27T12:01:00Z"));
+    expect(txMock.notification.create).toHaveBeenCalledTimes(1);
   });
 
   it("routes a confirmed failed checkout through the outbox and durable push", async () => {
