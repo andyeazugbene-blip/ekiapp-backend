@@ -5,7 +5,6 @@ type CompletionMapping = { ruleId: string; entityType: string; payloadField: str
 
 const COMPLETION_MAPPINGS: Record<string, readonly CompletionMapping[]> = {
   verification_completed: [{ ruleId: "R07_VERIFICATION_REQUIRES_CORRECTION", entityType: "Vendor", payloadField: "vendorId" }],
-  product_published: [{ ruleId: "R08_VERIFICATION_APPROVED", entityType: "Vendor", payloadField: "vendorId" }],
   order_accepted: [{ ruleId: "R12_FIRST_PAID_ORDER", entityType: "Order", payloadField: "orderId" }],
   order_delivered: [{ ruleId: "R22_ORDER_DISPATCHED", entityType: "Order", payloadField: "orderId" }],
   community_buy_minimum_reached: [{ ruleId: "R34_COMMUNITY_BUY_BELOW_MINIMUM", entityType: "CommunityCampaign", payloadField: "campaignId" }],
