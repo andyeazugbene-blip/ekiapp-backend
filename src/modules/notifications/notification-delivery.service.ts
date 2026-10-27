@@ -122,6 +122,20 @@ async function dispatchedOrderStillEligible(delivery: NotificationDelivery & { n
     && recipient?.id === delivery.notification.userId && recipient.role === "BUYER" && !recipient.isSuspended);
 }
 
+async function failedCheckoutStillEligible(delivery: NotificationDelivery & { notification: { userId: string; readAt: Date | null; data: unknown } }): Promise<boolean> {
+  const data = delivery.notification.data;
+  if (!isRecord(data) || typeof data.checkoutId !== "string" || delivery.notification.readAt
+    || process.env.R20_PAYMENT_FAILED_ENABLED !== "true") return false;
+  const rule = resolveNotificationRule({ name: EVENT_NAMES.payment_failed, schemaVersion: Number(data.ruleVersion) });
+  if (!rule?.enabled || rule.key !== "R20_PAYMENT_FAILED") return false;
+  const [checkout, recipient] = await Promise.all([
+    prisma.checkout.findUnique({ where: { id: data.checkoutId }, select: { buyerId: true, status: true } }),
+    prisma.user.findUnique({ where: { id: delivery.notification.userId }, select: { id: true, role: true, isSuspended: true } }),
+  ]);
+  return Boolean(checkout?.status === "FAILED" && checkout.buyerId === delivery.notification.userId
+    && recipient?.id === delivery.notification.userId && recipient.role === "BUYER" && !recipient.isSuspended);
+}
+
 async function criticalIncidentStillEligible(delivery: NotificationDelivery & { notification: { userId: string; readAt: Date | null; data: unknown } }): Promise<boolean> {
   if (process.env.R40_PAYMENT_ANOMALY_ALERTS_ENABLED !== "true") return false;
   const data = delivery.notification.data;
@@ -276,6 +290,7 @@ async function notificationStillEligible(delivery: NotificationDelivery & { noti
   if (data.type === "buyer_order_dispatched" && data.ruleKey === "R22_ORDER_DISPATCHED") return dispatchedOrderStillEligible(delivery);
   if (data.type === "buyer_order_confirmed" && data.ruleKey === "R21_ORDER_CONFIRMED") return buyerOrderConfirmationStillEligible(delivery);
   if (data.type === "vendor_order_paid" && data.ruleKey === "R12_FIRST_PAID_ORDER") return paidOrderStillEligible(delivery);
+  if (data.type === "payment_failed" && data.ruleKey === "R20_PAYMENT_FAILED") return failedCheckoutStillEligible(delivery);
   if (data.type === "critical_incident" && data.ruleKey === "R40_CRITICAL_INCIDENT") {
     return criticalIncidentStillEligible(delivery);
   }

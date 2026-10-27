@@ -1291,15 +1291,6 @@ class StripeWebhookService {
       return this.handleCommunityBuyHoldEvent(event);
     }
 
-    if (event.type === "payment_intent.payment_failed" && kind !== "wallet_topup" && kind !== "gift_card_purchase" && kind !== "community_buy_hold") {
-      const failure = this.paymentFailureFields(paymentIntent);
-      eventsService.emit({
-        name: EVENT_NAMES.payment_failed, actorType: "stripe", entityType: checkoutId ? "Checkout" : "PaymentIntent",
-        entityId: checkoutId ?? paymentIntent.id, source: "stripe_webhook",
-        payload: { stripeEventId: event.id, failureCode: failure.failureCode, paymentMethodType: failure.paymentMethodType },
-      });
-    }
-
     // Gift card purchase canceled/failed: nothing to reverse (payment never completed)
     if (kind === "gift_card_purchase") {
       try {
@@ -1366,6 +1357,14 @@ class StripeWebhookService {
           where: { id: checkoutId, status: PaymentStatus.PENDING },
           data: { status: "FAILED", processedAt: new Date() },
         });
+
+        if (event.type === "payment_intent.payment_failed" && kind !== "wallet_topup" && kind !== "gift_card_purchase" && kind !== "community_buy_hold") {
+          const failure = this.paymentFailureFields(paymentIntent);
+          await eventsService.enqueueTransactional(tx, {
+            name: EVENT_NAMES.payment_failed, actorType: "stripe", entityType: "Checkout", entityId: checkout.id,
+            source: "stripe_webhook", payload: { stripeEventId: event.id, checkoutId: checkout.id, failureCode: failure.failureCode, paymentMethodType: failure.paymentMethodType },
+          }, { dedupeKey: `payment-failed:${event.id}:${checkout.id}`, schemaVersion: 1 });
+        }
 
         // Fail all orders and restore stock
         for (const order of checkout.orders) {
