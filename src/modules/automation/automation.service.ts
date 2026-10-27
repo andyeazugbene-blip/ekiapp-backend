@@ -171,8 +171,8 @@ export const DEFAULT_TEMPLATES: Record<AutomationType, { title: string; body: st
     recipientType: "BUYER",
   },
   VENDOR_TRIAL_ENDING: {
-    title: "Your Eki free trial ends soon",
-    body: "Hi {{name}}, your free trial ends on {{trial_end_date}}. After that your {{plan_name}} plan ({{plan_price}}) is billed automatically. Manage your plan in the app before then.",
+    title: "Your Eki Membership trial is ending",
+    body: "Review your actual billing date and terms.",
     channels: ["push", "in_app", "email"],
     recipientType: "VENDOR",
   },
@@ -222,8 +222,19 @@ export const DEFAULT_CONFIG: Record<string, Record<string, number>> = {
 async function ensureTemplate(type: AutomationType): Promise<void> {
   const key = automationEventKey(type);
   const existing = await prisma.communicationTemplate.findUnique({ where: { key } });
-  if (existing) return;
   const def = DEFAULT_TEMPLATES[type];
+  if (existing) {
+    // R30's title/body are locked by the client specification. Keep the
+    // persisted template aligned while preserving its admin-controlled
+    // enabled state and other settings.
+    if (type === "VENDOR_TRIAL_ENDING") {
+      await prisma.communicationTemplate.update({
+        where: { key },
+        data: { title: def.title, body: def.body, channels: def.channels, recipientType: def.recipientType },
+      });
+    }
+    return;
+  }
   await prisma.communicationTemplate.create({
     data: { key, title: def.title, body: def.body, channels: def.channels, recipientType: def.recipientType, enabled: true },
   }).catch(() => {
@@ -352,6 +363,28 @@ async function collectChannelResults(recipientId: string, eventKey: string, sinc
   }
 }
 
+/** R30 send-time state/ownership check; the event's trial end must still be current. */
+export async function vendorTrialEndingStillEligible(input: ScheduleAutomationInput): Promise<boolean> {
+  const data = input.data;
+  if (process.env.R30_TRIAL_ENDING_ENABLED !== "true" || !data
+    || typeof data.vendor_subscription_id !== "string" || typeof data.trial_end !== "string") return false;
+  const [subscription, vendor, recipient] = await Promise.all([
+    prisma.vendorSubscription.findUnique({
+      where: { id: data.vendor_subscription_id },
+      select: { vendorId: true, plan: true, status: true, cancelledAt: true, trialEndsAt: true },
+    }),
+    prisma.vendor.findUnique({ where: { id: input.vendorId ?? "" }, select: { userId: true, isSuspended: true } }),
+    prisma.user.findUnique({ where: { id: input.recipientUserId }, select: { role: true, isSuspended: true } }),
+  ]);
+  const now = Date.now();
+  const trialEnd = subscription?.trialEndsAt?.getTime();
+  return Boolean(subscription && subscription.status === "ACTIVE" && subscription.plan !== "FREE"
+    && subscription.cancelledAt === null && trialEnd && new Date(trialEnd).toISOString() === data.trial_end
+    && trialEnd > now && trialEnd <= now + 7 * 24 * 60 * 60 * 1000
+    && vendor && vendor.userId === input.recipientUserId && !vendor.isSuspended
+    && recipient?.role === "VENDOR" && !recipient.isSuspended);
+}
+
 function dayBucket(): string {
   return new Date().toISOString().slice(0, 10);
 }
@@ -417,6 +450,9 @@ async function dispatchRun(
     const policy = params.policy;
     const gate = await getRuleGate(policy.type);
     let reason = gate.runnable ? null : gate.reason ?? "rule_paused";
+    if (!reason && policy.type === "VENDOR_TRIAL_ENDING" && !(await vendorTrialEndingStillEligible(policy))) {
+      reason = "trial_state_changed_or_vendor_ineligible";
+    }
     if (!reason && await commsPauseService.isAutomationsPaused()) reason = "emergency_pause";
     currentRecipient = reason ? null : await loadRecipientForEligibility(policy.recipientUserId);
     if (!reason && !policy.bypassQuietHours && isQuietHoursWith(gate.timing, currentRecipient?.country)) reason = "quiet_hours";

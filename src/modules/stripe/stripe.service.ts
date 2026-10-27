@@ -935,8 +935,9 @@ class StripeWebhookService {
         return { received: true, ignored: true, eventId: event.id, type: event.type };
       }
 
-      // Trial window is provider truth regardless of whether the status maps.
-      if (stripeSubscription.trial_start && stripeSubscription.trial_end) {
+      // Persist only an actual Stripe trialing window. A non-trial status may
+      // still carry historical trial fields in provider payloads.
+      if (stripeSubscription.status === "trialing" && stripeSubscription.trial_start && stripeSubscription.trial_end) {
         await prisma.vendorSubscription.update({
           where: { id: subscription.id },
           data: {
@@ -951,6 +952,16 @@ class StripeWebhookService {
           eventId: event.id, stripeStatus: stripeSubscription.status, vendorSubscriptionId: subscription.id,
         });
         return { received: true, eventId: event.id, type: event.type };
+      }
+
+      if (stripeSubscription.status !== "trialing") {
+        // Once Stripe reports a mapped non-trial state without a current
+        // trial end, remove the prior window. R30 reads these persisted
+        // dates, so stale future dates could send after an early conversion.
+        await prisma.vendorSubscription.update({
+          where: { id: subscription.id },
+          data: { trialStartedAt: null, trialEndsAt: null },
+        });
       }
 
       // Billing-period dates live on the subscription item, not the

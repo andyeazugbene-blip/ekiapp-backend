@@ -6,6 +6,7 @@ import { automationService } from "./automation.service";
 import { getRuleGate, noteRuleSkipped } from "./automation-rule-gate";
 import { eventsService, EVENT_NAMES } from "../events/events.service";
 import { runWithCoalesceScope } from "./automation-coalesce-scope";
+import { detectVendorTrialEnding } from "./vendor-trial-ending";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -1043,6 +1044,7 @@ export const automationDetectors = {
       ["BUYER_REFERRAL", detectBuyerReferral],
       ["PAYMENT_RECOVERY", detectPaymentRecovery],
       ["CHECKOUT_PAYMENT_FOLLOW_UP", detectCheckoutPaymentFollowUp],
+      ["VENDOR_TRIAL_ENDING", detectVendorTrialEnding],
     ];
     await runWithCoalesceScope(async () => {
       for (const [name, job] of jobs) {

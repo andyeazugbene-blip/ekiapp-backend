@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { prismaMock, txMock, sendPushToUser } = vi.hoisted(() => {
   const eventRow: Record<string, any> = {};
@@ -96,6 +96,8 @@ import { enqueueProductPublished } from "../modules/products/product-publication
 import { ensureCriticalIncidentCandidates } from "../modules/ledger/critical-incident-notifications";
 
 describe("event to notification pipeline integration", () => {
+  afterEach(() => vi.useRealTimers());
+
   beforeEach(() => {
     vi.clearAllMocks();
     vi.stubEnv("R28_GENERAL_SUPPORT_NOTIFICATIONS_ENABLED", "true");
