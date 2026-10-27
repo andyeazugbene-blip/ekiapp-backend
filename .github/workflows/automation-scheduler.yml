@@ -19,20 +19,19 @@ name: Automation Scheduler
 # GitHub's infrastructure. This is still a large, real improvement over a
 # single fixed daily tick, not a claim of real-time delivery.
 #
-# REQUIRED MANUAL SETUP (this workflow does nothing useful until done):
-#   Settings -> Secrets and variables -> Actions -> New repository secret
-#     Name:  CRON_SECRET
-#     Value: the SAME value already set as CRON_SECRET in the backend's
-#            Vercel project environment variables. Copy it from there --
-#            never type a new one here, or every call will 401.
+# REQUIRED MANUAL SETUP:
+#   Settings -> Secrets and variables -> Actions -> Repository secret
+#     Name: CRON_SECRET
+#     Value: the same value already set as CRON_SECRET in the backend's
+#            Vercel project environment variables. Never print it in logs.
 #   Optionally also add a repository VARIABLE (not secret) named
 #   BACKEND_BASE_URL if the production backend URL is ever not
 #   https://ekiapp-backend.vercel.app.
 #
-# Until CRON_SECRET is set, every run of this workflow will fail at the
-# curl step with a 401 -- visible in the Actions tab, and GitHub emails the
-# repo's watchers on a scheduled-workflow failure by default. That failure
-# is the verification signal that the secret still needs to be added.
+# A scheduled run on 2026-10-27 received HTTP 401 from all five endpoints;
+# the Actions log showed an empty Authorization bearer value. Do not treat
+# a successful workflow conclusion as evidence that the scheduler works.
+# This workflow now fails visibly on a missing secret or failed endpoint.
 
 on:
   schedule:
@@ -44,12 +43,19 @@ jobs:
     runs-on: ubuntu-latest
     env:
       BASE_URL: ${{ vars.BACKEND_BASE_URL || 'https://ekiapp-backend.vercel.app' }}
+      CRON_SECRET: ${{ secrets.CRON_SECRET }}
     steps:
+      - name: Require the authenticated scheduler secret
+        run: |
+          if [ -z "$CRON_SECRET" ]; then
+            echo "::error::CRON_SECRET is unavailable to the scheduled workflow; internal jobs were not run"
+            exit 1
+          fi
+
       - name: Automation sweep (cart recovery, low-stock alerts, onboarding nudges, win-back, referrals, reorder/checkout reminders)
-        continue-on-error: true
         run: |
           code=$(curl -sS -X POST "$BASE_URL/api/internal/jobs/automation-sweep" \
-            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
+            -H "Authorization: Bearer $CRON_SECRET" \
             -o /tmp/automation-sweep.json -w "%{http_code}")
           echo "HTTP $code"
           cat /tmp/automation-sweep.json
@@ -57,10 +63,9 @@ jobs:
           if [ "$code" -ge 300 ]; then echo "::error::automation-sweep returned HTTP $code"; exit 1; fi
 
       - name: Scheduled communications (admin "Schedule Later" broadcasts + push receipt refresh)
-        continue-on-error: true
         run: |
           code=$(curl -sS -X POST "$BASE_URL/api/internal/jobs/run-scheduled-communications" \
-            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
+            -H "Authorization: Bearer $CRON_SECRET" \
             -o /tmp/scheduled-comms.json -w "%{http_code}")
           echo "HTTP $code"
           cat /tmp/scheduled-comms.json
@@ -70,10 +75,9 @@ jobs:
       # Handoff O-02 "order.unacknowledged" (P1) — a paid order a vendor
       # hasn't accepted yet.
       - name: Unacknowledged order reminders
-        continue-on-error: true
         run: |
           code=$(curl -sS -X POST "$BASE_URL/api/internal/jobs/order-unacknowledged-sweep" \
-            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
+            -H "Authorization: Bearer $CRON_SECRET" \
             -o /tmp/order-unack.json -w "%{http_code}")
           echo "HTTP $code"
           cat /tmp/order-unack.json
@@ -83,10 +87,9 @@ jobs:
       # Handoff O-04 "order.dispatch.due" (P1) — an accepted order
       # approaching or past its assumed dispatch window.
       - name: Dispatch-due reminders
-        continue-on-error: true
         run: |
           code=$(curl -sS -X POST "$BASE_URL/api/internal/jobs/order-dispatch-due-sweep" \
-            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
+            -H "Authorization: Bearer $CRON_SECRET" \
             -o /tmp/dispatch-due.json -w "%{http_code}")
           echo "HTTP $code"
           cat /tmp/dispatch-due.json
@@ -97,10 +100,9 @@ jobs:
       # capture means real money in an ambiguous state; this sweep only
       # notifies the buyer and alerts ops, never retries/resolves it.
       - name: Community Buy stuck-capture review alert
-        continue-on-error: true
         run: |
           code=$(curl -sS -X POST "$BASE_URL/api/internal/jobs/community-buy-capture-pending-review-sweep" \
-            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
+            -H "Authorization: Bearer $CRON_SECRET" \
             -o /tmp/capture-pending.json -w "%{http_code}")
           echo "HTTP $code"
           cat /tmp/capture-pending.json
