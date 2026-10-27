@@ -195,3 +195,18 @@ git diff --check                     passed
 The six tests include the workflow entry point's nonzero exit and clear error when the credential is absent. The CI workflow now runs these Node tests. PR #46 code-head CI run [40510998294](https://github.com/andyeazugbene-blip/ekiapp-backend/actions/runs/40510998294) passed in 1m23s; the latest PR head at `3752edc` also passed full CI in [40511348200](https://github.com/andyeazugbene-blip/ekiapp-backend/actions/runs/40511348200), including unit tests, typecheck, and the six scheduler cases. Vercel preview and preview comments passed. GitHub confirmed PR #45 merged at `746a394` with CI run [40508295734](https://github.com/andyeazugbene-blip/ekiapp-backend/actions/runs/40508295734), Vercel preview, and preview comments passing. These checks do not verify that GitHub injects the owner's `CRON_SECRET` or that scheduled executions occur on time. R30 and cadence-sensitive rules remain gated.
 
 Mobile PR #5 remains open at `72355b0`; its Vercel and preview-comment checks passed, and no CI test job is listed. The clean PR QA checkout's `npm run typecheck` passed after adding a TypeScript 6 declaration for the existing global CSS import; the three repository checks `check:tab-registration`, `check:automation-managed-types-viewable`, and `check:release-config` passed. `check:domains` could not reach its remote endpoint in the prior review. The package has no unit-test runner/routing harness, so source-level mobile tests are unsupported without adding a test stack. No physical-device or native runtime QA is claimed.
+
+## Order reminder fail-closed follow-up — PR #47
+
+The order acceptance reminder service now returns explicit skip results for R13 (`business_hours_sla_required`) and R15 (`dispatch_deadline_required`) instead of sending based on elapsed-time assumptions. Focused regression coverage asserts both results. No domain fields, deadlines, notifications, or migrations were added. These tests validate fail-closed behavior only; they do not establish the missing business calendar or dispatch deadline.
+
+```text
+npx vitest run src/tests/order-acceptance-notifications.test.ts --pool=threads --maxWorkers=1
+1 file passed; 2 tests passed
+npm run build                         passed
+npx tsc --noEmit                      passed
+npx prisma validate                  passed (no schema change)
+git diff --check                     passed
+```
+
+The first focused Vitest invocation could not create a temporary file under the sandbox's default temp path; rerunning with repository-local `TEMP`/`TMP` succeeded. After rebasing PR #47 onto backend main `8243cb5`, its GitHub `test` job passed in 1m25s (run [40528973929](https://github.com/andyeazugbene-blip/ekiapp-backend/actions/runs/40528973929)); Vercel and preview comments also passed. The PR remains open and unmerged. Local/CI checks are not device QA or production runtime verification.

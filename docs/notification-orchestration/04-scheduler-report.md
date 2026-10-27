@@ -17,6 +17,10 @@ Verified record: [GitHub Actions run 40468800224](https://github.com/andyeazugbe
 
 ## The real constraint
 
+The individual O-02/R13 and O-04/R15 endpoints are retained for scheduler compatibility. PR #47 changes their service methods to return `skipped: true` until the business-hours acceptance SLA and actual dispatch deadline are approved and represented in domain state. After that change is merged, a successful HTTP response for either job will mean the fail-closed skip was recorded, not that a reminder was sent. See the corresponding rows in `01-compliance-matrix.md`.
+
+PR #46 has since merged into backend main at `8243cb5` and hardens the unrelated scheduler HTTP transport. PR #47 remains open; its service change is on the rebased branch, so the behavior described above is proposed and is not yet part of `main`.
+
 **A once-daily cron cannot deliver a 4-hour-after-inactivity first touch.** By the time the next daily run happens, more than 4 hours has almost always already passed. I am not describing the current deployment as meeting the spec's cadence — it does not, today.
 
 ## What was built to be scheduler-independent
