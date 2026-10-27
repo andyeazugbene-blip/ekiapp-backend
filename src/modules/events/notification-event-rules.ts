@@ -23,6 +23,24 @@ interface NotificationRuleDefinition {
  */
 export const NOTIFICATION_EVENT_RULES: readonly NotificationRuleDefinition[] = [
   {
+    eventName: EVENT_NAMES.payment_succeeded,
+    key: "R12_FIRST_PAID_ORDER",
+    version: 1,
+    enabled: () => process.env.R12_FIRST_PAID_ORDER_ENABLED === "true",
+  },
+  {
+    eventName: EVENT_NAMES.order_accepted,
+    key: "R21_ORDER_CONFIRMED",
+    version: 1,
+    enabled: () => process.env.R21_ORDER_CONFIRMED_ENABLED === "true",
+  },
+  {
+    eventName: EVENT_NAMES.order_dispatched,
+    key: "R22_ORDER_DISPATCHED",
+    version: 1,
+    enabled: () => process.env.R22_ORDER_DISPATCHED_ENABLED === "true",
+  },
+  {
     eventName: EVENT_NAMES.payment_failed,
     key: "R20_PAYMENT_FAILED",
     version: 1,
@@ -50,7 +68,7 @@ export const NOTIFICATION_EVENT_RULES: readonly NotificationRuleDefinition[] = [
     eventName: EVENT_NAMES.community_buy_minimum_reached,
     key: "R35_COMMUNITY_BUY_MINIMUM_REACHED",
     version: 1,
-    enabled: () => true,
+    enabled: () => process.env.R35_COMMUNITY_BUY_MINIMUM_REACHED_ENABLED === "true",
   },
   {
     eventName: EVENT_NAMES.community_buy_payment_action_required,

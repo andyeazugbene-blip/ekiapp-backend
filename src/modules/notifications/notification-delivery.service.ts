@@ -76,6 +76,52 @@ async function productInventoryConflictStillEligible(delivery: NotificationDeliv
     && recipient?.role === "VENDOR" && !recipient.isSuspended);
 }
 
+async function paidOrderStillEligible(delivery: NotificationDelivery & { notification: { userId: string; readAt: Date | null; data: unknown } }): Promise<boolean> {
+  const data = delivery.notification.data;
+  if (!isRecord(data) || typeof data.orderId !== "string" || delivery.notification.readAt
+    || process.env.R12_FIRST_PAID_ORDER_ENABLED !== "true") return false;
+  const rule = resolveNotificationRule({ name: EVENT_NAMES.payment_succeeded, schemaVersion: Number(data.ruleVersion) });
+  if (!rule?.enabled || rule.key !== "R12_FIRST_PAID_ORDER") return false;
+  const [order, recipient] = await Promise.all([
+    prisma.order.findUnique({ where: { id: data.orderId }, select: { status: true, vendorConfirmedAt: true, vendorId: true, items: { select: { vendorId: true } } } }),
+    prisma.user.findUnique({ where: { id: delivery.notification.userId }, select: { id: true, role: true, isSuspended: true } }),
+  ]);
+  const vendorId = order?.vendorId ?? order?.items[0]?.vendorId;
+  const vendor = vendorId ? await prisma.vendor.findUnique({ where: { id: vendorId }, select: { userId: true } }) : null;
+  return Boolean(order?.status === "PAID" && !order.vendorConfirmedAt && vendor?.userId === delivery.notification.userId
+    && recipient?.id === delivery.notification.userId && recipient.role === "VENDOR" && !recipient.isSuspended);
+}
+
+async function buyerOrderConfirmationStillEligible(delivery: NotificationDelivery & { notification: { userId: string; readAt: Date | null; data: unknown } }): Promise<boolean> {
+  const data = delivery.notification.data;
+  if (!isRecord(data) || typeof data.orderId !== "string" || delivery.notification.readAt
+    || process.env.R21_ORDER_CONFIRMED_ENABLED !== "true") return false;
+  const rule = resolveNotificationRule({ name: EVENT_NAMES.order_accepted, schemaVersion: Number(data.ruleVersion) });
+  if (!rule?.enabled || rule.key !== "R21_ORDER_CONFIRMED") return false;
+  const [order, recipient] = await Promise.all([
+    prisma.order.findUnique({ where: { id: data.orderId }, select: { buyerId: true, status: true } }),
+    prisma.user.findUnique({ where: { id: delivery.notification.userId }, select: { id: true, role: true, isSuspended: true } }),
+  ]);
+  return Boolean(order && ["CONFIRMED", "PROCESSING", "DISPATCHED", "IN_TRANSIT", "DELIVERED", "COMPLETED", "AUTO_RELEASED", "VENDOR_CONFIRMED", "DISPUTED"].includes(order.status)
+    && order.buyerId === delivery.notification.userId
+    && recipient?.id === delivery.notification.userId && recipient.role === "BUYER" && !recipient.isSuspended);
+}
+
+async function dispatchedOrderStillEligible(delivery: NotificationDelivery & { notification: { userId: string; readAt: Date | null; data: unknown } }): Promise<boolean> {
+  const data = delivery.notification.data;
+  if (!isRecord(data) || typeof data.orderId !== "string" || delivery.notification.readAt
+    || process.env.R22_ORDER_DISPATCHED_ENABLED !== "true") return false;
+  const rule = resolveNotificationRule({ name: EVENT_NAMES.order_dispatched, schemaVersion: Number(data.ruleVersion) });
+  if (!rule?.enabled || rule.key !== "R22_ORDER_DISPATCHED") return false;
+  const [order, recipient] = await Promise.all([
+    prisma.order.findUnique({ where: { id: data.orderId }, select: { buyerId: true, status: true } }),
+    prisma.user.findUnique({ where: { id: delivery.notification.userId }, select: { id: true, role: true, isSuspended: true } }),
+  ]);
+  return Boolean(order && ["DISPATCHED", "IN_TRANSIT", "DELIVERED", "COMPLETED", "AUTO_RELEASED", "DISPUTED"].includes(order.status)
+    && order.buyerId === delivery.notification.userId
+    && recipient?.id === delivery.notification.userId && recipient.role === "BUYER" && !recipient.isSuspended);
+}
+
 async function failedCheckoutStillEligible(delivery: NotificationDelivery & { notification: { userId: string; readAt: Date | null; data: unknown } }): Promise<boolean> {
   const data = delivery.notification.data;
   if (!isRecord(data) || typeof data.checkoutId !== "string" || delivery.notification.readAt
@@ -241,6 +287,9 @@ async function supplierReconfirmationStillEligible(delivery: NotificationDeliver
 async function notificationStillEligible(delivery: NotificationDelivery & { notification: { userId: string; readAt: Date | null; data: unknown } }): Promise<boolean> {
   const data = delivery.notification.data;
   if (!isRecord(data)) return false;
+  if (data.type === "buyer_order_dispatched" && data.ruleKey === "R22_ORDER_DISPATCHED") return dispatchedOrderStillEligible(delivery);
+  if (data.type === "buyer_order_confirmed" && data.ruleKey === "R21_ORDER_CONFIRMED") return buyerOrderConfirmationStillEligible(delivery);
+  if (data.type === "vendor_order_paid" && data.ruleKey === "R12_FIRST_PAID_ORDER") return paidOrderStillEligible(delivery);
   if (data.type === "payment_failed" && data.ruleKey === "R20_PAYMENT_FAILED") return failedCheckoutStillEligible(delivery);
   if (data.type === "critical_incident" && data.ruleKey === "R40_CRITICAL_INCIDENT") {
     return criticalIncidentStillEligible(delivery);
