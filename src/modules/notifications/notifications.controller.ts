@@ -2,7 +2,56 @@ import type { Request, Response } from "express";
 
 import { AppError } from "../../shared/errors/app-error";
 import { recordAudit } from "../../shared/utils/audit";
-import { notificationsService, parseListQuery } from "./notifications.service";
+import { notificationsService, parseListQuery, type OrchestrationPreferenceInput } from "./notifications.service";
+
+const preferenceChannels = new Set(["PUSH", "IN_APP", "EMAIL", "SMS", "WHATSAPP"]);
+const preferenceCategories = new Set(["SERVICE", "MARKETING"]);
+const preferenceConsents = new Set(["OPTED_IN", "OPTED_OUT", "NOT_REQUIRED_FOR_SERVICE", "UNKNOWN"]);
+const validTime = /^(?:[01]\d|2[0-3]):[0-5]\d$/;
+
+function parseOrchestrationPreferences(value: unknown): OrchestrationPreferenceInput[] | undefined {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value) || value.length > 10) throw new AppError("orchestration must be an array of up to 10 preferences", 400);
+  const seen = new Set<string>();
+  return value.map((raw, index) => {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new AppError(`orchestration[${index}] must be an object`, 400);
+    const item = raw as Record<string, unknown>;
+    if (typeof item.channel !== "string" || !preferenceChannels.has(item.channel)
+      || typeof item.category !== "string" || !preferenceCategories.has(item.category)
+      || typeof item.consent !== "string" || !preferenceConsents.has(item.consent)) {
+      throw new AppError(`orchestration[${index}] has an invalid channel, category, or consent`, 400);
+    }
+    const identity = `${item.channel}:${item.category}`;
+    if (seen.has(identity)) throw new AppError(`orchestration contains duplicate ${identity}`, 400);
+    seen.add(identity);
+    if (item.category === "MARKETING" && item.consent === "NOT_REQUIRED_FOR_SERVICE") {
+      throw new AppError(`orchestration[${index}] marketing consent cannot be not_required_for_service`, 400);
+    }
+    const timezone = item.timezone;
+    if (timezone !== undefined && (typeof timezone !== "string" || timezone.length > 100
+      || !isValidTimezone(timezone))) throw new AppError(`orchestration[${index}].timezone must be an IANA timezone`, 400);
+    const start = item.quietHoursStart;
+    const end = item.quietHoursEnd;
+    if ((start !== undefined && start !== null && (typeof start !== "string" || !validTime.test(start)))
+      || (end !== undefined && end !== null && (typeof end !== "string" || !validTime.test(end)))
+      || ((start == null) !== (end == null))) {
+      throw new AppError(`orchestration[${index}] quiet hours must be a valid start/end pair`, 400);
+    }
+    return {
+      channel: item.channel as OrchestrationPreferenceInput["channel"],
+      category: item.category as OrchestrationPreferenceInput["category"],
+      consent: item.consent as OrchestrationPreferenceInput["consent"],
+      ...(timezone === undefined ? {} : { timezone: timezone as string }),
+      ...(start === undefined ? {} : { quietHoursStart: start as string | null }),
+      ...(end === undefined ? {} : { quietHoursEnd: end as string | null }),
+    };
+  });
+}
+
+function isValidTimezone(timezone: string): boolean {
+  try { new Intl.DateTimeFormat("en-US", { timeZone: timezone }); return true; }
+  catch { return false; }
+}
 
 function requireUserId(request: Request): string {
   if (!request.user) {
@@ -51,10 +100,12 @@ export async function getUnreadNotificationCount(request: Request, response: Res
 
 export async function getNotificationPreferences(request: Request, response: Response): Promise<void> {
   const preferences = await notificationsService.getPreferences(requireUserId(request));
+  const orchestration = await notificationsService.getOrchestrationPreferences(requireUserId(request));
   response.status(200).json({
     smsMarketing: preferences.smsMarketingConsentAt != null,
     smsTransactional: preferences.smsTransactionalEnabled,
     marketingConsent: preferences.marketingConsentAt != null,
+    orchestration,
   });
 }
 
@@ -73,6 +124,7 @@ export async function testPushNotification(request: Request, response: Response)
 
 export async function updateNotificationPreferences(request: Request, response: Response): Promise<void> {
   const raw = (request.body ?? {}) as Record<string, unknown>;
+  const orchestration = parseOrchestrationPreferences(raw.orchestration);
   if (raw.smsMarketing !== undefined && typeof raw.smsMarketing !== "boolean") {
     throw new AppError("smsMarketing must be a boolean", 400);
   }
@@ -94,6 +146,9 @@ export async function updateNotificationPreferences(request: Request, response: 
     smsTransactional: raw.smsTransactional as boolean | undefined,
     marketingConsent: raw.marketingConsent as boolean | undefined,
   });
+  const orchestrationPreferences = orchestration === undefined
+    ? await notificationsService.getOrchestrationPreferences(userId)
+    : await notificationsService.updateOrchestrationPreferences(userId, orchestration);
 
   if (before) {
     await recordAudit({
@@ -111,5 +166,6 @@ export async function updateNotificationPreferences(request: Request, response: 
     smsMarketing: preferences.smsMarketingConsentAt != null,
     smsTransactional: preferences.smsTransactionalEnabled,
     marketingConsent: preferences.marketingConsentAt != null,
+    orchestration: orchestrationPreferences,
   });
 }

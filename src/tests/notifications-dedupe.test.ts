@@ -62,6 +62,33 @@ describe("notificationsService.create — dedupeKey", () => {
     expect(result).toEqual({ id: "n2", dedupeKey: "EVENT:1" });
   });
 
+  it("persists the typed orchestration contract for a versioned event candidate", async () => {
+    m.notification.create.mockResolvedValue({ id: "n3" } as never);
+    await notificationsService.create({
+      userId: "vendor-user",
+      type: "AUTOMATION_MESSAGE",
+      title: "Your foodstuff is now visible",
+      data: {
+        type: "product_published", ruleKey: "R09_PUBLICATION_CONFIRMED", ruleVersion: 1,
+        eventId: "event-9", templateVersion: 1, productId: "product-9", destination: "store_share",
+      },
+    });
+    expect(m.notification.create).toHaveBeenCalledWith({ data: expect.objectContaining({
+      ruleId: "R09_PUBLICATION_CONFIRMED",
+      ruleVersion: 1,
+      eventId: "event-9",
+      role: "VENDOR",
+      priority: "P1",
+      category: "SERVICE",
+      entityType: "Product",
+      entityId: "product-9",
+      taskEpisodeKey: "vendor-user:VENDOR:Product:product-9:R09_PUBLICATION_CONFIRMED:event-9",
+      dueAt: expect.any(Date),
+      candidateState: "QUEUED",
+      templateVersion: "1",
+    }) });
+  });
+
   it("returns null (not an error) when dedupeKey already exists — the DB constraint is what actually prevented the duplicate", async () => {
     m.notification.create.mockRejectedValue(p2002("dedupeKey"));
     const result = await notificationsService.create({ userId: "u1", type: "ADMIN_BROADCAST", title: "Hi", dedupeKey: "EVENT:1" });

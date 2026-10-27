@@ -110,3 +110,21 @@ The spec's test-requirements list (section 11) includes items this pass could no
 - It does not claim CI is green — PR #6 has 1 failing check (the pre-existing scaffolding finding) and 2 passing. That's stated plainly in `00-status.md` and the PR body.
 - It does not claim production is running this code — PR #6 is unmerged.
 - It does not claim any real push/email/WhatsApp message reached a real device this pass.
+# Current follow-up evidence — 2026-10-27
+
+The sections below also contain historical results from earlier branches. For `feat/notification-spec-contracts`, the following focused checks were run against the current worktree:
+
+```
+vitest run --reporter=dot \
+  src/tests/notification-event-pipeline.integration.test.ts \
+  src/tests/notification-delivery.test.ts \
+  src/tests/core-event-handlers.test.ts \
+  src/tests/notifications-dedupe.test.ts \
+  src/tests/notification-preferences.test.ts
+Test Files  5 passed (5)
+Tests       63 passed (63)
+```
+
+`prisma validate` and Prisma client generation passed for the additive schema migration. `git diff --check` passed. The full backend build and full suite have not been rerun from this worktree because its dependency tree is incomplete. `public-stores.test.ts` could not start: local `stripe` resolution fails because dependency `qs` is unavailable in this checkout. CI should run with the repository's locked dependency install before merge.
+
+The current follow-up does not claim native iOS/Android runtime QA, WhatsApp provider delivery, production migration, or production gate enablement.

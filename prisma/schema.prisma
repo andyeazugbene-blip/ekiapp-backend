@@ -159,6 +159,58 @@ enum NotificationType {
   NEW_MESSAGE
 }
 
+enum NotificationCandidateState {
+  SCHEDULED
+  SUPPRESSED
+  QUEUED
+  SENT
+  FAILED
+  CANCELLED
+  EXPIRED
+}
+
+enum NotificationPreferenceChannel {
+  PUSH
+  IN_APP
+  EMAIL
+  SMS
+  WHATSAPP
+}
+
+enum NotificationPreferenceCategory {
+  SERVICE
+  MARKETING
+}
+
+enum NotificationConsent {
+  OPTED_IN
+  OPTED_OUT
+  NOT_REQUIRED_FOR_SERVICE
+  UNKNOWN
+}
+
+enum NotificationAttributionModel {
+  DIRECT_TASK_COMPLETION
+  ASSISTED
+  NONE
+}
+
+enum NotificationPriority {
+  P0
+  P1
+  P2
+  P3
+}
+
+enum NotificationRecipientRole {
+  BUYER
+  VENDOR
+  ADMIN
+  ORGANISER
+  PARTICIPANT
+  SUPPLIER
+}
+
 enum ReviewStatus {
   PENDING
   APPROVED
@@ -209,6 +261,7 @@ model User {
   orders                   Order[]                   @relation("BuyerOrders")
   cart                     Cart?
   notifications            Notification[]
+  notificationPreferences  NotificationPreference[]
   purchasedGiftCards       PurchasedGiftCard[]
   adminTwoFactor           AdminTwoFactor?
   adminRoleAssignments     AdminRoleAssignment[]
@@ -817,8 +870,26 @@ model Notification {
   // the same event can never both succeed in creating a row, unlike an
   // application-level "check then create" which races.
   dedupeKey String?          @unique
+  // Optional for legacy notifications. Event-backed orchestration candidates
+  // populate these fields so candidate lifecycle, task-episode dedupe, and
+  // versioned copy can be queried without parsing arbitrary JSON.
+  ruleId            String?
+  ruleVersion       Int?
+  eventId           String?
+  role              NotificationRecipientRole?
+  category          NotificationPreferenceCategory?
+  priority          NotificationPriority?
+  entityType        String?
+  entityId          String?
+  taskEpisodeKey    String?                    @unique
+  dueAt             DateTime?
+  expiresAt         DateTime?
+  candidateState    NotificationCandidateState?
+  templateVersion   String?
+  variantId         String?
   user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
   deliveries NotificationDelivery[]
+  outcome   NotificationOutcome?
   createdAt DateTime         @default(now())
 
   @@index([userId, readAt])
@@ -834,6 +905,8 @@ enum NotificationDeliveryStatus {
   FAILED
   CANCELLED
   DEAD
+  OPENED
+  SUPPRESSED
 }
 
 // Per-channel delivery attempts for an idempotent notification candidate.
@@ -848,6 +921,8 @@ model NotificationDelivery {
   lockedAt            DateTime?
   communicationLogId  String?                    @unique
   providerRef         String?
+  templateVersion     String?
+  variantId           String?
   lastError           String?                    @db.Text
   deliveredAt         DateTime?
   notification        Notification               @relation(fields: [notificationId], references: [id], onDelete: Cascade)
@@ -856,6 +931,36 @@ model NotificationDelivery {
 
   @@unique([notificationId, channel])
   @@index([status, availableAt])
+}
+
+model NotificationPreference {
+  id                 String                           @id @default(cuid())
+  userId             String
+  role               UserRole
+  channel            NotificationPreferenceChannel
+  category           NotificationPreferenceCategory
+  consent            NotificationConsent              @default(UNKNOWN)
+  timezone           String                           @default("UTC")
+  quietHoursStart    String?
+  quietHoursEnd      String?
+  user               User                             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt          DateTime                         @default(now())
+  updatedAt          DateTime                         @updatedAt
+
+  @@unique([userId, role, channel, category])
+  @@index([userId, role])
+}
+
+model NotificationOutcome {
+  id                  String                       @id @default(cuid())
+  notificationId      String                       @unique
+  clickedAt           DateTime?
+  completedAt         DateTime?
+  completionEventId   String?
+  attributionModel    NotificationAttributionModel @default(NONE)
+  notification        Notification                 @relation(fields: [notificationId], references: [id], onDelete: Cascade)
+  createdAt           DateTime                     @default(now())
+  updatedAt           DateTime                     @updatedAt
 }
 
 model WebhookEvent {
@@ -1975,6 +2080,7 @@ model CommunicationLog {
   recipientId   String
   recipientType String // BUYER, VENDOR, ADMIN
   eventKey      String
+  taskEpisodeKey String?
   channel       String // email, push, in_app, sms
   title         String
   body          String    @db.Text
@@ -1993,6 +2099,7 @@ model CommunicationLog {
   @@index([broadcastId])
   @@index([recipientId])
   @@index([eventKey])
+  @@index([taskEpisodeKey, channel, status, createdAt])
   @@index([createdAt])
   @@index([recipientType, createdAt])
 }

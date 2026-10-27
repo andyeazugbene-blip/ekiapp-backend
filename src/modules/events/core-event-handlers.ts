@@ -274,6 +274,7 @@ export async function handleSupportResponseReceived(tx: Prisma.TransactionClient
       ruleKey: rule.key,
       ruleVersion: rule.version,
       eventId: event.id,
+      recipientRole: recipient.role,
       templateVersion: 1,
       destination: "support_case",
       conversationId,

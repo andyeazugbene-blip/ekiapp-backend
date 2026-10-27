@@ -35,8 +35,12 @@ const { prismaMock, txMock, sendPushToUser } = vi.hoisted(() => {
         notificationRow = { id: "notification-1", readAt: null, ...data };
         return notificationRow;
       }),
+      update: vi.fn(async () => ({})),
+      findMany: vi.fn(async () => []),
       findUnique: vi.fn(async () => notificationRow),
     },
+    notificationOutcome: { upsert: vi.fn(async () => ({})) },
+    notificationPreference: { findUnique: vi.fn(async () => null) },
     notificationDelivery: {
       upsert: vi.fn(async ({ create }: any) => {
         deliveryRow = { id: "delivery-1", attempt: 0, status: "PENDING", ...create };
@@ -57,6 +61,8 @@ const { prismaMock, txMock, sendPushToUser } = vi.hoisted(() => {
       findMany: vi.fn(async () => deliveryRow ? [{ ...deliveryRow, notification: notificationRow }] : []),
       findUnique: vi.fn(async () => ({ id: "delivery-1", attempt: 1, status: "SENT" })),
     },
+    notification: { update: vi.fn().mockResolvedValue({}) },
+    notificationPreference: { findUnique: vi.fn(async () => null) },
     message: txMock.message,
     user: { findUnique: vi.fn(), findMany: vi.fn() },
     paymentAnomaly: { findUnique: vi.fn(), findMany: vi.fn(), upsert: vi.fn() },
@@ -71,7 +77,7 @@ const { prismaMock, txMock, sendPushToUser } = vi.hoisted(() => {
     product: { findUnique: vi.fn() },
     productInventoryCount: { findUnique: vi.fn(), findFirst: vi.fn() },
     orderItem: { aggregate: vi.fn() },
-    communicationLog: { update: vi.fn().mockResolvedValue({}) },
+    communicationLog: { update: vi.fn().mockResolvedValue({}), findFirst: vi.fn(async () => null) },
     $transaction: vi.fn(async (fn: (tx: typeof txMock) => Promise<unknown>) => fn(txMock)),
   };
   return { prismaMock, txMock, sendPushToUser: vi.fn() };

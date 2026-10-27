@@ -5,6 +5,7 @@ import { logger } from "../../lib/logger";
 import { AppError } from "../../shared/errors/app-error";
 import { EVENT_NAMES, type EmitEventInput } from "./events.service";
 import { ensureCriticalIncidentCandidates, criticalIncidentAlertsEnabled, materializeOpenCriticalIncidents } from "../ledger/critical-incident-notifications";
+import { recordNotificationOutcomes } from "../notifications/notification-outcomes";
 
 const MAX_ATTEMPTS = 8;
 const STALE_LOCK_MS = 5 * 60 * 1000;
@@ -125,6 +126,7 @@ export const eventOutboxService = {
           const current = await tx.event.findUnique({ where: { id: candidate.id } });
           if (!current || current.deliveryStatus !== "PROCESSING") return false;
           await handler(tx, current);
+          await recordNotificationOutcomes(tx, current);
           await tx.event.update({
             where: { id: current.id },
             data: { deliveryStatus: "DELIVERED", deliveredAt: now, lockedAt: null, lastDeliveryError: null },
