@@ -69,6 +69,54 @@ beforeEach(() => {
 });
 
 describe("notification push delivery", () => {
+  it("defers service candidates to the recipient's local quiet-hours end", async () => {
+    prismaMock.notificationPreference.findUnique.mockResolvedValue({
+      consent: "NOT_REQUIRED_FOR_SERVICE", timezone: "UTC", quietHoursStart: "11:00", quietHoursEnd: "13:00",
+    } as never);
+    prismaMock.notificationDelivery.findMany.mockResolvedValue([{
+      ...delivery,
+      notification: { ...delivery.notification, role: "BUYER", category: "SERVICE", priority: "P1",
+        taskEpisodeKey: "buyer-1:BUYER:Order:order-1:R21_ORDER_CONFIRMED:event-1", data: { type: "buyer_order_confirmed" } },
+    }] as never);
+    const result = await notificationDeliveryService.dispatchBatch(10, now);
+    expect(result).toMatchObject({ claimed: 1, sent: 0 });
+    expect(prismaMock.notificationDelivery.updateMany).toHaveBeenLastCalledWith(expect.objectContaining({
+      where: { id: "delivery-1", status: "PROCESSING", lockedAt: now },
+      data: expect.objectContaining({ status: "PENDING", availableAt: new Date("2026-10-26T13:00:00.000Z"), attempt: { decrement: 1 } }),
+    }));
+    expect(sendPushToUser).not.toHaveBeenCalled();
+  });
+
+  it("requires explicit push marketing consent at send time", async () => {
+    prismaMock.notificationPreference.findUnique.mockResolvedValue(null);
+    prismaMock.notificationDelivery.findMany.mockResolvedValue([{
+      ...delivery,
+      notification: { ...delivery.notification, role: "BUYER", category: "MARKETING", priority: "P2",
+        data: { type: "buyer_win_back" } },
+    }] as never);
+    const result = await notificationDeliveryService.dispatchBatch(10, now);
+    expect(result).toMatchObject({ claimed: 1, cancelled: 1 });
+    expect(txMock.notification.update).toHaveBeenCalledWith({ where: { id: "notification-1" }, data: { candidateState: "SUPPRESSED" } });
+    expect(sendPushToUser).not.toHaveBeenCalled();
+  });
+
+  it("suppresses push when the same task episode was already delivered by WhatsApp", async () => {
+    const taskEpisodeKey = "buyer-1:BUYER:Order:order-1:R21_ORDER_CONFIRMED:event-1";
+    prismaMock.notificationPreference.findUnique.mockResolvedValue({ consent: "NOT_REQUIRED_FOR_SERVICE" } as never);
+    prismaMock.communicationLog.findFirst.mockResolvedValue({ id: "wa-log-1" } as never);
+    prismaMock.notificationDelivery.findMany.mockResolvedValue([{
+      ...delivery,
+      notification: { ...delivery.notification, role: "BUYER", category: "SERVICE", priority: "P1", taskEpisodeKey,
+        data: { type: "buyer_order_confirmed" } },
+    }] as never);
+    const result = await notificationDeliveryService.dispatchBatch(10, now);
+    expect(result).toMatchObject({ claimed: 1, cancelled: 1 });
+    expect(prismaMock.communicationLog.findFirst).toHaveBeenCalledWith({
+      where: { taskEpisodeKey, channel: "whatsapp", status: "DELIVERED" }, select: { id: true },
+    });
+    expect(sendPushToUser).not.toHaveBeenCalled();
+  });
+
   it("rechecks latest explicit shipment delay and buyer ownership before R24 push", async () => {
     vi.stubEnv("R24_DELIVERY_EXCEPTION_ENABLED", "true");
     prismaMock.shipment.findUnique.mockResolvedValue({ id: "shipment-24", orderId: "order-24", status: "DELAYED" } as never);

@@ -17,10 +17,12 @@ vi.mock("../lib/prisma", () => ({
 
 const mockScheduleAutomation = vi.fn();
 const mockGetVendorAutomationConfig = vi.fn();
+const mockDispatchDueVendorTrialEnding = vi.fn().mockResolvedValue(0);
 vi.mock("../modules/automation/automation.service", () => ({
   automationService: {
     scheduleAutomation: (...args: unknown[]) => mockScheduleAutomation(...args),
     getVendorAutomationConfig: (...args: unknown[]) => mockGetVendorAutomationConfig(...args),
+    dispatchDueVendorTrialEnding: (...args: unknown[]) => mockDispatchDueVendorTrialEnding(...args),
   },
 }));
 
@@ -67,6 +69,8 @@ describe("automationDetectors.runSweep — R04 incomplete product drafts", () =>
 
     const results = await automationDetectors.runSweep();
 
+    expect(results.VENDOR_TRIAL_ENDING_DUE).toBe(0);
+    expect(mockDispatchDueVendorTrialEnding).toHaveBeenCalledTimes(1);
     const calls = mockScheduleAutomation.mock.calls.map(([input]: any[]) => input).filter((input) => input.type === "DRAFT_PRODUCT_REMINDER");
     expect(results.DRAFT_PRODUCT_REMINDER).toBe(3);
     expect(calls.map((input) => input.subjectKey)).toEqual([
