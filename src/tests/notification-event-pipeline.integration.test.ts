@@ -9,6 +9,7 @@ const { prismaMock, txMock, sendPushToUser } = vi.hoisted(() => {
       upsert: vi.fn(async ({ create }: any) => Object.assign(eventRow, { id: "event-1", deliveryAttempt: 0, deliveryStatus: "PENDING", ...create })),
       updateMany: vi.fn().mockResolvedValue({ count: 1 }),
       findUnique: vi.fn(async () => ({ ...eventRow, deliveryStatus: "PROCESSING" })),
+      findFirst: vi.fn(async () => ({ id: eventRow.id })),
       update: vi.fn(async ({ data }: any) => Object.assign(eventRow, data)),
     },
     message: {
@@ -21,6 +22,7 @@ const { prismaMock, txMock, sendPushToUser } = vi.hoisted(() => {
     paymentAnomaly: { findUnique: vi.fn(), findMany: vi.fn(), upsert: vi.fn() },
     vendor: { findUnique: vi.fn() },
     order: { findUnique: vi.fn() },
+    shipment: { findUnique: vi.fn() },
     communityCampaign: { findUnique: vi.fn() },
     communityBuyPaymentAuthorisation: { findUnique: vi.fn() },
     campaignContribution: { findMany: vi.fn() },
@@ -55,6 +57,7 @@ const { prismaMock, txMock, sendPushToUser } = vi.hoisted(() => {
       upsert: vi.fn(),
       updateMany: vi.fn().mockResolvedValue({ count: 1 }),
       findMany: vi.fn(async () => [{ ...eventRow, deliveryStatus: "PENDING" }]),
+      findFirst: vi.fn(async () => ({ id: eventRow.id })),
     },
     notificationDelivery: {
       updateMany: vi.fn().mockResolvedValue({ count: 1 }),
@@ -68,6 +71,7 @@ const { prismaMock, txMock, sendPushToUser } = vi.hoisted(() => {
     paymentAnomaly: { findUnique: vi.fn(), findMany: vi.fn(), upsert: vi.fn() },
     vendor: { findUnique: vi.fn() },
     order: { findUnique: vi.fn() },
+    shipment: { findUnique: vi.fn() },
     communityCampaign: { findUnique: vi.fn() },
     communityBuyPaymentAuthorisation: { findUnique: vi.fn() },
     campaignContribution: { findMany: vi.fn() },
@@ -103,6 +107,7 @@ describe("event to notification pipeline integration", () => {
     vi.stubEnv("R28_GENERAL_SUPPORT_NOTIFICATIONS_ENABLED", "true");
     vi.stubEnv("R20_PAYMENT_FAILED_ENABLED", "false");
     vi.stubEnv("R22_ORDER_DISPATCHED_ENABLED", "false");
+    vi.stubEnv("R24_DELIVERY_EXCEPTION_ENABLED", "false");
     vi.stubEnv("R21_ORDER_CONFIRMED_ENABLED", "false");
     vi.stubEnv("R09_PUBLICATION_CONFIRMED_ENABLED", "false");
     vi.stubEnv("R34_COMMUNITY_BUY_BELOW_MINIMUM_ENABLED", "true");
@@ -245,6 +250,36 @@ describe("event to notification pipeline integration", () => {
     expect(sendPushToUser).toHaveBeenCalledWith("buyer-22", expect.objectContaining({
       title: "Your foodstuff is on its way", body: "View the latest delivery information.",
       data: expect.objectContaining({ type: "buyer_order_dispatched", destination: "order_detail", orderId: "order-22" }),
+    }), { logId: "log-1" });
+  });
+
+  it("routes an explicit vendor-reported delayed shipment to the owning buyer with R24 copy", async () => {
+    vi.stubEnv("R24_DELIVERY_EXCEPTION_ENABLED", "true");
+    const shipment = { id: "shipment-24", orderId: "order-24", vendorId: "vendor-24", status: "DELAYED",
+      order: { id: "order-24", buyerId: "buyer-24", orderNumber: "EKI-24" } };
+    txMock.shipment.findUnique.mockResolvedValue(shipment);
+    prismaMock.shipment.findUnique.mockResolvedValue({ id: "shipment-24", orderId: "order-24", status: "DELAYED" });
+    txMock.order.findUnique.mockResolvedValue({ buyerId: "buyer-24" });
+    prismaMock.order.findUnique.mockResolvedValue({ buyerId: "buyer-24" });
+    txMock.user.findUnique.mockResolvedValue({ id: "buyer-24", role: "BUYER", isSuspended: false });
+    prismaMock.user.findUnique.mockResolvedValue({ id: "buyer-24", role: "BUYER", isSuspended: false });
+
+    const event = await prismaMock.$transaction((tx: typeof txMock) => eventOutboxService.enqueue(tx, {
+      name: EVENT_NAMES.shipment_delayed, actorType: "vendor", entityType: "Shipment", entityId: "shipment-24",
+      payload: { shipmentId: "shipment-24", orderId: "order-24", vendorId: "vendor-24", fromStatus: "IN_TRANSIT", toStatus: "DELAYED" },
+    }, { dedupeKey: "shipment-delayed:shipment-24:episode-1", schemaVersion: 1 }));
+    const outbox = await eventOutboxService.dispatchRegisteredBatch(10, new Date("2026-10-27T12:00:00Z"));
+    expect(outbox).toMatchObject({ claimed: 1, delivered: 1 });
+    expect(txMock.notification.create).toHaveBeenCalledWith({ data: expect.objectContaining({
+      userId: "buyer-24", title: "Your delivery needs attention", body: "Review the available next steps.",
+      dedupeKey: `R24_DELIVERY_EXCEPTION:shipment-24:${event.id}`,
+      data: expect.objectContaining({ ruleKey: "R24_DELIVERY_EXCEPTION", eventId: event.id, destination: "order_detail", orderId: "order-24", shipmentId: "shipment-24" }),
+    }) });
+    const delivered = await notificationDeliveryService.dispatchBatch(10, new Date("2026-10-27T12:00:01Z"));
+    expect(delivered).toMatchObject({ claimed: 1, sent: 1 });
+    expect(sendPushToUser).toHaveBeenCalledWith("buyer-24", expect.objectContaining({
+      title: "Your delivery needs attention", body: "Review the available next steps.",
+      data: expect.objectContaining({ type: "shipment_delayed", destination: "order_detail", shipmentId: "shipment-24" }),
     }), { logId: "log-1" });
   });
 

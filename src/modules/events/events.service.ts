@@ -42,6 +42,7 @@ export const EVENT_NAMES = {
   order_created: "order_created",
   order_accepted: "order_accepted",
   order_dispatched: "order_dispatched",
+  shipment_delayed: "shipment_delayed",
   order_delivered: "order_delivered",
   order_completed: "order_completed",
   order_refunded: "order_refunded",

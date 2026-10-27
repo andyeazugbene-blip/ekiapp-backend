@@ -4,6 +4,7 @@ import { prisma } from "../../lib/prisma";
 import { CURSOR_ORDER_BY } from "../../shared/constants";
 import { AppError } from "../../shared/errors/app-error";
 import { notificationsService } from "../notifications/notifications.service";
+import { EVENT_NAMES, eventsService } from "../events/events.service";
 import type { CreateShipmentInput, ListShipmentsQuery, UpdateShipmentInput } from "./shipments.types";
 
 export const shipmentsService = {
@@ -115,10 +116,17 @@ export const shipmentsService = {
     let orderStatusApplied = false;
 
     const updated = await prisma.$transaction(async (tx) => {
-      const nextShipment = await tx.shipment.update({
-        where: { id: shipmentId },
-        data,
-      });
+      let nextShipment: Shipment;
+      if (input.status !== undefined) {
+        const claimed = await tx.shipment.updateMany({
+          where: { id: shipmentId, vendorId: vendor.id, status: shipment.status, updatedAt: shipment.updatedAt },
+          data,
+        });
+        if (claimed.count !== 1) throw new AppError("Shipment changed while it was being updated", 409);
+        nextShipment = await tx.shipment.findUniqueOrThrow({ where: { id: shipmentId } });
+      } else {
+        nextShipment = await tx.shipment.update({ where: { id: shipmentId }, data });
+      }
 
       if (nextOrderStatus) {
         const orderUpdate = await tx.order.updateMany({
@@ -139,6 +147,35 @@ export const shipmentsService = {
         // Notification row here: that previously sent the buyer a second,
         // mislabeled ("ADMIN_BROADCAST") duplicate for the same change.
         orderStatusApplied = orderUpdate.count === 1;
+      }
+
+      // R24 maps only the real, authenticated vendor-reported DELAYED state.
+      // A generic elapsed-time estimate or the Community Buy EXCEPTION state
+      // is not treated as an ordinary order delivery exception.
+      if (input.status === "DELAYED" && shipment.status !== "DELAYED") {
+        const order = await tx.order.findUnique({
+          where: { id: shipment.orderId },
+          select: { buyerId: true, orderNumber: true },
+        });
+        if (order) {
+          await eventsService.enqueueTransactional(tx, {
+            name: EVENT_NAMES.shipment_delayed,
+            actorType: "vendor",
+            actorId: userId,
+            entityType: "Shipment",
+            entityId: shipment.id,
+            secondaryEntities: { orderId: shipment.orderId, buyerId: order.buyerId, vendorId: vendor.id },
+            source: "vendor_shipments_api",
+            payload: {
+              orderId: shipment.orderId,
+              shipmentId: shipment.id,
+              vendorId: vendor.id,
+              fromStatus: shipment.status,
+              toStatus: "DELAYED",
+              orderNumber: order.orderNumber,
+            },
+          }, { dedupeKey: `shipment-delayed:${shipment.id}:${shipment.updatedAt.getTime()}`, schemaVersion: 1 });
+        }
       }
 
       return nextShipment;
