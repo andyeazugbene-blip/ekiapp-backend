@@ -20,7 +20,7 @@ The referral ledger records a configured credit-month reward as earned/owed and 
 
 ## 5. Mobile runtime QA and gated-rule verification
 
-The mobile source maps all 15 semantic destination keys to routes or role-safe fallbacks, and PR #5 source maps R40 `admin_case` to an authenticated admin queue. The mobile PR #5 state could not be refreshed during this pass because GitHub API access was unavailable; it was reported open and mergeable at the last check. Typechecking and preview CI do not verify native notification delivery, cold-start/background behavior, or route ownership on iOS/Android devices. Staging setup and the precise R40 device matrix are in `09-mobile-runtime-qa.md`. R04 remains DRAFT pending Acquisition WhatsApp ownership/coordination and sub-daily timing support.
+The mobile source maps all 15 semantic destination keys to routes or role-safe fallbacks, and PR #5 source maps R40 `admin_case` to an authenticated admin queue. PR #5 is currently open/clean with Vercel checks passing. Typechecking and preview CI do not verify native notification delivery, cold-start/background behavior, or route ownership on iOS/Android devices. Staging setup and the precise R40 device matrix are in `09-mobile-runtime-qa.md`. R04 remains DRAFT pending Acquisition WhatsApp ownership/coordination and sub-daily timing support.
 
 ## 6. Remaining engineering work and gated rules
 
