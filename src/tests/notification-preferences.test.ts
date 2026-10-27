@@ -17,8 +17,12 @@ vi.mock("../lib/prisma", () => ({
     user: { findUniqueOrThrow: vi.fn(), update: vi.fn() },
     auditLog: { create: vi.fn() },
     notification: { count: vi.fn() },
+    notificationPreference: { findMany: vi.fn(), upsert: vi.fn() },
+    notificationOutcome: { upsert: vi.fn() },
+    $transaction: vi.fn(),
   },
 }));
+vi.mock("../queues", () => ({ notificationsQueue: null }));
 
 import { prisma } from "../lib/prisma";
 import { getNotificationPreferences, getUnreadNotificationCount, updateNotificationPreferences } from "../modules/notifications/notifications.controller";
@@ -42,6 +46,8 @@ function createMockRes(): Response & { statusCode: number; data: unknown } {
 beforeEach(() => {
   vi.clearAllMocks();
   m.auditLog.create.mockResolvedValue({} as never);
+  m.notificationPreference.findMany.mockResolvedValue([] as never);
+  m.notificationPreference.upsert.mockResolvedValue({} as never);
 });
 
 describe("GET /notifications/preferences", () => {
@@ -50,6 +56,7 @@ describe("GET /notifications/preferences", () => {
     const res = createMockRes();
     await getNotificationPreferences(createMockReq(), res as unknown as Response);
     expect((res.data as Record<string, unknown>).marketingConsent).toBe(false);
+    expect((res.data as Record<string, unknown>).orchestration).toEqual([]);
   });
 });
 
@@ -114,11 +121,39 @@ describe("PATCH /notifications/preferences — marketingConsent", () => {
     const res = createMockRes();
     await updateNotificationPreferences(createMockReq({ smsMarketing: true }), res as unknown as Response);
 
-    expect(m.user.findUniqueOrThrow).not.toHaveBeenCalled(); // no "before" fetch needed
+    expect(m.user.findUniqueOrThrow).toHaveBeenCalledWith({ where: { id: "buyer-1" }, select: { role: true } }); // resolves role-scoped preferences
     expect(m.user.update).toHaveBeenCalledWith(expect.objectContaining({
       data: expect.not.objectContaining({ marketingConsentAt: expect.anything() }),
     }));
     expect(m.auditLog.create).not.toHaveBeenCalled();
+  });
+});
+
+describe("PATCH /notifications/preferences — orchestration policy", () => {
+  it("rejects an invalid timezone before writing preferences", async () => {
+    const res = createMockRes();
+    await expect(updateNotificationPreferences(createMockReq({ orchestration: [{
+      channel: "PUSH", category: "SERVICE", consent: "NOT_REQUIRED_FOR_SERVICE", timezone: "Mars/Olympus",
+    }] }), res as unknown as Response)).rejects.toMatchObject({ statusCode: 400 });
+    expect(m.notificationPreference.upsert).not.toHaveBeenCalled();
+  });
+
+  it("persists per-channel consent, IANA timezone, and paired quiet hours for the authenticated role", async () => {
+    m.user.findUniqueOrThrow.mockResolvedValue({ role: "BUYER" } as never);
+    m.$transaction.mockImplementation(async (callback: any) => callback({ notificationPreference: { upsert: m.notificationPreference.upsert } }) as never);
+    m.notificationPreference.upsert.mockResolvedValue({} as never);
+    m.notificationPreference.findMany.mockResolvedValue([{ channel: "PUSH", category: "SERVICE" }] as never);
+    const res = createMockRes();
+    await updateNotificationPreferences(createMockReq({ orchestration: [{
+      channel: "PUSH", category: "SERVICE", consent: "NOT_REQUIRED_FOR_SERVICE", timezone: "Africa/Lagos",
+      quietHoursStart: "22:00", quietHoursEnd: "07:00",
+    }] }), res as unknown as Response);
+
+    expect(m.notificationPreference.upsert).toHaveBeenCalledWith(expect.objectContaining({
+      where: { userId_role_channel_category: { userId: "buyer-1", role: "BUYER", channel: "PUSH", category: "SERVICE" } },
+      create: expect.objectContaining({ consent: "NOT_REQUIRED_FOR_SERVICE", timezone: "Africa/Lagos", quietHoursStart: "22:00", quietHoursEnd: "07:00" }),
+    }));
+    expect((res.data as Record<string, unknown>).orchestration).toEqual([{ channel: "PUSH", category: "SERVICE" }]);
   });
 });
 

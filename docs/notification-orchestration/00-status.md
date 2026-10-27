@@ -1,14 +1,14 @@
 # Notification Orchestration Spec v2 — Compliance Status
 
-**Date:** 2026-10-26
+**Date:** 2026-10-27
 **Author:** Mouad (with Claude Code assistance)
 **Authoritative source:** the client supplied the Google Doc export on 2026-10-26. A byte-for-byte working copy is stored at [`Eki-Notification-Orchestration-Spec-v2.md`](Eki-Notification-Orchestration-Spec-v2.md). The document identifies itself as an implementation draft and says production event mapping and live QA are still required; each R01–R40 entry is proposed, not proof of an implemented backend event.
 
-**Latest work:** R28 now covers both Community Buy cases and general Eki Support threads. Backend PRs #23 and #24 were merged externally at 12:29 UTC; backend `main` is `254f2a89fbed53614b512922eca459b91a598008`. CI for #23 failed because `messages-service.test.ts` still mocked only array transactions after the implementation moved to callback transactions; a callback-aware test fix and the v2 `support_case` payload alignment are on the current follow-up branch. Mobile PR #5 is open with the matching authenticated role route. Backend focused tests/build and mobile typecheck pass; native device QA is not evidenced. R04 remains fail-closed. The existing uncommitted `android/app/src/main/AndroidManifest.xml` change remains untouched.
+**Latest work:** Backend PR #38 (R07–R09 activation alerts) and PR #39 (R12/R21/R22 order alerts) are merged into `main`. This follow-up adds a shared candidate/preference/outcome persistence contract and send-time policy plumbing on `feat/notification-spec-contracts`. Existing Android manifest changes in the mobile checkout remain untouched. R07–R09 and order alert gates remain off pending native runtime QA.
 
-R06 now stops when the existing Stripe Identity session ID shows verification has started; R07/R08 were verified against the real `requires_input`/`verified` webhook paths and tests. R04's existing `Product.DRAFT` state and exact copy are implemented but remain disabled. General support coverage uses the existing SUPPORT conversation/Message model; the handler only targets an authenticated thread participant and suppresses notifications for internal, read, or closed-thread replies.
+R06 now stops when the existing Stripe Identity session ID shows verification has started; R07/R08 use the real `requires_input`/`verified` webhook paths. The shared schema now carries rule/event/role/entity/task-episode, due/expiry, priority/category, template/variant, candidate lifecycle, preference, and outcome fields. The delivery worker applies role-scoped push consent, preference quiet hours, WhatsApp episode suppression when an eligible delivered log exists, expiry, and current-state checks. Authenticated notification opens record click outcomes; source-backed completion events record direct-task completion. R04 remains disabled. General support coverage uses the existing SUPPORT conversation/Message model.
 
-**Completion status:** the full specification is not complete. The original 210-event legacy catalogue is still absent; most R01–R40 rules still need implementation/mapping work and applicable QA. R28 is the first end-to-end rule path on the shared outbox/candidate/delivery architecture; other rules have not yet been migrated through it. Sub-daily scheduling, WhatsApp coordination, unverified policies/signals, and native device QA remain outstanding. See `07-test-report.md` and `08-outstanding-decisions.md`.
+**Completion status:** the full specification is not complete. The original 210-event legacy catalogue is still absent; many R01–R40 rules need reviewed event mappings and applicable QA. The shared data contract and send-time policy are implemented, but source-backed producers, provider integrations, sub-daily scheduler cadence, billing policy, and native device QA remain incomplete. Feature gates stay disabled where route/runtime or business evidence is outstanding. See `01-compliance-matrix.md`, `07-test-report.md`, and `08-outstanding-decisions.md`.
 
 ## How to read the other files in this directory
 
@@ -26,12 +26,12 @@ R06 now stops when the existing Stripe Identity session ID shows verification ha
 | # | Deliverable | Status |
 |---|---|---|
 | 1 | Compliance matrix (R01–R40) | Done this pass — built from direct repo inspection |
-| 2 | Architecture report | Done — matches the ADR already shared with the client |
+| 2 | Architecture report | Updated with shared candidate, preference, delivery, and outcome contract |
 | 3 | FIRST_SALE report | Historical report — PR #6 is merged |
 | 4 | Scheduler report | Done — daily cron confirmed, 4h claim corrected |
 | 5 | Deep-link matrix | Done — verified against the actual mobile repo, not assumed |
-| 6 | Database report | Done — two additive migrations, rollback documented |
+| 6 | Database report | Existing migrations plus new additive candidate-contract migration |
 | 7 | Test report | Updated with actual 2026-10-26 commands; full HTTP suite is sandbox-blocked |
-| 8 | Changed-files summary | Backend commit `f9dcce9`; mobile commit `ff87a48` (local branch only) |
+| 8 | Changed-files summary | See current backend feature branch and PR once published |
 | 9 | Outstanding decisions | Done — 4 real decisions, not 40 |
-| 10 | Release recommendation | R10 backend update is on open PR #8. Mobile change is committed locally but awaits trusted authorization to push. No production deployment or merge was performed. |
+| 10 | Release recommendation | #38/#39 are merged. New shared-contract work must pass CI; no production migration or gate enablement is included. |

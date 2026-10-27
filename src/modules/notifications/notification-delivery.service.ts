@@ -319,7 +319,63 @@ async function supplierReconfirmationStillEligible(delivery: NotificationDeliver
     && campaign.reconfirmationQuantity === data.quantity);
 }
 
-async function notificationStillEligible(delivery: NotificationDelivery & { notification: { userId: string; readAt: Date | null; data: unknown } }): Promise<boolean> {
+function localMinutes(date: Date, timezone: string): number {
+  const parts = new Intl.DateTimeFormat("en-GB", { timeZone: timezone, hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).formatToParts(date);
+  const hour = Number(parts.find((part) => part.type === "hour")?.value);
+  const minute = Number(parts.find((part) => part.type === "minute")?.value);
+  return hour * 60 + minute;
+}
+
+function quietHoursEndAfter(now: Date, timezone: string, start: string, end: string): Date | null {
+  const [startHour, startMinute] = start.split(":").map(Number);
+  const [endHour, endMinute] = end.split(":").map(Number);
+  const current = localMinutes(now, timezone);
+  const startAt = startHour! * 60 + startMinute!;
+  const endAt = endHour! * 60 + endMinute!;
+  const quiet = startAt < endAt ? current >= startAt && current < endAt : current >= startAt || current < endAt;
+  if (!quiet) return null;
+  for (let delta = 60_000; delta <= 36 * 60 * 60_000; delta += 60_000) {
+    const candidate = new Date(now.getTime() + delta);
+    if (localMinutes(candidate, timezone) === endAt) return candidate;
+  }
+  return null;
+}
+
+async function orchestrationPolicy(delivery: NotificationDelivery & { notification: { userId: string; role: string | null; category: string | null; priority: string | null; taskEpisodeKey: string | null; data: unknown } }, now: Date): Promise<{ eligible: boolean; deferUntil?: Date }> {
+  const notification = delivery.notification;
+  if (!notification.role || !notification.category) return { eligible: true };
+  const user = await prisma.user.findUnique({ where: { id: notification.userId }, select: { role: true, marketingConsentAt: true } });
+  if (!user) return { eligible: false };
+  const preference = await prisma.notificationPreference.findUnique({
+    where: { userId_role_channel_category: {
+      userId: notification.userId,
+      role: user.role,
+      channel: "PUSH",
+      category: notification.category as "SERVICE" | "MARKETING",
+    } },
+  });
+  if (preference?.consent === "OPTED_OUT") return { eligible: false };
+  if (notification.category === "MARKETING"
+    && (preference?.consent !== "OPTED_IN" || !user.marketingConsentAt)) return { eligible: false };
+
+  const data = notification.data;
+  const ruleKey = isRecord(data) && typeof data.ruleKey === "string" ? data.ruleKey : "";
+  const critical = ["R12_FIRST_PAID_ORDER", "R19_PAYMENT_AUTHENTICATION_REQUIRED", "R20_PAYMENT_FAILED", "R21_ORDER_CONFIRMED", "R25_PAYOUT_ACTION_REQUIRED", "R32_SUBSCRIPTION_PAYMENT_FAILED", "R36_COMMUNITY_BUY_PAYMENT_ACTION_REQUIRED", "R40_CRITICAL_INCIDENT"].includes(ruleKey);
+  if (notification.taskEpisodeKey && !critical) {
+    const deliveredByWhatsApp = await prisma.communicationLog.findFirst({
+      where: { taskEpisodeKey: notification.taskEpisodeKey, channel: "whatsapp", status: "DELIVERED" },
+      select: { id: true },
+    });
+    if (deliveredByWhatsApp) return { eligible: false };
+  }
+  if (preference?.quietHoursStart && preference.quietHoursEnd && notification.priority !== "P0") {
+    const deferUntil = quietHoursEndAfter(now, preference.timezone, preference.quietHoursStart, preference.quietHoursEnd);
+    if (deferUntil) return { eligible: true, deferUntil };
+  }
+  return { eligible: true };
+}
+
+async function notificationStillEligible(delivery: NotificationDelivery & { notification: { userId: string; readAt: Date | null; role: string | null; category: string | null; priority: string | null; taskEpisodeKey: string | null; data: unknown } }): Promise<boolean> {
   const data = delivery.notification.data;
   if (!isRecord(data)) return false;
   if (data.ruleKey === "R08_VERIFICATION_APPROVED" && data.type === "vendor_verification_approved") {
@@ -386,13 +442,14 @@ export const notificationDeliveryService = {
   /** Process durable push deliveries. Expo receipt checks finalize SENT rows. */
   async dispatchBatch(limit = 50, now = new Date()): Promise<{ claimed: number; sent: number; retried: number; cancelled: number; dead: number }> {
     const boundedLimit = Math.min(Math.max(Math.floor(limit), 1), 200);
+    const dueCandidateWhere = { notification: { is: { OR: [{ dueAt: null }, { dueAt: { lte: now } }] } } };
     await prisma.notificationDelivery.updateMany({
       where: { status: "PROCESSING", lockedAt: { lt: new Date(now.getTime() - STALE_LOCK_MS) } },
       data: { status: "PENDING", lockedAt: null, availableAt: now },
     });
     const due = await prisma.notificationDelivery.findMany({
-      where: { status: "PENDING", availableAt: { lte: now } },
-      include: { notification: { select: { id: true, userId: true, title: true, body: true, data: true, readAt: true } } },
+      where: { status: "PENDING", availableAt: { lte: now }, ...dueCandidateWhere },
+      include: { notification: { select: { id: true, userId: true, title: true, body: true, data: true, readAt: true, role: true, category: true, priority: true, taskEpisodeKey: true, dueAt: true, expiresAt: true, candidateState: true, templateVersion: true, variantId: true } } },
       orderBy: [{ availableAt: "asc" }, { createdAt: "asc" }],
       take: boundedLimit,
     });
@@ -400,17 +457,50 @@ export const notificationDeliveryService = {
 
     for (const delivery of due) {
       const claim = await prisma.notificationDelivery.updateMany({
-        where: { id: delivery.id, status: "PENDING", availableAt: { lte: now } },
-        data: { status: "PROCESSING", lockedAt: now, attempt: { increment: 1 } },
+        where: { id: delivery.id, status: "PENDING", availableAt: { lte: now }, ...dueCandidateWhere },
+        data: {
+          status: "PROCESSING", lockedAt: now, attempt: { increment: 1 },
+          templateVersion: delivery.notification.templateVersion,
+          variantId: delivery.notification.variantId,
+        },
       });
       if (!claim.count) continue;
       result.claimed++;
       const attempt = delivery.attempt + 1;
 
-      if (!(await notificationStillEligible(delivery))) {
+      if (delivery.notification.expiresAt && delivery.notification.expiresAt <= now) {
+        await prisma.$transaction(async (tx) => {
+          await tx.notification.update({ where: { id: delivery.notification.id }, data: { candidateState: "EXPIRED" } });
+          await tx.notificationDelivery.updateMany({ where: { id: delivery.id, status: "PROCESSING", lockedAt: now }, data: { status: "CANCELLED", lockedAt: null, lastError: "candidate_expired" } });
+        });
+        result.cancelled++;
+        continue;
+      }
+
+      const policy = await orchestrationPolicy(delivery, now);
+      if (policy.deferUntil) {
         await prisma.notificationDelivery.updateMany({
           where: { id: delivery.id, status: "PROCESSING", lockedAt: now },
-          data: { status: "CANCELLED", lockedAt: null, lastError: "send_time_ineligible" },
+          data: { status: "PENDING", lockedAt: null, availableAt: policy.deferUntil, attempt: { decrement: 1 } },
+        });
+        continue;
+      }
+      if (!policy.eligible) {
+        await prisma.$transaction(async (tx) => {
+          await tx.notification.update({ where: { id: delivery.notification.id }, data: { candidateState: "SUPPRESSED" } });
+          await tx.notificationDelivery.updateMany({ where: { id: delivery.id, status: "PROCESSING", lockedAt: now }, data: { status: "SUPPRESSED", lockedAt: null, lastError: "channel_policy_suppressed" } });
+        });
+        result.cancelled++;
+        continue;
+      }
+
+      if (!(await notificationStillEligible(delivery))) {
+        await prisma.$transaction(async (tx) => {
+          await tx.notification.update({ where: { id: delivery.notification.id }, data: { candidateState: "SUPPRESSED" } });
+          await tx.notificationDelivery.updateMany({
+            where: { id: delivery.id, status: "PROCESSING", lockedAt: now },
+            data: { status: "SUPPRESSED", lockedAt: null, lastError: "send_time_ineligible" },
+          });
         });
         result.cancelled++;
         continue;
@@ -424,6 +514,7 @@ export const notificationDeliveryService = {
             recipientId: delivery.notification.userId,
             recipientType: role?.role ?? "UNKNOWN",
             eventKey: `notification_delivery:${delivery.id}:attempt:${attempt}`,
+            taskEpisodeKey: delivery.notification.taskEpisodeKey,
             channel: "push",
             title: delivery.notification.title,
             body: delivery.notification.body ?? "",
@@ -451,8 +542,9 @@ export const notificationDeliveryService = {
         });
         await prisma.notificationDelivery.updateMany({
           where: { id: delivery.id, status: "PROCESSING", lockedAt: now },
-          data: { status: "SENT", lockedAt: null, communicationLogId: communication.id, providerRef: push.ticketIds[0] ?? null, lastError: null },
+          data: { status: "SENT", lockedAt: null, communicationLogId: communication.id, providerRef: push.ticketIds[0] ?? null, lastError: null, templateVersion: delivery.notification.templateVersion, variantId: delivery.notification.variantId },
         });
+        await prisma.notification.update({ where: { id: delivery.notification.id }, data: { candidateState: "SENT" } });
         result.sent++;
       } else {
         const dead = attempt >= MAX_ATTEMPTS;
@@ -463,6 +555,7 @@ export const notificationDeliveryService = {
           where: { id: delivery.id, status: "PROCESSING", lockedAt: now },
           data: { status: dead ? "DEAD" : "PENDING", lockedAt: null, availableAt: next, communicationLogId: communication.id, lastError: error },
         });
+        if (dead) await prisma.notification.update({ where: { id: delivery.notification.id }, data: { candidateState: "FAILED" } });
         if (dead) result.dead++;
         else result.retried++;
         logger.warn("Notification push delivery did not reach Expo", { deliveryId: delivery.id, attempt, error, retryAt: dead ? undefined : next.toISOString() });

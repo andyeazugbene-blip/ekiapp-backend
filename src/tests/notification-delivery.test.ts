@@ -4,19 +4,22 @@ const { prismaMock, txMock, sendPushToUser } = vi.hoisted(() => {
   const txMock = {
     communicationLog: { create: vi.fn() },
     notificationDelivery: { updateMany: vi.fn() },
+    notification: { update: vi.fn() },
   };
   return {
     txMock,
     sendPushToUser: vi.fn(),
     prismaMock: {
       notificationDelivery: { updateMany: vi.fn(), findMany: vi.fn(), findUnique: vi.fn() },
+      notification: { update: vi.fn() },
+      notificationPreference: { findUnique: vi.fn().mockResolvedValue(null) },
       message: { findUnique: vi.fn() },
       product: { findUnique: vi.fn() },
       communityCampaign: { findUnique: vi.fn() },
       campaignContribution: { findMany: vi.fn() },
       payoutRequest: { findUnique: vi.fn() },
       user: { findUnique: vi.fn() },
-      communicationLog: { update: vi.fn() },
+      communicationLog: { update: vi.fn(), findFirst: vi.fn().mockResolvedValue(null) },
       $transaction: vi.fn(async (fn: (tx: typeof txMock) => Promise<unknown>) => fn(txMock)),
     },
   };

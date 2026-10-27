@@ -16,6 +16,7 @@ import { buildVendorShareUrl } from "../vendors/vendors.service";
 import { vendorMilestoneNotificationsService } from "../vendors/vendor-milestone-notifications.service";
 import { enqueueProductStockDepleted } from "../products/product-stock-events";
 import { dispatchNotificationsAfterCommit } from "../events/dispatch-notifications";
+import { recordNotificationTaskCompletion } from "../notifications/notification-outcomes";
 import type {
   ListPublicProductsQuery,
   PublicProduct,
@@ -1333,6 +1334,9 @@ export const publicStoresService = {
         name: EVENT_NAMES.store_shared, actorType: "user", actorId: viewerId ?? vendor.id,
         entityType: "Vendor", entityId: vendor.id, source, payload: { storeSlug: vendor.storeSlug, clientReported: true },
       });
+      void recordNotificationTaskCompletion({
+        userId: vendor.userId, ruleId: "R09_PUBLICATION_CONFIRMED", entityType: "Vendor", entityId: vendor.id,
+      }).catch((error) => logger.warn("Notification task completion attribution failed", { ruleId: "R09_PUBLICATION_CONFIRMED", vendorId: vendor.id, error: String(error) }));
     }
 
     return this.getAnalyticsSummaryForVendor(vendor.id, vendor.storeSlug);

@@ -1,4 +1,4 @@
-import type { Notification, NotificationType, Prisma } from "@prisma/client";
+import type { Notification, NotificationPreferenceCategory, NotificationPreferenceChannel, NotificationConsent, NotificationRecipientRole, NotificationPriority, NotificationType, Prisma } from "@prisma/client";
 
 import { logger } from "../../lib/logger";
 import { prisma } from "../../lib/prisma";
@@ -28,10 +28,86 @@ export interface CreateNotificationInput {
   dedupeKey?: string;
 }
 
+const RULE_RECIPIENT_ROLE: Record<string, NotificationRecipientRole> = {
+  R07_VERIFICATION_REQUIRES_CORRECTION: "VENDOR",
+  R08_VERIFICATION_APPROVED: "VENDOR",
+  R09_PUBLICATION_CONFIRMED: "VENDOR",
+  R12_FIRST_PAID_ORDER: "VENDOR",
+  R17_STOCK_DEPLETED: "VENDOR",
+  R18_STOCK_CONFLICT: "VENDOR",
+  R20_PAYMENT_FAILED: "BUYER",
+  R21_ORDER_CONFIRMED: "BUYER",
+  R22_ORDER_DISPATCHED: "BUYER",
+  R25_PAYOUT_ACTION_REQUIRED: "VENDOR",
+  R26_PAYOUT_CONFIRMED: "VENDOR",
+  R28_SUPPORT_RESPONSE: "BUYER",
+  R29_MEMBERSHIP_PAYMENT_FAILED: "VENDOR",
+  R34_COMMUNITY_BUY_BELOW_MINIMUM: "ORGANISER",
+  R35_COMMUNITY_BUY_MINIMUM_REACHED: "ORGANISER",
+  R36_COMMUNITY_BUY_PAYMENT_ACTION_REQUIRED: "PARTICIPANT",
+  R37_SUPPLIER_RECONFIRMATION: "SUPPLIER",
+  R40_CRITICAL_INCIDENT: "ADMIN",
+};
+
+const P0_RULES = new Set([
+  "R12_FIRST_PAID_ORDER", "R19_PAYMENT_AUTHENTICATION_REQUIRED", "R20_PAYMENT_FAILED",
+  "R21_ORDER_CONFIRMED", "R25_PAYOUT_ACTION_REQUIRED", "R32_SUBSCRIPTION_PAYMENT_FAILED",
+  "R36_COMMUNITY_BUY_PAYMENT_ACTION_REQUIRED", "R40_CRITICAL_INCIDENT",
+]);
+
+function orchestrationFields(input: CreateNotificationInput) {
+  const data = input.data;
+  if (!data || typeof data !== "object" || Array.isArray(data)) return {};
+  const value = data as Record<string, unknown>;
+  const ruleId = typeof value.ruleKey === "string" ? value.ruleKey : null;
+  const eventId = typeof value.eventId === "string" ? value.eventId : null;
+  if (!ruleId || !eventId) return {};
+  const audienceRole: Record<string, NotificationRecipientRole> = {
+    buyer: "BUYER", vendor: "VENDOR", admin: "ADMIN", organiser: "ORGANISER", participant: "PARTICIPANT", supplier: "SUPPLIER",
+  };
+  const role = (typeof value.recipientRole === "string" ? audienceRole[value.recipientRole.toLowerCase()] : undefined)
+    ?? (typeof value.audience === "string" ? audienceRole[value.audience.toLowerCase()] : undefined)
+    ?? RULE_RECIPIENT_ROLE[ruleId];
+  const entity = ruleId === "R09_PUBLICATION_CONFIRMED" && typeof value.vendorId === "string"
+    ? ["vendorId", "Vendor"]
+    : [
+    ["orderId", "Order"], ["productId", "Product"], ["vendorId", "Vendor"], ["campaignId", "CommunityCampaign"],
+    ["payoutRequestId", "Payout"], ["payoutId", "Payout"], ["conversationId", "Conversation"],
+    ["vendorSubscriptionId", "VendorSubscription"], ["subscriptionId", "VendorSubscription"],
+    ["authorisationId", "CommunityBuyPaymentAuthorisation"], ["anomalyKey", "PaymentAnomaly"], ["checkoutId", "Checkout"],
+    ].find(([key]) => typeof value[key!] === "string");
+  const entityId = entity ? value[entity[0]!] as string : null;
+  const ruleVersion = Number(value.ruleVersion);
+  if (!role || !entity || !entityId || !Number.isInteger(ruleVersion) || ruleVersion < 1) return {};
+  return {
+    ruleId,
+    ruleVersion,
+    eventId,
+    role,
+    priority: (P0_RULES.has(ruleId) ? "P0" : "P1") as NotificationPriority,
+    entityType: entity[1]!,
+    entityId,
+    taskEpisodeKey: [input.userId, role, entity[1], entityId, `${ruleId}:${eventId}`].join(":"),
+    dueAt: new Date(),
+    candidateState: "QUEUED" as const,
+    templateVersion: String(value.templateVersion ?? "1"),
+    category: "SERVICE" as const,
+  };
+}
+
 export interface ListNotificationsQuery {
   limit?: number;
   cursor?: string;
   unreadOnly?: boolean;
+}
+
+export interface OrchestrationPreferenceInput {
+  channel: NotificationPreferenceChannel;
+  category: NotificationPreferenceCategory;
+  consent: NotificationConsent;
+  timezone?: string;
+  quietHoursStart?: string | null;
+  quietHoursEnd?: string | null;
 }
 
 type PrismaLike = Prisma.TransactionClient | typeof prisma;
@@ -61,6 +137,7 @@ export const notificationsService = {
           body: input.body,
           data: input.data,
           dedupeKey: input.dedupeKey,
+          ...orchestrationFields(input),
         },
       });
     } catch (error) {
@@ -175,12 +252,18 @@ export const notificationsService = {
       });
       if (!existing) throw new AppError("Notification not found", 404);
       if (existing.userId !== userId) throw new AppError("Forbidden", 403);
-      if (existing.readAt) {
-        return prisma.notification.findUniqueOrThrow({ where: { id: notificationId } });
-      }
     }
 
-    return prisma.notification.findUniqueOrThrow({ where: { id: notificationId } });
+    const notification = await prisma.notification.findUniqueOrThrow({ where: { id: notificationId } });
+    // The authenticated single-item read endpoint is invoked by the mobile
+    // notification tap handler. Keep this attribution separate from inbox
+    // bulk-read actions, which do not imply a click.
+    await prisma.notificationOutcome.upsert({
+      where: { notificationId },
+      create: { notificationId, clickedAt: new Date() },
+      update: {},
+    });
+    return notification;
   },
 
   async markAllRead(userId: string): Promise<{ count: number }> {
@@ -237,6 +320,47 @@ export const notificationsService = {
         marketingConsentAt: true,
       },
     });
+  },
+
+  async getOrchestrationPreferences(userId: string) {
+    const user = await prisma.user.findUniqueOrThrow({ where: { id: userId }, select: { role: true } });
+    return prisma.notificationPreference.findMany({
+      where: { userId, role: user.role },
+      orderBy: [{ category: "asc" }, { channel: "asc" }],
+    });
+  },
+
+  async updateOrchestrationPreferences(userId: string, preferences: OrchestrationPreferenceInput[]) {
+    const user = await prisma.user.findUniqueOrThrow({ where: { id: userId }, select: { role: true } });
+    await prisma.$transaction(async (tx) => {
+      for (const preference of preferences) {
+        await tx.notificationPreference.upsert({
+          where: { userId_role_channel_category: {
+            userId,
+            role: user.role,
+            channel: preference.channel,
+            category: preference.category,
+          } },
+          create: {
+            userId,
+            role: user.role,
+            channel: preference.channel,
+            category: preference.category,
+            consent: preference.consent,
+            timezone: preference.timezone ?? "UTC",
+            quietHoursStart: preference.quietHoursStart ?? null,
+            quietHoursEnd: preference.quietHoursEnd ?? null,
+          },
+          update: {
+            consent: preference.consent,
+            ...(preference.timezone === undefined ? {} : { timezone: preference.timezone }),
+            ...(preference.quietHoursStart === undefined ? {} : { quietHoursStart: preference.quietHoursStart }),
+            ...(preference.quietHoursEnd === undefined ? {} : { quietHoursEnd: preference.quietHoursEnd }),
+          },
+        });
+      }
+    });
+    return this.getOrchestrationPreferences(userId);
   },
 };
 
