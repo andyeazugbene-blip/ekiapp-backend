@@ -15,6 +15,37 @@ function requiredId(payload: unknown, field: string): string {
   return value;
 }
 
+/** R20: ask the buyer to review payment after Stripe confirms a checkout failure. */
+export async function handlePaymentFailed(tx: Prisma.TransactionClient, event: Event): Promise<void> {
+  const rule = resolveNotificationRule(event);
+  if (!rule?.enabled) return;
+  const checkoutId = requiredId(event.payload, "checkoutId");
+  const checkout = await tx.checkout.findUnique({ where: { id: checkoutId }, select: { id: true, buyerId: true, status: true } });
+  if (!checkout || checkout.status !== "FAILED") return;
+  const recipient = await tx.user.findUnique({ where: { id: checkout.buyerId }, select: { id: true, role: true, isSuspended: true } });
+  if (!recipient || recipient.role !== "BUYER" || recipient.isSuspended) return;
+
+  const dedupeKey = `R20_PAYMENT_FAILED:${checkout.id}`;
+  const created = await notificationsService.create({
+    userId: recipient.id,
+    type: "AUTOMATION_MESSAGE",
+    title: "Your payment did not go through",
+    body: "Review your payment method to continue.",
+    data: {
+      type: "payment_failed", ruleKey: rule.key, ruleVersion: rule.version,
+      eventId: event.id, templateVersion: 1, destination: "checkout", checkoutId: checkout.id,
+      stripeEventId: requiredId(event.payload, "stripeEventId"),
+    },
+    dedupeKey,
+  }, tx);
+  const candidate = created ?? await tx.notification.findUnique({ where: { dedupeKey }, select: { id: true } });
+  if (candidate) await tx.notificationDelivery.upsert({
+    where: { notificationId_channel: { notificationId: candidate.id, channel: "push" } },
+    create: { notificationId: candidate.id, channel: "push" },
+    update: {},
+  });
+}
+
 /**
  * R28 consumer for the real general SUPPORT conversation model. This only
  * materializes the in-app candidate. Outbox delivery and candidate creation
@@ -507,6 +538,7 @@ export async function handleCommunityBuyBelowMinimum(tx: Prisma.TransactionClien
 let registered = false;
 export function registerCoreEventHandlers(): void {
   if (registered) return;
+  eventOutboxService.registerHandler(EVENT_NAMES.payment_failed, handlePaymentFailed);
   eventOutboxService.registerHandler(EVENT_NAMES.support_response_received, handleSupportResponseReceived);
   eventOutboxService.registerHandler(EVENT_NAMES.product_stock_depleted, handleProductStockDepleted);
   eventOutboxService.registerHandler(EVENT_NAMES.product_inventory_conflict_detected, handleProductInventoryConflictDetected);
