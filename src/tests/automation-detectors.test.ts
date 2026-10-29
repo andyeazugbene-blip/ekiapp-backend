@@ -18,11 +18,13 @@ vi.mock("../lib/prisma", () => ({
 const mockScheduleAutomation = vi.fn();
 const mockGetVendorAutomationConfig = vi.fn();
 const mockDispatchDueVendorTrialEnding = vi.fn().mockResolvedValue(0);
+const mockListSentDedupeKeys = vi.fn().mockResolvedValue(new Set());
 vi.mock("../modules/automation/automation.service", () => ({
   automationService: {
     scheduleAutomation: (...args: unknown[]) => mockScheduleAutomation(...args),
     getVendorAutomationConfig: (...args: unknown[]) => mockGetVendorAutomationConfig(...args),
     dispatchDueVendorTrialEnding: (...args: unknown[]) => mockDispatchDueVendorTrialEnding(...args),
+    listSentDedupeKeys: (...args: unknown[]) => mockListSentDedupeKeys(...args),
   },
 }));
 
@@ -37,6 +39,10 @@ beforeEach(() => {
   vi.clearAllMocks();
   vi.useFakeTimers();
   vi.setSystemTime(NOW);
+  // clearAllMocks() does not revert a mockResolvedValue a previous test set —
+  // reset the P2 "already sent" lookup to empty here, globally, so no test
+  // can leak its override into an unrelated later one.
+  mockListSentDedupeKeys.mockResolvedValue(new Set());
   m.automationRule.findUnique.mockImplementation(async ({ where }: any) => ({
     state: where.key === "DRAFT_PRODUCT_REMINDER" ? "DRAFT" : "ACTIVE",
     timing: null,
@@ -469,6 +475,37 @@ describe("automationDetectors.runSweep — vendor onboarding progress rules (Not
     await automationDetectors.runSweep();
     const keys = mockScheduleAutomation.mock.calls.filter(([a]: any[]) => a.type === "FIRST_PRODUCT_REMINDER").map(([a]: any[]) => a.subjectKey);
     expect(keys).toEqual(["vendor-1:touch1", "vendor-1:touch2", "vendor-1:touch3"]);
+  });
+
+  it("production bug fix 2026-10-29: once touch1 already SENT (a real vendor's history), the next day's sweep does NOT re-attempt it — so touch2 never gets starved out of the one-per-sweep coalescing slot by a doomed repeat of an already-delivered touch", async () => {
+    // Day 2: vendor has been ready 28h (past touch1's 4h AND touch2's 24h threshold).
+    mockCandidates(candidate({ products: 0, createdAt: new Date(NOW.getTime() - 28 * 60 * 60 * 1000) }));
+    // touch1 already has a real SENT row from a prior sweep — exactly the
+    // production scenario that was found: `vendor-1-user` has never
+    // received touch2 because touch1's pointless re-attempt kept winning
+    // the per-sweep coalescing claim before failing on its own dedupeKey.
+    mockListSentDedupeKeys.mockResolvedValue(new Set(["FIRST_PRODUCT_REMINDER:vendor-1:touch1"]));
+
+    await automationDetectors.runSweep();
+
+    const calls = mockScheduleAutomation.mock.calls.filter(([a]: any[]) => a.type === "FIRST_PRODUCT_REMINDER");
+    // Only touch2 is attempted — touch1 is skipped entirely (not even a
+    // doomed re-attempt), so it never competes for the coalescing slot.
+    expect(calls).toHaveLength(1);
+    expect(calls[0][0].subjectKey).toBe("vendor-1:touch2");
+  });
+
+  it("when ALL due touches already have a real SENT row, nothing is attempted at all — not even a pointless lookup-then-skip churns the coalescing slot", async () => {
+    mockCandidates(candidate({ products: 0, createdAt: new Date(NOW.getTime() - 10 * 24 * 60 * 60 * 1000) })); // past all 3 thresholds
+    mockListSentDedupeKeys.mockResolvedValue(new Set([
+      "FIRST_PRODUCT_REMINDER:vendor-1:touch1",
+      "FIRST_PRODUCT_REMINDER:vendor-1:touch2",
+      "FIRST_PRODUCT_REMINDER:vendor-1:touch3",
+    ]));
+
+    await automationDetectors.runSweep();
+
+    expect(mockScheduleAutomation).not.toHaveBeenCalledWith(expect.objectContaining({ type: "FIRST_PRODUCT_REMINDER" }));
   });
 });
 

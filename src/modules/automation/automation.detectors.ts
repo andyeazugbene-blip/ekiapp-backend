@@ -67,8 +67,29 @@ async function scheduleP2Touches(input: {
   body: string;
   data?: Record<string, unknown>;
 }): Promise<number> {
+  const dueTouchNumbers = duePTouchNumbers(input.hoursSinceEligible);
+  if (dueTouchNumbers.length === 0) return 0;
+
+  // Bug fix 2026-10-29 (found via production evidence — a vendor's own
+  // AutomationRun history showed touch2/touch3 had NEVER once been sent,
+  // on any day, for any recipient): once touch1 has actually SENT, it
+  // becomes a PERMANENT dedupeKey — every later sweep still re-attempts
+  // it (hoursSinceEligible only grows), and isEligible() claims this
+  // recipient's one-per-sweep non-urgent coalescing slot BEFORE the
+  // attempt fails on the dedupeKey's unique constraint. That pointless
+  // re-attempt of an already-delivered touch was winning the slot every
+  // single day, forever, so touch2 (24h) and touch3 (72h) could never
+  // get a turn — "coalesced_same_run" masquerading as working as
+  // designed. Fix: look up which of the due touches already have a real
+  // SENT row first, and only ever attempt the ones that don't — an
+  // already-sent touch no longer competes for the coalescing slot at all.
+  const candidateKeys = dueTouchNumbers.map((n) => `${input.type}:${input.subjectPrefix}:touch${n}`);
+  const alreadySent = await automationService.listSentDedupeKeys(candidateKeys);
+  const touchesToAttempt = dueTouchNumbers.filter((n) => !alreadySent.has(`${input.type}:${input.subjectPrefix}:touch${n}`));
+  if (touchesToAttempt.length === 0) return 0;
+
   let scheduled = 0;
-  for (const touchNumber of duePTouchNumbers(input.hoursSinceEligible)) {
+  for (const touchNumber of touchesToAttempt) {
     await automationService.scheduleAutomation({
       type: input.type,
       recipientUserId: input.recipientUserId,
