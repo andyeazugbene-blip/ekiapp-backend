@@ -531,6 +531,24 @@ async function dispatchRun(
 
 export const automationService = {
   /**
+   * Returns the subset of the given dedupeKeys that already have a real
+   * SENT AutomationRun row. Added 2026-10-29 alongside the P2 touch-
+   * starvation fix in automation.detectors.ts's scheduleP2Touches — lets a
+   * detector skip re-attempting an already-delivered touch instead of
+   * burning that recipient's one-per-sweep non-urgent coalescing slot on
+   * a doomed repeat that only fails afterward on the dedupeKey's unique
+   * constraint.
+   */
+  async listSentDedupeKeys(dedupeKeys: string[]): Promise<Set<string>> {
+    if (dedupeKeys.length === 0) return new Set();
+    const rows = await prisma.automationRun.findMany({
+      where: { dedupeKey: { in: dedupeKeys }, status: "SENT" },
+      select: { dedupeKey: true },
+    });
+    return new Set(rows.map((r) => r.dedupeKey));
+  },
+
+  /**
    * The single entry point every trigger/detector calls. Order of checks:
    * emergency pause -> rule state -> quiet hours -> eligibility (recipient,
    * consent, vendor toggle, frequency cap). EVERY suppression is recorded as
