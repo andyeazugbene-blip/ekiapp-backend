@@ -82,6 +82,7 @@ const { prismaMock, txMock, sendPushToUser } = vi.hoisted(() => {
     productInventoryCount: { findUnique: vi.fn(), findFirst: vi.fn() },
     orderItem: { aggregate: vi.fn() },
     communicationLog: { update: vi.fn().mockResolvedValue({}), findFirst: vi.fn(async () => null) },
+    adminPlatformSetting: { findUnique: vi.fn(async () => null) },
     $transaction: vi.fn(async (fn: (tx: typeof txMock) => Promise<unknown>) => fn(txMock)),
   };
   return { prismaMock, txMock, sendPushToUser: vi.fn() };

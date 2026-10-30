@@ -7,6 +7,7 @@ import { EVENT_NAMES } from "../events/events.service";
 import { resolveNotificationRule } from "../events/notification-event-rules";
 import { COMMUNITY_BUY_ORGANISER_DECISION_WINDOW_MS } from "../community-buy/community-buy-timing";
 import { getCurrentInventoryConflict } from "../products/inventory-conflict";
+import { adminPlatformSettingsService } from "../admin/admin-platform-settings.service";
 
 const MAX_ATTEMPTS = 8;
 const STALE_LOCK_MS = 5 * 60 * 1000;
@@ -383,11 +384,19 @@ async function orchestrationPolicy(delivery: NotificationDelivery & { notificati
   const data = notification.data;
   const ruleKey = isRecord(data) && typeof data.ruleKey === "string" ? data.ruleKey : "";
   const critical = ["R12_FIRST_PAID_ORDER", "R19_PAYMENT_AUTHENTICATION_REQUIRED", "R20_PAYMENT_FAILED", "R21_ORDER_CONFIRMED", "R25_PAYOUT_ACTION_REQUIRED", "R32_SUBSCRIPTION_PAYMENT_FAILED", "R36_COMMUNITY_BUY_PAYMENT_ACTION_REQUIRED", "R40_CRITICAL_INCIDENT"].includes(ruleKey);
-  // Cross-channel coordination is only safe when the client has configured a
-  // cooldown. Without one, a historical WhatsApp receipt must not suppress a
-  // push indefinitely. Zero/unset intentionally disables this provider-neutral
-  // lookup until a provider and policy window are approved.
-  const whatsappCooldownSeconds = Number(process.env.NOTIFICATION_WHATSAPP_TASK_COOLDOWN_SECONDS ?? 0);
+  // Cross-channel coordination is only safe when a cooldown is actually
+  // configured. Without one, a historical WhatsApp receipt must not
+  // suppress a push indefinitely. Zero/unset intentionally disables this
+  // provider-neutral lookup until a provider and policy window are
+  // approved. Owner instruction (2026-10-29, "make it default and can
+  // change it from admin panel"): moved from an env var (redeploy to
+  // change) to NOTIFICATION_WHATSAPP_TASK_COOLDOWN_SECONDS, an
+  // AdminPlatformSetting an admin can edit live, same convention as every
+  // other operational threshold in this codebase. Default stays 0
+  // (disabled) — flipping it on is a real decision (it needs a real
+  // WhatsApp provider/receipt pipeline to have anything to suppress
+  // against), not something this change enables by itself.
+  const whatsappCooldownSeconds = await adminPlatformSettingsService.getWhatsappCooldownSeconds();
   if (notification.taskEpisodeKey && !critical && Number.isSafeInteger(whatsappCooldownSeconds) && whatsappCooldownSeconds > 0) {
     const deliveredByWhatsApp = await prisma.communicationLog.findFirst({
       where: {

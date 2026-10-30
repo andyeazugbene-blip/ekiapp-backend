@@ -22,6 +22,17 @@ export async function updateOperationalThreshold(request: Request, response: Res
   response.json({ setting: updated });
 }
 
+export async function getWhatsappCooldownSetting(_request: Request, response: Response): Promise<void> {
+  response.json({ setting: await adminPlatformSettingsService.getWhatsappCooldownSetting() });
+}
+
+export async function updateWhatsappCooldownSetting(request: Request, response: Response): Promise<void> {
+  const adminId = requireUserId(request);
+  const { value, reason } = (request.body ?? {}) as { value?: unknown; reason?: unknown };
+  const updated = await adminPlatformSettingsService.setWhatsappCooldownSeconds(value, adminId, reason, request);
+  response.json({ setting: updated });
+}
+
 export async function listPlatformFlags(_request: Request, response: Response): Promise<void> {
   response.json({ flags: await adminPlatformSettingsService.listFlags() });
 }
