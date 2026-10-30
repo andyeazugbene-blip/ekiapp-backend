@@ -64,7 +64,7 @@ async function verificationStatusStillEligible(delivery: NotificationDelivery & 
   const data = delivery.notification.data;
   if (!isRecord(data) || typeof data.vendorId !== "string" || typeof data.sessionId !== "string" || delivery.notification.readAt) return false;
   const isApproved = ruleKey === "R08_VERIFICATION_APPROVED";
-  const rule = resolveNotificationRule({
+  const rule = await resolveNotificationRule({
     name: isApproved ? EVENT_NAMES.verification_completed : EVENT_NAMES.verification_requires_input,
     schemaVersion: Number(data.ruleVersion),
   });
@@ -96,7 +96,7 @@ async function productPublicationStillEligible(delivery: NotificationDelivery & 
 }
 
 async function productInventoryConflictStillEligible(delivery: NotificationDelivery & { notification: { userId: string; readAt: Date | null; data: unknown } }): Promise<boolean> {
-  if (process.env.R18_STOCK_CONFLICT_ENABLED !== "true") return false;
+  if (!(await adminPlatformSettingsService.getFlag("FLAG_R18_STOCK_CONFLICT_ENABLED"))) return false;
   const data = delivery.notification.data;
   if (!isRecord(data) || data.type !== "product_inventory_conflict" || typeof data.productId !== "string"
     || typeof data.inventoryCountId !== "string" || delivery.notification.readAt) return false;
@@ -116,7 +116,7 @@ async function paidOrderStillEligible(delivery: NotificationDelivery & { notific
   const data = delivery.notification.data;
   if (!isRecord(data) || typeof data.orderId !== "string" || delivery.notification.readAt
     || process.env.R12_FIRST_PAID_ORDER_ENABLED !== "true") return false;
-  const rule = resolveNotificationRule({ name: EVENT_NAMES.payment_succeeded, schemaVersion: Number(data.ruleVersion) });
+  const rule = await resolveNotificationRule({ name: EVENT_NAMES.payment_succeeded, schemaVersion: Number(data.ruleVersion) });
   if (!rule?.enabled || rule.key !== "R12_FIRST_PAID_ORDER") return false;
   const [order, recipient] = await Promise.all([
     prisma.order.findUnique({ where: { id: data.orderId }, select: { status: true, vendorConfirmedAt: true, vendorId: true, items: { select: { vendorId: true } } } }),
@@ -132,7 +132,7 @@ async function buyerOrderConfirmationStillEligible(delivery: NotificationDeliver
   const data = delivery.notification.data;
   if (!isRecord(data) || typeof data.orderId !== "string" || delivery.notification.readAt
     || process.env.R21_ORDER_CONFIRMED_ENABLED !== "true") return false;
-  const rule = resolveNotificationRule({ name: EVENT_NAMES.order_accepted, schemaVersion: Number(data.ruleVersion) });
+  const rule = await resolveNotificationRule({ name: EVENT_NAMES.order_accepted, schemaVersion: Number(data.ruleVersion) });
   if (!rule?.enabled || rule.key !== "R21_ORDER_CONFIRMED") return false;
   const [order, recipient] = await Promise.all([
     prisma.order.findUnique({ where: { id: data.orderId }, select: { buyerId: true, status: true } }),
@@ -147,7 +147,7 @@ async function dispatchedOrderStillEligible(delivery: NotificationDelivery & { n
   const data = delivery.notification.data;
   if (!isRecord(data) || typeof data.orderId !== "string" || delivery.notification.readAt
     || process.env.R22_ORDER_DISPATCHED_ENABLED !== "true") return false;
-  const rule = resolveNotificationRule({ name: EVENT_NAMES.order_dispatched, schemaVersion: Number(data.ruleVersion) });
+  const rule = await resolveNotificationRule({ name: EVENT_NAMES.order_dispatched, schemaVersion: Number(data.ruleVersion) });
   if (!rule?.enabled || rule.key !== "R22_ORDER_DISPATCHED") return false;
   const [order, recipient] = await Promise.all([
     prisma.order.findUnique({ where: { id: data.orderId }, select: { buyerId: true, status: true } }),
@@ -163,7 +163,7 @@ async function delayedShipmentStillEligible(delivery: NotificationDelivery & { n
   if (!isRecord(data) || typeof data.shipmentId !== "string" || typeof data.orderId !== "string"
     || typeof data.eventId !== "string" || delivery.notification.readAt
     || process.env.R24_DELIVERY_EXCEPTION_ENABLED !== "true") return false;
-  const rule = resolveNotificationRule({ name: EVENT_NAMES.shipment_delayed, schemaVersion: Number(data.ruleVersion) });
+  const rule = await resolveNotificationRule({ name: EVENT_NAMES.shipment_delayed, schemaVersion: Number(data.ruleVersion) });
   if (!rule?.enabled || rule.key !== "R24_DELIVERY_EXCEPTION") return false;
   const [shipment, recipient, latestEvent] = await Promise.all([
     prisma.shipment.findUnique({ where: { id: data.shipmentId }, select: { id: true, orderId: true, status: true } }),
@@ -184,7 +184,7 @@ async function failedCheckoutStillEligible(delivery: NotificationDelivery & { no
   const data = delivery.notification.data;
   if (!isRecord(data) || typeof data.checkoutId !== "string" || delivery.notification.readAt
     || process.env.R20_PAYMENT_FAILED_ENABLED !== "true") return false;
-  const rule = resolveNotificationRule({ name: EVENT_NAMES.payment_failed, schemaVersion: Number(data.ruleVersion) });
+  const rule = await resolveNotificationRule({ name: EVENT_NAMES.payment_failed, schemaVersion: Number(data.ruleVersion) });
   if (!rule?.enabled || rule.key !== "R20_PAYMENT_FAILED") return false;
   const [checkout, recipient] = await Promise.all([
     prisma.checkout.findUnique({ where: { id: data.checkoutId }, select: { buyerId: true, status: true } }),
@@ -429,7 +429,7 @@ async function notificationStillEligible(delivery: NotificationDelivery & { noti
     return verificationStatusStillEligible(delivery, "R07_VERIFICATION_REQUIRES_CORRECTION");
   }
   if (data.type === "product_published" && data.ruleKey === "R09_PUBLICATION_CONFIRMED") {
-    const rule = resolveNotificationRule({ name: EVENT_NAMES.product_published, schemaVersion: Number(data.ruleVersion) });
+    const rule = await resolveNotificationRule({ name: EVENT_NAMES.product_published, schemaVersion: Number(data.ruleVersion) });
     return Boolean(rule?.enabled && await productPublicationStillEligible(delivery));
   }
   if (data.type === "buyer_order_dispatched" && data.ruleKey === "R22_ORDER_DISPATCHED") return dispatchedOrderStillEligible(delivery);
@@ -441,43 +441,43 @@ async function notificationStillEligible(delivery: NotificationDelivery & { noti
     return criticalIncidentStillEligible(delivery);
   }
   if (data.type === "support_case_response" && data.ruleKey === "R28_SUPPORT_RESPONSE") {
-    const rule = resolveNotificationRule({ name: EVENT_NAMES.support_response_received, schemaVersion: Number(data.ruleVersion) });
+    const rule = await resolveNotificationRule({ name: EVENT_NAMES.support_response_received, schemaVersion: Number(data.ruleVersion) });
     return Boolean(rule?.enabled && await supportReplyStillEligible(delivery));
   }
   if (data.type === "product_stock_depleted" && data.ruleKey === "R17_STOCK_DEPLETED") {
-    const rule = resolveNotificationRule({ name: EVENT_NAMES.product_stock_depleted, schemaVersion: Number(data.ruleVersion) });
+    const rule = await resolveNotificationRule({ name: EVENT_NAMES.product_stock_depleted, schemaVersion: Number(data.ruleVersion) });
     return Boolean(rule?.enabled && await productStockAlertStillEligible(delivery));
   }
   if (data.type === "product_inventory_conflict" && data.ruleKey === "R18_STOCK_CONFLICT") {
-    const rule = resolveNotificationRule({ name: EVENT_NAMES.product_inventory_conflict_detected, schemaVersion: Number(data.ruleVersion) });
+    const rule = await resolveNotificationRule({ name: EVENT_NAMES.product_inventory_conflict_detected, schemaVersion: Number(data.ruleVersion) });
     return Boolean(rule?.enabled && await productInventoryConflictStillEligible(delivery));
   }
   if (data.type === "community_campaign_update" && data.event === "minimum_reached" && data.ruleKey === "R35_COMMUNITY_BUY_MINIMUM_REACHED") {
-    const rule = resolveNotificationRule({ name: EVENT_NAMES.community_buy_minimum_reached, schemaVersion: Number(data.ruleVersion) });
+    const rule = await resolveNotificationRule({ name: EVENT_NAMES.community_buy_minimum_reached, schemaVersion: Number(data.ruleVersion) });
     return Boolean(rule?.enabled && await communityBuyMinimumStillEligible(delivery));
   }
   if (data.type === "community_buy_payment_action_required" && data.ruleKey === "R36_COMMUNITY_BUY_PAYMENT_ACTION_REQUIRED") {
-    const rule = resolveNotificationRule({ name: EVENT_NAMES.community_buy_payment_action_required, schemaVersion: Number(data.ruleVersion) });
+    const rule = await resolveNotificationRule({ name: EVENT_NAMES.community_buy_payment_action_required, schemaVersion: Number(data.ruleVersion) });
     return Boolean(rule?.enabled && await communityBuyPaymentActionStillEligible(delivery));
   }
   if (data.type === "supplier_reconfirmation_requested" && data.ruleKey === "R37_SUPPLIER_RECONFIRMATION") {
-    const rule = resolveNotificationRule({ name: EVENT_NAMES.community_buy_supplier_reconfirmation_requested, schemaVersion: Number(data.ruleVersion) });
+    const rule = await resolveNotificationRule({ name: EVENT_NAMES.community_buy_supplier_reconfirmation_requested, schemaVersion: Number(data.ruleVersion) });
     return Boolean(rule?.enabled && await supplierReconfirmationStillEligible(delivery));
   }
   if (data.type === "payout_action_required" && data.ruleKey === "R25_PAYOUT_ACTION_REQUIRED") {
-    const rule = resolveNotificationRule({ name: EVENT_NAMES.payout_action_required, schemaVersion: Number(data.ruleVersion) });
+    const rule = await resolveNotificationRule({ name: EVENT_NAMES.payout_action_required, schemaVersion: Number(data.ruleVersion) });
     return Boolean(rule?.enabled && await payoutActionStillEligible(delivery));
   }
   if (data.type === "subscription_update" && data.event === "vendor_subscription_payment_failed" && data.ruleKey === "R29_MEMBERSHIP_PAYMENT_FAILED") {
-    const rule = resolveNotificationRule({ name: EVENT_NAMES.vendor_membership_payment_failed, schemaVersion: Number(data.ruleVersion) });
+    const rule = await resolveNotificationRule({ name: EVENT_NAMES.vendor_membership_payment_failed, schemaVersion: Number(data.ruleVersion) });
     return Boolean(rule?.enabled && await vendorMembershipPaymentStillEligible(delivery));
   }
   if (data.type === "community_campaign_update" && data.event === "below_minimum" && data.ruleKey === "R34_COMMUNITY_BUY_BELOW_MINIMUM") {
-    const rule = resolveNotificationRule({ name: EVENT_NAMES.community_buy_below_minimum, schemaVersion: Number(data.ruleVersion) });
+    const rule = await resolveNotificationRule({ name: EVENT_NAMES.community_buy_below_minimum, schemaVersion: Number(data.ruleVersion) });
     return Boolean(rule?.enabled && await communityBuyBelowMinimumStillEligible(delivery));
   }
   if (data.type === "payout_confirmed" && data.ruleKey === "R26_PAYOUT_CONFIRMED") {
-    const rule = resolveNotificationRule({ name: EVENT_NAMES.payout_confirmed, schemaVersion: Number(data.ruleVersion) });
+    const rule = await resolveNotificationRule({ name: EVENT_NAMES.payout_confirmed, schemaVersion: Number(data.ruleVersion) });
     return Boolean(rule?.enabled && await payoutConfirmedStillEligible(delivery));
   }
   return false;

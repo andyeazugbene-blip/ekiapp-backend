@@ -12,7 +12,7 @@ async function handleVerificationStatus(tx: Prisma.TransactionClient, event: Eve
   eventName: string; ruleKey: string; notificationType: string; title: string; body: string; dedupePrefix: string;
   requiredStatus: string; requiredIdentityStatus: string; destination: string;
 }): Promise<void> {
-  const rule = resolveNotificationRule(event);
+  const rule = await resolveNotificationRule(event);
   if (!rule?.enabled) return;
   const vendorId = requiredId(event.payload, "vendorId");
   const sessionId = requiredId(event.payload, "sessionId");
@@ -56,7 +56,7 @@ export async function handleVerificationRequiresCorrection(tx: Prisma.Transactio
 
 /** R09: notify once for the vendor's first genuinely published foodstuff. */
 export async function handleProductPublished(tx: Prisma.TransactionClient, event: Event): Promise<void> {
-  const rule = resolveNotificationRule(event);
+  const rule = await resolveNotificationRule(event);
   if (!rule?.enabled) return;
   const productId = requiredId(event.payload, "productId");
   const vendorId = requiredId(event.payload, "vendorId");
@@ -106,7 +106,7 @@ function requiredId(payload: unknown, field: string): string {
 
 /** R20: ask the buyer to review payment after Stripe confirms a checkout failure. */
 export async function handlePaymentFailed(tx: Prisma.TransactionClient, event: Event): Promise<void> {
-  const rule = resolveNotificationRule(event);
+  const rule = await resolveNotificationRule(event);
   if (!rule?.enabled) return;
   const checkoutId = requiredId(event.payload, "checkoutId");
   const checkout = await tx.checkout.findUnique({ where: { id: checkoutId }, select: { id: true, buyerId: true, status: true } });
@@ -136,7 +136,7 @@ export async function handlePaymentFailed(tx: Prisma.TransactionClient, event: E
 }
 
 export async function handleFirstPaidOrder(tx: Prisma.TransactionClient, event: Event): Promise<void> {
-  const rule = resolveNotificationRule(event);
+  const rule = await resolveNotificationRule(event);
   if (!rule?.enabled) return;
   const orderId = requiredId(event.payload, "orderId");
   const order = await tx.order.findUnique({
@@ -173,7 +173,7 @@ export async function handleFirstPaidOrder(tx: Prisma.TransactionClient, event: 
 
 /** R21: confirm the paid order to its buyer once. */
 export async function handleOrderConfirmed(tx: Prisma.TransactionClient, event: Event): Promise<void> {
-  const rule = resolveNotificationRule(event);
+  const rule = await resolveNotificationRule(event);
   if (!rule?.enabled) return;
   const orderId = requiredId(event.payload, "orderId");
   const order = await tx.order.findUnique({ where: { id: orderId }, select: { id: true, orderNumber: true, buyerId: true, status: true } });
@@ -204,7 +204,7 @@ export async function handleOrderConfirmed(tx: Prisma.TransactionClient, event: 
 
 /** R22: tell the buyer when the vendor confirms dispatch. */
 export async function handleOrderDispatched(tx: Prisma.TransactionClient, event: Event): Promise<void> {
-  const rule = resolveNotificationRule(event);
+  const rule = await resolveNotificationRule(event);
   if (!rule?.enabled) return;
   const orderId = requiredId(event.payload, "orderId");
   const order = await tx.order.findUnique({ where: { id: orderId }, select: { id: true, orderNumber: true, buyerId: true, status: true } });
@@ -235,7 +235,7 @@ export async function handleOrderDispatched(tx: Prisma.TransactionClient, event:
 
 /** R24: notify the buyer only for the latest explicit DELAYED shipment state. */
 export async function handleShipmentDelayed(tx: Prisma.TransactionClient, event: Event): Promise<void> {
-  const rule = resolveNotificationRule(event);
+  const rule = await resolveNotificationRule(event);
   if (!rule?.enabled) return;
   const shipmentId = requiredId(event.payload, "shipmentId");
   const orderId = requiredId(event.payload, "orderId");
@@ -293,7 +293,7 @@ export async function handleShipmentDelayed(tx: Prisma.TransactionClient, event:
  * commit together; external push remains a post-commit delivery concern.
  */
 export async function handleSupportResponseReceived(tx: Prisma.TransactionClient, event: Event): Promise<void> {
-  const rule = resolveNotificationRule(event);
+  const rule = await resolveNotificationRule(event);
   if (!rule?.enabled) return;
   const conversationId = requiredId(event.payload, "conversationId");
   const messageId = requiredId(event.payload, "messageId");
@@ -348,7 +348,7 @@ export async function handleSupportResponseReceived(tx: Prisma.TransactionClient
 
 /** R17 rule handler: exact vendor alert for an active listing that truly reached zero. */
 export async function handleProductStockDepleted(tx: Prisma.TransactionClient, event: Event): Promise<void> {
-  const rule = resolveNotificationRule(event);
+  const rule = await resolveNotificationRule(event);
   if (!rule?.enabled) return;
   const productId = requiredId(event.payload, "productId");
   const stockVersion = event.payload && typeof event.payload === "object" && !Array.isArray(event.payload)
@@ -398,7 +398,7 @@ export async function handleProductStockDepleted(tx: Prisma.TransactionClient, e
 
 /** R18: notify the listing owner only when an explicit stocktake proves a real shortfall. */
 export async function handleProductInventoryConflictDetected(tx: Prisma.TransactionClient, event: Event): Promise<void> {
-  const rule = resolveNotificationRule(event);
+  const rule = await resolveNotificationRule(event);
   if (!rule?.enabled) return;
   const productId = requiredId(event.payload, "productId");
   const inventoryCountId = requiredId(event.payload, "inventoryCountId");
@@ -436,7 +436,7 @@ export async function handleProductInventoryConflictDetected(tx: Prisma.Transact
 
 /** R35: notify only the campaign organiser after a confirmed minimum threshold. */
 export async function handleCommunityBuyMinimumReached(tx: Prisma.TransactionClient, event: Event): Promise<void> {
-  const rule = resolveNotificationRule(event);
+  const rule = await resolveNotificationRule(event);
   if (!rule?.enabled) return;
   const campaignId = requiredId(event.payload, "campaignId");
   const payload = event.payload as Record<string, unknown>;
@@ -497,7 +497,7 @@ export async function handleCommunityBuyMinimumReached(tx: Prisma.TransactionCli
 
 /** R36: route a real Community Buy authentication requirement to its participant. */
 export async function handleCommunityBuyPaymentActionRequired(tx: Prisma.TransactionClient, event: Event): Promise<void> {
-  const rule = resolveNotificationRule(event);
+  const rule = await resolveNotificationRule(event);
   if (!rule?.enabled) return;
   const authorisationId = requiredId(event.payload, "authorisationId");
   const authorisation = await tx.communityBuyPaymentAuthorisation.findUnique({
@@ -542,7 +542,7 @@ export async function handleCommunityBuyPaymentActionRequired(tx: Prisma.Transac
 
 /** R37: ask the currently assigned supplier to reconfirm a real reduced quantity. */
 export async function handleSupplierReconfirmationRequested(tx: Prisma.TransactionClient, event: Event): Promise<void> {
-  const rule = resolveNotificationRule(event);
+  const rule = await resolveNotificationRule(event);
   if (!rule?.enabled) return;
   const campaignId = requiredId(event.payload, "campaignId");
   const payload = event.payload as Record<string, unknown>;
@@ -605,7 +605,7 @@ export async function handleSupplierReconfirmationRequested(tx: Prisma.Transacti
 }
 /** R25: a real Stripe payout hold requires the vendor to review next steps. */
 export async function handlePayoutActionRequired(tx: Prisma.TransactionClient, event: Event): Promise<void> {
-  const rule = resolveNotificationRule(event);
+  const rule = await resolveNotificationRule(event);
   if (!rule?.enabled) return;
   const payoutRequestId = requiredId(event.payload, "payoutRequestId");
   const payout = await tx.payoutRequest.findUnique({
@@ -648,7 +648,7 @@ export async function handlePayoutActionRequired(tx: Prisma.TransactionClient, e
 
 /** R29: notify the current owner when a Stripe-confirmed Membership invoice is past due. */
 export async function handleVendorMembershipPaymentFailed(tx: Prisma.TransactionClient, event: Event): Promise<void> {
-  const rule = resolveNotificationRule(event);
+  const rule = await resolveNotificationRule(event);
   if (!rule?.enabled) return;
   const payload = event.payload;
   const subscriptionId = requiredId(payload, "subscriptionId");
@@ -700,7 +700,7 @@ export async function handleVendorMembershipPaymentFailed(tx: Prisma.Transaction
 
 /** R26: a confirmed payout gets one vendor-targeted candidate. */
 export async function handlePayoutConfirmed(tx: Prisma.TransactionClient, event: Event): Promise<void> {
-  const rule = resolveNotificationRule(event);
+  const rule = await resolveNotificationRule(event);
   if (!rule?.enabled) return;
   const payoutRequestId = requiredId(event.payload, "payoutRequestId");
   const payout = await tx.payoutRequest.findUnique({
@@ -732,7 +732,7 @@ export async function handlePayoutConfirmed(tx: Prisma.TransactionClient, event:
 
 /** R34: notify the organiser during the real below-minimum rescue window. */
 export async function handleCommunityBuyBelowMinimum(tx: Prisma.TransactionClient, event: Event): Promise<void> {
-  const rule = resolveNotificationRule(event);
+  const rule = await resolveNotificationRule(event);
   if (!rule?.enabled) return;
   const campaignId = requiredId(event.payload, "campaignId");
   const campaign = await tx.communityCampaign.findUnique({

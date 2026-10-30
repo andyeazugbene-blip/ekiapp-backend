@@ -105,6 +105,7 @@ describe("event to notification pipeline integration", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    prismaMock.adminPlatformSetting.findUnique.mockImplementation(async () => null);
     vi.stubEnv("R28_GENERAL_SUPPORT_NOTIFICATIONS_ENABLED", "true");
     vi.stubEnv("R20_PAYMENT_FAILED_ENABLED", "false");
     vi.stubEnv("R22_ORDER_DISPATCHED_ENABLED", "false");
@@ -426,7 +427,8 @@ describe("event to notification pipeline integration", () => {
   });
 
   it("routes a physical stocktake conflict without counting checkout-reserved quantities twice", async () => {
-    vi.stubEnv("R18_STOCK_CONFLICT_ENABLED", "true");
+    prismaMock.adminPlatformSetting.findUnique.mockImplementation(async ({ where }: any) =>
+      where.key === "FLAG_R18_STOCK_CONFLICT_ENABLED" ? { value: 1 } : null);
     const count = { id: "count-1", productId: "product-1", physicalQuantity: 3, outstandingOrderQuantity: 5, shortfallQuantity: 2, stockVersion: 4, createdAt: new Date("2026-10-26T11:00:00Z") };
     txMock.productInventoryCount.findUnique.mockResolvedValue(count);
     prismaMock.productInventoryCount.findUnique.mockResolvedValue(count);
