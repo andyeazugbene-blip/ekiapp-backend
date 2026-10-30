@@ -1,6 +1,7 @@
 import type { Event } from "@prisma/client";
 
 import { AppError } from "../../shared/errors/app-error";
+import { adminPlatformSettingsService } from "../admin/admin-platform-settings.service";
 import { EVENT_NAMES } from "./events.service";
 
 export interface ResolvedNotificationRule {
@@ -13,7 +14,7 @@ interface NotificationRuleDefinition {
   eventName: string;
   key: string;
   version: number;
-  enabled: () => boolean;
+  enabled: () => boolean | Promise<boolean>;
 }
 
 /**
@@ -86,7 +87,7 @@ export const NOTIFICATION_EVENT_RULES: readonly NotificationRuleDefinition[] = [
     eventName: EVENT_NAMES.product_inventory_conflict_detected,
     key: "R18_STOCK_CONFLICT",
     version: 1,
-    enabled: () => process.env.R18_STOCK_CONFLICT_ENABLED === "true",
+    enabled: () => adminPlatformSettingsService.getFlag("FLAG_R18_STOCK_CONFLICT_ENABLED"),
   },
   {
     eventName: EVENT_NAMES.community_buy_minimum_reached,
@@ -132,11 +133,11 @@ export const NOTIFICATION_EVENT_RULES: readonly NotificationRuleDefinition[] = [
   },
 ];
 
-export function resolveNotificationRule(event: Pick<Event, "name" | "schemaVersion">): ResolvedNotificationRule | null {
+export async function resolveNotificationRule(event: Pick<Event, "name" | "schemaVersion">): Promise<ResolvedNotificationRule | null> {
   const definition = NOTIFICATION_EVENT_RULES.find((rule) => rule.eventName === event.name);
   if (!definition) return null;
   if (event.schemaVersion !== definition.version) {
     throw new AppError(`Unsupported ${definition.key} event schema version`, 400);
   }
-  return { key: definition.key, version: definition.version, enabled: definition.enabled() };
+  return { key: definition.key, version: definition.version, enabled: await definition.enabled() };
 }
