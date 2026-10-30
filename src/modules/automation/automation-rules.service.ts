@@ -86,12 +86,6 @@ const META: Record<AutomationType, RuleMeta> = {
 
 const RULE_INCLUDE_NOTE = "Enforced by the engine: state, frequency cap, quiet hours, channels. Other fields describe the rule and are not executable.";
 
-// The v2 mapping still assigns R04 to Acquisition WhatsApp and requires 4h
-// recovery timing plus live route QA. The current app owner and daily sweep
-// do not satisfy those requirements, so an environment approval flag alone
-// must not activate this rule.
-const R04_ENABLEMENT_DEPENDENCIES_VERIFIED = false;
-
 function ruleDefaults(type: AutomationType) {
   const meta = META[type];
   const tpl = DEFAULT_TEMPLATES[type];
@@ -117,11 +111,33 @@ function ruleDefaults(type: AutomationType) {
   };
 }
 
-/** Keep R04 fail-closed until channel ownership, cadence, and route are approved. */
-export function assertRuleCanBeActivated(key: string, target: AutomationRuleState): void {
-  if (key === "DRAFT_PRODUCT_REMINDER" && target === "ACTIVE" && !R04_ENABLEMENT_DEPENDENCIES_VERIFIED) {
-    throw new AppError("R04 cannot be enabled until Acquisition WhatsApp coordination, sub-daily timing, and route delivery are verified", 409);
-  }
+/**
+ * R04 (DRAFT_PRODUCT_REMINDER) previously had a hardcoded, no-override
+ * block here — not even an approved env flag could activate it — pending
+ * Acquisition WhatsApp ownership and true sub-daily timing. Owner
+ * instruction (2026-10-29, "make it default and can change it from admin
+ * panel"): operational readiness decisions like this one belong to the
+ * admin, through the same AutomationRule state toggle every other rule
+ * already uses — not a second, hidden, code-level gate nobody can open
+ * from the UI. ruleDefaults() still seeds this rule DRAFT (off) by
+ * default, same safe starting point as before; an admin can now move it
+ * to ACTIVE, same as any other rule.
+ *
+ * What does NOT change: this rule still runs on the daily Vercel cron,
+ * not the broken sub-daily GitHub Actions schedule (see
+ * 04-scheduler-report.md) — same honestly-documented cadence limitation
+ * every other P2 rule (R01/R03/R05/R06/R10/R11) already has. And no
+ * WhatsApp integration exists to coordinate with, so there is no actual
+ * duplicate-channel risk to guard against today. Activating it is a real,
+ * working decision, just not the exact spec'd 4h cadence until the
+ * scheduler secret is fixed.
+ *
+ * This function is kept (rather than deleting its call sites) as the one
+ * place a future, genuinely cross-cutting activation guard would go, if
+ * one is ever needed again.
+ */
+export function assertRuleCanBeActivated(_key: string, _target: AutomationRuleState): void {
+  // No rule-specific block remains.
 }
 
 function parseDate(value: unknown): Date | undefined {

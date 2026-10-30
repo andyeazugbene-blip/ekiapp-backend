@@ -88,7 +88,7 @@ import {
 } from "../stripe/stripe-disputes.controller";
 import { adminAdjustTrustScore } from "../paystack/trust-score.controller";
 import { getEscrowHealth, updateEscrowProvider } from "../paystack/escrow-health.controller";
-import { listOperationalThresholds, updateOperationalThreshold, listPlatformFlags, upsertPlatformFlag, getSettingHistory } from "./admin-platform-settings.controller";
+import { listOperationalThresholds, updateOperationalThreshold, listPlatformFlags, upsertPlatformFlag, getSettingHistory, getWhatsappCooldownSetting, updateWhatsappCooldownSetting } from "./admin-platform-settings.controller";
 import {
   adminApproveVerificationReview,
   adminDeleteVerificationFiles,
@@ -739,6 +739,11 @@ adminRouter.post("/admins/:id/deactivate", asyncHandler(requireAdminPermission("
 adminRouter.post("/admins/:id/reactivate", asyncHandler(requireAdminPermission("roles.mutate")), asyncHandler(require2fa), asyncHandler(reactivateAdmin));
 adminRouter.put("/admins/:id/role", asyncHandler(requireAdminPermission("roles.mutate")), asyncHandler(require2fa), asyncHandler(changeAdminRole));
 adminRouter.patch("/settings/operational-thresholds/:key", asyncHandler(requireAdminPermission("settings.mutate")), asyncHandler(require2fa), asyncHandler(updateOperationalThreshold));
+// WhatsApp task-episode cooldown (seconds) — same reversible, non-financial
+// config tier as the thresholds above; its own endpoint because 0 is this
+// setting's valid "disabled" state, unlike every operational threshold.
+adminRouter.get("/settings/whatsapp-cooldown", asyncHandler(requireAdminPermission("settings.read")), asyncHandler(getWhatsappCooldownSetting));
+adminRouter.patch("/settings/whatsapp-cooldown", asyncHandler(requireAdminPermission("settings.mutate")), asyncHandler(require2fa), asyncHandler(updateWhatsappCooldownSetting));
 
 // Rewards / Gifts management
 adminRouter.use("/rewards", adminRewardsRouter);

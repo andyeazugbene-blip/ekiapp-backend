@@ -30,6 +30,10 @@ const { prismaMock, txMock, sendPushToUser } = vi.hoisted(() => {
 
 vi.mock("../lib/prisma", () => ({ prisma: prismaMock }));
 vi.mock("../lib/expo-push", () => ({ sendPushToUser }));
+const mockGetWhatsappCooldownSeconds = vi.fn().mockResolvedValue(0);
+vi.mock("../modules/admin/admin-platform-settings.service", () => ({
+  adminPlatformSettingsService: { getWhatsappCooldownSeconds: () => mockGetWhatsappCooldownSeconds() },
+}));
 
 import { notificationDeliveryService } from "../modules/notifications/notification-delivery.service";
 
@@ -45,7 +49,7 @@ const delivery = {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  vi.stubEnv("NOTIFICATION_WHATSAPP_TASK_COOLDOWN_SECONDS", "0");
+  mockGetWhatsappCooldownSeconds.mockResolvedValue(0);
   vi.stubEnv("R28_GENERAL_SUPPORT_NOTIFICATIONS_ENABLED", "true");
   vi.stubEnv("R35_COMMUNITY_BUY_MINIMUM_REACHED_ENABLED", "false");
   vi.stubEnv("R24_DELIVERY_EXCEPTION_ENABLED", "false");
@@ -102,7 +106,7 @@ describe("notification push delivery", () => {
   });
 
   it("suppresses push when the same task episode was already delivered by WhatsApp", async () => {
-    vi.stubEnv("NOTIFICATION_WHATSAPP_TASK_COOLDOWN_SECONDS", "3600");
+    mockGetWhatsappCooldownSeconds.mockResolvedValue(3600);
     const taskEpisodeKey = "buyer-1:BUYER:Order:order-1:R21_ORDER_CONFIRMED:event-1";
     prismaMock.notificationPreference.findUnique.mockResolvedValue({ consent: "NOT_REQUIRED_FOR_SERVICE" } as never);
     prismaMock.communicationLog.findFirst.mockResolvedValue({ id: "wa-log-1" } as never);
@@ -138,7 +142,7 @@ describe("notification push delivery", () => {
   });
 
   it("does not suppress on unresolved WhatsApp provider outcomes", async () => {
-    vi.stubEnv("NOTIFICATION_WHATSAPP_TASK_COOLDOWN_SECONDS", "3600");
+    mockGetWhatsappCooldownSeconds.mockResolvedValue(3600);
     const taskEpisodeKey = "buyer-1:BUYER:Order:order-1:R21_ORDER_CONFIRMED:event-1";
     prismaMock.notificationPreference.findUnique.mockResolvedValue({ consent: "NOT_REQUIRED_FOR_SERVICE" } as never);
     // QUEUED/SENT/FAILED records are not a positive delivery receipt.
@@ -161,7 +165,7 @@ describe("notification push delivery", () => {
   });
 
   it("keeps critical transactional order messages independent of WhatsApp coordination", async () => {
-    vi.stubEnv("NOTIFICATION_WHATSAPP_TASK_COOLDOWN_SECONDS", "3600");
+    mockGetWhatsappCooldownSeconds.mockResolvedValue(3600);
     vi.stubEnv("R21_ORDER_CONFIRMED_ENABLED", "true");
     prismaMock.order.findUnique.mockResolvedValue({ buyerId: "buyer-1", status: "CONFIRMED" } as never);
     prismaMock.notificationPreference.findUnique.mockResolvedValue({ consent: "NOT_REQUIRED_FOR_SERVICE" } as never);

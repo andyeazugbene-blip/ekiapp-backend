@@ -31,6 +31,18 @@ export const OPERATIONAL_THRESHOLD_KEYS = [
   // programme (the qualification/tracking system itself isn't built).
   "MEMBERSHIP_GRACE_PERIOD_DAYS",
   "VENDOR_REFERRAL_CREDIT_MONTHS",
+  // Owner instruction (2026-10-29, "make it default and can change it from
+  // admin panel"): R13/R15 (order-acceptance-notifications.service.ts)
+  // previously failed closed entirely because no business-hours
+  // calendar/dispatch-deadline column was ever approved. Restored with
+  // these as the configurable inputs instead — plain elapsed-time
+  // thresholds (not a real business-hours calendar), same documented
+  // simplification the original handoff implementation used, now
+  // admin-editable rather than hardcoded or blocked outright.
+  "ORDER_UNACKNOWLEDGED_FIRST_REMINDER_MINUTES",
+  "ORDER_UNACKNOWLEDGED_ESCALATION_HOURS",
+  "ORDER_DISPATCH_DUE_HOURS",
+  "ORDER_DISPATCH_DUE_REMINDER_HOURS_BEFORE",
 ] as const;
 
 /**
@@ -62,6 +74,13 @@ const DEFAULT_THRESHOLD_VALUE = 1;
 const DEFAULT_VALUE_OVERRIDES: Partial<Record<OperationalThresholdKey, number>> = {
   MEMBERSHIP_GRACE_PERIOD_DAYS: 7,
   VENDOR_REFERRAL_CREDIT_MONTHS: 1,
+  // Matches the original handoff's own stated default timings (O-02: "15
+  // business-minutes; at configured SLA" / O-04: "2 business-hours before
+  // due") — safe, documented starting points, not invented numbers.
+  ORDER_UNACKNOWLEDGED_FIRST_REMINDER_MINUTES: 15,
+  ORDER_UNACKNOWLEDGED_ESCALATION_HOURS: 24,
+  ORDER_DISPATCH_DUE_HOURS: 24,
+  ORDER_DISPATCH_DUE_REMINDER_HOURS_BEFORE: 2,
 };
 
 async function ensureDefaults(): Promise<void> {
@@ -176,6 +195,56 @@ export const adminPlatformSettingsService = {
   // Boolean feature flags stored in the same generic table (1 = on, 0 = off).
   // A flag only has an effect where platform code reads it via getFlag(); the
   // admin UI says so. History comes from the immutable AuditLog.
+
+  // ─── WhatsApp task-episode cooldown (seconds) ──────────────────────────
+  // Deliberately NOT one of the OPERATIONAL_THRESHOLD_KEYS above: that
+  // list's validator requires every value to be > 0 (and seeds an unset
+  // key to 1), which is wrong here — 0 is this setting's own meaningful
+  // "disabled" state (see notification-delivery.service.ts's
+  // orchestrationPolicy, the one caller), not an unconfigured placeholder.
+  // Same AdminPlatformSetting table, same audit trail, just its own
+  // >=0 validator and its own explicit default of 0 (never auto-seeded to
+  // a nonzero value by ensureDefaults(), unlike the hour/day thresholds).
+  WHATSAPP_COOLDOWN_SETTING_KEY: "NOTIFICATION_WHATSAPP_TASK_COOLDOWN_SECONDS" as const,
+
+  async getWhatsappCooldownSeconds(): Promise<number> {
+    const row = await prisma.adminPlatformSetting.findUnique({ where: { key: "NOTIFICATION_WHATSAPP_TASK_COOLDOWN_SECONDS" } });
+    return row && Number.isSafeInteger(row.value) && row.value >= 0 ? row.value : 0;
+  },
+
+  /** Admin-web settings page — this one setting, read the same way getValue()'s callers read theirs. */
+  async getWhatsappCooldownSetting(): Promise<{ value: number; updatedById: string | null; updatedAt: Date | null }> {
+    const row = await prisma.adminPlatformSetting.findUnique({ where: { key: "NOTIFICATION_WHATSAPP_TASK_COOLDOWN_SECONDS" } });
+    return { value: row?.value ?? 0, updatedById: row?.updatedById ?? null, updatedAt: row?.updatedAt ?? null };
+  },
+
+  async setWhatsappCooldownSeconds(rawValue: unknown, adminId: string, rawReason: unknown, request?: Request): Promise<{ value: number; updatedAt: Date }> {
+    const reason = requireAuditReason(rawReason);
+    if (typeof rawValue !== "number" && typeof rawValue !== "string") throw new AppError("value must be a number", 400);
+    const value = typeof rawValue === "number" ? rawValue : Number(rawValue);
+    if (!Number.isSafeInteger(value) || value < 0) throw new AppError("value must be a whole number, zero or greater", 400);
+
+    const key = "NOTIFICATION_WHATSAPP_TASK_COOLDOWN_SECONDS";
+    const before = await prisma.adminPlatformSetting.findUnique({ where: { key } });
+    const updated = await prisma.adminPlatformSetting.upsert({
+      where: { key },
+      update: { value, updatedById: adminId },
+      create: { key, value, updatedById: adminId },
+    });
+    await recordAudit({
+      actorId: adminId,
+      action: "admin_platform_setting.whatsapp_cooldown_updated",
+      entityType: "AdminPlatformSetting",
+      entityId: updated.id,
+      beforeState: { value: before?.value ?? 0 },
+      afterState: { value },
+      metadata: { key },
+      reason,
+      request,
+      failClosed: true,
+    });
+    return { value: updated.value, updatedAt: updated.updatedAt };
+  },
 
   async getFlag(key: string, fallback = false): Promise<boolean> {
     const row = await prisma.adminPlatformSetting.findUnique({ where: { key } });
