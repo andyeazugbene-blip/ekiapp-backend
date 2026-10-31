@@ -9,16 +9,22 @@ const MAX_LIMIT = 100;
 const DEFAULT_LIMIT = 20;
 
 const VALID_WEIGHT_UNITS = new Set(["kg", "g", "lb", "oz", "pack", "bunch", "piece", "litre", "ml"]);
+// A vendor may also type their own unit (e.g. "crate", "sack", "dozen") —
+// not a real mass, so the frontend normalizer treats any unit outside
+// VALID_WEIGHT_UNITS as count/volume and passes the number through 1:1,
+// same as pack/bunch/piece already do. This pattern only bounds the text
+// (display-only — never used in server-side math) so it stays printable
+// and short.
+const CUSTOM_WEIGHT_UNIT_PATTERN = /^[a-z0-9][a-z0-9 -]{0,19}$/;
 
 function optionalWeightUnit(value: unknown): string | undefined {
   if (value === undefined) return undefined;
   const str = optionalString(value, "weightUnit");
   if (str === undefined) return undefined;
   const lower = str.toLowerCase();
-  if (!VALID_WEIGHT_UNITS.has(lower)) {
-    throw new AppError(`Invalid weightUnit (must be one of: ${[...VALID_WEIGHT_UNITS].join(", ")})`, 400);
-  }
-  return lower;
+  if (VALID_WEIGHT_UNITS.has(lower)) return lower;
+  if (CUSTOM_WEIGHT_UNIT_PATTERN.test(lower)) return lower;
+  throw new AppError("Invalid weightUnit (must be a short word of letters, numbers, spaces or hyphens)", 400);
 }
 
 function requiredString(value: unknown, field: string): string {

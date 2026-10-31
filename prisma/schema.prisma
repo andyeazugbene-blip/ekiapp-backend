@@ -492,9 +492,10 @@ model Product {
   stockVersion              Int                        @default(0)
   weightGrams               Int?
   // Display-only unit the vendor typed `weightGrams` in (kg/g/lb/oz/pack/
-  // bunch/piece/litre/ml) — weightGrams itself is always true grams (real
-  // weight units converted on input; count/volume units pass through 1:1),
-  // used as-is everywhere weightGrams already feeds real math (delivery fee
+  // bunch/piece/litre/ml, or a short custom unit they typed themselves) —
+  // weightGrams itself is always true grams (real weight units converted
+  // on input; count/volume and any custom unit pass through 1:1), used
+  // as-is everywhere weightGrams already feeds real math (delivery fee
   // calc). This column exists purely so the edit screen can show back the
   // unit the vendor actually picked instead of always relabelling "kg".
   weightUnit                String                     @default("kg")

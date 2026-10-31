@@ -102,8 +102,17 @@ describe("validateCreateProductInput / validateUpdateProductInput — weightUnit
     expect(result.weightUnit).toBe("g");
   });
 
-  it("rejects an unrecognized weightUnit", () => {
-    expect(() => validateCreateProductInput({ title: "Rice", priceAmount: 1000, weightUnit: "stone" })).toThrow(/invalid weightunit/i);
+  it("accepts and lowercases a custom (non-preset) weightUnit on create", () => {
+    const result = validateCreateProductInput({ title: "Rice", priceAmount: 1000, weightUnit: "Crate" });
+    expect(result.weightUnit).toBe("crate");
+  });
+
+  it("rejects a weightUnit with disallowed characters", () => {
+    expect(() => validateCreateProductInput({ title: "Rice", priceAmount: 1000, weightUnit: "kg/box!" })).toThrow(/invalid weightunit/i);
+  });
+
+  it("rejects a weightUnit longer than 20 characters", () => {
+    expect(() => validateCreateProductInput({ title: "Rice", priceAmount: 1000, weightUnit: "a".repeat(21) })).toThrow(/invalid weightunit/i);
   });
 
   it("is undefined on create when omitted — service defaults to kg", () => {
@@ -116,8 +125,13 @@ describe("validateCreateProductInput / validateUpdateProductInput — weightUnit
     expect(result.weightUnit).toBe("lb");
   });
 
-  it("rejects an unrecognized weightUnit on update", () => {
-    expect(() => validateUpdateProductInput({ weightUnit: "tonne" })).toThrow(/invalid weightunit/i);
+  it("accepts a custom weightUnit on update", () => {
+    const result = validateUpdateProductInput({ weightUnit: "sack" });
+    expect(result.weightUnit).toBe("sack");
+  });
+
+  it("rejects a weightUnit with disallowed characters on update", () => {
+    expect(() => validateUpdateProductInput({ weightUnit: "tonne$" })).toThrow(/invalid weightunit/i);
   });
 });
 
