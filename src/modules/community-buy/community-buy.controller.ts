@@ -44,6 +44,7 @@ export async function getPublicMarketConfig(request: Request, response: Response
       organiserApplicationsEnabled: false,
       supplierApplicationsEnabled: false,
       regularDeliveriesEnabled: false,
+      communityBuyOffersRequired: false,
       individualDeliveryEnabled: isIndividualDeliveryEnabled(),
     },
   });

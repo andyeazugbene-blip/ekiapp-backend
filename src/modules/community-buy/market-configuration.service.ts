@@ -108,6 +108,8 @@ export interface PublicMarketConfiguration {
   organiserApplicationsEnabled: boolean;
   supplierApplicationsEnabled: boolean;
   regularDeliveriesEnabled: boolean;
+  // Phase 1: the app sends organisers to the offer flow when this is on.
+  communityBuyOffersRequired: boolean;
   // M4 — global kill-switch (COMMUNITY_BUY_INDIVIDUAL_DELIVERY_ENABLED),
   // not a per-market column; identical for every country.
   individualDeliveryEnabled: boolean;
@@ -121,6 +123,7 @@ function toPublicShape(config: {
   organiserApplicationsEnabled: boolean;
   supplierApplicationsEnabled: boolean;
   regularDeliveriesEnabled: boolean;
+  communityBuyOffersRequired?: boolean;
 }): PublicMarketConfiguration {
   return {
     countryCode: config.countryCode,
@@ -130,6 +133,7 @@ function toPublicShape(config: {
     organiserApplicationsEnabled: config.organiserApplicationsEnabled,
     supplierApplicationsEnabled: config.supplierApplicationsEnabled,
     regularDeliveriesEnabled: config.regularDeliveriesEnabled,
+    communityBuyOffersRequired: config.communityBuyOffersRequired === true,
     individualDeliveryEnabled: isIndividualDeliveryEnabled(),
   };
 }
@@ -142,6 +146,7 @@ const BOOLEAN_FIELDS = [
   "supplierApplicationsEnabled",
   // regularDeliveriesEnabled drives the customer-facing "Foodstuffs Subscription" feature.
   "regularDeliveriesEnabled",
+  "communityBuyOffersRequired",
 ] as const;
 const NULLABLE_STRING_FIELDS = ["paymentProvider", "identityProvider", "refundTermsVersion", "legalTermsVersion"] as const;
 const NULLABLE_INT_FIELDS = ["campaignMinDurationHours", "campaignMaxDurationHours", "campaignMinValueAmount", "campaignMaxValueAmount", "organiserFeeBps"] as const;

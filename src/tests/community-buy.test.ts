@@ -3386,6 +3386,7 @@ describe("marketConfigurationService.listPublic/getPublic — SEC-01: public end
     "organiserApplicationsEnabled",
     "supplierApplicationsEnabled",
     "regularDeliveriesEnabled",
+    "communityBuyOffersRequired",
     // M4 — global individual-delivery kill-switch, deliberately added to
     // this public shape (see market-configuration.service.ts's own doc
     // comment on the field) — not a leak, an intentional capability flag.
@@ -3394,6 +3395,14 @@ describe("marketConfigurationService.listPublic/getPublic — SEC-01: public end
 
   beforeEach(() => {
     m.marketConfiguration.count.mockResolvedValue(1 as never); // skip ensureDefaults() seeding
+  });
+
+  it("tells the app when a market requires supplier offers, or organisers would never reach that flow", async () => {
+    m.marketConfiguration.findMany.mockResolvedValue([{ ...FULL_ROW, communityBuyOffersRequired: true }] as never);
+
+    const [item] = await marketConfigurationService.listPublic();
+
+    expect(item.communityBuyOffersRequired).toBe(true);
   });
 
   it("listPublic() strips every field outside the documented public shape", async () => {
@@ -3411,6 +3420,7 @@ describe("marketConfigurationService.listPublic/getPublic — SEC-01: public end
       organiserApplicationsEnabled: true,
       supplierApplicationsEnabled: true,
       regularDeliveriesEnabled: true,
+      communityBuyOffersRequired: false,
       individualDeliveryEnabled: false,
     });
     // Explicitly assert the sensitive fields this bug leaked are gone.
