@@ -36,6 +36,7 @@ vi.mock("../lib/stripe", () => ({
 vi.mock("../modules/notifications/notifications.service", () => ({ notificationsService: { enqueue: vi.fn().mockResolvedValue(undefined) } }));
 vi.mock("../modules/events/dispatch-notifications", () => ({ dispatchNotificationsAfterCommit: vi.fn().mockResolvedValue(undefined) }));
 
+import { prisma } from "../lib/prisma";
 import { campaignAuthorisationService } from "../modules/community-buy/campaign-authorisation.service";
 import { defaultAuthorisationSchedule } from "../modules/community-buy/community-buy-timing";
 
@@ -117,6 +118,17 @@ describe("abandoned checkouts", () => {
     expect(released).toBe(1);
     expect(m.authorisation.findMany.mock.calls[0][0].where).toMatchObject({ holdStatus: "NOT_REQUESTED", paymentMethodReference: "", campaign: { status: "LIVE" }, createdAt: { lt: expect.any(Date) } });
     expect(m.campaign.update).toHaveBeenCalledWith({ where: { id: "camp-1" }, data: { confirmedShares: { decrement: 3 } } });
+  });
+});
+
+describe("going ahead below the minimum", () => {
+  it("is refused when nobody has a confirmed hold", async () => {
+    m.campaign.findUnique.mockResolvedValue({ id: "camp-1", organiserId: "org-1", status: "DECISION_REQUIRED", fulfilmentOwner: "SUPPLIER" });
+    (prisma as unknown as { organiserProfile: { findUnique: ReturnType<typeof vi.fn> } }).organiserProfile = { findUnique: vi.fn().mockResolvedValue({ id: "org-1", userId: "organiser" }) };
+    (m.contribution as unknown as { findMany: ReturnType<typeof vi.fn> }).findMany = vi.fn().mockResolvedValue([]);
+
+    await expect(campaignAuthorisationService.decide("organiser", "camp-1", "proceed")).rejects.toMatchObject({ statusCode: 409, code: "NO_AUTHORISED_SHARES" });
+    expect(m.transaction).not.toHaveBeenCalled();
   });
 });
 

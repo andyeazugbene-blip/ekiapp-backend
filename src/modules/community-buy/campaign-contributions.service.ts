@@ -803,7 +803,7 @@ export const campaignContributionsService = {
         },
         contributions: {
           where: { status: { not: "INITIATED" } },
-          include: { refund: true },
+          include: { refund: true, paymentAuthorisation: { select: { holdStatus: true, captureStatus: true, holdRecoveryDeadline: true } } },
           orderBy: { createdAt: "desc" },
         },
       },

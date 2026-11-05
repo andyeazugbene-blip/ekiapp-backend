@@ -821,6 +821,9 @@ export const campaignAuthorisationService = {
     // still persisted, so admin/organiser reporting doesn't have to treat
     // self-fulfilled campaigns as a blank spot.
     const authorisedQuantity = await this.getAuthorisedQuantity(campaignId);
+    if (authorisedQuantity === 0) {
+      throw new AppError("Nobody has a confirmed hold, so this can't go ahead. End it to release every hold.", 409, undefined, "NO_AUTHORISED_SHARES");
+    }
 
     if (campaign.fulfilmentOwner === "SUPPLIER") {
       const reconfirmationDeadline = await this.computeReconfirmationDeadline(campaign.id);
