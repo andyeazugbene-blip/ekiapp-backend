@@ -2603,6 +2603,8 @@ model BuyerSubscription {
   pausedAt                    DateTime?
   cancelReason                String?
   cancelledAt                 DateTime?
+  // When the buyer ticked the recurring-payment consent (null: created before this existed).
+  recurringConsentAt          DateTime?
   buyer                       User                        @relation(fields: [buyerId], references: [id], onDelete: Cascade)
   offer                       SubscriptionOffer           @relation(fields: [offerId], references: [id], onDelete: Restrict)
   deliveryAddress             BuyerAddress                @relation(fields: [deliveryAddressId], references: [id], onDelete: Restrict)

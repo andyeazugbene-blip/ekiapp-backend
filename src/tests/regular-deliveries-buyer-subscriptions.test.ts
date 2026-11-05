@@ -54,6 +54,7 @@ describe("buyerSubscriptionsService.create — offer approval threshold copy-thr
   const basePaymentMethod = { id: "pm-1", buyerId: "buyer-1" };
   const baseInput = {
     offerId: "offer-1",
+    recurringConsent: true,
     frequency: "WEEKLY" as const,
     deliveryAddressId: "addr-1",
     paymentMethodId: "pm-1",
@@ -98,6 +99,7 @@ describe("buyerSubscriptionsService.create — re-enforces listPublic's own elig
   const basePaymentMethod = { id: "pm-1", buyerId: "buyer-1" };
   const baseInput = {
     offerId: "offer-1",
+    recurringConsent: true,
     frequency: "WEEKLY" as const,
     deliveryAddressId: "addr-1",
     paymentMethodId: "pm-1",
@@ -108,6 +110,53 @@ describe("buyerSubscriptionsService.create — re-enforces listPublic's own elig
     m.buyerAddress.findUnique.mockResolvedValue(baseAddress as never);
     m.buyerPaymentMethod.findUnique.mockResolvedValue(basePaymentMethod as never);
     m.buyerSubscription.create.mockResolvedValue({ id: "sub-new" } as never);
+  });
+
+  describe("recurring consent and first delivery date", () => {
+    const offer = { ...baseOffer, renewalCutoffHours: 24 };
+    const hoursFromNow = (h: number) => new Date(Date.now() + h * 3_600_000).toISOString();
+    const eligible = () => {
+      listMarketConfigs.mockResolvedValue([{ countryCode: "GB", regularDeliveriesEnabled: true }] as never);
+      vi.mocked(vendorMarketsService.getActiveMarketCodes).mockResolvedValue(["GB"] as never);
+      m.subscriptionOffer.findUnique.mockResolvedValue(offer as never);
+    };
+
+    it("refuses to start without the buyer's explicit consent", async () => {
+      eligible();
+      await expect(
+        buyerSubscriptionsService.create("buyer-1", { ...baseInput, recurringConsent: undefined }),
+      ).rejects.toMatchObject({ statusCode: 400, code: "RECURRING_CONSENT_REQUIRED" });
+      expect(m.buyerSubscription.create).not.toHaveBeenCalled();
+    });
+
+    it("records when consent was given", async () => {
+      eligible();
+      await buyerSubscriptionsService.create("buyer-1", baseInput);
+      expect(m.buyerSubscription.create).toHaveBeenCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ recurringConsentAt: expect.any(Date) }) }),
+      );
+    });
+
+    it("schedules the first renewal on the chosen date", async () => {
+      eligible();
+      const firstDeliveryDate = hoursFromNow(72);
+      await buyerSubscriptionsService.create("buyer-1", { ...baseInput, firstDeliveryDate });
+      expect(m.buyerSubscription.create).toHaveBeenCalledWith(
+        expect.objectContaining({ data: expect.objectContaining({ nextRenewalAt: new Date(firstDeliveryDate) }) }),
+      );
+    });
+
+    it.each([
+      ["too soon for the required reminder", () => hoursFromNow(24)],
+      ["too far ahead", () => hoursFromNow(24 * 91)],
+      ["not a date", () => "soon"],
+    ])("refuses a first date that is %s", async (_label, date) => {
+      eligible();
+      await expect(
+        buyerSubscriptionsService.create("buyer-1", { ...baseInput, firstDeliveryDate: date() }),
+      ).rejects.toMatchObject({ statusCode: 400, code: "FIRST_DELIVERY_DATE_UNAVAILABLE" });
+      expect(m.buyerSubscription.create).not.toHaveBeenCalled();
+    });
   });
 
   it("rejects a subscribe attempt against a suspended vendor — a buyer with just the offer id must not bypass the browse-list filter", async () => {
