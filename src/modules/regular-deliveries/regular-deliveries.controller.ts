@@ -139,7 +139,7 @@ export async function listVendorSubscribers(request: Request, response: Response
   const offerIds = offers.map((o) => o.id);
   const items = await prisma.buyerSubscription.findMany({
     where: { offerId: { in: offerIds } },
-    include: { buyer: { select: { name: true, email: true } }, items: { include: { product: true } } },
+    include: { buyer: { select: { name: true, email: true } }, items: { include: { product: true } }, offer: { select: { title: true, discountPercent: true } } },
     orderBy: { createdAt: "desc" },
   });
   response.json({ items });
