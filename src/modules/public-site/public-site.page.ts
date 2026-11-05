@@ -680,7 +680,7 @@ function renderHomeLayout(page: PageDefinition): string {
         <article class="feature-card">
           <div class="feature-icon">🛡️</div>
           <h3>Secure checkout</h3>
-          <p>Pay safely by card or wallet. Every transaction is protected and recorded on Eki.</p>
+          <p>Pay safely by card or wallet. Every transaction is recorded on Eki.</p>
         </article>
         <article class="feature-card">
           <div class="feature-icon">📱</div>
@@ -1614,7 +1614,7 @@ const homePage: PageDefinition = {
         "Vendor storefront pages shared by direct link",
         "Secure checkout through connected payment providers",
         "Order tracking, guest order lookup, and buyer notifications",
-        "Escrow-style order states, disputes, and refund handling",
+        "Clear order states, disputes, and refund handling",
       ],
     },
     {
@@ -1669,7 +1669,7 @@ const helpPage: PageDefinition = {
       bullets: [
         "If payment succeeded but your order is still pending, the system may still be waiting on webhook confirmation.",
         "Guest buyers can use the public order lookup flow with their checkout email and one-time code.",
-        "If an escrow order was shipped and something is wrong, open a dispute before funds are released.",
+        "If an order was shipped and something is wrong, open a dispute before the vendor is paid.",
       ],
     },
     {
@@ -1684,7 +1684,7 @@ const helpPage: PageDefinition = {
       title: "Vendor support",
       bullets: [
         "Vendors can manage products, public store links, payouts, notifications, and buyer messages in the app.",
-        "Payout availability depends on order status, escrow rules, and any active dispute or refund review.",
+        "Payout availability depends on order status and any active dispute or refund review.",
       ],
     },
   ],

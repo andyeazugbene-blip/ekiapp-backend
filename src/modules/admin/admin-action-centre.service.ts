@@ -377,7 +377,7 @@ async function subscriptionRisk(): Promise<ActionSection> {
     by: ["status", "currency"], where,
     _count: { _all: true }, _sum: { subtotalAmount: true }, _min: { createdAt: true },
   });
-  const s = base("subscriptions", "Foodstuffs Subscription risk", "Renewals with failed payment, awaiting stock, or awaiting price approval.", "/subscription-exceptions");
+  const s = base("subscriptions", "Foodstuff Subscription risk", "Renewals with failed payment, awaiting stock, or awaiting price approval.", "/subscription-exceptions");
   s.count = groups.reduce((n, g) => n + g._count._all, 0);
   s.values = mergeMoney(groups.map((g) => ({ currency: g.currency, amountMinor: g._sum.subtotalAmount ?? 0, count: g._count._all })));
   s.oldestAt = iso(minDate(...groups.map((g) => g._min.createdAt)));
@@ -507,7 +507,7 @@ const BUILDERS: Record<string, { title: string; run: () => Promise<ActionSection
   verification: { title: "Verification queue", run: verificationQueue },
   vendorReadiness: { title: "Vendor readiness", run: vendorReadiness },
   communityBuy: { title: "Community Buy risk", run: communityBuy },
-  subscriptions: { title: "Foodstuffs Subscription risk", run: subscriptionRisk },
+  subscriptions: { title: "Foodstuff Subscription risk", run: subscriptionRisk },
   automation: { title: "Automation failures", run: automationFailures },
   communications: { title: "Communications", run: communicationsHealth },
   conversations: { title: "Conversations", run: conversations },

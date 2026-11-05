@@ -22,7 +22,7 @@ import {
  *
  * productType is DERIVED (no column): a product linked to a Regular Delivery
  * offer (SubscriptionOfferProduct) is "REGULAR_DELIVERY" (customer-facing name
- * "Foodstuffs Subscription"); everything else is "STANDARD". Community Buy
+ * "Foodstuff Subscription"); everything else is "STANDARD". Community Buy
  * campaigns carry their own product fields and are NOT Product rows, so the
  * COMMUNITY_BUY filter is accepted but matches no catalogue product.
  */

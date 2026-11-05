@@ -52,7 +52,7 @@ const GROUP_LABELS: Record<SearchGroupKey, string> = {
   orders: "Orders",
   payments: "Payments",
   campaigns: "Community Buy campaigns",
-  subscriptions: "Foodstuffs Subscriptions",
+  subscriptions: "Foodstuff Subscriptions",
 };
 
 function can(perms: string[], anyOf: string[]): boolean {

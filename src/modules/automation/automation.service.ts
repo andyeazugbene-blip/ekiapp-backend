@@ -141,14 +141,14 @@ export const DEFAULT_TEMPLATES: Record<AutomationType, { title: string; body: st
     recipientType: "BUYER",
   },
   RENEWAL_REMINDER: {
-    title: "Upcoming Foodstuffs Subscription",
-    body: "Hi {{name}}, your Foodstuffs Subscription from {{store_name}} renews on {{renewal_date}}.",
+    title: "Upcoming Foodstuff Subscription",
+    body: "Hi {{name}}, your Foodstuff Subscription from {{store_name}} renews on {{renewal_date}}.",
     channels: ["push", "in_app"],
     recipientType: "BUYER",
   },
   PRICE_APPROVAL_REMINDER: {
     title: "Price change needs your approval",
-    body: "Hi {{name}}, {{store_name}} changed a price on your upcoming Foodstuffs Subscription delivery. Review and approve to continue.",
+    body: "Hi {{name}}, {{store_name}} changed a price on your upcoming Foodstuff Subscription delivery. Review and approve to continue.",
     channels: ["push", "in_app"],
     recipientType: "BUYER",
   },

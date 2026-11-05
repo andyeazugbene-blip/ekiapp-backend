@@ -268,7 +268,7 @@ export const buyerSubscriptionsService = {
     const vendorActiveCodes = await vendorMarketsService.getActiveMarketCodes(offer.vendor.id);
     const eligibleInAnyMarket = vendorActiveCodes.some((code) => enabledMarketCodes.includes(code));
     if (!eligibleInAnyMarket) {
-      throw new AppError("Foodstuffs Subscriptions are not available in this vendor's market", 400);
+      throw new AppError("Foodstuff Subscriptions are not available in this vendor's market", 400);
     }
 
     const eligibleProductIds = new Set(
@@ -476,7 +476,7 @@ export const buyerSubscriptionsService = {
     await notificationsService.enqueue({
       userId: buyerId,
       type: "SUBSCRIPTION_UPDATE",
-      title: "Foodstuffs Subscription frequency updated",
+      title: "Foodstuff Subscription frequency updated",
       body: `Your delivery frequency has been changed to ${FREQUENCY_LABEL[newFrequency]}. Next delivery: ${newNextRenewalAt.toLocaleDateString("en-GB")}.`,
       data: {
         type: "regular_delivery_frequency_changed",
@@ -528,7 +528,7 @@ export const buyerSubscriptionsService = {
     await notificationsService.enqueue({
       userId: sub.buyerId,
       type: "SUBSCRIPTION_UPDATE",
-      title: "Foodstuffs Subscription frequency updated",
+      title: "Foodstuff Subscription frequency updated",
       body: `Your delivery frequency has been updated to ${FREQUENCY_LABEL[newFrequency]} by Eki support. Next delivery: ${newNextRenewalAt.toLocaleDateString("en-GB")}.`,
       data: {
         type: "regular_delivery_frequency_changed",

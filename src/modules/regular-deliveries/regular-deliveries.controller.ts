@@ -500,7 +500,7 @@ export async function adminChangeSubscriptionFrequency(request: Request, respons
   response.json(await subscriptionAdminService.changeFrequency(requireUserId(request), requireIdParam(request), frequency, reason, request));
 }
 
-// ─── Admin: Foodstuffs Subscription module (list / detail / reports / actions) ──
+// ─── Admin: Foodstuff Subscription module (list / detail / reports / actions) ──
 
 export async function adminListSubscriptions(request: Request, response: Response): Promise<void> {
   const q = request.query;

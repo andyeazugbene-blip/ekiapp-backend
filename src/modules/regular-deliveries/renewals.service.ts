@@ -134,7 +134,7 @@ export const renewalsService = {
       await notificationsService.enqueue({
         userId: sub.buyerId,
         type: "SUBSCRIPTION_UPDATE",
-        title: "Upcoming Foodstuffs Subscription",
+        title: "Upcoming Foodstuff Subscription",
         body: `Your delivery from ${storeName} renews on ${sub.nextRenewalAt.toDateString()}.`,
         data: { type: "subscription_update", event: "renewal_upcoming", subscriptionId: sub.id },
         dedupeKey,
@@ -154,7 +154,7 @@ export const renewalsService = {
         // dedupe — same class of bug and fix as FIRST_SALE/CART_RECOVERY.
         subjectKey: `${sub.id}:${sub.nextRenewalAt.toISOString().slice(0, 10)}`,
         requiresMarketingConsent: false,
-        title: "Upcoming Foodstuffs Subscription",
+        title: "Upcoming Foodstuff Subscription",
         body: `Your delivery from ${storeName} renews soon.`,
         data: { store_name: storeName, renewal_date: sub.nextRenewalAt.toDateString() },
       });
@@ -323,7 +323,7 @@ export const renewalsService = {
         subjectKey: renewalId,
         requiresMarketingConsent: false,
         title: "Price change needs your approval",
-        body: "Review the price change on your upcoming Foodstuffs Subscription delivery.",
+        body: "Review the price change on your upcoming Foodstuff Subscription delivery.",
       });
       return;
     }
@@ -711,7 +711,7 @@ export const renewalsService = {
       vendorId: sub.offer.vendorId,
       subjectKey: `renewal:${renewalId}`,
       requiresMarketingConsent: false,
-      title: "Your Foodstuffs Subscription payment didn't go through",
+      title: "Your Foodstuff Subscription payment didn't go through",
       body: "Update your payment method or retry now to keep your subscription active.",
     });
     return prisma.renewal.findUnique({ where: { id: renewalId } });
@@ -833,7 +833,7 @@ export const renewalsService = {
       await notificationsService.enqueue({
         userId: sub.buyerId,
         type: "SUBSCRIPTION_UPDATE",
-        title: "Your Foodstuffs Subscription is back",
+        title: "Your Foodstuff Subscription is back",
         body: `Your pause has ended and your subscription is active again. Next delivery is prepared on ${nextRenewalAt.toDateString()}.`,
         data: { type: "subscription_update", event: "auto_resumed", subscriptionId: sub.id },
         dedupeKey: `AUTO_RESUMED:${sub.id}:${now.toISOString().slice(0, 10)}`,
@@ -878,14 +878,14 @@ export const renewalsService = {
       await notificationsService.enqueue({
         userId: renewal.subscription.buyerId,
         type: "SUBSCRIPTION_UPDATE",
-        title: "Your Foodstuffs Subscription delivery was skipped",
+        title: "Your Foodstuff Subscription delivery was skipped",
         body: `${storeName} couldn't confirm stock in time, so this delivery was skipped. You have not been charged and nothing was substituted. Your next delivery stays on schedule.`,
         data: { type: "subscription_update", event: "stock_timeout_skipped", renewalId: renewal.id, subscriptionId: renewal.subscriptionId },
       }).catch(() => {});
       await notificationsService.enqueue({
         userId: renewal.subscription.offer.vendor.userId,
         type: "SUBSCRIPTION_UPDATE",
-        title: "Foodstuffs Subscription cycle skipped",
+        title: "Foodstuff Subscription cycle skipped",
         body: `A renewal for "${renewal.subscription.offer.title}" was skipped because stock wasn't confirmed within ${hours} hours. Confirm stock promptly next time to keep your subscribers.`,
         data: { type: "subscription_update", event: "vendor_stock_timeout", renewalId: renewal.id },
       }).catch(() => {});
@@ -936,7 +936,7 @@ export const renewalsService = {
       await notificationsService.enqueue({
         userId: sub.buyerId,
         type: "SUBSCRIPTION_UPDATE",
-        title: "Price change on your Foodstuffs Subscription",
+        title: "Price change on your Foodstuff Subscription",
         body: `${sub.offer.vendor.storeName} has a new price on your next delivery (${sub.nextRenewalAt.toDateString()}). ${changes.join("; ")}.${needsApproval ? " You will be asked to approve it before you are charged." : ""}`,
         data: { type: "subscription_update", event: "price_change_notice", subscriptionId: sub.id, approvalRequired: needsApproval },
         dedupeKey,
@@ -1076,7 +1076,7 @@ export const renewalsService = {
           currency: renewal.currency,
           deliveryZoneId: zoneId,
           deliveryAddress: `${renewal.subscription.deliveryAddress.line1}, ${renewal.subscription.deliveryAddress.city}, ${renewal.subscription.deliveryAddress.country}`,
-          notes: "Foodstuffs Subscription renewal",
+          notes: "Foodstuff Subscription renewal",
           items: {
             create: renewal.items.map((item) => ({
               productId: item.productId,
@@ -1114,7 +1114,7 @@ export const renewalsService = {
         data: {
           walletId: wallet.id, vendorId, orderId: order.id,
           type: "PAYMENT_PENDING_CREDIT", amount: vendorEarnings, currency: renewal.currency,
-          description: `Foodstuffs Subscription renewal for order ${order.orderNumber}`,
+          description: `Foodstuff Subscription renewal for order ${order.orderNumber}`,
         },
       });
       await tx.wallet.update({ where: { id: wallet.id }, data: { pendingBalance: { increment: vendorEarnings } } });
@@ -1139,7 +1139,7 @@ export const renewalsService = {
       await notificationsService.enqueue({
         userId: vendor.userId,
         type: "SUBSCRIPTION_UPDATE",
-        title: "Foodstuffs Subscription renewal paid",
+        title: "Foodstuff Subscription renewal paid",
         body: `Order ${order.orderNumber} was created from a subscription renewal.`,
         data: { type: "subscription_update", event: "vendor_renewal_paid", orderNumber: order.orderNumber },
       });
@@ -1214,8 +1214,8 @@ export const renewalsService = {
     await notificationsService.enqueue({
       userId: sub.buyer.id,
       type: "SUBSCRIPTION_UPDATE",
-      title: "Your Foodstuffs Subscription has been cancelled",
-      body: `Your Foodstuffs Subscription has been cancelled by Eki support. Only future unprocessed deliveries are affected. Reason: ${reason}.`,
+      title: "Your Foodstuff Subscription has been cancelled",
+      body: `Your Foodstuff Subscription has been cancelled by Eki support. Only future unprocessed deliveries are affected. Reason: ${reason}.`,
       data: { type: "subscription_update", event: "admin_force_cancelled", subscriptionId },
     }).catch(() => { /* non-blocking */ });
 
@@ -1224,7 +1224,7 @@ export const renewalsService = {
       userId: sub.offer.vendor.userId,
       type: "SUBSCRIPTION_UPDATE",
       title: "Subscription cancelled by admin",
-      body: `A subscription for your Foodstuffs Subscription offer has been cancelled by Eki support. Only future unprocessed renewals are affected.`,
+      body: `A subscription for your Foodstuff Subscription offer has been cancelled by Eki support. Only future unprocessed renewals are affected.`,
       data: { type: "subscription_update", event: "admin_force_cancelled", subscriptionId },
     }).catch(() => { /* non-blocking */ });
 
@@ -1295,7 +1295,7 @@ export const renewalsService = {
       userId: renewal.subscription.buyerId,
       type: "SUBSCRIPTION_UPDATE",
       title: "Price change cancelled",
-      body: "An upcoming price change on your Foodstuffs Subscription was cancelled by Eki support. Your delivery will proceed at the original price.",
+      body: "An upcoming price change on your Foodstuff Subscription was cancelled by Eki support. Your delivery will proceed at the original price.",
       data: { type: "subscription_update", event: "admin_price_change_cancelled", renewalId, subscriptionId: renewal.subscription.id },
     }).catch(() => { /* non-blocking */ });
 
@@ -1401,10 +1401,10 @@ async function notifySubscriptionEvent(
   const retryText = extra?.retryAt ? extra.retryAt.toDateString() : null;
   const titles: Record<string, string> = {
     price_approval_required: "Price change needs your approval",
-    payment_failed: extra?.finalAttempt ? "Last chance: update your payment method" : "Your Foodstuffs Subscription payment failed",
-    renewal_cancelled: "Your Foodstuffs Subscription is paused",
-    price_approval_expired: "Your Foodstuffs Subscription delivery was skipped",
-    order_created: "Your Foodstuffs Subscription order was created",
+    payment_failed: extra?.finalAttempt ? "Last chance: update your payment method" : "Your Foodstuff Subscription payment failed",
+    renewal_cancelled: "Your Foodstuff Subscription is paused",
+    price_approval_expired: "Your Foodstuff Subscription delivery was skipped",
+    order_created: "Your Foodstuff Subscription order was created",
   };
   const bodies: Record<string, string> = {
     price_approval_required: "Review the updated price on your upcoming delivery.",
@@ -1419,7 +1419,7 @@ async function notifySubscriptionEvent(
   await notificationsService.enqueue({
     userId: buyerId,
     type: "SUBSCRIPTION_UPDATE",
-    title: titles[event] ?? "Foodstuffs Subscription update",
+    title: titles[event] ?? "Foodstuff Subscription update",
     body: bodies[event] ?? "",
     data: { type: "subscription_update", event, renewalId, subscriptionId, ...(cta ? { cta } : {}), ...(retryText ? { nextRetryAt: extra!.retryAt!.toISOString() } : {}) },
   });

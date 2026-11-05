@@ -98,7 +98,7 @@ export const disputeService = {
           // consistently calls this "payment protection" (see order-status
           // screens: order-confirmation.tsx, orders.tsx, track-order.tsx).
           body: isEscrow
-            ? `A buyer has raised a dispute for order ${order.orderNumber}. Payment protection remains active until resolved.`
+            ? `A buyer has raised a dispute for order ${order.orderNumber}. The vendor is not paid until this is resolved.`
             : `A buyer has reported an issue for order ${order.orderNumber}. Please review and respond.`,
           data: { orderId, disputeId: dispute.id },
         });

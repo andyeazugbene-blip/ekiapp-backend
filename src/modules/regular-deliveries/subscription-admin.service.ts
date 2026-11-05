@@ -8,7 +8,7 @@ import { buyerSubscriptionsService, parseRescheduleDate, subscriptionLifecycle }
 import { renewalsService } from "./renewals.service";
 
 /**
- * Foodstuffs Subscription admin module (handbook section 9 / gap B11).
+ * Foodstuff Subscription admin module (handbook section 9 / gap B11).
  * Read side: queue list with counts + full detail timeline + reports.
  * Write side: pause / resume / skip next / set next date / change frequency /
  * retry payment — each needs a reason (min 5 chars, validated here, server
@@ -393,7 +393,7 @@ export const subscriptionAdminService = {
     const resumeAt = resumeAtRaw ? parseRescheduleDate(resumeAtRaw) : undefined;
     const updated = await subscriptionLifecycle.pause(sub, adminId, { by: "admin", resumeAt, reason });
     await audit(adminId, "subscription.admin_pause", id, sub, updated, reason, request, { resumeAt: resumeAt?.toISOString() ?? null });
-    await notifyBuyer(sub.buyerId, id, "admin_paused", "Your Foodstuffs Subscription was paused", `Eki support paused your Foodstuffs Subscription${resumeAt ? ` until ${resumeAt.toDateString()}` : ""}. Reason: ${reason}. You can resume it in the app.`);
+    await notifyBuyer(sub.buyerId, id, "admin_paused", "Your Foodstuff Subscription was paused", `Eki support paused your Foodstuff Subscription${resumeAt ? ` until ${resumeAt.toDateString()}` : ""}. Reason: ${reason}. You can resume it in the app.`);
     return updated;
   },
 
@@ -402,7 +402,7 @@ export const subscriptionAdminService = {
     const sub = await requireSub(id);
     const updated = await subscriptionLifecycle.resume(sub, adminId, { by: "admin", reason });
     await audit(adminId, "subscription.admin_resume", id, sub, updated, reason, request);
-    await notifyBuyer(sub.buyerId, id, "admin_resumed", "Your Foodstuffs Subscription is active again", `Eki support resumed your Foodstuffs Subscription. Next delivery is prepared on ${updated.nextRenewalAt?.toDateString() ?? "the next scheduled run"}.`);
+    await notifyBuyer(sub.buyerId, id, "admin_resumed", "Your Foodstuff Subscription is active again", `Eki support resumed your Foodstuff Subscription. Next delivery is prepared on ${updated.nextRenewalAt?.toDateString() ?? "the next scheduled run"}.`);
     return updated;
   },
 
@@ -411,7 +411,7 @@ export const subscriptionAdminService = {
     const sub = await requireSub(id);
     const updated = await subscriptionLifecycle.skipNext(sub, adminId, { by: "admin", reason });
     await audit(adminId, "subscription.admin_skip_next", id, sub, updated, reason, request);
-    await notifyBuyer(sub.buyerId, id, "admin_skipped_next", "Your next Foodstuffs Subscription delivery was skipped", `Eki support skipped your next delivery. Reason: ${reason}. Your next delivery is on ${updated.nextRenewalAt?.toDateString() ?? "the following cycle"}. You have not been charged for the skipped one.`);
+    await notifyBuyer(sub.buyerId, id, "admin_skipped_next", "Your next Foodstuff Subscription delivery was skipped", `Eki support skipped your next delivery. Reason: ${reason}. Your next delivery is on ${updated.nextRenewalAt?.toDateString() ?? "the following cycle"}. You have not been charged for the skipped one.`);
     return updated;
   },
 
@@ -421,7 +421,7 @@ export const subscriptionAdminService = {
     const sub = await requireSub(id);
     const updated = await subscriptionLifecycle.reschedule(sub, date, adminId, { by: "admin", reason });
     await audit(adminId, "subscription.admin_set_next_date", id, sub, updated, reason, request);
-    await notifyBuyer(sub.buyerId, id, "admin_rescheduled", "Your Foodstuffs Subscription delivery date changed", `Eki support moved your next delivery to ${date.toDateString()}. Reason: ${reason}.`);
+    await notifyBuyer(sub.buyerId, id, "admin_rescheduled", "Your Foodstuff Subscription delivery date changed", `Eki support moved your next delivery to ${date.toDateString()}. Reason: ${reason}.`);
     return updated;
   },
 
@@ -467,7 +467,7 @@ export const subscriptionAdminService = {
         sub.buyerId,
         renewal.subscriptionId,
         "admin_retry_payment",
-        "We retried your Foodstuffs Subscription payment",
+        "We retried your Foodstuff Subscription payment",
         result?.status === "ORDER_CREATED" ? "The payment went through and your order is being prepared." : "Eki support retried your payment. Check the app for the result or update your payment method.",
       );
     }

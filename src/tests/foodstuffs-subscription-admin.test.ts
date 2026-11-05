@@ -244,7 +244,7 @@ describe("admin actions require a reason, write an audit row and notify the buye
       actorId: "admin1", action: "subscription.admin_pause", entityId: "s1", reason: "buyer is travelling",
       beforeState: expect.objectContaining({ status: "ACTIVE" }), afterState: expect.objectContaining({ status: "PAUSED" }),
     }));
-    expect(enqueue).toHaveBeenCalledWith(expect.objectContaining({ userId: "b1", title: "Your Foodstuffs Subscription was paused" }));
+    expect(enqueue).toHaveBeenCalledWith(expect.objectContaining({ userId: "b1", title: "Your Foodstuff Subscription was paused" }));
   });
 
   it("resume after a payment-failure pause starts a fresh cycle right away and needs a saved card", async () => {

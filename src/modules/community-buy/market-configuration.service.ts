@@ -144,7 +144,7 @@ const BOOLEAN_FIELDS = [
   "communityBuyEnabled",
   "organiserApplicationsEnabled",
   "supplierApplicationsEnabled",
-  // regularDeliveriesEnabled drives the customer-facing "Foodstuffs Subscription" feature.
+  // regularDeliveriesEnabled drives the customer-facing "Foodstuff Subscription" feature.
   "regularDeliveriesEnabled",
   "communityBuyOffersRequired",
 ] as const;
@@ -268,7 +268,7 @@ export function assertDependencies(existing: MarketLike, changes: Record<string,
   }
   if ((touched("regularDeliveriesEnabled") || touched("paymentProvider") || touched("paymentMode")) && next.regularDeliveriesEnabled) {
     if (!next.paymentProvider || next.paymentMode === "DISABLED") {
-      throw new AppError("Foodstuffs Subscriptions need a recurring payments provider: set a payment provider and a payment mode other than DISABLED first.", 409, null, "MARKET_DEPENDENCY");
+      throw new AppError("Foodstuff Subscriptions need a recurring payments provider: set a payment provider and a payment mode other than DISABLED first.", 409, null, "MARKET_DEPENDENCY");
     }
   }
 }
