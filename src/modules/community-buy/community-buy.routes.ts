@@ -1,5 +1,25 @@
 import { Router } from "express";
 
+import {
+  confirmPhoneCode,
+  createDemandRequest,
+  createOfferCampaign,
+  createSupplierOffer,
+  getMySupplierOffer,
+  getOrganiserChecks,
+  listMySupplierOffers,
+  listOffersForOrganiser,
+  listSupplierOfferOrders,
+  registerCampaignInterest,
+  sendPhoneCode,
+  submitOfferCampaign,
+  submitSupplierOffer,
+  updateOfferCampaign,
+  updateSupplierOffer,
+  withdrawOfferCampaign,
+  withdrawSupplierOffer,
+} from "./supplier-offers.controller";
+
 import { authenticate } from "../../middlewares/authenticate";
 import { requireApprovedSupplier, requireApprovedSupplierForOwnCampaign } from "../../middlewares/require-capability";
 import { asyncHandler } from "../../shared/utils/async-handler";
@@ -155,6 +175,18 @@ communityBuyRouter.post("/supplier-invitations/:token/decline", asyncHandler(dec
 // Organiser — mounted at /organiser.
 export const organiserRouter = Router();
 organiserRouter.use(authenticate);
+
+// Phase 1: Community Buys built on an approved supplier offer.
+organiserRouter.get("/offers", asyncHandler(listOffersForOrganiser));
+organiserRouter.post("/demand-requests", asyncHandler(createDemandRequest));
+organiserRouter.get("/checks", asyncHandler(getOrganiserChecks));
+organiserRouter.post("/checks/phone/send", asyncHandler(sendPhoneCode));
+organiserRouter.post("/checks/phone/confirm", asyncHandler(confirmPhoneCode));
+organiserRouter.post("/offer-campaigns", asyncHandler(createOfferCampaign));
+organiserRouter.patch("/offer-campaigns/:id", asyncHandler(updateOfferCampaign));
+organiserRouter.post("/offer-campaigns/:id/submit", asyncHandler(submitOfferCampaign));
+organiserRouter.post("/offer-campaigns/:id/withdraw", asyncHandler(withdrawOfferCampaign));
+organiserRouter.post("/campaigns/:id/interest", asyncHandler(registerCampaignInterest));
 organiserRouter.get("/profile", asyncHandler(getMyOrganiserProfile));
 organiserRouter.patch("/profile", asyncHandler(updateMyOrganiserProfile));
 organiserRouter.post("/applications", asyncHandler(applyAsOrganiser));
@@ -231,6 +263,15 @@ organiserRouter.post("/campaigns/:id/cancel", asyncHandler(legacyCancelFailedCam
 // approved SupplierAccount, via requireApprovedSupplier() below.
 export const supplierRouter = Router();
 supplierRouter.use(authenticate);
+
+// Phase 1: bulk offers. Any account can prepare one; approval decides what organisers see.
+supplierRouter.get("/offers", asyncHandler(listMySupplierOffers));
+supplierRouter.post("/offers", asyncHandler(createSupplierOffer));
+supplierRouter.get("/offers/:id", asyncHandler(getMySupplierOffer));
+supplierRouter.patch("/offers/:id", asyncHandler(updateSupplierOffer));
+supplierRouter.post("/offers/:id/submit", asyncHandler(submitSupplierOffer));
+supplierRouter.post("/offers/:id/withdraw", asyncHandler(withdrawSupplierOffer));
+supplierRouter.get("/offer-orders", asyncHandler(listSupplierOfferOrders));
 supplierRouter.get("/profile", asyncHandler(getMySupplierProfile));
 supplierRouter.post("/applications", asyncHandler(applyAsSupplier));
 // M5 (spec §6.4 "paused: voluntarily unavailable for new work") — self-service only, no requireApprovedSupplier() gate needed since pause()/resume() enforce their own precondition (APPROVED/PAUSED respectively).

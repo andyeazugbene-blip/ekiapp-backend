@@ -248,6 +248,9 @@ model User {
   // production metrics by default.
   isTest                   Boolean                   @default(false)
   emailVerifiedAt          DateTime?
+  // Phase 1: organiser check. Partner code is kept from the deep link so sign-ups reach the partner's cohort report.
+  phoneVerifiedAt          DateTime?
+  partnerCode              String?
   trustScore               Int                       @default(50)
   smsMarketingConsentAt    DateTime?
   smsTransactionalEnabled  Boolean                   @default(true)
@@ -278,6 +281,11 @@ model User {
   createdAt                DateTime                  @default(now())
   updatedAt                DateTime                  @updatedAt
 
+  capabilityGrants         CapabilityGrant[]
+  phoneVerification        PhoneVerification?
+  businessMemberships      BusinessMember[]
+  demandRequests           DemandRequest[]
+  campaignInterests        CampaignInterest[]
   @@index([role, createdAt])
   @@index([createdAt])
   @@index([isSuspended])
@@ -2943,6 +2951,8 @@ model SupplierAccount {
   businessRegistrationNumber String?
   // DELIVERY and/or COLLECTION: how this supplier can fulfil a campaign.
   fulfilmentMethods          String[]             @default([])
+  leadTimeDays             Int?
+  storageNotes             String?
   approvedAt                 DateTime?
   pausedAt                   DateTime?
   // M5 — SUSPENDED/CLOSED were reachable in the enum since Workstream 1 but
@@ -2965,6 +2975,7 @@ model SupplierAccount {
   // dual-written onto CommunityCampaign.supplierId too; see supplierId's
   // own comment for why both can be set at once during the transition.
   campaigns                  CommunityCampaign[]
+  offers                   SupplierOffer[]
 
   @@index([supplierState])
 }
@@ -3078,6 +3089,9 @@ model CommunityCampaign {
   // resolution.service.ts), never by reading either FK directly, so both
   // paths stay correct without duplicating logic at every call site.
   supplierAccountId         String?
+  // Phase 1: when set, price, minimum and maximum come from this approved offer.
+  supplierOfferId          String?
+  supplierOffer            SupplierOffer? @relation(fields: [supplierOfferId], references: [id], onDelete: SetNull)
   fulfilmentOwner           CampaignFulfilmentOwner            @default(SUPPLIER)
   title                     String
   description               String?
@@ -4065,6 +4079,8 @@ model MarketConfiguration {
   organiserApplicationsEnabled Boolean @default(false)
   supplierApplicationsEnabled  Boolean @default(false)
   regularDeliveriesEnabled     Boolean @default(false)
+  // Phase 1: when on, organisers must build on an approved supplier offer. Stays off until offers are seeded.
+  communityBuyOffersRequired Boolean @default(false)
 
   // Architecture doc §8 (Market Controls) — added in the A→Z gap-closure pass.
   // paymentProvider/identityProvider are read by feature evaluation to reject
@@ -4475,4 +4491,179 @@ model CommunicationTemplateVersion {
 
   @@unique([templateKey, version])
   @@index([templateKey, createdAt])
+}
+
+// ─── Phase 1: unified account and supplier offers ───────────────────────────
+
+enum SupplierOfferStatus {
+  DRAFT
+  IN_REVIEW
+  INFO_REQUIRED
+  APPROVED
+  REJECTED
+  WITHDRAWN
+  SUSPENDED
+  SUPERSEDED
+}
+
+enum ReviewRequestType {
+  SUPPLIER_ELIGIBILITY
+  SUPPLIER_OFFER
+  COMMUNITY_BUY_CAMPAIGN
+  EXTENSION
+}
+
+enum ReviewRequestStatus {
+  DRAFT
+  SUBMITTED
+  UNDER_REVIEW
+  INFO_REQUIRED
+  APPROVED
+  REJECTED
+  WITHDRAWN
+  SUSPENDED
+}
+
+enum CapabilityType {
+  BUYER
+  ORGANISER
+  VENDOR
+  SUPPLIER
+}
+
+enum CapabilityStatus {
+  ACTIVE
+  PENDING
+  SUSPENDED
+}
+
+/// A bulk offer organisers build Community Buys on. Price and quantities live here, never on the organiser's side.
+model SupplierOffer {
+  id                     String              @id @default(cuid())
+  supplierAccountId      String
+  supplierAccount        SupplierAccount     @relation(fields: [supplierAccountId], references: [id], onDelete: Cascade)
+  market                 String              @default("GB")
+  /// Price or quantity changes create a new version, so a live campaign's terms never move.
+  version                Int                 @default(1)
+  previousVersionId      String?             @unique
+  foodstuffName          String
+  description            String?
+  packSize               String
+  weightGrams            Int?
+  images                 String[]            @default([])
+  currency               String
+  pricePerShareMinor     Int
+  minimumShares          Int
+  maximumShares          Int
+  windowStartsAt         DateTime
+  windowEndsAt           DateTime
+  fulfilmentMethods      String[]            @default([])
+  deliveryAreas          String[]            @default([])
+  deliveryFeeMinor       Int?
+  collectionAddressLine1 String?
+  collectionCity         String?
+  collectionPostcode     String?
+  leadTimeDays           Int?
+  status                 SupplierOfferStatus @default(DRAFT)
+  approvedAt             DateTime?
+  createdAt              DateTime            @default(now())
+  updatedAt              DateTime            @updatedAt
+  campaigns              CommunityCampaign[]
+
+  @@index([status, market])
+  @@index([supplierAccountId])
+}
+
+/// One record per thing Eki reviews. The app shows "in review" only after this row exists.
+model ReviewRequest {
+  id             String              @id @default(cuid())
+  type           ReviewRequestType
+  subjectType    String
+  subjectId      String
+  market         String              @default("GB")
+  status         ReviewRequestStatus @default(SUBMITTED)
+  submittedById  String
+  submittedAt    DateTime            @default(now())
+  slaDueAt       DateTime
+  reviewerId     String?
+  decidedAt      DateTime?
+  decisionReason String?
+  infoMessage    String?
+  autoApproved   Boolean             @default(false)
+  createdAt      DateTime            @default(now())
+  updatedAt      DateTime            @updatedAt
+
+  @@index([status, slaDueAt])
+  @@index([type, status])
+  @@index([subjectType, subjectId])
+}
+
+/// What someone may do in a market. Who they are stays on User; screens never show this word.
+model CapabilityGrant {
+  id          String           @id @default(cuid())
+  userId      String
+  user        User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  capability  CapabilityType
+  market      String           @default("GB")
+  status      CapabilityStatus @default(PENDING)
+  grantedById String?
+  grantedAt   DateTime?
+  suspendedAt DateTime?
+  reason      String?
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+
+  @@unique([userId, capability, market])
+  @@index([capability, status])
+}
+
+/// Table only until Phase 3 (multi-staff businesses): no screens read it yet.
+model BusinessMember {
+  id                String   @id @default(cuid())
+  userId            String
+  user              User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  vendorId          String?
+  supplierAccountId String?
+  role              String   @default("OWNER")
+  createdAt         DateTime @default(now())
+
+  @@unique([userId, vendorId])
+  @@unique([userId, supplierAccountId])
+}
+
+/// "Tell us what you'd like to buy together", when no offers are live.
+model DemandRequest {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  foodstuff String
+  area      String?
+  market    String   @default("GB")
+  createdAt DateTime @default(now())
+
+  @@index([foodstuff])
+  @@index([createdAt])
+}
+
+/// Interest sign-ups on a "coming soon" link while a campaign is in review. No payment.
+model CampaignInterest {
+  id         String   @id @default(cuid())
+  campaignId String
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt  DateTime @default(now())
+
+  @@unique([campaignId, userId])
+}
+
+/// A pending phone check for the organiser step. The code is stored hashed and expires quickly.
+model PhoneVerification {
+  id        String   @id @default(cuid())
+  userId    String   @unique
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  phone     String
+  codeHash  String
+  attempts  Int      @default(0)
+  expiresAt DateTime
+  createdAt DateTime @default(now())
 }

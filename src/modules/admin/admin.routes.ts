@@ -299,6 +299,14 @@ import {
 } from "../uploads/uploads.controller";
 import { adminRewardsRouter } from "../rewards/rewards.routes";
 import { adminGiftCardsRouter } from "../gift-cards/gift-cards.routes";
+import {
+  adminApproveReviewRequest,
+  adminGetReviewRequest,
+  adminListDemandRequests,
+  adminListReviewRequests,
+  adminRejectReviewRequest,
+  adminRequestReviewInformation,
+} from "../community-buy/supplier-offers.controller";
 import { adminRestoreProduct, adminUnpublishProduct } from "./admin-products.controller";
 import { adminProvisionDemoAccount, adminCreateDemoAccount } from "./admin-demo-accounts.controller";
 import { adminCampaignsRouter } from "../campaigns/campaigns.routes";
@@ -523,6 +531,12 @@ adminRouter.post("/community-buy/suppliers/:id/unrestrict", asyncHandler(require
 // Community Buy Workstream 1 — admin actions on the new, no-Vendor-required
 // SupplierAccount (distinct from /community-buy/suppliers above, which
 // still operates on the legacy Vendor-keyed SupplierProfile).
+adminRouter.get("/approvals-queue", asyncHandler(requireAdminPermission("community_buy.read")), asyncHandler(adminListReviewRequests));
+adminRouter.get("/approvals-queue/demand", asyncHandler(requireAdminPermission("community_buy.read")), asyncHandler(adminListDemandRequests));
+adminRouter.get("/approvals-queue/:id", asyncHandler(requireAdminPermission("community_buy.read")), asyncHandler(adminGetReviewRequest));
+adminRouter.post("/approvals-queue/:id/approve", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(adminApproveReviewRequest));
+adminRouter.post("/approvals-queue/:id/request-information", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(adminRequestReviewInformation));
+adminRouter.post("/approvals-queue/:id/reject", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(adminRejectReviewRequest));
 adminRouter.get("/community-buy/supplier-accounts", asyncHandler(requireAdminPermission("community_buy.read")), asyncHandler(adminListSupplierAccounts));
 adminRouter.get("/community-buy/supplier-accounts/:id", asyncHandler(requireAdminPermission("community_buy.read")), asyncHandler(adminGetSupplierAccount));
 adminRouter.post("/community-buy/supplier-accounts/:id/reject", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(adminRejectSupplierAccount));

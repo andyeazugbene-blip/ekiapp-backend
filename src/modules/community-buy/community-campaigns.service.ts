@@ -28,6 +28,8 @@ import { notifyCampaignLiveDiscovery, notifyClosingSoonDiscovery } from "./campa
 // authoritative gate that requires the rest before review.
 export interface CreateCampaignInput {
   title: string;
+  /** Set only by the offer flow: the supplier's approved offer is their commitment, so no invitation goes out. */
+  fromApprovedOffer?: boolean;
   country: string;
   // Client-corrected flow: supplier is an optional fulfilment choice, never
   // a prerequisite for publication. SUPPLIER requires supplierId; SELF
@@ -523,6 +525,9 @@ export const communityCampaignsService = {
 
     const config = await marketConfigurationService.get(input.country);
     if (!config?.communityBuyEnabled) throw new AppError("Community Buy is not available in this market yet", 403);
+    if (config.communityBuyOffersRequired && !input.fromApprovedOffer) {
+      throw new AppError("Choose a supplier offer to start a Community Buy.", 409, undefined, "SUPPLIER_OFFER_REQUIRED");
+    }
 
     // Client-corrected flow: choosing a supplier is optional, and — new
     // this workstream — so is choosing a supply route at all while still
@@ -599,7 +604,7 @@ export const communityCampaignsService = {
     // actually comes into existence (supplierId assigned, supplierCommitted:
     // false), not merely because a campaign object exists. Self-fulfilled
     // campaigns have no supplier, so there is nothing to invite.
-    if (route?.fulfilmentOwner === "SUPPLIER" && route.notifyUserId) {
+    if (route?.fulfilmentOwner === "SUPPLIER" && route.notifyUserId && !input.fromApprovedOffer) {
       await notifyCampaign(
         route.notifyUserId,
         "supplier_invited",
