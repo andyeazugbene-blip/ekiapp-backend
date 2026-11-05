@@ -94,7 +94,7 @@ async function createProducts(userId: string, products: typeof MAIN_PRODUCTS) {
 async function createOffer(vendorId: string, productIds: string[], title: string) {
   const offer = await subscriptionOffersService.create(vendorId, {
     title,
-    description: "Demo Foodstuffs Subscription.",
+    description: "Demo Foodstuff Subscription.",
     productIds,
     frequencies: ["WEEKLY", "MONTHLY"],
     substitutionMode: "ASK_BUYER",

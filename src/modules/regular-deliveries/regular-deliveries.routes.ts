@@ -124,7 +124,7 @@ buyerSubscriptionsRouter.post("/:id/change-frequency", asyncHandler(changeBuyerS
 buyerSubscriptionsRouter.post("/:id/reschedule-next", asyncHandler(rescheduleNextBuyerSubscription));
 buyerSubscriptionsRouter.post("/:id/payment-method", asyncHandler(updateBuyerSubscriptionPaymentMethod));
 
-// Admin: Foodstuffs Subscription module - mounted at /admin/subscriptions and
+// Admin: Foodstuff Subscription module - mounted at /admin/subscriptions and
 // /admin/renewals. Reads need subscriptions.read; every mutation needs
 // subscriptions.mutate + 2FA (when enabled) + a required reason (validated
 // server-side in subscription-admin.service.ts) + an AuditLog row.

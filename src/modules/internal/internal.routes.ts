@@ -114,7 +114,7 @@ async function runRenewalsSweep() {
   const generation = await renewalsService.generateDueRenewals();
   const reminded = await renewalsService.sendUpcomingRenewalReminders();
   const priceApprovalExpiry = await renewalsService.expirePriceApprovalTimeouts();
-  // Foodstuffs Subscription recovery: pausedUntil auto-resume, AWAITING_STOCK
+  // Foodstuff Subscription recovery: pausedUntil auto-resume, AWAITING_STOCK
   // timeout, advance price notices, automatic payment retry schedule.
   const recovery = await renewalsService.runRecoverySweep();
 

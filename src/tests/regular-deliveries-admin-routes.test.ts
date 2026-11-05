@@ -131,7 +131,7 @@ describe("Admin Regular Delivery exception queue — real route path", () => {
   });
 });
 
-describe("Foodstuffs Subscription admin module — permission gating", () => {
+describe("Foodstuff Subscription admin module — permission gating", () => {
   it("GET /api/admin/subscriptions and /:id are gated by subscriptions.read", async () => {
     mockAssertPermission.mockRejectedValue(new AppError("Forbidden", 403));
     const list = await request(app).get("/api/admin/subscriptions").set("Authorization", `Bearer ${adminToken()}`);

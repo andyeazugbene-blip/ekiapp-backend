@@ -31,11 +31,11 @@ describe("PAY-03 — no 'escrow' in user-facing checkout error strings", () => {
     expect(paystackServiceSrc).not.toMatch(/throw new AppError\("Domestic escrow checkout/);
   });
 
-  it("uses the same 'Secured checkout' wording for all 3 checkout validation errors", () => {
-    expect(paystackServiceSrc).toContain('"Secured checkout supports one vendor per order. Please check out each vendor separately."');
-    expect(paystackServiceSrc).toContain('"Secured checkout is not available because the vendor country is not configured"');
-    expect(paystackServiceSrc).toContain('"Secured checkout only supports items from a single vendor country"');
-    expect(paystackServiceSrc).toContain('"Secured checkout is not available for this vendor country yet"');
+  it("uses the same 'Checkout' wording for all 3 checkout validation errors", () => {
+    expect(paystackServiceSrc).toContain('"Checkout supports one vendor per order. Please check out each vendor separately."');
+    expect(paystackServiceSrc).toContain('"Checkout is not available because the vendor country is not configured"');
+    expect(paystackServiceSrc).toContain('"Checkout only supports items from a single vendor country"');
+    expect(paystackServiceSrc).toContain('"Checkout is not available for this vendor country yet"');
   });
 });
 
@@ -46,7 +46,7 @@ describe("PAY-03 — no 'escrow' in the vendor dispute-notification body", () =>
     expect(disputeServiceSrc).not.toContain("The escrow is frozen until resolved");
   });
 
-  it("uses 'Payment protection remains active until resolved' instead", () => {
-    expect(disputeServiceSrc).toContain("Payment protection remains active until resolved");
+  it("uses 'The vendor is not paid until this is resolved' instead", () => {
+    expect(disputeServiceSrc).toContain("The vendor is not paid until this is resolved");
   });
 });
