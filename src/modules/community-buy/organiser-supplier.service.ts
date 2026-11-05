@@ -2,7 +2,7 @@ import { prisma } from "../../lib/prisma";
 import { AppError } from "../../shared/errors/app-error";
 import { vendorMarketsService } from "../vendors/vendor-markets.service";
 import { marketConfigurationService } from "./market-configuration.service";
-import { supplierAccountService } from "./supplier-account.service";
+import { isSupplierPayoutReady, supplierAccountService } from "./supplier-account.service";
 
 /**
  * spec §5 permission rule: a role must be granted independently. Being a
@@ -86,9 +86,11 @@ export const organiserSupplierService = {
       include: { user: { select: { name: true } } },
       orderBy: { approvedAt: "desc" },
     });
-    return accounts.map((account) => ({
+    // Assignment and submit both reject a supplier whose payouts aren't ready,
+    // so offering one here would only lead the organiser to an error.
+    return accounts.filter(isSupplierPayoutReady).map((account) => ({
       id: account.id,
-      displayName: account.user.name,
+      displayName: account.businessName ?? account.user.name,
       categories: account.categories,
       coverageRegions: account.coverageRegions,
       legacySupplierProfileId: account.legacySupplierProfileId,

@@ -21,6 +21,10 @@ export const stripeIdentityService = {
     if (!vendor) {
       throw new AppError("Vendor profile required", 403);
     }
+    // Starting a new session writes PENDING below, which would un-verify them.
+    if (vendor.verificationStatus === VendorVerificationStatus.VERIFIED) {
+      throw new AppError("Your account is already verified", 409, undefined, "ALREADY_VERIFIED");
+    }
 
     const session = await stripe.identity.verificationSessions.create({
       type: "document",
@@ -122,12 +126,23 @@ export const stripeIdentityService = {
 
       // Vendor-activation spec: automatic verification must automatically
       // publish eligible pending listings — never left as a manual step.
-      void vendorActivationService.publishEligibleProducts(vendorId);
+      // Awaited: on serverless, work left running after the webhook responds
+      // can be stopped. This call never throws into the webhook.
+      await vendorActivationService.publishEligibleProducts(vendorId);
 
       return;
     }
 
     if (session.status === "requires_input") {
+      // A late or repeated failure must not undo a result already reached: a
+      // verified vendor stays verified, and a superseded session can't fail
+      // the attempt the vendor is on now.
+      const isSupersededSession = !!vendor.stripeVerificationSessionId && vendor.stripeVerificationSessionId !== session.id;
+      if (vendor.verificationStatus === VendorVerificationStatus.VERIFIED || isSupersededSession) {
+        logger.info("Stripe Identity failure ignored: outcome already superseded", { vendorId, sessionId: session.id });
+        return;
+      }
+
       const reason = session.last_error?.reason ?? session.last_error?.code ?? "Verification failed";
 
       const updatedVendor = await prisma.$transaction(async (tx) => {

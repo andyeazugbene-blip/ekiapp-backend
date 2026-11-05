@@ -1,3 +1,4 @@
+import { logger } from "../../lib/logger";
 import { prisma } from "../../lib/prisma";
 import { pushNotifications } from "../../lib/push-notifications";
 import { isBlocked } from "../reports/reports.service";
@@ -118,7 +119,11 @@ async function assertConversationAllowed(
     return "ADMIN_VENDOR";
   }
 
-  if (!roles.has("BUYER") || !roles.has("VENDOR")) {
+  // Opening a store no longer changes User.role (see createVendor), so a seller
+  // is whoever has a Vendor row, not only role VENDOR. Two role-VENDOR accounts
+  // stay blocked unless an order connects them.
+  const hasSeller = [requester, other].some((p) => p.role === "VENDOR" || !!p.vendor);
+  if (!hasSeller || (!orderId && !roles.has("BUYER"))) {
     throw new AppError("Conversation participants are not compatible", 400);
   }
 
@@ -139,10 +144,11 @@ async function assertConversationAllowed(
     throw new AppError("Order not found", 404);
   }
 
-  const buyer = requester.role === "BUYER" ? requester : other;
-  const vendor = requester.role === "VENDOR" ? requester : other;
+  const orderLinksPair =
+    (order.buyerId === requester.id && order.vendorId === other.vendor?.id) ||
+    (order.buyerId === other.id && order.vendorId === requester.vendor?.id);
 
-  if (order.buyerId !== buyer.id || order.vendorId !== vendor.vendor?.id) {
+  if (!orderLinksPair) {
     throw new AppError("Conversation is not allowed for this order", 403);
   }
 
@@ -268,7 +274,77 @@ async function serializeMessage(messageId: string) {
   };
 }
 
+/** Upper bound on one send, so a request can't outrun the serverless time limit. */
+const MAX_OFFER_RECIPIENTS = 200;
+const OFFER_REPEAT_WINDOW_MS = 24 * 60 * 60 * 1000;
+
 export const messagesService = {
+  /**
+   * Sends one offer to many of the vendor's own buyers. Recipients are checked
+   * against real orders, one failure doesn't stop the rest, and repeating a
+   * send (a retry after a partial failure) doesn't message anyone twice.
+   */
+  async sendVendorOffer(userId: string, input: { buyerIds: string[]; message: string }) {
+    const message = input.message.trim();
+    if (!message) throw new AppError("Write a message before sending an offer.", 400);
+    const buyerIds = [...new Set(input.buyerIds)];
+    if (buyerIds.length === 0) throw new AppError("Choose at least one buyer.", 400);
+    if (buyerIds.length > MAX_OFFER_RECIPIENTS) {
+      throw new AppError(`An offer can reach up to ${MAX_OFFER_RECIPIENTS} buyers at a time.`, 400);
+    }
+
+    const vendor = await prisma.vendor.findUnique({ where: { userId }, select: { id: true } });
+    if (!vendor) throw new AppError("Vendor profile required", 403);
+
+    const orders = await prisma.order.findMany({
+      where: { vendorId: vendor.id, buyerId: { in: buyerIds }, status: { notIn: ["PENDING", "FAILED", "CANCELLED"] } },
+      select: { id: true, buyerId: true },
+      orderBy: { createdAt: "desc" },
+    });
+    const latestOrderByBuyer = new Map<string, string>();
+    for (const order of orders) {
+      if (!latestOrderByBuyer.has(order.buyerId)) latestOrderByBuyer.set(order.buyerId, order.id);
+    }
+
+    const repeatCutoff = new Date(Date.now() - OFFER_REPEAT_WINDOW_MS);
+    let sent = 0;
+    let alreadySent = 0;
+    let failed = 0;
+    for (const buyerId of buyerIds) {
+      const orderId = latestOrderByBuyer.get(buyerId);
+      if (!orderId) {
+        failed += 1;
+        continue;
+      }
+      try {
+        const conversation = await this.createConversation(userId, { participantId: buyerId, orderId });
+        const repeat = await prisma.message.findFirst({
+          where: { conversationId: conversation.id, senderId: userId, text: message, createdAt: { gte: repeatCutoff } },
+          select: { id: true },
+        });
+        if (repeat) {
+          alreadySent += 1;
+          continue;
+        }
+        await this.sendMessage(userId, conversation.id, { text: message });
+        sent += 1;
+      } catch (error) {
+        failed += 1;
+        logger.warn("Vendor offer not delivered to a buyer", { vendorId: vendor.id, buyerId, error: String(error) });
+      }
+    }
+
+    await recordAudit({
+      actorId: userId,
+      action: "VENDOR_OFFER_SENT",
+      entityType: "Vendor",
+      entityId: vendor.id,
+      metadata: { sent, alreadySent, failed },
+    }).catch(() => undefined);
+
+    return { sent, alreadySent, failed };
+  },
+
   async createConversation(
     userId: string,
     input: CreateConversationInput,

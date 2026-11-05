@@ -2,6 +2,16 @@ import type { Request, Response } from "express";
 
 import { prisma } from "../../lib/prisma";
 import { AppError } from "../../shared/errors/app-error";
+import { messagesService } from "../messages/messages.service";
+
+export async function sendVendorOffer(request: Request, response: Response): Promise<void> {
+  const userId = requireUserId(request);
+  const { buyerIds, message } = (request.body ?? {}) as { buyerIds?: unknown; message?: unknown };
+  if (!Array.isArray(buyerIds) || !buyerIds.every((id) => typeof id === "string") || typeof message !== "string") {
+    throw new AppError("buyerIds and message are required", 400);
+  }
+  response.status(200).json(await messagesService.sendVendorOffer(userId, { buyerIds: buyerIds as string[], message }));
+}
 
 function requireUserId(request: Request): string {
   if (!request.user) throw new AppError("Unauthorized", 401);

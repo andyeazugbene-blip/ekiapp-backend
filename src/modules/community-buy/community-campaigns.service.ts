@@ -509,7 +509,8 @@ export const communityCampaignsService = {
     // authenticated user (WS1 canOrganise:true) — an OrganiserProfile is
     // created on first draft, the same lightweight/instant/non-admin-gated
     // record applyAsOrganiser() already produces, isVerified:false until
-    // admin review. Verification is enforced at submit(), not here.
+    // the admin approves their first campaign (see approve()). Organising
+    // needs no prior application: admin review of each campaign is the gate.
     let organiser = await prisma.organiserProfile.findUnique({ where: { userId } });
     if (!organiser) {
       const applicationConfig = await marketConfigurationService.get(input.country);
@@ -1006,7 +1007,6 @@ export const communityCampaignsService = {
     if (!organiser) missing.push("organiser_profile");
     else {
       if (organiser.isRestricted) missing.push("organiser_restricted");
-      if (!organiser.isVerified) missing.push("organiser_verification");
     }
     if (!campaign.country) missing.push("country");
     if (!campaign.currency) missing.push("currency");
@@ -1249,6 +1249,12 @@ export const communityCampaignsService = {
       where: { id: campaignId },
       data: { status: "APPROVED", reviewedById: adminId, reviewedAt: new Date(), ...(criteria ? { reviewCriteria: criteria } : {}) },
     });
+    if (!campaign.organiser.isVerified) {
+      await prisma.organiserProfile.updateMany({
+        where: { id: campaign.organiser.id, isVerified: false },
+        data: { isVerified: true, verifiedAt: new Date() },
+      });
+    }
     eventsService.emit({
       name: EVENT_NAMES.community_buy_approved, actorType: "admin", actorId: adminId, entityType: "CommunityCampaign", entityId: campaignId, source: "admin_panel",
     });
@@ -2063,13 +2069,13 @@ export const communityCampaignsService = {
     // can only differ from this preview if an admin changes the rate
     // between viewing and pledging. Null when there's no price yet (still
     // drafting) or no market configuration to compute against.
-    let perShareFeeEstimate: { productSubtotal: number; feeAmount: number; maxTotal: number; feeBps: number } | null = null;
+    let perShareFeeEstimate: { productSubtotal: number; feeAmount: number; maxTotal: number; feeBps: number; minAmount: number; maxAmount: number } | null = null;
     if (campaign.pricePerShareMinor && campaign.country) {
       const config = await marketConfigurationService.get(campaign.country);
       if (config) {
         const productSubtotal = campaign.pricePerShareMinor;
         const feeAmount = calculateBoundedServiceFee(productSubtotal, config.buyerServiceFeeBps, config.buyerServiceFeeMinAmount, config.buyerServiceFeeMaxAmount);
-        perShareFeeEstimate = { productSubtotal, feeAmount, maxTotal: productSubtotal + feeAmount, feeBps: config.buyerServiceFeeBps };
+        perShareFeeEstimate = { productSubtotal, feeAmount, maxTotal: productSubtotal + feeAmount, feeBps: config.buyerServiceFeeBps, minAmount: config.buyerServiceFeeMinAmount, maxAmount: config.buyerServiceFeeMaxAmount };
       }
     }
 

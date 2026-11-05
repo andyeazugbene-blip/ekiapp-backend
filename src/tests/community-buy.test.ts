@@ -1563,6 +1563,7 @@ describe("campaignContributionsService — financial ledger (read-only aggregati
     m.campaignContribution.groupBy.mockResolvedValue([] as never);
     m.campaignRefund.groupBy.mockResolvedValue([] as never);
     m.campaignSupplierPayment.findMany.mockResolvedValue([] as never);
+    m.communityBuyOrganiserPayout.findMany.mockResolvedValue([] as never);
 
     const summary = await campaignContributionsService.getLedgerSummaryForAdmin();
     expect(summary).toEqual([]);
@@ -1570,13 +1571,14 @@ describe("campaignContributionsService — financial ledger (read-only aggregati
 
   it("getLedgerSummaryForAdmin computes netPosition as contributed minus refunded minus paid to supplier", async () => {
     m.campaignContribution.groupBy.mockResolvedValue([
-      { campaignId: "camp-1", _sum: { amount: 10000 }, _count: { id: 4 } },
+      { campaignId: "camp-1", _sum: { amount: 10000, buyerServiceFeeAmount: 600 }, _count: { id: 4 } },
     ] as never);
     m.campaignRefund.groupBy.mockResolvedValue([
       { contributionId: "contrib-1", _sum: { amount: 2500 } },
     ] as never);
     m.campaignContribution.findMany.mockResolvedValue([{ id: "contrib-1", campaignId: "camp-1" }] as never);
-    m.campaignSupplierPayment.findMany.mockResolvedValue([{ campaignId: "camp-1", amount: 5000 }] as never);
+    m.campaignSupplierPayment.findMany.mockResolvedValue([{ campaignId: "camp-1", amount: 5000, feeAmount: 400 }] as never);
+    m.communityBuyOrganiserPayout.findMany.mockResolvedValue([{ campaignId: "camp-1", commissionAmount: 500 }] as never);
     m.communityCampaign.findMany.mockResolvedValue([
       { id: "camp-1", title: "Rice bulk buy", currency: "GBP", status: "COMPLETED", fundingOutcome: "GOAL_REACHED" },
     ] as never);
@@ -1590,6 +1592,10 @@ describe("campaignContributionsService — financial ledger (read-only aggregati
         totalPaidToSupplier: 5000,
         netPosition: 2500,
         contributionCount: 4,
+        // Spec N.7: the three Eki revenue lines reconcile separately.
+        buyerServiceFeeRevenue: 600,
+        organiserCommissionRevenue: 500,
+        supplierCommissionRevenue: 400,
       }),
     ]);
   });

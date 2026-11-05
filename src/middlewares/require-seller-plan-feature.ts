@@ -5,6 +5,15 @@ import { prisma } from "../lib/prisma";
 
 type SellerPlanFeature = "analytics" | "bundles" | "flashSales" | "discounts" | "marketingTools" | "canReceiveOrders";
 
+const FEATURE_LABELS: Record<SellerPlanFeature, string> = {
+  analytics: "Analytics",
+  bundles: "Bundles",
+  flashSales: "Flash sales",
+  discounts: "Discounts",
+  marketingTools: "Marketing tools",
+  canReceiveOrders: "Receiving orders",
+};
+
 export function requireSellerPlanFeature(feature: SellerPlanFeature) {
   return async (request: Request, _response: Response, next: NextFunction): Promise<void> => {
     try {
@@ -20,7 +29,7 @@ export function requireSellerPlanFeature(feature: SellerPlanFeature) {
 
       const allowed = Boolean((subscription?.sellerPlan as Record<string, boolean> | null)?.[feature]);
       if (!allowed) {
-        throw new AppError(`Your current plan does not include this feature: ${feature}`, 403);
+        throw new AppError(`${FEATURE_LABELS[feature]} isn't included in your current plan. Upgrade your Vendor Account to use it.`, 403, undefined, "PLAN_FEATURE_REQUIRED");
       }
 
       next();

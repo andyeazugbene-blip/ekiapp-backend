@@ -2937,6 +2937,10 @@ model SupplierAccount {
   // onboarding field named in the spec that never got a column. Nullable:
   // "not yet stated," never a fabricated default.
   collectionCapacityPerDay   Int?
+  businessName               String?
+  businessRegistrationNumber String?
+  // DELIVERY and/or COLLECTION: how this supplier can fulfil a campaign.
+  fulfilmentMethods          String[]             @default([])
   approvedAt                 DateTime?
   pausedAt                   DateTime?
   // M5 — SUSPENDED/CLOSED were reachable in the enum since Workstream 1 but

@@ -1295,11 +1295,11 @@ export const campaignContributionsService = {
 
   /** One row per campaign that has had at least one financial event, for the admin ledger overview list. */
   async getLedgerSummaryForAdmin() {
-    const [contributions, refunds, supplierPayments] = await Promise.all([
+    const [contributions, refunds, supplierPayments, organiserPayouts] = await Promise.all([
       prisma.campaignContribution.groupBy({
         by: ["campaignId"],
         where: { status: "PAID" },
-        _sum: { amount: true },
+        _sum: { amount: true, buyerServiceFeeAmount: true },
         _count: { id: true },
       }),
       prisma.campaignRefund.groupBy({
@@ -1309,7 +1309,11 @@ export const campaignContributionsService = {
       }),
       prisma.campaignSupplierPayment.findMany({
         where: { status: "PAID" },
-        select: { campaignId: true, amount: true },
+        select: { campaignId: true, amount: true, feeAmount: true },
+      }),
+      prisma.communityBuyOrganiserPayout.findMany({
+        where: { status: "PAID" },
+        select: { campaignId: true, commissionAmount: true },
       }),
     ]);
 
@@ -1330,14 +1334,21 @@ export const campaignContributionsService = {
     }
 
     const supplierPaidByCampaign = new Map<string, number>();
+    const supplierCommissionByCampaign = new Map<string, number>();
     for (const p of supplierPayments) {
       supplierPaidByCampaign.set(p.campaignId, (supplierPaidByCampaign.get(p.campaignId) ?? 0) + p.amount);
+      supplierCommissionByCampaign.set(p.campaignId, (supplierCommissionByCampaign.get(p.campaignId) ?? 0) + (p.feeAmount ?? 0));
+    }
+    const organiserCommissionByCampaign = new Map<string, number>();
+    for (const p of organiserPayouts) {
+      organiserCommissionByCampaign.set(p.campaignId, (organiserCommissionByCampaign.get(p.campaignId) ?? 0) + (p.commissionAmount ?? 0));
     }
 
     const campaignIds = new Set<string>([
       ...contributions.map((c) => c.campaignId),
       ...refundedByCampaign.keys(),
       ...supplierPaidByCampaign.keys(),
+      ...organiserCommissionByCampaign.keys(),
     ]);
     if (campaignIds.size === 0) return [];
 
@@ -1346,7 +1357,7 @@ export const campaignContributionsService = {
       select: { id: true, title: true, currency: true, status: true, fundingOutcome: true },
     });
     const campaignById = new Map(campaigns.map((c) => [c.id, c]));
-    const contributedByCampaign = new Map(contributions.map((c) => [c.campaignId, { total: c._sum.amount ?? 0, count: c._count.id }]));
+    const contributedByCampaign = new Map(contributions.map((c) => [c.campaignId, { total: c._sum.amount ?? 0, count: c._count.id, buyerServiceFees: c._sum.buyerServiceFeeAmount ?? 0 }]));
 
     return [...campaignIds].map((campaignId) => {
       const campaign = campaignById.get(campaignId);
@@ -1364,6 +1375,9 @@ export const campaignContributionsService = {
         totalRefunded,
         totalPaidToSupplier,
         netPosition: totalContributed - totalRefunded - totalPaidToSupplier,
+        buyerServiceFeeRevenue: contributedByCampaign.get(campaignId)?.buyerServiceFees ?? 0,
+        organiserCommissionRevenue: organiserCommissionByCampaign.get(campaignId) ?? 0,
+        supplierCommissionRevenue: supplierCommissionByCampaign.get(campaignId) ?? 0,
       };
     });
   },
