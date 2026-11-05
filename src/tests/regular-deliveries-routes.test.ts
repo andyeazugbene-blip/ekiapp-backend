@@ -232,7 +232,7 @@ describe("Vendor subscription-offer routes", () => {
   it("GET /api/subscription-offers/:id — public, no auth required", async () => {
     const res = await request(app).get("/api/subscription-offers/offer-42");
     expect(res.status).toBe(200);
-    expect(mockGetPublicOffer).toHaveBeenCalledWith("offer-42");
+    expect(mockGetPublicOffer).toHaveBeenCalledWith("offer-42", false);
   });
 
   it("GET /api/subscription-offers/public — real discovery, no auth required, and NOT swallowed by the /:id route", async () => {
@@ -243,7 +243,7 @@ describe("Vendor subscription-offer routes", () => {
     // If "public" were being matched by "/:id" instead, this would have
     // been called with "public" as the offer id — it must not be.
     expect(mockGetPublicOffer).not.toHaveBeenCalled();
-    expect(mockListPublicOffers).toHaveBeenCalledWith({ country: "GB", vendorId: undefined });
+    expect(mockListPublicOffers).toHaveBeenCalledWith({ country: "GB", vendorId: undefined, viewerIsTest: false });
   });
 
   it("POST /api/subscription-offers/:id/pause-renewals — reads id from the URL, requires vendor auth", async () => {

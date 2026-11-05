@@ -20,6 +20,7 @@ import { upsertParticipantWithAttribution } from "./campaign-participant-attribu
 import { buyerCountryService } from "./buyer-country.service";
 import { notifyProgressMilestone } from "./campaign-notifications";
 import { dispatchNotificationsAfterCommit } from "../events/dispatch-notifications";
+import { viewerIsTest } from "../../shared/test-accounts";
 
 /**
  * Client decision (2026-09-22, buyer-country acceptance fix) — a buyer may
@@ -41,6 +42,15 @@ export async function assertBuyerCountryEligible(userId: string, campaignCountry
   if (!buyerCountryService.isEligible(buyerMarketCode, campaignCountry)) {
     throw new AppError("Campaign not found", 404);
   }
+}
+
+/** Same 404 as a campaign outside the buyer's market: demo and real accounts never meet. */
+async function assertCampaignSameWorld(userId: string, organiserId: string): Promise<void> {
+  const [buyerIsTest, organiser] = await Promise.all([
+    viewerIsTest(userId),
+    prisma.organiserProfile.findUnique({ where: { id: organiserId }, select: { user: { select: { isTest: true } } } }),
+  ]);
+  if ((organiser?.user?.isTest ?? false) !== buyerIsTest) throw new AppError("Campaign not found", 404);
 }
 
 const SYSTEM_CRON_ACTOR = "system:cron";
@@ -328,6 +338,7 @@ export const campaignContributionsService = {
     const campaign = await prisma.communityCampaign.findUnique({ where: { id: campaignId } });
     if (!campaign || campaign.status !== "LIVE") throw new AppError("Campaign not found or not live", 404);
     await assertBuyerCountryEligible(userId, campaign.country);
+    await assertCampaignSameWorld(userId, campaign.organiserId);
 
     return upsertParticipantWithAttribution(campaign, userId);
   },
@@ -345,6 +356,7 @@ export const campaignContributionsService = {
     }
     if (new Date() >= campaign.deadline) throw new AppError("This campaign is no longer accepting contributions", 409);
     await assertBuyerCountryEligible(userId, campaign.country);
+    await assertCampaignSameWorld(userId, campaign.organiserId);
 
     const paymentsEnabled = await marketConfigurationService.isCommunityBuyPaymentsEnabled(campaign.country);
     if (!paymentsEnabled) {

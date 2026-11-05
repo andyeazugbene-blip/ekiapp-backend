@@ -18,6 +18,10 @@ const m = vi.hoisted(() => ({
   supplierAccountCreate: vi.fn(),
 }));
 
+vi.mock("../modules/vendors/vendor-markets.service", () => ({
+  vendorMarketsService: { ensureInitialAssignment: async () => undefined },
+}));
+
 vi.mock("../lib/prisma", () => ({
   prisma: {
     user: { findUnique: m.userFindUnique, update: m.userUpdate, create: m.userCreate },

@@ -1,6 +1,6 @@
 import { Router } from "express";
 
-import { authenticate } from "../../middlewares/authenticate";
+import { authenticate, optionalAuthenticate } from "../../middlewares/authenticate";
 import { requireVendorProfileOrAdmin } from "../../middlewares/require-capability";
 import { requireSellerPlanFeature } from "../../middlewares/require-seller-plan-feature";
 import { asyncHandler } from "../../shared/utils/async-handler";
@@ -10,7 +10,7 @@ import { createFlashSale, deleteFlashSale, listMyFlashSales, listPublicFlashSale
 
 export const promosRouter = Router();
 
-promosRouter.get("/deals", asyncHandler(listPublicDeals));
+promosRouter.get("/deals", optionalAuthenticate, asyncHandler(listPublicDeals));
 promosRouter.post("/validate", authenticate, asyncHandler(validatePromo));
 promosRouter.get("/me", authenticate, requireVendorProfileOrAdmin(), asyncHandler(listVendorPromoCodes));
 promosRouter.post(
@@ -31,7 +31,7 @@ promosRouter.delete(
 // old PromoCode "BUNDLE"-prefix hack. Still redeems through the same
 // PromoCode mechanism under the hood — see bundles.service.ts.
 export const bundlesRouter = Router();
-bundlesRouter.get("/public", asyncHandler(listPublicBundles));
+bundlesRouter.get("/public", optionalAuthenticate, asyncHandler(listPublicBundles));
 bundlesRouter.get("/me", authenticate, requireVendorProfileOrAdmin(), asyncHandler(listMyBundles));
 bundlesRouter.post("/me", authenticate, requireVendorProfileOrAdmin(), asyncHandler(requireSellerPlanFeature("bundles")), asyncHandler(createBundle));
 bundlesRouter.patch("/me/:id", authenticate, requireVendorProfileOrAdmin(), asyncHandler(updateBundleActive));
@@ -42,7 +42,7 @@ bundlesRouter.delete("/me/:id", authenticate, requireVendorProfileOrAdmin(), asy
 // hack. Still redeems through the same PromoCode mechanism under the
 // hood — see flash-sales.service.ts.
 export const flashSalesRouter = Router();
-flashSalesRouter.get("/public", asyncHandler(listPublicFlashSales));
+flashSalesRouter.get("/public", optionalAuthenticate, asyncHandler(listPublicFlashSales));
 flashSalesRouter.get("/me", authenticate, requireVendorProfileOrAdmin(), asyncHandler(listMyFlashSales));
 flashSalesRouter.post("/me", authenticate, requireVendorProfileOrAdmin(), asyncHandler(requireSellerPlanFeature("flashSales")), asyncHandler(createFlashSale));
 flashSalesRouter.patch("/me/:id", authenticate, requireVendorProfileOrAdmin(), asyncHandler(updateFlashSaleActive));

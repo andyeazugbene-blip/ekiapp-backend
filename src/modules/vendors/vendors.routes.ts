@@ -1,6 +1,6 @@
 import { Router } from "express";
 
-import { authenticate } from "../../middlewares/authenticate";
+import { authenticate, optionalAuthenticate } from "../../middlewares/authenticate";
 import { requireVendorProfileOrAdmin } from "../../middlewares/require-capability";
 import { requireSellerPlanFeature } from "../../middlewares/require-seller-plan-feature";
 import { asyncHandler } from "../../shared/utils/async-handler";
@@ -56,8 +56,8 @@ import {
 
 export const vendorsRouter = Router();
 
-vendorsRouter.get("/", asyncHandler(listPublicVendors));
-vendorsRouter.get("/:id([A-Za-z0-9]{10,})", asyncHandler(getPublicVendor));
+vendorsRouter.get("/", optionalAuthenticate, asyncHandler(listPublicVendors));
+vendorsRouter.get("/:id([A-Za-z0-9]{10,})", optionalAuthenticate, asyncHandler(getPublicVendor));
 
 vendorsRouter.use(authenticate);
 

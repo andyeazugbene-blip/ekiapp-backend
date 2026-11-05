@@ -13,6 +13,7 @@ import { ledgerService } from "../ledger/ledger.service";
 import { LedgerAccountType, LedgerDirection, LedgerOwnerType } from "@prisma/client";
 import { enqueueProductStockDepleted } from "../products/product-stock-events";
 import { dispatchNotificationsAfterCommit } from "../events/dispatch-notifications";
+import { assertSameAccountWorld } from "../../shared/test-accounts";
 
 export interface InitializeEscrowInput {
   cartId: string;
@@ -123,6 +124,7 @@ export const paystackService = {
     const reference = `eki-escrow-${crypto.randomBytes(12).toString("hex")}`;
 
     // Get buyer email
+    await assertSameAccountWorld(buyerId, [vendorId]);
     const buyer = await prisma.user.findUnique({ where: { id: buyerId }, select: { email: true } });
     if (!buyer) throw new AppError("Buyer not found", 404);
 

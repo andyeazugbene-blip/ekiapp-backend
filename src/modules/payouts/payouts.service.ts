@@ -74,9 +74,11 @@ async function enqueuePayoutConfirmed(tx: Prisma.TransactionClient, payout: Payo
 async function getVendorForWrite(userId: string): Promise<{ id: string }> {
   const vendor = await prisma.vendor.findUnique({
     where: { userId },
-    select: { id: true, isSuspended: true, verificationStatus: true },
+    select: { id: true, isSuspended: true, verificationStatus: true, isTest: true },
   });
   if (!vendor || vendor.isSuspended) throw new AppError("Vendor profile not found", 404);
+  // Demo earnings come from wallet credit nobody paid for: never withdrawable.
+  if (vendor.isTest) throw new AppError("Demo accounts can't withdraw earnings.", 403, null, "DEMO_NO_PAYOUT");
   if (vendor.verificationStatus !== "VERIFIED") {
     throw new AppError(
       "Identity verification is required before requesting a payout.",

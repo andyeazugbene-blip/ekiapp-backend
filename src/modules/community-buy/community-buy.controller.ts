@@ -23,6 +23,7 @@ import { communityBuyManifestService } from "./community-buy-manifest.service";
 import { campaignSupplierProposalService, type ProposalInput } from "./campaign-supplier-proposal.service";
 import { searchDataAccessLog, revokeDeliveryReferencesForSupplierAccount, isIndividualDeliveryEnabled, FULFILMENT_ACCESS_PRESERVED_SCOPE } from "./community-buy-privacy.service";
 import { buyerCountryService } from "./buyer-country.service";
+import { viewerIsTest } from "../../shared/test-accounts";
 
 // ─── Public market availability (used by the mobile app to decide whether
 // to show Regular Deliveries / Community Buy entry points at all — the
@@ -112,7 +113,7 @@ export async function listCampaigns(request: Request, response: Response): Promi
   const userId = requireUserId(request);
   const marketCode = await buyerCountryService.requireMarketCode(userId);
   const q = typeof request.query.q === "string" ? request.query.q : undefined;
-  response.json({ items: await communityCampaignsService.listLive(marketCode, q) });
+  response.json({ items: await communityCampaignsService.listLive(marketCode, q, await viewerIsTest(userId)) });
 }
 
 /** Country-gated for an unrelated caller; the campaign's own organiser/supplier/an admin always get through — see getForRequester()'s doc comment. */
@@ -171,7 +172,7 @@ function requirePaymentMethodIdBody(request: Request): string {
 // No format validation here beyond "must be a string" — assertDeliveryAddressWithinCoverage()
 // in campaign-contributions.service.ts is the single source of truth for
 // presence/coverage rules.
-function readDeliveryAddressBody(request: Request): { recipientName?: string; addressLine1?: string; addressLine2?: string; city?: string; postcode?: string } | undefined {
+function readDeliveryAddressBody(request: Request): { recipientName?: string; addressLine1?: string; addressLine2?: string; city?: string; postcode?: string; phone?: string; instructions?: string } | undefined {
   const raw = request.body?.deliveryAddress;
   if (raw === undefined || raw === null) return undefined;
   if (typeof raw !== "object" || Array.isArray(raw)) throw new AppError("deliveryAddress must be an object", 400);
@@ -182,6 +183,8 @@ function readDeliveryAddressBody(request: Request): { recipientName?: string; ad
     addressLine2: pick("addressLine2"),
     city: pick("city"),
     postcode: pick("postcode"),
+    phone: pick("phone"),
+    instructions: pick("instructions"),
   };
 }
 

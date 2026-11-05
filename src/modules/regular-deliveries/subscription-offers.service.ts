@@ -226,12 +226,12 @@ export const subscriptionOffersService = {
     });
   },
 
-  async getPublic(offerId: string) {
+  async getPublic(offerId: string, viewerIsTest = false) {
     const offer = await prisma.subscriptionOffer.findUnique({
       where: { id: offerId },
-      include: { products: { include: { product: true } }, vendor: { select: { id: true, storeName: true } } },
+      include: { products: { include: { product: true } }, vendor: { select: { id: true, storeName: true, isTest: true } } },
     });
-    if (!offer || !offer.isActive) throw new AppError("Offer not found", 404);
+    if (!offer || !offer.isActive || offer.vendor.isTest !== viewerIsTest) throw new AppError("Offer not found", 404);
     return offer;
   },
 
@@ -250,7 +250,7 @@ export const subscriptionOffersService = {
    * every vendor's offers regardless of whether their market had Regular
    * Deliveries enabled.
    */
-  async listPublic(filters: { country?: string; vendorId?: string }) {
+  async listPublic(filters: { country?: string; vendorId?: string; viewerIsTest?: boolean }) {
     const enabledMarketCodes = await getEnabledRegularDeliveryMarketCodes();
     if (enabledMarketCodes.length === 0) return [];
 
@@ -270,6 +270,7 @@ export const subscriptionOffersService = {
         isActive: true,
         vendor: {
           isSuspended: false,
+          isTest: filters.viewerIsTest ?? false,
           // A multi-market vendor is eligible in EVERY market they hold an
           // active assignment for, not just their single primary
           // Vendor.country — see getEnabledRegularDeliveryMarketCodes for

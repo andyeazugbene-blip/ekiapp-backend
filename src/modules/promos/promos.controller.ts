@@ -10,6 +10,7 @@ import {
   validateUpdatePromoCodeInput,
   validateValidatePromoInput,
 } from "./promos.validation";
+import { viewerIsTest } from "../../shared/test-accounts";
 
 function requireUserId(request: Request): string {
   if (!request.user) {
@@ -52,8 +53,8 @@ export async function deleteVendorPromoCode(request: Request, response: Response
 
 // ─── Public ─────────────────────────────────────────────────────────────────
 
-export async function listPublicDeals(_request: Request, response: Response): Promise<void> {
-  const deals = await promosService.listPublicDeals();
+export async function listPublicDeals(request: Request, response: Response): Promise<void> {
+  const deals = await promosService.listPublicDeals(await viewerIsTest(request.user?.id));
   response.status(200).json(deals);
 }
 

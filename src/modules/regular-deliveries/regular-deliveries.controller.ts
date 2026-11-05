@@ -8,6 +8,7 @@ import { buyerSubscriptionsService } from "./buyer-subscriptions.service";
 import { buyerPaymentMethodsService } from "./payment-methods.service";
 import { renewalsService } from "./renewals.service";
 import { requireReason, subscriptionAdminService } from "./subscription-admin.service";
+import { assertCardAllowedForAccount, viewerIsTest } from "../../shared/test-accounts";
 
 function requireUserId(request: Request): string {
   if (!request.user) throw new AppError("Unauthorized", 401);
@@ -118,7 +119,7 @@ export async function resumeSubscriptionOfferProduct(request: Request, response:
 }
 
 export async function getPublicSubscriptionOffer(request: Request, response: Response): Promise<void> {
-  const offer = await subscriptionOffersService.getPublic(requireIdParam(request));
+  const offer = await subscriptionOffersService.getPublic(requireIdParam(request), await viewerIsTest(request.user?.id));
   response.json({ offer });
 }
 
@@ -126,7 +127,7 @@ export async function getPublicSubscriptionOffer(request: Request, response: Res
 export async function listPublicSubscriptionOffers(request: Request, response: Response): Promise<void> {
   const country = typeof request.query.country === "string" ? request.query.country : undefined;
   const vendorId = typeof request.query.vendorId === "string" ? request.query.vendorId : undefined;
-  const items = await subscriptionOffersService.listPublic({ country, vendorId });
+  const items = await subscriptionOffersService.listPublic({ country, vendorId, viewerIsTest: await viewerIsTest(request.user?.id) });
   response.json({ items });
 }
 
@@ -234,6 +235,7 @@ export async function getVendorRegularDeliveryInsights(request: Request, respons
 
 export async function createSetupIntent(request: Request, response: Response): Promise<void> {
   const buyerId = requireUserId(request);
+  await assertCardAllowedForAccount(buyerId);
   response.json(await buyerPaymentMethodsService.createSetupIntent(buyerId));
 }
 

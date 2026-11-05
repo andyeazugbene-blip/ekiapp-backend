@@ -12,6 +12,12 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import fs from "fs";
 import path from "path";
 
+vi.mock("../shared/test-accounts", () => ({
+  viewerIsTest: async () => false,
+  assertSameAccountWorld: async () => undefined,
+  assertCardAllowedForAccount: async () => undefined,
+}));
+
 vi.mock("../lib/prisma", () => ({
   prisma: {
     cart: { findUnique: vi.fn() },

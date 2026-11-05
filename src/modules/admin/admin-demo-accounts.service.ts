@@ -3,7 +3,8 @@ import { UserRole } from "@prisma/client";
 
 import { prisma } from "../../lib/prisma";
 import { AppError } from "../../shared/errors/app-error";
-import { currencyFromCountry } from "../../shared/currency";
+import { currencyFromCountry, marketCodeToCountryName, resolveMarketCode } from "../../shared/currency";
+import { vendorMarketsService } from "../vendors/vendor-markets.service";
 import { resolveUniqueSlug, resolveUniqueText } from "../../shared/utils/slug";
 
 const MAX_CREDIT_MINOR = 1_000_000; // €10,000 cap per call — a deliberate ceiling, not a guess at what's "enough".
@@ -197,13 +198,15 @@ export const adminDemoAccountsService = {
           },
           select: { id: true, storeName: true, storeSlug: true },
         });
-        // So the first product the demo adds publishes immediately
-        // instead of sitting on "configure delivery to go live".
+        // Subscriptions and buyer discovery are scoped by market assignment.
+        await vendorMarketsService.ensureInitialAssignment(vendor.id, country, tx);
+        // Checkout matches zones by full country name, so a bare code like
+        // "GB" would leave this store unable to take any order.
         await tx.deliveryZone.create({
           data: {
             vendorId: vendor.id,
             name: "Demo delivery zone",
-            country,
+            country: marketCodeToCountryName(resolveMarketCode(country) ?? "") ?? country,
             isActive: true,
             baseFeeAmount: 500,
             feePerKgAmount: 0,
@@ -223,7 +226,11 @@ export const adminDemoAccountsService = {
             detailsSubmitted: true,
             approvedAt: now,
             termsAcceptedAt: now,
-            coverageRegions: [country],
+            coverageRegions: [resolveMarketCode(country) ?? country],
+            businessName: storeName ?? input.name,
+            categories: ["Grains", "Fish", "Staples"],
+            fulfilmentMethods: ["DELIVERY", "COLLECTION"],
+            collectionCapacityPerDay: 100,
           },
           select: { id: true },
         });

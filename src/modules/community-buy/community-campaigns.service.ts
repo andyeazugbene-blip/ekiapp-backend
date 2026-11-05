@@ -1955,11 +1955,12 @@ export const communityCampaignsService = {
   // exactly the point. There is still no clickable "browse by country" UI
   // (that part of the original client correction is unchanged) — this is
   // an eligibility filter, not a category control.
-  async listLive(country: string, q?: string) {
+  async listLive(country: string, q?: string, viewerIsTest = false) {
     const search = q?.trim();
     const campaigns = await prisma.communityCampaign.findMany({
       where: {
         status: "LIVE",
+        organiser: { user: { isTest: viewerIsTest } },
         country,
         ...(search && {
           OR: [
@@ -2124,7 +2125,7 @@ export const communityCampaignsService = {
     if (!gate) throw new AppError("Campaign not found", 404);
 
     const [user, organiser, participant] = await Promise.all([
-      prisma.user.findUnique({ where: { id: userId }, select: { role: true } }),
+      prisma.user.findUnique({ where: { id: userId }, select: { role: true, isTest: true } }),
       prisma.organiserProfile.findUnique({ where: { userId }, select: { id: true } }),
       prisma.campaignParticipant.findFirst({ where: { campaignId, userId }, select: { id: true } }),
     ]);
@@ -2142,6 +2143,9 @@ export const communityCampaignsService = {
     }
 
     if (!involved) {
+      // Demo and real accounts never see each other's campaigns.
+      const gateOrganiser = await prisma.organiserProfile.findUnique({ where: { id: gate.organiserId }, select: { user: { select: { isTest: true } } } });
+      if ((gateOrganiser?.user?.isTest ?? false) !== (user?.isTest ?? false)) throw new AppError("Campaign not found", 404);
       const buyerMarketCode = await buyerCountryService.requireMarketCode(userId);
       if (!buyerCountryService.isEligible(buyerMarketCode, gate.country)) {
         throw new AppError("Campaign not found", 404);

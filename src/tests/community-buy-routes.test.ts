@@ -473,13 +473,13 @@ describe("Discovery routes — authenticated, country comes from the buyer's own
     expect(res.status).toBe(200);
     // Community Buy Workstream 2: listLive also takes an optional search
     // term now — undefined here since none was passed on the query string.
-    expect(mockListLive).toHaveBeenCalledWith("GB", undefined);
+    expect(mockListLive).toHaveBeenCalledWith("GB", undefined, false);
   });
 
   it("GET /api/community-buy/campaigns?q= — passes the search term through", async () => {
     const res = await request(app).get("/api/community-buy/campaigns?q=rice").set("Authorization", `Bearer ${buyerToken()}`);
     expect(res.status).toBe(200);
-    expect(mockListLive).toHaveBeenCalledWith("GB", "rice");
+    expect(mockListLive).toHaveBeenCalledWith("GB", "rice", false);
   });
 
   it("GET /api/community-buy/campaigns/:id — requires authentication", async () => {

@@ -2,6 +2,7 @@ import type { Request, Response } from "express";
 
 import { AppError } from "../../shared/errors/app-error";
 import { flashSalesService } from "./flash-sales.service";
+import { viewerIsTest } from "../../shared/test-accounts";
 
 function requireUserId(request: Request): string {
   if (!request.user) throw new AppError("Unauthorized", 401);
@@ -49,6 +50,6 @@ export async function deleteFlashSale(request: Request, response: Response): Pro
   response.status(204).send();
 }
 
-export async function listPublicFlashSales(_request: Request, response: Response): Promise<void> {
-  response.json({ items: await flashSalesService.listPublic() });
+export async function listPublicFlashSales(request: Request, response: Response): Promise<void> {
+  response.json({ items: await flashSalesService.listPublic(await viewerIsTest(request.user?.id)) });
 }

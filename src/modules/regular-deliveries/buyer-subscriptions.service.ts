@@ -6,6 +6,7 @@ import { AppError } from "../../shared/errors/app-error";
 import { notificationsService } from "../notifications/notifications.service";
 import { vendorMarketsService } from "../vendors/vendor-markets.service";
 import { getEnabledRegularDeliveryMarketCodes } from "./subscription-offers.service";
+import { assertSameAccountWorld } from "../../shared/test-accounts";
 
 // EVERY_4_WEEKS (28 days, fixed) is deliberately distinct from MONTHLY (30
 // days, fixed) — client spec (Regular Delivery doc) lists "Weekly | Every 2
@@ -214,6 +215,7 @@ export const buyerSubscriptionsService = {
       },
     });
     if (!offer || !offer.isActive) throw new AppError("Offer not found", 404);
+    await assertSameAccountWorld(buyerId, [offer.vendor.id]);
     if (!offer.frequencies.includes(input.frequency)) throw new AppError("Frequency not offered", 400);
     if (input.items.length === 0) throw new AppError("At least one item is required", 400);
 
