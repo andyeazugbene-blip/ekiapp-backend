@@ -229,8 +229,24 @@ export async function commitToCampaign(request: Request, response: Response): Pr
   const userId = requireUserId(request);
   const quantity = Number(request.body?.quantity);
   if (!Number.isInteger(quantity) || quantity <= 0) throw new AppError("A positive integer quantity is required", 400);
-  const result = await campaignAuthorisationService.commit(userId, requireIdParam(request), quantity);
+  const result = await campaignAuthorisationService.commit(userId, requireIdParam(request), quantity, readDeliveryAddressBody(request));
   response.status(201).json(result);
+}
+
+/** Starts saving a different card for a hold that was declined or needs a bank check. */
+export async function startContributionCardUpdate(request: Request, response: Response): Promise<void> {
+  response.json(await campaignAuthorisationService.startCardUpdate(requireUserId(request), requireIdParam(request)));
+}
+
+/** What the app needs to run the buyer's bank check for a hold. */
+export async function getContributionHoldAction(request: Request, response: Response): Promise<void> {
+  response.json(await campaignAuthorisationService.getHoldAction(requireUserId(request), requireIdParam(request)));
+}
+
+/** Re-reads a hold from Stripe after a bank check. */
+export async function refreshContributionHold(request: Request, response: Response): Promise<void> {
+  const authorisation = await campaignAuthorisationService.refreshHold(requireUserId(request), requireIdParam(request));
+  response.json({ holdStatus: authorisation.holdStatus });
 }
 
 /** Participant confirms the connected-account SetupIntent client-side, then calls this to attach the resulting PaymentMethod. */

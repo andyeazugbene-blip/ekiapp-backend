@@ -38,6 +38,7 @@ vi.mock("../lib/prisma", () => ({
 
 vi.mock("../lib/stripe", () => ({
   stripe: {
+    customers: { create: vi.fn().mockResolvedValue({ id: "cus_1" }) },
     setupIntents: { create: vi.fn(), retrieve: vi.fn() },
     paymentIntents: { create: vi.fn(), capture: vi.fn(), cancel: vi.fn() },
   },
@@ -135,6 +136,7 @@ function makeAuthorisationStore(initial: Record<string, any>) {
 beforeEach(() => {
   vi.clearAllMocks();
   m.marketConfiguration.count.mockResolvedValue(1);
+  m.communityBuyPaymentAuthorisation.findMany.mockResolvedValue([] as any);
   m.marketConfiguration.findUnique.mockResolvedValue({
     countryCode: "GB", communityBuyEnabled: true, communityBuyPaymentsEnabled: true, communityBuyPaymentMode: "AUTHORISE_THEN_CAPTURE", communityBuyFeeBps: 500,
     buyerServiceFeeBps: 500, buyerServiceFeeMinAmount: 120, buyerServiceFeeMaxAmount: 500,
@@ -294,7 +296,7 @@ describe("createHold() — spec §11.3 hold creation (AT-07, AT-08, AT-09)", () 
     await campaignAuthorisationService.createHold("auth-1");
 
     expect(m.communityBuyPaymentAuthorisation.update).toHaveBeenCalledWith(expect.objectContaining({
-      where: { id: "auth-1" }, data: { holdStatus: "REQUIRES_ACTION", paymentIntentId: "pi_1", authenticationStatus: "requires_action" },
+      where: { id: "auth-1" }, data: { holdStatus: "REQUIRES_ACTION", paymentIntentId: "pi_1", authenticationStatus: "requires_action" , holdRecoveryDeadline: expect.any(Date) },
     }));
     expect(eventUpsert).toHaveBeenCalledWith(expect.objectContaining({
       where: { dedupeKey: "community-buy-payment-action-required:auth-1" },
@@ -366,6 +368,7 @@ describe("cancelHold() — spec §11.5 (never call it a refund)", () => {
     m.communityBuyPaymentAuthorisation.updateMany.mockResolvedValue({ count: 1 } as any);
     m.campaignContribution.findUniqueOrThrow.mockResolvedValue({ id: "contrib-1", participant: { userId: "user-1" } } as any);
 
+    m.campaignContribution.updateMany.mockResolvedValue({ count: 1 } as any);
     await campaignAuthorisationService.cancelHold("auth-1", "organiser_cancelled");
 
     expect(s.paymentIntents.cancel).toHaveBeenCalledWith("pi_1", undefined, { stripeAccount: CONNECTED_ACCOUNT_ID });

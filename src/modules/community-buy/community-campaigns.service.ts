@@ -7,6 +7,7 @@ import { AppError } from "../../shared/errors/app-error";
 import { notificationsService } from "../notifications/notifications.service";
 import { automationService } from "../automation/automation.service";
 import { marketConfigurationService } from "./market-configuration.service";
+import { defaultAuthorisationSchedule } from "./community-buy-timing";
 import { calculateBoundedServiceFee } from "../../shared/pricing";
 import { campaignContributionsService } from "./campaign-contributions.service";
 import { campaignAuthorisationService } from "./campaign-authorisation.service";
@@ -249,9 +250,8 @@ function validateAuthorisationSchedule(
     if (Number.isNaN(parsed.getTime()) || parsed <= new Date()) {
       throw new AppError("Hold window start must be a valid future date", 400);
     }
-    if (deadline && parsed < deadline) {
-      throw new AppError("Hold window cannot start before the commitment lock (deadline)", 400);
-    }
+    // Holds start shortly before the deadline, while joining is still open:
+    // anyone joining inside the window gets their hold when they save a card.
     result.holdWindowStartsAt = parsed;
   }
   if (decisionDeadline !== undefined) {
@@ -348,10 +348,12 @@ function validateDeliveryPreference(deliveryPreference: string | undefined): voi
  * fail-closed shape as validateDeliveryPreference above, rather than
  * silently under-charging a real buyer or leaving their order address-less.
  */
-function validateDeliveryPaymentModeCompatibility(paymentMode: string, deliveryPreference: string): void {
-  if (paymentMode === "AUTHORISE_THEN_CAPTURE" && deliveryPreference === "DELIVERY") {
+function validateDeliveryPaymentModeCompatibility(paymentMode: string, deliveryPreference: string, deliveryResponsibility: string | undefined): void {
+  // Two-stage money lands directly with the supplier, so a delivery charge
+  // only reaches whoever delivers when that is the supplier.
+  if (paymentMode === "AUTHORISE_THEN_CAPTURE" && deliveryPreference === "DELIVERY" && deliveryResponsibility !== "SUPPLIER") {
     throw new AppError(
-      "Individual delivery is not yet supported for this market's payment mode — use collection point.",
+      "In this market, home delivery must be handled by the supplier. Use a collection point or supplier delivery.",
       400,
       undefined,
       "INDIVIDUAL_DELIVERY_NOT_AVAILABLE",
@@ -549,7 +551,7 @@ export const communityCampaignsService = {
     // M2 — snapshotted once, here, never re-read afterward (see
     // CommunityCampaign.paymentMode's own doc comment).
     const paymentMode = await marketConfigurationService.resolveNewCampaignPaymentMode(input.country);
-    validateDeliveryPaymentModeCompatibility(paymentMode, input.deliveryPreference ?? "COLLECTION");
+    validateDeliveryPaymentModeCompatibility(paymentMode, input.deliveryPreference ?? "COLLECTION", input.deliveryResponsibility);
 
     const campaign = await prisma.communityCampaign.create({
       data: {
@@ -666,7 +668,7 @@ export const communityCampaignsService = {
     validatePerBuyerLimits(input, input.maximumShares ?? campaign.maximumShares ?? undefined);
     validateQuantityPerOrder(input.quantityPerOrder);
     validateDeliveryPreference(input.deliveryPreference);
-    validateDeliveryPaymentModeCompatibility(campaign.paymentMode, input.deliveryPreference ?? campaign.deliveryPreference);
+    validateDeliveryPaymentModeCompatibility(campaign.paymentMode, input.deliveryPreference ?? campaign.deliveryPreference, input.deliveryResponsibility ?? campaign.deliveryResponsibility);
     validateCollectionAddressFields(input);
     validateDeliveryFeeAmount(input.deliveryFeeAmountMinor);
     validateDeliveryResponsibility(route?.fulfilmentOwner ?? campaign.fulfilmentOwner, input.deliveryResponsibility);
@@ -1037,6 +1039,12 @@ export const communityCampaignsService = {
       if (campaign.deliveryFeeAmountMinor == null || campaign.deliveryFeeAmountMinor < 0) missing.push("deliveryFeeAmountMinor");
     }
     if (campaign.paymentMode === "AUTHORISE_THEN_CAPTURE") {
+      // Organisers choose only a deadline, and it can change while drafting,
+      // so the schedule follows it here unless one was deliberately set.
+      if (campaign.deadline && campaign.deadline > new Date()
+        && (!campaign.holdWindowStartsAt || !campaign.decisionDeadline || campaign.decisionDeadline < campaign.deadline || campaign.holdWindowStartsAt > campaign.decisionDeadline)) {
+        Object.assign(campaign, await prisma.communityCampaign.update({ where: { id: campaignId }, data: defaultAuthorisationSchedule(campaign.deadline) }));
+      }
       if (!campaign.holdWindowStartsAt) missing.push("holdWindowStartsAt");
       if (!campaign.decisionDeadline) missing.push("decisionDeadline");
       // M2 scope: Stripe Connect Direct Charges needs a supplier connected

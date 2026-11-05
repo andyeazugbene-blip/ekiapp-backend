@@ -3826,6 +3826,8 @@ model CommunityBuyPaymentAuthorisation {
   contributionId             String                    @unique
   campaignId                 String
   supplierConnectedAccountId String
+  // Stripe won't reuse a saved card off-session unless it belongs to a Customer.
+  stripeCustomerId           String?
   setupIntentId              String
   paymentMethodReference     String
   paymentIntentId            String?                   @unique

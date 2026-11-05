@@ -45,7 +45,7 @@ export async function assertBuyerCountryEligible(userId: string, campaignCountry
 }
 
 /** Same 404 as a campaign outside the buyer's market: demo and real accounts never meet. */
-async function assertCampaignSameWorld(userId: string, organiserId: string): Promise<void> {
+export async function assertCampaignSameWorld(userId: string, organiserId: string): Promise<void> {
   const [buyerIsTest, organiser] = await Promise.all([
     viewerIsTest(userId),
     prisma.organiserProfile.findUnique({ where: { id: organiserId }, select: { user: { select: { isTest: true } } } }),
@@ -117,7 +117,7 @@ async function assertCapacityAvailable(campaign: { maximumShares: number | null;
 // from the campaign-wide capacity check above. Only applies to a
 // participant's own regular pledge(); pledgeOrganiserTopUp() is a distinct
 // rescue-window mechanism for a different actor and is untouched.
-async function assertPerBuyerLimits(
+export async function assertPerBuyerLimits(
   campaign: { id: string; perBuyerMinShares: number | null; perBuyerMaxShares: number | null },
   userId: string,
   quantity: number,
@@ -179,7 +179,7 @@ function assertContributableCampaign(campaign: { pricePerShareMinor: number | nu
 // DELIVERY. Ignored entirely (never even inspected) for a COLLECTION
 // campaign — "collect address only when the campaign/receiving method
 // requires it."
-interface DeliveryAddressInput {
+export interface DeliveryAddressInput {
   recipientName?: string;
   addressLine1?: string;
   addressLine2?: string;
@@ -201,7 +201,7 @@ function postcodeMatchesCoverage(postcode: string, coverageAreas: string[]): boo
   return coverageAreas.some((area) => normalized.startsWith(area.replace(/\s+/g, "")));
 }
 
-async function assertDeliveryAddressWithinCoverage(
+export async function assertDeliveryAddressWithinCoverage(
   campaign: { deliveryPreference: string; deliveryCoverageAreas: string[] },
   deliveryAddress: DeliveryAddressInput | undefined,
 ): Promise<void> {
@@ -778,7 +778,12 @@ export const campaignContributionsService = {
   async getMyContribution(userId: string, contributionId: string) {
     const contribution = await prisma.campaignContribution.findUnique({
       where: { id: contributionId },
-      include: { participant: true, refund: true },
+      include: {
+        participant: true,
+        refund: true,
+        // Only what the buyer's screen needs to say where their hold stands.
+        paymentAuthorisation: { select: { holdStatus: true, captureStatus: true, holdRecoveryDeadline: true } },
+      },
     });
     if (!contribution || contribution.participant.userId !== userId) throw new AppError("Contribution not found", 404);
     return contribution;
@@ -798,7 +803,7 @@ export const campaignContributionsService = {
         },
         contributions: {
           where: { status: { not: "INITIATED" } },
-          include: { refund: true },
+          include: { refund: true, paymentAuthorisation: { select: { holdStatus: true, captureStatus: true, holdRecoveryDeadline: true } } },
           orderBy: { createdAt: "desc" },
         },
       },

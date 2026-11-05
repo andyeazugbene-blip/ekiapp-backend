@@ -18,7 +18,14 @@ import { organiserFeeService } from "./organiser-fee.service";
 import { resolveCampaignConnectedAccountId, resolveCampaignSupplierLedgerOwnerId } from "./campaign-supplier-resolution.service";
 import { upsertParticipantWithAttribution } from "./campaign-participant-attribution.service";
 import { alertOps } from "./ops-alert.service";
-import { assertBuyerCountryEligible } from "./campaign-contributions.service";
+import {
+  assertBuyerCountryEligible,
+  type DeliveryAddressInput,
+  assertCampaignSameWorld,
+  assertDeliveryAddressWithinCoverage,
+  assertPerBuyerLimits,
+} from "./campaign-contributions.service";
+import { assertCardAllowedForAccount } from "../../shared/test-accounts";
 import { dispatchNotificationsAfterCommit } from "../events/dispatch-notifications";
 import { COMMUNITY_BUY_ORGANISER_DECISION_WINDOW_MS } from "./community-buy-timing";
 
@@ -28,6 +35,9 @@ const CONSENT_WORDING_VERSION = "cb-authorise-v1";
 // spec 9.3 — participant recovery window after a declined/requires_action
 // hold. spec 12/17.2's payment_recovery_timeout job expires it.
 const HOLD_RECOVERY_WINDOW_MS = 48 * 60 * 60 * 1000;
+// A commitment holds capacity while the buyer saves a card. Someone who walks
+// away shouldn't keep others out, so it goes back after this long.
+const COMMITMENT_SETUP_TTL_MS = 30 * 60 * 1000;
 
 // spec AT-11/AT-13 — organiser's below-minimum proceed/cancel window.
 const DECISION_WINDOW_MS = COMMUNITY_BUY_ORGANISER_DECISION_WINDOW_MS;
@@ -56,6 +66,7 @@ type AuthorisationRecord = {
   contributionId: string;
   campaignId: string;
   supplierConnectedAccountId: string;
+  stripeCustomerId: string | null;
   setupIntentId: string;
   paymentMethodReference: string;
   paymentIntentId: string | null;
@@ -122,8 +133,10 @@ function nextHoldIdempotencyKey(contributionId: string, retryCount: number): str
  * "communityBuyFeeBps of the fee" — it goes to Eki in full, on top of
  * communityBuyFeeBps's cut of the product amount.
  */
-function computeApplicationFeeAmount(grossAmount: number, buyerServiceFeeAmount: number, communityBuyFeeBps: number): number {
-  const productAmount = grossAmount - buyerServiceFeeAmount;
+function computeApplicationFeeAmount(grossAmount: number, buyerServiceFeeAmount: number, communityBuyFeeBps: number, deliveryFeeAmount = 0): number {
+  // Delivery goes to whoever delivers, which in this mode is always the
+  // supplier. Commission applies to the product alone.
+  const productAmount = grossAmount - buyerServiceFeeAmount - deliveryFeeAmount;
   return calculatePlatformFee(productAmount, communityBuyFeeBps) + buyerServiceFeeAmount;
 }
 
@@ -154,7 +167,7 @@ export const campaignAuthorisationService = {
    * client-side). Splitting the endpoint keeps pledge() and its 194
    * existing tests completely untouched.
    */
-  async commit(userId: string, campaignId: string, quantity: number): Promise<{ contributionId: string; quantity: number; amount: number; currency: string; status: string; setupIntentClientSecret: string | null }> {
+  async commit(userId: string, campaignId: string, quantity: number, deliveryAddress?: DeliveryAddressInput): Promise<{ contributionId: string; quantity: number; amount: number; currency: string; status: string; setupIntentClientSecret: string | null; stripeAccountId: string }> {
     const campaign = await prisma.communityCampaign.findUnique({ where: { id: campaignId } });
     if (!campaign || campaign.status !== "LIVE" || !campaign.country || !campaign.deadline) {
       throw new AppError("Campaign not found or not live", 404);
@@ -165,6 +178,9 @@ export const campaignAuthorisationService = {
     // .service.ts) — this is the M2 AUTHORISE_THEN_CAPTURE participant
     // commitment endpoint, the equivalent entry point for that mode.
     await assertBuyerCountryEligible(userId, campaign.country);
+    await assertCampaignSameWorld(userId, campaign.organiserId);
+    await assertCardAllowedForAccount(userId);
+    const releasedShares = await this.releaseAbandonedCommitments(campaignId);
 
     const paymentsEnabled = await marketConfigurationService.isCommunityBuyPaymentsEnabled(campaign.country);
     if (!paymentsEnabled) {
@@ -181,11 +197,18 @@ export const campaignAuthorisationService = {
       throw new AppError("This campaign's supplier has not completed Stripe Connect onboarding yet", 409, undefined, "SUPPLIER_NOT_PAYOUT_READY");
     }
 
-    const maximum = campaign.maximumShares ?? 0;
-    if (campaign.confirmedShares + quantity > maximum) {
-      throw new AppError(`Only ${Math.max(0, maximum - campaign.confirmedShares)} share(s) remain available.`, 409, undefined, "CAPACITY_UNAVAILABLE");
+    // Releasing abandoned commitments above may have freed capacity.
+    const current = releasedShares > 0
+      ? await prisma.communityCampaign.findUniqueOrThrow({ where: { id: campaignId }, select: { maximumShares: true, confirmedShares: true } })
+      : campaign;
+    const maximum = current.maximumShares ?? 0;
+    if (current.confirmedShares + quantity > maximum) {
+      throw new AppError(`Only ${Math.max(0, maximum - current.confirmedShares)} share(s) remain available.`, 409, undefined, "CAPACITY_UNAVAILABLE");
     }
+    await assertPerBuyerLimits(campaign, userId, quantity);
+    await assertDeliveryAddressWithinCoverage(campaign, deliveryAddress);
     const amount = quantity * campaign.pricePerShareMinor;
+    const deliveryFeeAmountMinor = campaign.deliveryPreference === "DELIVERY" ? campaign.deliveryFeeAmountMinor ?? 0 : 0;
     // Same immutable-snapshot-at-commitment-time rationale as createPledge()'s
     // identical calculation for PLEDGE_THEN_CHARGE (campaign-contributions.
     // service.ts) — this was missing here entirely, so every
@@ -212,7 +235,20 @@ export const campaignAuthorisationService = {
       });
       if (claim.count !== 1) return null;
       const contribution = await tx.campaignContribution.create({
-        data: { campaignId, participantId: participant.id, amount, buyerServiceFeeAmount, currency: campaign.currency!, quantity, isOrganiserTopUp: false, status: "PLEDGED", paymentMethodId: null },
+        data: {
+          campaignId, participantId: participant.id, amount, buyerServiceFeeAmount, deliveryFeeAmountMinor, currency: campaign.currency!, quantity, isOrganiserTopUp: false, status: "PLEDGED", paymentMethodId: null,
+          ...(campaign.deliveryPreference === "DELIVERY" && deliveryAddress
+            ? {
+                deliveryRecipientName: deliveryAddress.recipientName,
+                deliveryAddressLine1: deliveryAddress.addressLine1,
+                deliveryAddressLine2: deliveryAddress.addressLine2,
+                deliveryCity: deliveryAddress.city,
+                deliveryPostcode: deliveryAddress.postcode,
+                deliveryPhone: deliveryAddress.phone,
+                deliveryInstructions: deliveryAddress.instructions,
+              }
+            : {}),
+        },
       });
       if (!fresh.termsLockedAt) {
         await tx.communityCampaign.update({ where: { id: campaignId }, data: { termsLockedAt: new Date() } });
@@ -227,8 +263,13 @@ export const campaignAuthorisationService = {
     // spec §11.2: create the SetupIntent IN the connected-account context;
     // persist references; do NOT populate authorised_amount; do NOT write
     // ledger events.
+    // Lives in the supplier's connected account, like the card itself.
+    const customer = await stripe.customers.create(
+      { metadata: { kind: "community_buy_participant", userId, contributionId: claimed.id } },
+      { stripeAccount: connectedAccountId, idempotencyKey: `customer:${claimed.id}` },
+    );
     const setupIntent = await stripe.setupIntents.create(
-      { payment_method_types: ["card"], usage: "off_session", metadata: { kind: "community_buy_hold_setup", contributionId: claimed.id, campaignId } },
+      { customer: customer.id, payment_method_types: ["card"], usage: "off_session", metadata: { kind: "community_buy_hold_setup", contributionId: claimed.id, campaignId } },
       { stripeAccount: connectedAccountId, idempotencyKey: `setup:${claimed.id}` },
     );
 
@@ -237,11 +278,12 @@ export const campaignAuthorisationService = {
         contributionId: claimed.id,
         campaignId,
         supplierConnectedAccountId: connectedAccountId,
+        stripeCustomerId: customer.id,
         setupIntentId: setupIntent.id,
         paymentMethodReference: "", // filled in by confirmSetup() once the participant completes the SetupIntent client-side
         consentedAt: new Date(),
         consentWordingVersion: CONSENT_WORDING_VERSION,
-        consentedChargeAmount: amount + buyerServiceFeeAmount,
+        consentedChargeAmount: amount + buyerServiceFeeAmount + deliveryFeeAmountMinor,
         consentCurrency: campaign.currency,
         holdStatus: "NOT_REQUESTED",
         idempotencyKey: `hold:${claimed.id}:0`, // attempt-0 sentinel, never sent to Stripe — createHold() overwrites this before the first real attempt
@@ -254,7 +296,97 @@ export const campaignAuthorisationService = {
       name: EVENT_NAMES.community_buy_joined, actorType: "user", actorId: userId, entityType: "CampaignContribution", entityId: claimed.id,
       source: "api", secondaryEntities: { campaignId }, amountMinor: amount, currency: campaign.currency,
     });
-    return { contributionId: claimed.id, quantity, amount, currency: campaign.currency, status: "PLEDGED", setupIntentClientSecret: setupIntent.client_secret };
+    return { contributionId: claimed.id, quantity, amount, currency: campaign.currency, status: "PLEDGED", setupIntentClientSecret: setupIntent.client_secret, stripeAccountId: connectedAccountId };
+  },
+
+  /** Returns capacity held by buyers who started joining but never saved a card. */
+  async releaseAbandonedCommitments(campaignId?: string): Promise<number> {
+    const abandoned = await prisma.communityBuyPaymentAuthorisation.findMany({
+      where: {
+        ...(campaignId ? { campaignId } : {}),
+        holdStatus: "NOT_REQUESTED",
+        paymentMethodReference: "",
+        createdAt: { lt: new Date(Date.now() - COMMITMENT_SETUP_TTL_MS) },
+        campaign: { status: "LIVE" },
+      },
+      include: { contribution: { select: { quantity: true } } },
+    });
+    let released = 0;
+    for (const authorisation of abandoned) {
+      const done = await prisma.$transaction(async (tx) => {
+        const claim = await tx.campaignContribution.updateMany({ where: { id: authorisation.contributionId, status: "PLEDGED" }, data: { status: "CANCELLED" } });
+        if (claim.count !== 1) return false;
+        await tx.communityCampaign.update({ where: { id: authorisation.campaignId }, data: { confirmedShares: { decrement: authorisation.contribution.quantity } } });
+        await tx.communityBuyPaymentAuthorisation.update({ where: { id: authorisation.id }, data: { holdStatus: "HOLD_RELEASED" } });
+        return true;
+      });
+      if (done) released++;
+    }
+    return released;
+  },
+
+  /** Lets a buyer use a different card after a decline or a failed bank check. */
+  async startCardUpdate(userId: string, contributionId: string): Promise<{ setupIntentClientSecret: string | null; stripeAccountId: string }> {
+    const authorisation = await this.requireOwnAuthorisation(userId, contributionId);
+    if (!["NOT_REQUESTED", "HOLD_DECLINED", "REQUIRES_ACTION"].includes(authorisation.holdStatus)) {
+      throw new AppError("This card can't be changed right now", 409, undefined, "HOLD_NOT_UPDATABLE");
+    }
+    // A bank check still open on the old card must not complete later alongside the new one.
+    if (authorisation.paymentIntentId) {
+      await stripe.paymentIntents.cancel(authorisation.paymentIntentId, undefined, { stripeAccount: authorisation.supplierConnectedAccountId }).catch((error: unknown) => {
+        logger.warn("Could not cancel the previous hold attempt during a card update", { contributionId, errorMessage: error instanceof Error ? error.message : String(error) });
+      });
+    }
+    const setupIntent = await stripe.setupIntents.create(
+      {
+        ...(authorisation.stripeCustomerId ? { customer: authorisation.stripeCustomerId } : {}),
+        payment_method_types: ["card"], usage: "off_session", metadata: { kind: "community_buy_hold_setup", contributionId, campaignId: authorisation.campaignId },
+      },
+      { stripeAccount: authorisation.supplierConnectedAccountId },
+    );
+    await prisma.communityBuyPaymentAuthorisation.update({
+      where: { id: authorisation.id },
+      data: {
+        setupIntentId: setupIntent.id,
+        paymentMethodReference: "",
+        paymentIntentId: null,
+        ...(authorisation.holdStatus === "REQUIRES_ACTION" ? { holdStatus: "HOLD_DECLINED" as const } : {}),
+      },
+    });
+    return { setupIntentClientSecret: setupIntent.client_secret, stripeAccountId: authorisation.supplierConnectedAccountId };
+  },
+
+  /** What the app needs to run the buyer's bank check (3-D Secure) for a hold that requires one. */
+  async getHoldAction(userId: string, contributionId: string): Promise<{ clientSecret: string | null; stripeAccountId: string; paymentMethodId: string; needsConfirmation: boolean }> {
+    const authorisation = await this.requireOwnAuthorisation(userId, contributionId);
+    if (authorisation.holdStatus !== "REQUIRES_ACTION" || !authorisation.paymentIntentId) {
+      throw new AppError("This hold doesn't need a bank check", 409, undefined, "HOLD_ACTION_NOT_REQUIRED");
+    }
+    const intent = await stripe.paymentIntents.retrieve(authorisation.paymentIntentId, { stripeAccount: authorisation.supplierConnectedAccountId });
+    return {
+      clientSecret: intent.client_secret,
+      stripeAccountId: authorisation.supplierConnectedAccountId,
+      paymentMethodId: authorisation.paymentMethodReference,
+      needsConfirmation: intent.status === "requires_payment_method" || intent.status === "requires_confirmation",
+    };
+  },
+
+  /** Asks Stripe where a hold stands, so the app isn't waiting on a webhook after a bank check. */
+  async refreshHold(userId: string, contributionId: string) {
+    const authorisation = await this.requireOwnAuthorisation(userId, contributionId);
+    if (authorisation.holdStatus !== "REQUIRES_ACTION" || !authorisation.paymentIntentId) return authorisation;
+    const intent = await stripe.paymentIntents.retrieve(authorisation.paymentIntentId, { stripeAccount: authorisation.supplierConnectedAccountId });
+    if (intent.status === "requires_capture") return this.markHoldSucceeded(authorisation, intent);
+    return authorisation;
+  },
+
+  async requireOwnAuthorisation(userId: string, contributionId: string) {
+    const authorisation = await prisma.communityBuyPaymentAuthorisation.findUnique({
+      where: { contributionId },
+      include: { contribution: { include: { participant: true } } },
+    });
+    if (!authorisation || authorisation.contribution.participant.userId !== userId) throw new AppError("Contribution not found", 404);
+    return authorisation;
   },
 
   /** Participant confirms the connected-account SetupIntent client-side, then calls this to attach the resulting PaymentMethod reference. Idempotent. */
@@ -271,7 +403,12 @@ export const campaignAuthorisationService = {
       throw new AppError("Card setup has not completed yet", 409);
     }
     const paymentMethodReference = typeof setupIntent.payment_method === "string" ? setupIntent.payment_method : setupIntent.payment_method.id;
-    return prisma.communityBuyPaymentAuthorisation.update({ where: { contributionId }, data: { paymentMethodReference } });
+    const updated = await prisma.communityBuyPaymentAuthorisation.update({ where: { contributionId }, data: { paymentMethodReference } });
+    // Joined inside the hold window, or fixing a declined card: the hold shouldn't wait for the next daily job.
+    const campaign = await prisma.communityCampaign.findUnique({ where: { id: updated.campaignId }, select: { status: true, holdWindowStartsAt: true } });
+    const windowOpen = !!campaign?.holdWindowStartsAt && campaign.holdWindowStartsAt <= new Date() && ["LIVE", "HOLD_WINDOW"].includes(campaign.status);
+    if (updated.holdStatus === "HOLD_DECLINED" || (windowOpen && updated.holdStatus === "NOT_REQUESTED")) return this.createHold(updated.id);
+    return updated;
   },
 
   /** spec §16 "POST /community-buys/:id/withdraw" — only before a hold exists; once one does, it's a release (cancelHold), never a plain withdrawal. */
@@ -304,12 +441,17 @@ export const campaignAuthorisationService = {
 
   /** open_hold_windows job — moves LIVE->HOLD_WINDOW at the deadline is done in community-campaigns.service.ts's closeDueCampaigns(); this creates the actual holds once holdWindowStartsAt has passed for a campaign already in HOLD_WINDOW. */
   async openHoldWindows(): Promise<{ campaignsProcessed: number; holdsCreated: number }> {
+    await this.releaseAbandonedCommitments();
     const due = await prisma.communityCampaign.findMany({
-      where: { status: "HOLD_WINDOW", paymentMode: "AUTHORISE_THEN_CAPTURE", holdWindowStartsAt: { lte: new Date() } },
+      where: { status: { in: ["LIVE", "HOLD_WINDOW"] }, paymentMode: "AUTHORISE_THEN_CAPTURE", holdWindowStartsAt: { lte: new Date() } },
     });
     let holdsCreated = 0;
     for (const campaign of due) {
-      const pending = await prisma.communityBuyPaymentAuthorisation.findMany({ where: { campaignId: campaign.id, holdStatus: "NOT_REQUESTED" } });
+      // While joining is still open, someone may be mid-way through saving a
+      // card. Once it has closed, a commitment with no card can no longer succeed.
+      const pending = await prisma.communityBuyPaymentAuthorisation.findMany({
+        where: { campaignId: campaign.id, holdStatus: "NOT_REQUESTED", ...(campaign.status === "LIVE" ? { paymentMethodReference: { not: "" } } : {}) },
+      });
       for (const authorisation of pending) {
         await this.createHold(authorisation.id);
         holdsCreated++;
@@ -341,6 +483,7 @@ export const campaignAuthorisationService = {
         {
           amount: authorisation.consentedChargeAmount,
           currency: resolveStripeCurrency(authorisation.consentCurrency),
+          ...(authorisation.stripeCustomerId ? { customer: authorisation.stripeCustomerId } : {}),
           payment_method: authorisation.paymentMethodReference,
           confirm: true,
           off_session: true,
@@ -350,8 +493,13 @@ export const campaignAuthorisationService = {
         { stripeAccount: authorisation.supplierConnectedAccountId, idempotencyKey },
       );
     } catch (error) {
-      const stripeErr = error as { type?: string; code?: string };
+      const stripeErr = error as { type?: string; code?: string; payment_intent?: { id?: string } };
       const message = error instanceof Error ? error.message : String(error);
+      // UK cards often need the buyer's bank to approve an off-session hold.
+      // That isn't a decline: they can finish it from the app.
+      if (stripeErr.code === "authentication_required" && stripeErr.payment_intent?.id) {
+        return this.markHoldNeedsBankCheck(authorisation, stripeErr.payment_intent.id);
+      }
       if (stripeErr.type === "StripeConnectionError" || stripeErr.type === "StripeAPIError") {
         // Ambiguous — leave HOLD_PENDING; requeryAmbiguousHold() replays the
         // SAME idempotencyKey (same reasoning as attemptCharge()'s identical
@@ -359,7 +507,11 @@ export const campaignAuthorisationService = {
         await prisma.communityBuyPaymentAuthorisation.update({ where: { id: authorisationId }, data: { providerErrorCode: stripeErr.code ?? null } });
         return prisma.communityBuyPaymentAuthorisation.findUniqueOrThrow({ where: { id: authorisationId } });
       }
-      return this.markHoldDeclined(authorisation, message, stripeErr.code);
+      // A request Stripe rejected outright is our fault, not the buyer's card: make it visible.
+      if (stripeErr.type === "StripeInvalidRequestError") {
+        logger.error("Stripe rejected a Community Buy hold request", { authorisationId, errorMessage: message });
+      }
+      return this.markHoldDeclined(authorisation, message, stripeErr.code ?? stripeErr.type);
     }
 
     return this.applyHoldIntentResult(authorisation, intent);
@@ -405,31 +557,35 @@ export const campaignAuthorisationService = {
       return this.markHoldSucceeded(authorisation, intent);
     }
     if (intent.status === "requires_action") {
-      await prisma.$transaction(async (tx) => {
-        await tx.communityBuyPaymentAuthorisation.update({
-          where: { id: authorisation.id },
-          data: { holdStatus: "REQUIRES_ACTION", paymentIntentId: intent.id, authenticationStatus: intent.status },
-        });
-        await eventsService.enqueueTransactional(tx, {
-          name: EVENT_NAMES.community_buy_payment_action_required,
-          actorType: "system",
-          entityType: "CommunityBuyPaymentAuthorisation",
-          entityId: authorisation.id,
-          payload: { authorisationId: authorisation.id, campaignId: authorisation.campaignId, contributionId: authorisation.contributionId },
-        }, { dedupeKey: `community-buy-payment-action-required:${authorisation.id}`, schemaVersion: 1 });
-      });
-      const contribution = await prisma.campaignContribution.findUniqueOrThrow({ where: { id: authorisation.contributionId }, include: { participant: true } });
-      await dispatchNotificationsAfterCommit();
-      if (process.env.R36_COMMUNITY_BUY_PAYMENT_ACTION_REQUIRED_ENABLED !== "true") {
-        await notifyParticipant(contribution.participant.userId, "hold_requires_action", "Confirm your card", "Your bank needs one more security check to place this hold.", authorisation.campaignId);
-      }
-      return prisma.communityBuyPaymentAuthorisation.findUniqueOrThrow({ where: { id: authorisation.id } });
+      return this.markHoldNeedsBankCheck(authorisation, intent.id);
     }
     if (intent.status === "processing") {
       await prisma.communityBuyPaymentAuthorisation.update({ where: { id: authorisation.id }, data: { paymentIntentId: intent.id } });
       return prisma.communityBuyPaymentAuthorisation.findUniqueOrThrow({ where: { id: authorisation.id } });
     }
     return this.markHoldDeclined(authorisation, `Unexpected status: ${intent.status}`, intent.status, intent.id);
+  },
+
+  async markHoldNeedsBankCheck(authorisation: AuthorisationRecord, paymentIntentId: string) {
+    await prisma.$transaction(async (tx) => {
+      await tx.communityBuyPaymentAuthorisation.update({
+        where: { id: authorisation.id },
+        data: { holdStatus: "REQUIRES_ACTION", paymentIntentId, authenticationStatus: "requires_action", holdRecoveryDeadline: new Date(Date.now() + HOLD_RECOVERY_WINDOW_MS) },
+      });
+      await eventsService.enqueueTransactional(tx, {
+        name: EVENT_NAMES.community_buy_payment_action_required,
+        actorType: "system",
+        entityType: "CommunityBuyPaymentAuthorisation",
+        entityId: authorisation.id,
+        payload: { authorisationId: authorisation.id, campaignId: authorisation.campaignId, contributionId: authorisation.contributionId },
+      }, { dedupeKey: `community-buy-payment-action-required:${authorisation.id}`, schemaVersion: 1 });
+    });
+    const contribution = await prisma.campaignContribution.findUniqueOrThrow({ where: { id: authorisation.contributionId }, include: { participant: true } });
+    await dispatchNotificationsAfterCommit();
+    if (process.env.R36_COMMUNITY_BUY_PAYMENT_ACTION_REQUIRED_ENABLED !== "true") {
+      await notifyParticipant(contribution.participant.userId, "hold_requires_action", "Confirm your card", "Your bank needs one more security check to place this hold.", authorisation.campaignId);
+    }
+    return prisma.communityBuyPaymentAuthorisation.findUniqueOrThrow({ where: { id: authorisation.id } });
   },
 
   async markHoldSucceeded(authorisation: AuthorisationRecord, intent: Stripe.PaymentIntent) {
@@ -488,8 +644,12 @@ export const campaignAuthorisationService = {
         logger.warn("Stripe cancel failed for an already-released Community Buy hold (may already be cancelled/captured provider-side)", { authorisationId, errorMessage: error instanceof Error ? error.message : String(error) });
       }
     }
-    await prisma.campaignContribution.updateMany({ where: { id: authorisation.contributionId, status: { not: "CANCELLED" } }, data: { status: "CANCELLED" } });
+    const cancelled = await prisma.campaignContribution.updateMany({ where: { id: authorisation.contributionId, status: { not: "CANCELLED" } }, data: { status: "CANCELLED" } });
     const contribution = await prisma.campaignContribution.findUniqueOrThrow({ where: { id: authorisation.contributionId }, include: { participant: true } });
+    // Holds now start before the deadline, so joining may still be open: give the place back.
+    if (cancelled.count === 1) {
+      await prisma.communityCampaign.updateMany({ where: { id: authorisation.campaignId, status: "LIVE" }, data: { confirmedShares: { decrement: contribution.quantity } } });
+    }
     await notifyParticipant(contribution.participant.userId, "hold_released", "You were not charged", "This campaign did not charge you. Your bank may briefly show a pending amount.", authorisation.campaignId);
     return prisma.communityBuyPaymentAuthorisation.findUniqueOrThrow({ where: { id: authorisationId } });
   },
@@ -661,6 +821,9 @@ export const campaignAuthorisationService = {
     // still persisted, so admin/organiser reporting doesn't have to treat
     // self-fulfilled campaigns as a blank spot.
     const authorisedQuantity = await this.getAuthorisedQuantity(campaignId);
+    if (authorisedQuantity === 0) {
+      throw new AppError("Nobody has a confirmed hold, so this can't go ahead. End it to release every hold.", 409, undefined, "NO_AUTHORISED_SHARES");
+    }
 
     if (campaign.fulfilmentOwner === "SUPPLIER") {
       const reconfirmationDeadline = await this.computeReconfirmationDeadline(campaign.id);
@@ -951,8 +1114,8 @@ export const campaignAuthorisationService = {
       throw new AppError("This market has no configured Community Buy processing fee", 409, undefined, "FEE_NOT_CONFIGURED");
     }
     const grossAmount = authorisation.authorisedAmount ?? authorisation.consentedChargeAmount;
-    const contributionForFee = await prisma.campaignContribution.findUniqueOrThrow({ where: { id: authorisation.contributionId }, select: { buyerServiceFeeAmount: true } });
-    const applicationFeeAmount = computeApplicationFeeAmount(grossAmount, contributionForFee.buyerServiceFeeAmount, config.communityBuyFeeBps);
+    const contributionForFee = await prisma.campaignContribution.findUniqueOrThrow({ where: { id: authorisation.contributionId }, select: { buyerServiceFeeAmount: true, deliveryFeeAmountMinor: true } });
+    const applicationFeeAmount = computeApplicationFeeAmount(grossAmount, contributionForFee.buyerServiceFeeAmount, config.communityBuyFeeBps, contributionForFee.deliveryFeeAmountMinor);
 
     const claim = await prisma.communityBuyPaymentAuthorisation.updateMany({ where: { id: authorisationId, captureStatus: "NOT_CAPTURED" }, data: { captureStatus: "CAPTURE_PENDING" } });
     if (claim.count !== 1) return prisma.communityBuyPaymentAuthorisation.findUniqueOrThrow({ where: { id: authorisationId } });
