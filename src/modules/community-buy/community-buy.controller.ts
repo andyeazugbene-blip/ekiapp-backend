@@ -997,8 +997,15 @@ export async function applyAsSupplier(request: Request, response: Response): Pro
   const coverageRegions = Array.isArray(request.body?.coverageRegions) ? request.body.coverageRegions : undefined;
   // M5 (spec §10.2 step 5 "collection capacity").
   const collectionCapacityPerDay = Number.isInteger(request.body?.collectionCapacityPerDay) ? request.body.collectionCapacityPerDay : undefined;
+  const optionalText = (value: unknown, max: number): string | undefined =>
+    typeof value === "string" && value.trim() ? value.trim().slice(0, max) : undefined;
+  const businessName = optionalText(request.body?.businessName, 120);
+  const businessRegistrationNumber = optionalText(request.body?.businessRegistrationNumber, 60);
+  const fulfilmentMethods = Array.isArray(request.body?.fulfilmentMethods)
+    ? request.body.fulfilmentMethods.filter((m: unknown) => m === "DELIVERY" || m === "COLLECTION")
+    : undefined;
   response.status(201).json({
-    account: await supplierAccountService.applyAsSupplier(userId, { country, categories, coverageRegions, collectionCapacityPerDay }),
+    account: await supplierAccountService.applyAsSupplier(userId, { country, categories, coverageRegions, collectionCapacityPerDay, businessName, businessRegistrationNumber, fulfilmentMethods }),
   });
 }
 

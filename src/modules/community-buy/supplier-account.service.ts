@@ -166,7 +166,7 @@ export const supplierAccountService = {
    * Stripe Connect / KYC onboarding is Workstream 3; this records intent
    * and minimal profile data only.
    */
-  async applyAsSupplier(userId: string, input: { country: string; categories?: string[]; coverageRegions?: string[]; collectionCapacityPerDay?: number }) {
+  async applyAsSupplier(userId: string, input: { country: string; categories?: string[]; coverageRegions?: string[]; collectionCapacityPerDay?: number; businessName?: string; businessRegistrationNumber?: string; fulfilmentMethods?: string[] }) {
     const existing = await prisma.supplierAccount.findUnique({ where: { userId } });
     if (existing && (existing.supplierState === "APPROVED" || existing.supplierState === "RESTRICTED")) {
       // Already decided — applying again is a no-op, not a re-application.
@@ -183,6 +183,9 @@ export const supplierAccountService = {
     const categories = input.categories ?? existing?.categories ?? [];
     const coverageRegions = input.coverageRegions ?? existing?.coverageRegions ?? [input.country];
     const collectionCapacityPerDay = input.collectionCapacityPerDay ?? existing?.collectionCapacityPerDay ?? null;
+    const businessName = input.businessName ?? existing?.businessName ?? null;
+    const businessRegistrationNumber = input.businessRegistrationNumber ?? existing?.businessRegistrationNumber ?? null;
+    const fulfilmentMethods = input.fulfilmentMethods ?? existing?.fulfilmentMethods ?? [];
 
     const account = await prisma.supplierAccount.upsert({
       where: { userId },
@@ -192,6 +195,9 @@ export const supplierAccountService = {
         categories,
         coverageRegions,
         collectionCapacityPerDay,
+        businessName,
+        businessRegistrationNumber,
+        fulfilmentMethods,
         // Submitting the Supplier Centre application is the terms acceptance act.
         termsAcceptedAt: new Date(),
       },
@@ -200,6 +206,9 @@ export const supplierAccountService = {
         categories,
         coverageRegions,
         collectionCapacityPerDay,
+        businessName,
+        businessRegistrationNumber,
+        fulfilmentMethods,
         termsAcceptedAt: existing?.termsAcceptedAt ?? new Date(),
         rejectedAt: null,
       },

@@ -10,7 +10,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("../lib/prisma", () => ({
   prisma: {
-    organiserProfile: { findUnique: vi.fn(), create: vi.fn() },
+    organiserProfile: { findUnique: vi.fn(), create: vi.fn(), updateMany: vi.fn() },
     supplierProfile: { findUnique: vi.fn() },
     supplierAccount: { findUnique: vi.fn() },
     communityCampaign: { create: vi.fn(), update: vi.fn(), updateMany: vi.fn(), findUnique: vi.fn(), findUniqueOrThrow: vi.fn() },
@@ -169,12 +169,37 @@ describe("communityCampaignsService.submit — the authoritative gate (C, D, H)"
       code: "SUBMIT_REQUIREMENTS_NOT_MET",
       details: {
         missing: expect.arrayContaining([
-          "organiser_verification", "country", "currency", "deadline",
+          "country", "currency", "deadline",
           "minimumShares", "goalShares", "maximumShares", "pricePerShareMinor",
           "unit", "quantityPerOrder",
         ]),
       },
     });
+    expect(m.communityCampaign.update).not.toHaveBeenCalled();
+  });
+
+  it("needs no prior organiser approval: a first-time organiser can submit for review", async () => {
+    m.communityCampaign.findUnique.mockResolvedValue({
+      id: "camp-1", organiserId: "org-1", status: "DRAFT", fulfilmentOwner: "SELF", supplierId: null,
+      ...validDraftFields, deadline: new Date(validDraftFields.deadline),
+    } as never);
+    m.organiserProfile.findUnique.mockResolvedValue({ id: "org-1", isVerified: false, isRestricted: false });
+    m.marketConfiguration.findUnique.mockResolvedValue({ countryCode: "GB", communityBuyEnabled: true } as never);
+    m.communityCampaign.update.mockResolvedValue({ id: "camp-1", status: "UNDER_REVIEW" });
+
+    const result = await communityCampaignsService.submit("u1", "camp-1");
+    expect(result.status).toBe("UNDER_REVIEW");
+  });
+
+  it("a restricted organiser still can't submit", async () => {
+    m.communityCampaign.findUnique.mockResolvedValue({
+      id: "camp-1", organiserId: "org-1", status: "DRAFT", fulfilmentOwner: "SELF", supplierId: null,
+      ...validDraftFields, deadline: new Date(validDraftFields.deadline),
+    } as never);
+    m.organiserProfile.findUnique.mockResolvedValue({ id: "org-1", isVerified: true, isRestricted: true });
+    m.marketConfiguration.findUnique.mockResolvedValue({ countryCode: "GB", communityBuyEnabled: true } as never);
+
+    await expect(communityCampaignsService.submit("u1", "camp-1")).rejects.toMatchObject({ statusCode: 403 });
     expect(m.communityCampaign.update).not.toHaveBeenCalled();
   });
 
@@ -326,5 +351,29 @@ describe("campaignContributionsService.pledge — the guarded-transaction capaci
     const result = await campaignContributionsService.pledge("buyer-1", "camp-race2", 1, "pm-1");
     expect(result.status).toBe("PLEDGED");
     expect(txContribution.create).toHaveBeenCalled();
+  });
+});
+
+describe("approve() is where an organiser becomes verified", () => {
+  it("admin approval of a first campaign marks the organiser verified", async () => {
+    m.communityCampaign.findUnique.mockResolvedValue({ id: "camp-1", title: "Rice", status: "UNDER_REVIEW", organiser: { id: "org-1", userId: "u1", isVerified: false } } as never);
+    m.communityCampaign.update.mockResolvedValue({ id: "camp-1", status: "APPROVED" });
+
+    await communityCampaignsService.approve("admin-1", "camp-1");
+
+    expect(m.organiserProfile.updateMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: { id: "org-1", isVerified: false },
+      data: expect.objectContaining({ isVerified: true }),
+    }));
+  });
+
+  it("does not touch an organiser who is already verified", async () => {
+    m.organiserProfile.updateMany.mockClear();
+    m.communityCampaign.findUnique.mockResolvedValue({ id: "camp-1", title: "Rice", status: "UNDER_REVIEW", organiser: { id: "org-1", userId: "u1", isVerified: true } } as never);
+    m.communityCampaign.update.mockResolvedValue({ id: "camp-1", status: "APPROVED" });
+
+    await communityCampaignsService.approve("admin-1", "camp-1");
+
+    expect(m.organiserProfile.updateMany).not.toHaveBeenCalled();
   });
 });

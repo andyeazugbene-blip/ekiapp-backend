@@ -12,9 +12,10 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 vi.mock("../lib/prisma", () => ({
   prisma: {
     user: { findUnique: vi.fn(), findFirst: vi.fn() },
-    order: { findUnique: vi.fn() },
+    vendor: { findUnique: vi.fn() },
+    order: { findUnique: vi.fn(), findMany: vi.fn() },
     conversation: { findUnique: vi.fn(), create: vi.fn(), update: vi.fn(), findMany: vi.fn() },
-    message: { create: vi.fn(), findUnique: vi.fn(), findMany: vi.fn(), count: vi.fn(), updateMany: vi.fn() },
+    message: { create: vi.fn(), findUnique: vi.fn(), findFirst: vi.fn(), findMany: vi.fn(), count: vi.fn(), updateMany: vi.fn() },
     notification: { create: vi.fn().mockResolvedValue({}), findUnique: vi.fn().mockResolvedValue(null) },
     event: { upsert: vi.fn().mockResolvedValue({}), updateMany: vi.fn().mockResolvedValue({ count: 0 }), findMany: vi.fn().mockResolvedValue([]) },
     userBlock: { findUnique: vi.fn().mockResolvedValue(null) },
@@ -138,6 +139,57 @@ describe("createConversation — role-pair compatibility", () => {
     await expect(
       messagesService.createConversation(VENDOR_USER.id, { participantId: OTHER_VENDOR_USER.id }),
     ).rejects.toMatchObject({ statusCode: 400 });
+  });
+
+  describe("seller identified by Vendor row, not role (opening a store keeps role BUYER)", () => {
+    const STORE_OWNER = { id: "store-owner-1", name: "Store Owner", role: "BUYER", vendor: { id: "vendor-3", storeName: "Owner Store" } };
+
+    function mockCreatedConversation(id: string, participantA: string, participantB: string) {
+      m.conversation.create.mockResolvedValue({ id });
+      m.conversation.findUnique.mockImplementation(({ where }: any) => {
+        if (where.id === id) return Promise.resolve({ id, orderId: "", participantA, participantB, messages: [], lastMessageAt: null, updatedAt: new Date(), createdAt: new Date() });
+        return Promise.resolve(null);
+      });
+    }
+
+    it("lets a role-BUYER store owner message a buyer of their order", async () => {
+      mockUsers({ [STORE_OWNER.id]: STORE_OWNER, [BUYER.id]: BUYER });
+      m.order.findUnique.mockResolvedValue({ id: "order-1", buyerId: BUYER.id, vendorId: "vendor-3", orderNumber: "EKI-1" });
+      mockCreatedConversation("conv-3", STORE_OWNER.id, BUYER.id);
+
+      await messagesService.createConversation(STORE_OWNER.id, { participantId: BUYER.id, orderId: "order-1" });
+
+      expect(m.conversation.create).toHaveBeenCalledWith(expect.objectContaining({
+        data: expect.objectContaining({ type: "BUYER_VENDOR", orderId: "order-1" }),
+      }));
+    });
+
+    it("lets a vendor message a role-VENDOR customer of their order", async () => {
+      mockUsers({ [VENDOR_USER.id]: VENDOR_USER, [OTHER_VENDOR_USER.id]: OTHER_VENDOR_USER });
+      m.order.findUnique.mockResolvedValue({ id: "order-1", buyerId: OTHER_VENDOR_USER.id, vendorId: "vendor-1", orderNumber: "EKI-1" });
+      mockCreatedConversation("conv-4", VENDOR_USER.id, OTHER_VENDOR_USER.id);
+
+      await messagesService.createConversation(VENDOR_USER.id, { participantId: OTHER_VENDOR_USER.id, orderId: "order-1" });
+
+      expect(m.conversation.create).toHaveBeenCalled();
+    });
+
+    it("still rejects a store owner using an order from a different store", async () => {
+      mockUsers({ [STORE_OWNER.id]: STORE_OWNER, [BUYER.id]: BUYER });
+      m.order.findUnique.mockResolvedValue({ id: "order-1", buyerId: BUYER.id, vendorId: "vendor-2" });
+
+      await expect(
+        messagesService.createConversation(STORE_OWNER.id, { participantId: BUYER.id, orderId: "order-1" }),
+      ).rejects.toMatchObject({ statusCode: 403 });
+    });
+
+    it("still rejects two storeless buyers even when an order id is supplied", async () => {
+      mockUsers({ [BUYER.id]: BUYER, [OTHER_BUYER.id]: OTHER_BUYER });
+
+      await expect(
+        messagesService.createConversation(BUYER.id, { participantId: OTHER_BUYER.id, orderId: "order-1" }),
+      ).rejects.toMatchObject({ statusCode: 400 });
+    });
   });
 
   it("rejects admin-to-admin conversations", async () => {
@@ -507,5 +559,56 @@ describe("vendor support thread", () => {
     }));
     expect(result.participantName).toBe("Eki Support");
     expect(result.isSupport).toBe(true);
+  });
+});
+
+describe("sendVendorOffer", () => {
+  const OWNER = { id: "owner-1", name: "Owner", role: "BUYER", vendor: { id: "vendor-9", storeName: "Store" } };
+
+  beforeEach(() => {
+    mockTransaction();
+    m.vendor.findUnique.mockResolvedValue({ id: "vendor-9" });
+    m.conversation.create.mockResolvedValue({ id: "conv-o" });
+    m.conversation.update.mockResolvedValue({});
+    m.message.create.mockResolvedValue({ id: "msg-o", conversationId: "conv-o" });
+    m.message.findUnique.mockResolvedValue({ id: "msg-o", senderId: OWNER.id, conversationId: "conv-o", text: "Offer", createdAt: new Date() });
+    mockUsers({ [OWNER.id]: OWNER, [BUYER.id]: BUYER, [OTHER_BUYER.id]: OTHER_BUYER });
+    m.order.findUnique.mockImplementation(({ where }: any) => Promise.resolve({ id: where.id, buyerId: where.id === "order-b1" ? BUYER.id : OTHER_BUYER.id, vendorId: "vendor-9", orderNumber: "EKI-1" }));
+    m.conversation.findUnique.mockImplementation(({ where }: any) => (
+      where.id === "conv-o"
+        ? Promise.resolve({ id: "conv-o", orderId: "order-b1", participantA: OWNER.id, participantB: BUYER.id, status: "OPEN", type: "BUYER_VENDOR", messages: [], lastMessageAt: null, updatedAt: new Date(), createdAt: new Date() })
+        : Promise.resolve(null)
+    ));
+  });
+
+  it("refuses an account with no store", async () => {
+    m.vendor.findUnique.mockResolvedValue(null);
+    await expect(messagesService.sendVendorOffer(BUYER.id, { buyerIds: [OTHER_BUYER.id], message: "Hi" })).rejects.toMatchObject({ statusCode: 403 });
+  });
+
+  it("refuses an empty message before contacting anyone", async () => {
+    await expect(messagesService.sendVendorOffer(OWNER.id, { buyerIds: [BUYER.id], message: "   " })).rejects.toMatchObject({ statusCode: 400 });
+    expect(m.conversation.create).not.toHaveBeenCalled();
+  });
+
+  it("never messages someone who has not bought from this store", async () => {
+    m.order.findMany.mockResolvedValue([]);
+    await expect(messagesService.sendVendorOffer(OWNER.id, { buyerIds: [OTHER_BUYER.id], message: "Hi" })).resolves.toEqual({ sent: 0, alreadySent: 0, failed: 1 });
+    expect(m.message.create).not.toHaveBeenCalled();
+  });
+
+  it("does not send the same offer twice when a send is retried", async () => {
+    m.order.findMany.mockResolvedValue([{ id: "order-b1", buyerId: BUYER.id }]);
+    m.message.findFirst.mockResolvedValue({ id: "already" });
+    await expect(messagesService.sendVendorOffer(OWNER.id, { buyerIds: [BUYER.id], message: "Offer" })).resolves.toEqual({ sent: 0, alreadySent: 1, failed: 0 });
+    expect(m.message.create).not.toHaveBeenCalled();
+  });
+
+  it("keeps sending to the rest when one buyer fails", async () => {
+    m.order.findMany.mockResolvedValue([{ id: "order-b1", buyerId: BUYER.id }, { id: "order-b2", buyerId: OTHER_BUYER.id }]);
+    m.message.findFirst.mockResolvedValue(null);
+    m.conversation.create.mockRejectedValueOnce(new Error("boom")).mockResolvedValue({ id: "conv-o" });
+
+    await expect(messagesService.sendVendorOffer(OWNER.id, { buyerIds: [BUYER.id, OTHER_BUYER.id], message: "Offer" })).resolves.toEqual({ sent: 1, alreadySent: 0, failed: 1 });
   });
 });

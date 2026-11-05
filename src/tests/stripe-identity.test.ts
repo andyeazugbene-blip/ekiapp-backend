@@ -185,3 +185,30 @@ describe("stripeIdentityService.getVerificationStatus", () => {
     expect(result).toEqual(row);
   });
 });
+
+describe("stripeIdentityService — late and repeated events", () => {
+  it("refuses a new session for a verified vendor, so it can't un-verify them", async () => {
+    m.vendor.findUnique.mockResolvedValue({ id: "v1", verificationStatus: "VERIFIED", storeName: "Store", user: { email: "v@example.test" } });
+
+    await expect(stripeIdentityService.createVerificationSession("u1")).rejects.toMatchObject({ statusCode: 409, code: "ALREADY_VERIFIED" });
+    expect(m.vendor.update).not.toHaveBeenCalled();
+  });
+
+  it("a late requires_input can't reject a vendor who is already verified", async () => {
+    m.vendor.findUnique.mockResolvedValue({ id: "v1", verificationStatus: "VERIFIED", stripeVerificationSessionId: "vs_1" });
+
+    await stripeIdentityService.handleVerificationCompleted({ id: "vs_1", status: "requires_input", metadata: { vendorId: "v1" } });
+
+    expect(m.vendor.update).not.toHaveBeenCalled();
+    expect(m.$transaction).not.toHaveBeenCalled();
+  });
+
+  it("a failure from a superseded session can't fail the vendor's current attempt", async () => {
+    m.vendor.findUnique.mockResolvedValue({ id: "v1", verificationStatus: "PENDING", stripeVerificationSessionId: "vs_new" });
+
+    await stripeIdentityService.handleVerificationCompleted({ id: "vs_old", status: "requires_input", metadata: { vendorId: "v1" } });
+
+    expect(m.vendor.update).not.toHaveBeenCalled();
+    expect(m.$transaction).not.toHaveBeenCalled();
+  });
+});

@@ -3,6 +3,7 @@ import type { Request, Response } from "express";
 import { env } from "../../config/env";
 import { AppError } from "../../shared/errors/app-error";
 import { authService } from "./auth.service";
+import { destinationsService } from "./destinations.service";
 import {
   validateForgotPasswordInput,
   validateLoginInput,
@@ -62,6 +63,13 @@ export async function me(request: Request, response: Response): Promise<void> {
   }
   const user = await authService.getCurrentUser(request.user.id);
   response.status(200).json({ user });
+}
+
+export async function myDestinations(request: Request, response: Response): Promise<void> {
+  if (!request.user) {
+    throw new AppError("Unauthorized", 401);
+  }
+  response.status(200).json({ destinations: await destinationsService.getForUser(request.user.id) });
 }
 
 export async function updateProfile(request: Request, response: Response): Promise<void> {

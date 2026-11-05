@@ -38,7 +38,7 @@ import { getMyReadiness, getMyStorePreview } from "./vendor-store-preview.contro
 import { getVendorRevenue } from "./vendors-revenue.controller";
 import {
   getVendorBuyer,
-  listVendorBuyers,
+  listVendorBuyers, sendVendorOffer,
 } from "./vendors-buyers.controller";
 import {
   addOwnVendorMarket,
@@ -98,6 +98,7 @@ vendorsRouter.get(
 );
 vendorsRouter.get("/me/public-store-analytics", requireVendorProfileOrAdmin(), asyncHandler(getVendorPublicStoreAnalytics));
 vendorsRouter.get("/me/buyers", requireVendorProfileOrAdmin(), asyncHandler(listVendorBuyers));
+vendorsRouter.post("/me/offers", requireVendorProfileOrAdmin(), asyncHandler(sendVendorOffer));
 vendorsRouter.get("/me/buyers/:id", requireVendorProfileOrAdmin(), asyncHandler(getVendorBuyer));
 vendorsRouter.post("/me/payout-methods", requireVendorProfileOrAdmin(), asyncHandler(createPayoutMethod));
 vendorsRouter.get("/me/payout-methods", requireVendorProfileOrAdmin(), asyncHandler(listPayoutMethods));
