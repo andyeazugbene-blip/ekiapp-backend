@@ -58,6 +58,7 @@ describe("subscriptionOffersService.listPublic — market-aware, no private vend
           isActive: true,
           vendor: {
             isSuspended: false,
+            isTest: false,
             marketAssignments: { some: { enabled: true, marketCode: { in: ["GB"] } } },
           },
         }),

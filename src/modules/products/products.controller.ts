@@ -8,6 +8,7 @@ import {
   validateListProductsQuery,
   validateUpdateProductInput,
 } from "./products.validation";
+import { viewerIsTest } from "../../shared/test-accounts";
 
 function requireUserId(request: Request): string {
   if (!request.user) {
@@ -65,7 +66,7 @@ export async function recordInventoryCount(request: Request, response: Response)
 
 export async function listProducts(request: Request, response: Response): Promise<void> {
   const query = validateListProductsQuery(request.query as Record<string, unknown>);
-  const result = await productsService.listActiveProducts(query);
+  const result = await productsService.listActiveProducts(query, await viewerIsTest(request.user?.id));
   response.status(200).json({
     ...result,
     items: result.items.map((product) => stripInternalCost(product as unknown as Record<string, unknown>)),
@@ -85,6 +86,6 @@ export async function getMyProduct(request: Request, response: Response): Promis
 }
 
 export async function getProduct(request: Request, response: Response): Promise<void> {
-  const product = await productsService.getProductById(requireIdParam(request));
+  const product = await productsService.getProductById(requireIdParam(request), await viewerIsTest(request.user?.id));
   response.status(200).json({ product: stripInternalCost(product as unknown as Record<string, unknown>) });
 }

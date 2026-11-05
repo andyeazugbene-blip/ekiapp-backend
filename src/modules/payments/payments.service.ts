@@ -27,6 +27,7 @@ import { communicationService } from "../communications/communication.service";
 import { assertVendorsPurchasable } from "../products/seller-readiness";
 import { enqueueProductStockDepleted } from "../products/product-stock-events";
 import { dispatchNotificationsAfterCommit } from "../events/dispatch-notifications";
+import { assertCardAllowedForAccount, assertSameAccountWorld } from "../../shared/test-accounts";
 
 interface VendorGroup {
   vendorId: string;
@@ -93,6 +94,7 @@ class PaymentsService {
     // B15: every seller in the cart must be verified, not suspended/closed and
     // able to receive payment (env SELLER_PAYMENT_READINESS_GATE, default on).
     await assertVendorsPurchasable(cart.items.map((item) => item.product.vendorId));
+    await assertSameAccountWorld(authenticatedBuyerId, cart.items.map((item) => item.product.vendorId));
 
     const outOfStock = cart.items.find((item) => item.product.stock < item.quantity);
     if (outOfStock) throw new AppError(`Insufficient stock for "${outOfStock.product.title}"`, 400);
@@ -370,6 +372,7 @@ class PaymentsService {
     }
 
     const stripeAmount = grandTotal - walletDeduction;
+    if (stripeAmount > 0) await assertCardAllowedForAccount(buyerId);
 
     // A card charge must be created in the same currency the buyer was
     // shown. resolveStripeCurrency() falls back to EUR for currencies

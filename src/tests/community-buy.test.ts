@@ -2807,7 +2807,7 @@ describe("Client correction — supplier is optional, never a publication gate",
     m.communityCampaign.findMany.mockResolvedValue([{ id: "camp-8", status: "LIVE", supplierId: "sup-1", supplierCommitted: false, organiser: { firstNameOnlyDisplay: true, user: { name: "Organiser Eight" } } }] as never);
     const live = await communityCampaignsService.listLive("GB");
     expect(live).toHaveLength(1);
-    expect(m.communityCampaign.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: { status: "LIVE", country: "GB" } }));
+    expect(m.communityCampaign.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: { status: "LIVE", organiser: { user: { isTest: false } }, country: "GB" } }));
   });
 
   // 8b. Figma "Search yam, garri, location" — a single search box must also match a real location (collection city), not just title/description.
@@ -2820,6 +2820,7 @@ describe("Client correction — supplier is optional, never a publication gate",
     expect(m.communityCampaign.findMany).toHaveBeenCalledWith(expect.objectContaining({
       where: {
         status: "LIVE",
+        organiser: { user: { isTest: false } },
         OR: [
           { title: { contains: "coventry", mode: "insensitive" } },
           { description: { contains: "coventry", mode: "insensitive" } },

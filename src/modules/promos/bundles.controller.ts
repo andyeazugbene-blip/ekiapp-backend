@@ -2,6 +2,7 @@ import type { Request, Response } from "express";
 
 import { AppError } from "../../shared/errors/app-error";
 import { bundlesService } from "./bundles.service";
+import { viewerIsTest } from "../../shared/test-accounts";
 
 function requireUserId(request: Request): string {
   if (!request.user) throw new AppError("Unauthorized", 401);
@@ -44,6 +45,6 @@ export async function deleteBundle(request: Request, response: Response): Promis
   response.status(204).send();
 }
 
-export async function listPublicBundles(_request: Request, response: Response): Promise<void> {
-  response.json({ items: await bundlesService.listPublic() });
+export async function listPublicBundles(request: Request, response: Response): Promise<void> {
+  response.json({ items: await bundlesService.listPublic(await viewerIsTest(request.user?.id)) });
 }

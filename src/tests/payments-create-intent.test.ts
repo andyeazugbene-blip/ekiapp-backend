@@ -10,6 +10,12 @@
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
+vi.mock("../shared/test-accounts", () => ({
+  viewerIsTest: async () => false,
+  assertSameAccountWorld: async () => undefined,
+  assertCardAllowedForAccount: async () => undefined,
+}));
+
 vi.mock("../lib/prisma", () => ({
   prisma: {
     cart: { findUnique: vi.fn() },

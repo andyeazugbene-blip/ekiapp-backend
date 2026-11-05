@@ -39,6 +39,7 @@ const TRACKABLE_ORDER_STATUSES = ["PAID", "PAYMENT_SECURED", "CONFIRMED", "VENDO
 
 type VendorStoreRecord = {
   id: string;
+  isTest?: boolean;
   userId?: string;
   storeName: string;
   storeSlug: string;
@@ -223,6 +224,7 @@ async function findVendorBySlug(slug: string): Promise<VendorStoreRecord> {
       city: true,
       country: true,
       isSuspended: true,
+      isTest: true,
     },
   });
 
@@ -249,6 +251,7 @@ async function findVendorBySlug(slug: string): Promise<VendorStoreRecord> {
       city: true,
       country: true,
       isSuspended: true,
+      isTest: true,
     },
   });
 
@@ -701,9 +704,11 @@ async function ensureGuestBuyer(input: PublicStoreCheckoutInput) {
 
 export const publicStoresService = {
   async listPublicStores(limit = 48): Promise<PublicStore[]> {
+    // Demo stores stay off the public directory.
     const vendors = await prisma.vendor.findMany({
       where: {
         isSuspended: false,
+        isTest: false,
       },
       orderBy: [{ verificationStatus: "asc" }, { createdAt: "desc" }],
       take: limit,
@@ -875,6 +880,7 @@ export const publicStoresService = {
     input: PublicStoreCheckoutInput,
   ): Promise<{ checkoutUrl: string; orderNumber: string; checkoutId: string }> {
     const vendor = await findVendorBySlug(slug);
+    if (vendor.isTest) throw new AppError("This is a demo store and can't take real orders.", 403, undefined, "TEST_ACCOUNT_ISOLATION");
     const itemsInput = input.items
       .map((item) => ({
         productId: normalizeText(item.productId),

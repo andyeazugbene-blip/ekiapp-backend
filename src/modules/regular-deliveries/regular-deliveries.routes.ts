@@ -1,6 +1,6 @@
 import { Router } from "express";
 
-import { authenticate, requireRole } from "../../middlewares/authenticate";
+import { authenticate, optionalAuthenticate, requireRole } from "../../middlewares/authenticate";
 import { requireVendorProfile } from "../../middlewares/require-capability";
 import { requireAdminPermission } from "../../middlewares/require-admin-permission";
 import { require2fa } from "../../middlewares/require-2fa";
@@ -67,8 +67,8 @@ import {
 export const subscriptionOffersRouter = Router();
 // Must be registered BEFORE "/:id" — otherwise Express would match
 // "/public" as an :id param and this route would never be reached.
-subscriptionOffersRouter.get("/public", asyncHandler(listPublicSubscriptionOffers));
-subscriptionOffersRouter.get("/:id", asyncHandler(getPublicSubscriptionOffer));
+subscriptionOffersRouter.get("/public", optionalAuthenticate, asyncHandler(listPublicSubscriptionOffers));
+subscriptionOffersRouter.get("/:id", optionalAuthenticate, asyncHandler(getPublicSubscriptionOffer));
 subscriptionOffersRouter.patch("/:id", authenticate, requireVendorProfile(), asyncHandler(updateSubscriptionOffer));
 subscriptionOffersRouter.post("/:id/publish", authenticate, requireVendorProfile(), asyncHandler(publishSubscriptionOffer));
 subscriptionOffersRouter.post("/:id/unpublish", authenticate, requireVendorProfile(), asyncHandler(unpublishSubscriptionOffer));

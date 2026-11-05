@@ -135,9 +135,9 @@ export const bundlesService = {
    * (drafted), so it drops off the live feed the moment a vendor does that
    * to any item — no need to touch the bundle itself.
    */
-  async listPublic() {
+  async listPublic(viewerIsTest = false) {
     const bundles = await prisma.bundle.findMany({
-      where: { isActive: true, items: { every: { product: { isActive: true } } } },
+      where: { isActive: true, vendor: { isTest: viewerIsTest }, items: { every: { product: { isActive: true } } } },
       include: {
         vendor: { select: { storeName: true, storeSlug: true } },
         items: { include: { product: { select: { id: true, title: true, priceInCents: true, currency: true, images: true } } } },

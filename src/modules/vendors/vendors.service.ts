@@ -86,7 +86,7 @@ function isUniqueViolation(error: unknown, field: string): boolean {
 }
 
 export const vendorsService = {
-  async listPublicVendors(input?: { search?: string; limit?: number; sort?: "newest" | "popular" }): Promise<any[]> {
+  async listPublicVendors(input?: { viewerIsTest?: boolean; search?: string; limit?: number; sort?: "newest" | "popular" }): Promise<any[]> {
     const search = input?.search?.trim();
     const limit = Math.min(Math.max(input?.limit ?? 20, 1), 100);
     const sort = input?.sort ?? "popular";
@@ -95,6 +95,7 @@ export const vendorsService = {
       where: {
         isSuspended: false,
         verificationStatus: "VERIFIED",
+        isTest: input?.viewerIsTest ?? false,
         ...(search
           ? {
               OR: [
@@ -158,12 +159,13 @@ export const vendorsService = {
     return serialized;
   },
 
-  async getPublicVendorById(id: string): Promise<any> {
+  async getPublicVendorById(id: string, viewerIsTest = false): Promise<any> {
     const vendor = await prisma.vendor.findFirst({
       where: {
         id,
         isSuspended: false,
         verificationStatus: "VERIFIED",
+        isTest: viewerIsTest,
       },
       include: {
         user: { select: { id: true, name: true, avatar: true } },

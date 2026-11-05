@@ -338,7 +338,7 @@ export const promosService = {
     await prisma.promoCode.delete({ where: { id: promoId } });
   },
 
-  async listPublicDeals(): Promise<{
+  async listPublicDeals(viewerIsTest = false): Promise<{
     bundles: Array<{ id: string; vendorId: string; code: string; value: number; type: string; storeName: string; productIds: string[] }>;
     flashSales: Array<{ id: string; vendorId: string; code: string; value: number; type: string; storeName: string; productId: string; endsAt: string | null }>;
   }> {
@@ -349,6 +349,7 @@ export const promosService = {
         validFrom: { lte: now },
         OR: [{ validUntil: null }, { validUntil: { gte: now } }],
         code: { startsWith: "BUNDLE" },
+        vendor: { isTest: viewerIsTest },
       },
       include: { vendor: { select: { storeName: true } } },
       orderBy: CURSOR_ORDER_BY,
@@ -360,6 +361,7 @@ export const promosService = {
         validFrom: { lte: now },
         OR: [{ validUntil: null }, { validUntil: { gte: now } }],
         code: { startsWith: "FLASH" },
+        vendor: { isTest: viewerIsTest },
       },
       include: { vendor: { select: { storeName: true } } },
       orderBy: CURSOR_ORDER_BY,

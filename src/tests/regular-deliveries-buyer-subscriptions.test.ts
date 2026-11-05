@@ -1,5 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+vi.mock("../shared/test-accounts", () => ({
+  viewerIsTest: async () => false,
+  assertSameAccountWorld: async () => undefined,
+  assertCardAllowedForAccount: async () => undefined,
+}));
+
 vi.mock("../lib/prisma", () => ({
   prisma: {
     orderItem: { findMany: vi.fn() },

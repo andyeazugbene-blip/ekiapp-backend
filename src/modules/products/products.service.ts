@@ -309,12 +309,13 @@ export const productsService = {
 
   async listActiveProducts(
     query: ListProductsQuery,
+    viewerIsTest = false,
   ): Promise<{ items: Array<Product & { vendor: { storeName: string; city: string | null; userId: string } }>; nextCursor: string | null }> {
     const items = await prisma.product.findMany({
       where: {
         isActive: true,
         // B15: hide products whose seller cannot receive payment.
-        ...(isSellerReadinessGateEnabled() ? { vendor: purchasableVendorWhere() } : {}),
+        vendor: { isTest: viewerIsTest, ...(isSellerReadinessGateEnabled() ? purchasableVendorWhere() : {}) },
         ...(query.category ? { category: query.category } : {}),
         ...(query.vendorId ? { vendorId: query.vendorId } : {}),
       },
@@ -341,7 +342,7 @@ export const productsService = {
     return { items, nextCursor };
   },
 
-  async getProductById(productId: string): Promise<Product & { vendor: { storeName: string; city: string | null; userId: string } }> {
+  async getProductById(productId: string, viewerIsTest = false): Promise<Product & { vendor: { storeName: string; city: string | null; userId: string } }> {
     const product = await prisma.product.findUnique({
       where: { id: productId },
       include: {
@@ -350,11 +351,12 @@ export const productsService = {
             storeName: true,
             city: true,
             userId: true,
+            isTest: true,
           },
         },
       },
     });
-    if (!product || !product.isActive) {
+    if (!product || !product.isActive || product.vendor.isTest !== viewerIsTest) {
       throw new AppError("Product not found", 404);
     }
     return product;

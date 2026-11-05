@@ -11,6 +11,7 @@ import {
   validateUpdatePayoutMethodInput,
   validateUpdateVendorInput,
 } from "./vendors.validation";
+import { viewerIsTest } from "../../shared/test-accounts";
 
 function requireUserId(request: Request): string {
   if (!request.user) {
@@ -36,7 +37,7 @@ export async function listPublicVendors(request: Request, response: Response): P
   const limit = Number(request.query.limit) || 20;
   const search = typeof request.query.search === "string" ? request.query.search : undefined;
   const sort = request.query.sort === "newest" ? "newest" : "popular";
-  const vendors = await vendorsService.listPublicVendors({ limit, search, sort });
+  const vendors = await vendorsService.listPublicVendors({ limit, search, sort, viewerIsTest: await viewerIsTest(request.user?.id) });
   response.status(200).json({ items: vendors.map((vendor) => withShareUrl(vendor)) });
 }
 
@@ -45,7 +46,7 @@ export async function getPublicVendor(request: Request, response: Response): Pro
   if (!id) {
     throw new AppError("Invalid id", 400);
   }
-  const vendor = await vendorsService.getPublicVendorById(id);
+  const vendor = await vendorsService.getPublicVendorById(id, await viewerIsTest(request.user?.id));
   response.status(200).json({ vendor: withShareUrl(vendor) });
 }
 
