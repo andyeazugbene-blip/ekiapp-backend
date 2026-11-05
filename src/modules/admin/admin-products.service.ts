@@ -348,62 +348,19 @@ export const adminProductsService = {
     };
   },
 
-  /**
-   * Hard delete — genuinely removes the row, unlike unpublish (which keeps
-   * the record). Only permitted when nothing real is attached to it: no
-   * order ever referenced it (order history must never be erasable), no
-   * live subscription/renewal/bundle/flash-sale linkage. A product with
-   * any of that history gets a clear 409 pointing at Unpublish instead —
-   * this is for genuinely removing test/garbage listings, not for
-   * retroactively hiding something that was actually sold.
-   */
-  async deleteProduct(productId: string, reason: string) {
-    const product = await prisma.product.findUnique({ where: { id: productId }, include: { vendor: { select: { userId: true, storeName: true } } } });
-    if (!product) throw new AppError("Product not found", 404);
-
-    const [orderItems, subscriptionOfferProducts, subscriptionItems, renewalItems, bundleItems, flashSales] = await Promise.all([
-      prisma.orderItem.count({ where: { productId } }),
-      prisma.subscriptionOfferProduct.count({ where: { productId } }),
-      prisma.subscriptionItem.count({ where: { productId } }),
-      prisma.renewalItem.count({ where: { productId } }),
-      prisma.bundleItem.count({ where: { productId } }),
-      prisma.flashSale.count({ where: { productId } }),
-    ]);
-    const blockers = { orderItems, subscriptionOfferProducts, subscriptionItems, renewalItems, bundleItems, flashSales };
-    const hasHistory = Object.values(blockers).some((n) => n > 0);
-    if (hasHistory) {
-      throw new AppError(
-        "This product has real order or subscription history and can't be deleted — use Unpublish instead, which keeps the record and the history it's attached to.",
-        409,
-        blockers,
-        "PRODUCT_HAS_HISTORY",
-      );
-    }
-
-    // Cart items are transient/low-stakes (nobody has checked out with
-    // them) — safe to clear so the delete doesn't fail on the Restrict FK.
-    await prisma.cartItem.deleteMany({ where: { productId } });
-    await prisma.product.delete({ where: { id: productId } });
-
-    return { product, before: { title: product.title, status: product.status }, after: { deleted: true, reason } };
-  },
-
   /** In-app + email notice to the vendor owner. Best effort, never throws. */
   async notifyVendor(params: {
     vendorUserId: string;
     productId: string;
     productTitle: string;
-    action: "unpublished" | "restored" | "deleted";
+    action: "unpublished" | "restored";
     reason: string;
   }): Promise<void> {
-    const title =
-      params.action === "unpublished" ? "A product was unpublished" : params.action === "deleted" ? "A product was removed" : "Your product is live again";
+    const title = params.action === "unpublished" ? "A product was unpublished" : "Your product is live again";
     const body =
       params.action === "unpublished"
         ? `"${params.productTitle}" was unpublished by Eki support. Reason: ${params.reason}`
-        : params.action === "deleted"
-          ? `"${params.productTitle}" was removed from your store by Eki support. Reason: ${params.reason}`
-          : `"${params.productTitle}" was restored and is visible to buyers again. Note: ${params.reason}`;
+        : `"${params.productTitle}" was restored and is visible to buyers again. Note: ${params.reason}`;
     try {
       await notificationsService.enqueue({
         userId: params.vendorUserId,
