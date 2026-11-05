@@ -73,6 +73,31 @@ export interface CreateBuyerSubscriptionInput {
   deliveryAddressId: string;
   paymentMethodId: string;
   items: { productId: string; quantity: number }[];
+  /** The buyer's explicit agreement that this is a recurring subscription. */
+  recurringConsent?: boolean;
+  /** ISO date of the first delivery. Omitted: one full cycle from today. */
+  firstDeliveryDate?: string;
+}
+
+/** A first date this close would leave no time for the required reminder. */
+const FIRST_DELIVERY_MIN_LEAD_HOURS = 48;
+const FIRST_DELIVERY_MAX_LEAD_DAYS = 90;
+
+function resolveFirstRenewalAt(
+  frequency: SubscriptionFrequency,
+  firstDeliveryDate: string | undefined,
+  renewalCutoffHours: number,
+  now = new Date(),
+): Date {
+  if (firstDeliveryDate === undefined) return nextCycleDate(frequency, now);
+  const chosen = new Date(firstDeliveryDate);
+  const leadHours = Math.max(renewalCutoffHours, FIRST_DELIVERY_MIN_LEAD_HOURS);
+  const earliest = now.getTime() + leadHours * 3_600_000;
+  const latest = now.getTime() + FIRST_DELIVERY_MAX_LEAD_DAYS * 86_400_000;
+  if (Number.isNaN(chosen.getTime()) || chosen.getTime() < earliest || chosen.getTime() > latest) {
+    throw new AppError("That first delivery date isn't available. Please choose another.", 400, undefined, "FIRST_DELIVERY_DATE_UNAVAILABLE");
+  }
+  return chosen;
 }
 
 export const PAYMENT_FAILED_REASON = "payment_failed";
@@ -216,6 +241,14 @@ export const buyerSubscriptionsService = {
     });
     if (!offer || !offer.isActive) throw new AppError("Offer not found", 404);
     await assertSameAccountWorld(buyerId, [offer.vendor.id]);
+    if (input.recurringConsent !== true) {
+      throw new AppError(
+        "Please confirm that you understand this is a recurring subscription.",
+        400,
+        undefined,
+        "RECURRING_CONSENT_REQUIRED",
+      );
+    }
     if (!offer.frequencies.includes(input.frequency)) throw new AppError("Frequency not offered", 400);
     if (input.items.length === 0) throw new AppError("At least one item is required", 400);
 
@@ -254,6 +287,8 @@ export const buyerSubscriptionsService = {
     const paymentMethod = await prisma.buyerPaymentMethod.findUnique({ where: { id: input.paymentMethodId } });
     if (!paymentMethod || paymentMethod.buyerId !== buyerId) throw new AppError("Payment method not found", 404);
 
+    const nextRenewalAt = resolveFirstRenewalAt(input.frequency, input.firstDeliveryDate, offer.renewalCutoffHours);
+
     const subscription = await prisma.buyerSubscription.create({
       data: {
         buyerId,
@@ -262,7 +297,8 @@ export const buyerSubscriptionsService = {
         frequency: input.frequency,
         deliveryAddressId: input.deliveryAddressId,
         paymentMethodId: input.paymentMethodId,
-        nextRenewalAt: nextCycleDate(input.frequency),
+        nextRenewalAt,
+        recurringConsentAt: new Date(),
         // spec §22 — the vendor's configured approval threshold, if any,
         // becomes this subscription's threshold; null leaves the renewal
         // evaluator on its own default (renewals.service.ts).
