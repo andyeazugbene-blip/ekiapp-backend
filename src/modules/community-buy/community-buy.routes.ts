@@ -48,6 +48,9 @@ import {
   pledgeContribution,
   reconfirmCampaign,
   retryContributionHold,
+  startContributionCardUpdate,
+  getContributionHoldAction,
+  refreshContributionHold,
   withdrawContribution,
   createSupportCase,
   createOrganiserCampaign,
@@ -159,6 +162,9 @@ communityBuyRouter.get("/campaigns/:id/authorisation-summary", authenticate, asy
 communityBuyRouter.post("/contributions/:id/confirm-setup", authenticate, asyncHandler(confirmContributionSetup));
 communityBuyRouter.post("/contributions/:id/withdraw", authenticate, asyncHandler(withdrawContribution));
 communityBuyRouter.post("/contributions/:id/retry-hold", authenticate, asyncHandler(retryContributionHold));
+communityBuyRouter.post("/contributions/:id/update-card", authenticate, asyncHandler(startContributionCardUpdate));
+communityBuyRouter.get("/contributions/:id/hold-action", authenticate, asyncHandler(getContributionHoldAction));
+communityBuyRouter.post("/contributions/:id/refresh-hold", authenticate, asyncHandler(refreshContributionHold));
 
 // Buyers/organisers join a live campaign — kept on the same router since
 // it's participant-facing, not an organiser-only action.
