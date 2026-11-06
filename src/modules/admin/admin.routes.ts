@@ -114,6 +114,9 @@ import { partnerCohortsService } from "./partner-cohorts.service";
 import { getAnalyticsGeography, getAnalyticsPayments } from "./admin-analytics-phase3.controller";
 import { getAdminRevenue } from "./admin-revenue.controller";
 import { campaignOperationsService } from "../community-buy/campaign-operations.service";
+import { firstSaleCampaignService } from "../growth/first-sale-campaign.service";
+import { vendorReferralsService } from "../growth/vendor-referrals.service";
+import { requireAuditReason } from "../../shared/utils/audit";
 import {
   createDeliveryZone,
   deleteDeliveryZone,
@@ -314,6 +317,12 @@ import { adminProvisionDemoAccount, adminCreateDemoAccount } from "./admin-demo-
 import { adminCampaignsRouter } from "../campaigns/campaigns.routes";
 import { adminResetUsers } from "./admin-reset.controller";
 
+function requireAdminUserId(request: unknown): string {
+  const id = (request as { user?: { id?: string } }).user?.id;
+  if (!id) throw new AppError("Unauthorized", 401);
+  return id;
+}
+
 export const adminRouter = Router();
 
 // Dev/QA-only database reset+reseed utility — truncates nearly every table.
@@ -353,6 +362,22 @@ adminRouter.get("/analytics/overview", asyncHandler(requireAdminPermission("anal
 adminRouter.get("/analytics/growth", asyncHandler(requireAdminPermission("analytics.read")), asyncHandler(getAnalyticsGrowth));
 adminRouter.get("/analytics/buyers", asyncHandler(requireAdminPermission("analytics.read")), asyncHandler(getAnalyticsBuyers));
 adminRouter.get("/analytics/vendors", asyncHandler(requireAdminPermission("analytics.read")), asyncHandler(getAnalyticsVendors));
+adminRouter.get("/growth/referral-credits", asyncHandler(requireAdminPermission("subscriptions.read")), asyncHandler(async (_request, response) => {
+  response.json(await vendorReferralsService.listForAdmin());
+}));
+adminRouter.post("/growth/referral-credits/release", asyncHandler(requireAdminPermission("subscriptions.mutate")), asyncHandler(require2fa), asyncHandler(async (request, response) => {
+  const adminId = requireAdminUserId(request);
+  response.json(await vendorReferralsService.release(adminId, String(request.body?.referrerId ?? ""), requireAuditReason(request.body?.reason)));
+}));
+adminRouter.post("/growth/referral-credits/:id/reverse", asyncHandler(requireAdminPermission("subscriptions.mutate")), asyncHandler(require2fa), asyncHandler(async (request, response) => {
+  response.json({ credit: await vendorReferralsService.reverse(requireAdminUserId(request), String(request.params.id), requireAuditReason(request.body?.reason)) });
+}));
+adminRouter.get("/growth/first-sale-campaigns", asyncHandler(requireAdminPermission("subscriptions.read")), asyncHandler(async (_request, response) => {
+  response.json({ items: await firstSaleCampaignService.listForAdmin() });
+}));
+adminRouter.post("/growth/first-sale-campaigns/:id/stop", asyncHandler(requireAdminPermission("subscriptions.mutate")), asyncHandler(async (request, response) => {
+  response.json(await firstSaleCampaignService.stop(requireAdminUserId(request), String(request.params.id), requireAuditReason(request.body?.reason)));
+}));
 adminRouter.get("/analytics/partner-cohorts", asyncHandler(requireAdminPermission("analytics.read")), asyncHandler(async (_request, response) => {
   response.json({ partners: await partnerCohortsService.list() });
 }));

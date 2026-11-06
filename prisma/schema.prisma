@@ -373,6 +373,7 @@ model Vendor {
   wallet                          Wallet?
   products                        Product[]
   orderItems                      OrderItem[]
+  firstSaleCampaign               FirstSaleCampaign?
   walletTransactions              WalletTransaction[]
   payoutMethods                   PayoutMethod[]
   payoutRequests                  PayoutRequest[]
@@ -4738,4 +4739,59 @@ model SubscriptionSupportCase {
 
   @@index([subscriptionId])
   @@index([status, escalated])
+}
+
+/// Handbook 8.6: one row per referred vendor. Credits are never cash.
+enum VendorReferralCreditStatus {
+  QUALIFIED
+  RELEASED
+  REVERSED
+}
+
+model VendorReferralCredit {
+  id                         String                     @id @default(cuid())
+  referralId                 String
+  referrerId                 String
+  referredUserId             String                     @unique
+  referredVendorId           String
+  status                     VendorReferralCreditStatus
+  qualifiedAt                DateTime?
+  releasedAt                 DateTime?
+  releasedById               String?
+  // This referral's share of the credit, kept so one reversal takes back the right amount.
+  amountMinor                Int?
+  currency                   String?
+  stripeBalanceTransactionId String?
+  reversedAt                 DateTime?
+  reversalReason             String?
+  createdAt                  DateTime                   @default(now())
+  updatedAt                  DateTime                   @updatedAt
+
+  @@index([referrerId, status])
+}
+
+/// Handbook 8.3: one First Sale Campaign per vendor.
+enum FirstSaleCampaignStatus {
+  ACTIVE
+  COMPLETED
+  STOPPED
+}
+
+model FirstSaleCampaign {
+  id               String                  @id @default(cuid())
+  vendorId         String                  @unique
+  vendor           Vendor                  @relation(fields: [vendorId], references: [id], onDelete: Cascade)
+  status           FirstSaleCampaignStatus
+  launchProductIds String[]                @default([])
+  approvedAt       DateTime?
+  startedAt        DateTime?
+  completedAt      DateTime?
+  escalatedAt      DateTime?
+  stoppedAt        DateTime?
+  stoppedById      String?
+  buyersMessaged   Int                     @default(0)
+  createdAt        DateTime                @default(now())
+  updatedAt        DateTime                @updatedAt
+
+  @@index([status])
 }

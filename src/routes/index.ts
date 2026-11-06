@@ -31,6 +31,7 @@ import {
   renewalsRouter,
   subscriptionOffersRouter,
 } from "../modules/regular-deliveries/regular-deliveries.routes";
+import { growthRouter } from "../modules/growth/growth.routes";
 import { communityBuyRouter, organiserRouter, supplierRouter } from "../modules/community-buy/community-buy.routes";
 import { paystackRouter } from "../modules/paystack/paystack.routes";
 import { pushTokensRouter } from "../modules/push-tokens/push-tokens.routes";
@@ -119,6 +120,7 @@ apiRouter.use("/subscriptions", subscriptionsRouter);
 apiRouter.use("/vendor", vendorAccountRouter);
 apiRouter.use("/vendor", automationVendorRouter);
 apiRouter.use("/vendor", regularDeliveriesVendorRouter);
+apiRouter.use("/growth", growthRouter);
 apiRouter.use("/subscription-offers", subscriptionOffersRouter);
 apiRouter.use("/renewals", renewalsRouter);
 apiRouter.use("/buyer/payment-methods", buyerPaymentMethodsRouter);

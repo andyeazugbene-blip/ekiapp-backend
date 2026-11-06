@@ -29,6 +29,7 @@ import { eventOutboxService } from "../events/event-outbox.service";
 import { registerCoreEventHandlers } from "../events/core-event-handlers";
 import { notificationDeliveryService } from "../notifications/notification-delivery.service";
 import { supplierOffersService } from "../community-buy/supplier-offers.service";
+import { firstSaleCampaignService } from "../growth/first-sale-campaign.service";
 
 export const internalRouter = Router();
 registerCoreEventHandlers();
@@ -468,6 +469,7 @@ const jobs: [string, string, () => Promise<Record<string, unknown>>][] = [
   ["support-retention-sweep", "support conversation retention sweep", () => supportRetentionService.sweep()],
   // Timed suspensions (Handbook 4.3): lift those whose end date has passed.
   ["suspension-expiry", "timed suspension expiry", () => adminSuspensionService.liftExpired()],
+  ["first-sale-campaign-sweep", "First Sale Campaign outcomes", () => firstSaleCampaignService.sweep()],
   ["demand-digest", "daily foodstuff request digest", () => supplierOffersService.sendDemandDigest()],
 ];
 
