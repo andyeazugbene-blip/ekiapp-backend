@@ -3,6 +3,7 @@ import type { Request, Response } from "express";
 import { AppError } from "../../shared/errors/app-error";
 import { requireAuditReason } from "../../shared/utils/audit";
 import { adminPlatformSettingsService } from "./admin-platform-settings.service";
+import { launchSettingsService } from "./launch-settings.service";
 
 function requireUserId(request: Request): string {
   if (!request.user) throw new AppError("Unauthorized", 401);
@@ -20,6 +21,17 @@ export async function updateOperationalThreshold(request: Request, response: Res
   const { value, reason } = (request.body ?? {}) as { value?: unknown; reason?: unknown };
   const updated = await adminPlatformSettingsService.setValue(key, value, adminId, requireAuditReason(reason), request);
   response.json({ setting: updated });
+}
+
+export async function listLaunchSettings(_request: Request, response: Response): Promise<void> {
+  response.json({ settings: await launchSettingsService.list() });
+}
+
+export async function updateLaunchSetting(request: Request, response: Response): Promise<void> {
+  const adminId = requireUserId(request);
+  const key = typeof request.params.key === "string" ? request.params.key : "";
+  const { value, reason } = (request.body ?? {}) as { value?: unknown; reason?: unknown };
+  response.json({ setting: await launchSettingsService.set(key, value, adminId, requireAuditReason(reason), request) });
 }
 
 export async function getWhatsappCooldownSetting(_request: Request, response: Response): Promise<void> {

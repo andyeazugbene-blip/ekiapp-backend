@@ -37,5 +37,11 @@ jobs:
       - name: Dispatch-due reminders
         run: node scripts/call-internal-scheduler-endpoint.mjs order-dispatch-due-sweep /api/internal/jobs/order-dispatch-due-sweep
 
+      - name: Community Buy deadlines
+        run: node scripts/call-internal-scheduler-endpoint.mjs community-buy-sweep /api/internal/jobs/community-buy-sweep
+
+      - name: Community Buy card holds and decisions
+        run: node scripts/call-internal-scheduler-endpoint.mjs community-buy-authorisation-sweep /api/internal/jobs/community-buy-authorisation-sweep
+
       - name: Community Buy stuck-capture review alert
         run: node scripts/call-internal-scheduler-endpoint.mjs community-buy-capture-pending-review-sweep /api/internal/jobs/community-buy-capture-pending-review-sweep

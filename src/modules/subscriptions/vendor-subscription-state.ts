@@ -4,7 +4,7 @@
  * Nothing here charges, extends or invents a trial: Stripe is the source of truth and the
  * webhook handlers keep these columns current. Pure function => fully unit-testable.
  *
- * Trial length is 14 days (GROWTH_TRIAL_DAYS in subscriptions.service.ts). Dates are
+ * Trial length is an admin setting (VENDOR_TRIAL_DAYS). Dates are
  * absolute instants (UTC); callers format them with an explicit timezone.
  */
 

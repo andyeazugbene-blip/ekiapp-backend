@@ -7,6 +7,7 @@ import { AppError } from "../../shared/errors/app-error";
 import { notificationsService } from "../notifications/notifications.service";
 import { automationService } from "../automation/automation.service";
 import { marketConfigurationService } from "./market-configuration.service";
+import { launchSettingsService } from "../admin/launch-settings.service";
 import { defaultAuthorisationSchedule } from "./community-buy-timing";
 import { calculateBoundedServiceFee } from "../../shared/pricing";
 import { campaignContributionsService } from "./campaign-contributions.service";
@@ -1043,7 +1044,7 @@ export const communityCampaignsService = {
       // so the schedule follows it here unless one was deliberately set.
       if (campaign.deadline && campaign.deadline > new Date()
         && (!campaign.holdWindowStartsAt || !campaign.decisionDeadline || campaign.decisionDeadline < campaign.deadline || campaign.holdWindowStartsAt > campaign.decisionDeadline)) {
-        Object.assign(campaign, await prisma.communityCampaign.update({ where: { id: campaignId }, data: defaultAuthorisationSchedule(campaign.deadline) }));
+        Object.assign(campaign, await prisma.communityCampaign.update({ where: { id: campaignId }, data: defaultAuthorisationSchedule(campaign.deadline, await launchSettingsService.get("HOLD_HOURS_BEFORE_DEADLINE"), await launchSettingsService.get("DECISION_HOURS_AFTER_DEADLINE")) }));
       }
       if (!campaign.holdWindowStartsAt) missing.push("holdWindowStartsAt");
       if (!campaign.decisionDeadline) missing.push("decisionDeadline");

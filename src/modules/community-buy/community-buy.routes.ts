@@ -23,6 +23,7 @@ import {
 import { authenticate } from "../../middlewares/authenticate";
 import { requireApprovedSupplier, requireApprovedSupplierForOwnCampaign } from "../../middlewares/require-capability";
 import { asyncHandler } from "../../shared/utils/async-handler";
+import { launchSettingsService } from "../admin/launch-settings.service";
 import {
   acceptSupplierInvitation,
   applyAsOrganiser,
@@ -127,6 +128,7 @@ import {
 
 // Public discovery + participant actions — mounted at /community-buy.
 export const communityBuyRouter = Router();
+communityBuyRouter.get("/launch-settings", asyncHandler(async (_request, response) => { response.json(await launchSettingsService.publicView()); }));
 communityBuyRouter.get("/markets", asyncHandler(listPublicMarketConfigs));
 communityBuyRouter.get("/markets/:country", asyncHandler(getPublicMarketConfig));
 communityBuyRouter.get("/campaigns", authenticate, asyncHandler(listCampaigns));

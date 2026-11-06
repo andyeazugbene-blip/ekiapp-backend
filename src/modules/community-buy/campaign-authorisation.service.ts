@@ -4,6 +4,7 @@ import { LedgerAccountType, LedgerDirection, LedgerOwnerType } from "@prisma/cli
 import type Stripe from "stripe";
 
 import { prisma } from "../../lib/prisma";
+import { launchSettingsService } from "../admin/launch-settings.service";
 import { stripe } from "../../lib/stripe";
 import { logger } from "../../lib/logger";
 import { AppError } from "../../shared/errors/app-error";
@@ -37,7 +38,6 @@ const CONSENT_WORDING_VERSION = "cb-authorise-v1";
 const HOLD_RECOVERY_WINDOW_MS = 48 * 60 * 60 * 1000;
 // A commitment holds capacity while the buyer saves a card. Someone who walks
 // away shouldn't keep others out, so it goes back after this long.
-const COMMITMENT_SETUP_TTL_MS = 30 * 60 * 1000;
 
 // spec AT-11/AT-13 — organiser's below-minimum proceed/cancel window.
 const DECISION_WINDOW_MS = COMMUNITY_BUY_ORGANISER_DECISION_WINDOW_MS;
@@ -301,12 +301,13 @@ export const campaignAuthorisationService = {
 
   /** Returns capacity held by buyers who started joining but never saved a card. */
   async releaseAbandonedCommitments(campaignId?: string): Promise<number> {
+    const setupMinutes = await launchSettingsService.get("ABANDONED_CHECKOUT_MINUTES");
     const abandoned = await prisma.communityBuyPaymentAuthorisation.findMany({
       where: {
         ...(campaignId ? { campaignId } : {}),
         holdStatus: "NOT_REQUESTED",
         paymentMethodReference: "",
-        createdAt: { lt: new Date(Date.now() - COMMITMENT_SETUP_TTL_MS) },
+        createdAt: { lt: new Date(Date.now() - setupMinutes * 60_000) },
         campaign: { status: "LIVE" },
       },
       include: { contribution: { select: { quantity: true } } },
