@@ -12,6 +12,7 @@ import { errorHandler } from "./middlewares/error-handler";
 import { notFoundHandler } from "./middlewares/not-found";
 import { adminRateLimiter, generalRateLimiter } from "./middlewares/rate-limit";
 import { resolveCorsOrigins } from "./config/cors";
+import { getPublicCommunityBuyPage } from "./modules/public-site/community-buy-page";
 import { logger } from "./lib/logger";
 import { requestIdMiddleware } from "./middlewares/request-id";
 import { requestLogger } from "./middlewares/request-logger";
@@ -61,7 +62,7 @@ app.disable("x-powered-by");
 // public HTML pages that use inline scripts.
 const publicHtmlPaths = new Set(["/", "/sell", "/find-order", "/help", "/support", "/privacy", "/terms", "/account-deletion", "/refund-policy", "/cookie-policy", "/subscription-policy", "/acceptable-use", "/vendor-agreement", "/vendor/subscription", "/vendor", "/cart", "/checkout", "/business-portal"]);
 const swaggerAndPublicPagePaths = (req: { path: string }) =>
-  req.path === "/api/docs" || req.path.startsWith("/store") || req.path.startsWith("/invite/") || publicHtmlPaths.has(req.path);
+  req.path === "/api/docs" || req.path.startsWith("/store") || req.path.startsWith("/invite/") || req.path.startsWith("/community-buy/") || publicHtmlPaths.has(req.path);
 
 app.use((req, res, next) => {
   if (swaggerAndPublicPagePaths(req)) {
@@ -177,6 +178,9 @@ app.get("/acceptable-use", (req, res, next) => {
 });
 app.get("/vendor-agreement", (req, res, next) => {
   Promise.resolve(getPublicVendorAgreementPage(req, res)).catch(next);
+});
+app.get("/community-buy/:id", (req, res, next) => {
+  Promise.resolve(getPublicCommunityBuyPage(req, res)).catch(next);
 });
 app.get("/invite/:code", (req, res, next) => {
   Promise.resolve(getPublicInvitePage(req, res)).catch(next);

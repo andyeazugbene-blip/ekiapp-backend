@@ -24,6 +24,8 @@ import { authenticate } from "../../middlewares/authenticate";
 import { requireApprovedSupplier, requireApprovedSupplierForOwnCampaign } from "../../middlewares/require-capability";
 import { asyncHandler } from "../../shared/utils/async-handler";
 import { launchSettingsService } from "../admin/launch-settings.service";
+import { publicInterestRateLimiter } from "../../middlewares/rate-limit";
+import { registerPublicCampaignInterest } from "../public-site/community-buy-page";
 import {
   acceptSupplierInvitation,
   applyAsOrganiser,
@@ -128,6 +130,9 @@ import {
 
 // Public discovery + participant actions — mounted at /community-buy.
 export const communityBuyRouter = Router();
+communityBuyRouter.post("/campaigns/:id/interest", publicInterestRateLimiter, asyncHandler(async (request, response) => {
+  response.status(201).json(await registerPublicCampaignInterest(String(request.params.id), (request.body as { email?: unknown } | undefined)?.email));
+}));
 communityBuyRouter.get("/launch-settings", asyncHandler(async (_request, response) => { response.json(await launchSettingsService.publicView()); }));
 communityBuyRouter.get("/markets", asyncHandler(listPublicMarketConfigs));
 communityBuyRouter.get("/markets/:country", asyncHandler(getPublicMarketConfig));

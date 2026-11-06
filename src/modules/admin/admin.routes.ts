@@ -110,6 +110,7 @@ import {
 import { getAnalyticsGrowth, getAnalyticsOverview } from "./admin-analytics.controller";
 import { getAnalyticsBuyers, getAnalyticsOrders, getAnalyticsVendors } from "./admin-analytics-phase2.controller";
 import { getVendorOnboardingFunnel } from "./admin-vendor-funnel.controller";
+import { partnerCohortsService } from "./partner-cohorts.service";
 import { getAnalyticsGeography, getAnalyticsPayments } from "./admin-analytics-phase3.controller";
 import { getAdminRevenue } from "./admin-revenue.controller";
 import {
@@ -351,6 +352,12 @@ adminRouter.get("/analytics/overview", asyncHandler(requireAdminPermission("anal
 adminRouter.get("/analytics/growth", asyncHandler(requireAdminPermission("analytics.read")), asyncHandler(getAnalyticsGrowth));
 adminRouter.get("/analytics/buyers", asyncHandler(requireAdminPermission("analytics.read")), asyncHandler(getAnalyticsBuyers));
 adminRouter.get("/analytics/vendors", asyncHandler(requireAdminPermission("analytics.read")), asyncHandler(getAnalyticsVendors));
+adminRouter.get("/analytics/partner-cohorts", asyncHandler(requireAdminPermission("analytics.read")), asyncHandler(async (_request, response) => {
+  response.json({ partners: await partnerCohortsService.list() });
+}));
+adminRouter.get("/analytics/partner-cohorts/:code", asyncHandler(requireAdminPermission("analytics.read")), asyncHandler(async (request, response) => {
+  response.json(await partnerCohortsService.detail(String(request.params.code)));
+}));
 adminRouter.get("/analytics/vendor-funnel", asyncHandler(requireAdminPermission("analytics.read")), asyncHandler(getVendorOnboardingFunnel));
 adminRouter.get("/analytics/orders", asyncHandler(requireAdminPermission("analytics.read")), asyncHandler(getAnalyticsOrders));
 adminRouter.get("/analytics/payments", asyncHandler(requireAdminPermission("analytics.read")), asyncHandler(getAnalyticsPayments));

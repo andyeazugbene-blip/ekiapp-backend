@@ -216,6 +216,7 @@ export const authService = {
           password: passwordHash,
           phone: input.phone,
           country: input.country,
+          partnerCode: input.partnerCode,
           role: input.role ?? UserRole.BUYER,
           ...(recentlyVerifiedOtp ? { emailVerifiedAt: new Date() } : {}),
         },

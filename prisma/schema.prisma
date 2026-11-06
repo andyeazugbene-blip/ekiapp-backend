@@ -4649,13 +4649,17 @@ model DemandRequest {
 
 /// Interest sign-ups on a "coming soon" link while a campaign is in review. No payment.
 model CampaignInterest {
-  id         String   @id @default(cuid())
+  id         String    @id @default(cuid())
   campaignId String
-  userId     String
-  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  createdAt  DateTime @default(now())
+  // Exactly one of userId or email: email is for someone with no account, and is cleared once they've been told.
+  userId     String?
+  user       User?     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  email      String?
+  notifiedAt DateTime?
+  createdAt  DateTime  @default(now())
 
   @@unique([campaignId, userId])
+  @@unique([campaignId, email])
 }
 
 /// A pending phone check for the organiser step. The code is stored hashed and expires quickly.
