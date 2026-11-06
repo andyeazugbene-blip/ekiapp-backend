@@ -1818,7 +1818,7 @@ describe("communityCampaignsService.requestChanges — Final Client Decision 1",
 });
 
 describe("communityCampaignsService.listParticipantsForOrganiser — 'Participants'", () => {
-  it("only returns participants with an actual PAID contribution, with real totals", async () => {
+  it("shows participants with their status, and totals count only what is paid", async () => {
     m.organiserProfile.findUnique.mockResolvedValue({ id: "org-1" } as never);
     m.communityCampaign.findUnique.mockResolvedValue({ id: "camp-1", organiserId: "org-1" } as never);
     m.campaignParticipant.findMany.mockResolvedValue([
@@ -1827,8 +1827,8 @@ describe("communityCampaignsService.listParticipantsForOrganiser — 'Participan
         user: { name: "Amina", email: "amina@example.com" },
         joinedAt: new Date("2026-01-01"),
         contributions: [
-          { quantity: 2, amount: 2000, isOrganiserTopUp: false, createdAt: new Date() },
-          { quantity: 1, amount: 1000, isOrganiserTopUp: true, createdAt: new Date() },
+          { status: "PAID", quantity: 2, amount: 2000, isOrganiserTopUp: false, createdAt: new Date() },
+          { status: "PAID", quantity: 1, amount: 1000, isOrganiserTopUp: true, createdAt: new Date() },
         ],
       },
     ] as never);
@@ -1836,11 +1836,32 @@ describe("communityCampaignsService.listParticipantsForOrganiser — 'Participan
     const result = await communityCampaignsService.listParticipantsForOrganiser("organiser-user-1", "camp-1");
 
     expect(result).toEqual([
-      expect.objectContaining({ userId: "buyer-1", totalQuantity: 3, totalPaid: 3000, isOrganiser: true }),
+      expect.objectContaining({ userId: "buyer-1", contributionStatus: "Confirmed", totalQuantity: 3, totalPaid: 3000, isOrganiser: true }),
     ]);
     expect(m.campaignParticipant.findMany).toHaveBeenCalledWith(
-      expect.objectContaining({ where: { campaignId: "camp-1", contributions: { some: { status: "PAID" } } } }),
+      expect.objectContaining({ where: { campaignId: "camp-1", contributions: { some: { status: { in: expect.arrayContaining(["PAID", "PLEDGED", "PAYMENT_PROCESSING", "REFUNDED"]) } } } } }),
     );
+  });
+
+  it.each([
+    [["PAYMENT_PROCESSING"], "Processing", 2, 0],
+    [["PAYMENT_FAILED"], "Failed", 0, 0],
+    [["REFUND_PENDING"], "Refunding", 0, 0],
+    [["REFUNDED"], "Refunded", 0, 0],
+    [["PLEDGED"], "Confirmed", 2, 0],
+  ])("reads %j as %s, counting only live shares and paid money", async (statuses, label, quantity, paid) => {
+    m.organiserProfile.findUnique.mockResolvedValue({ id: "org-1" } as never);
+    m.communityCampaign.findUnique.mockResolvedValue({ id: "camp-1", organiserId: "org-1", deliveryPreference: "DELIVERY" } as never);
+    m.campaignParticipant.findMany.mockResolvedValue([{
+      userId: "buyer-1", user: { name: "Amina", email: "amina@example.com" }, joinedAt: new Date(),
+      contributions: statuses.map((status) => ({ status, quantity: 2, amount: 2000, isOrganiserTopUp: false, createdAt: new Date(), deliveryAddressLine1: "1 Road" })),
+    }] as never);
+
+    const [row] = await communityCampaignsService.listParticipantsForOrganiser("organiser-user-1", "camp-1");
+
+    expect(row).toMatchObject({ contributionStatus: label, totalQuantity: quantity, totalPaid: paid });
+    // Only someone who has paid has an address the organiser needs.
+    expect(row).not.toHaveProperty("deliveryAddress");
   });
 
   // M4 gap 12/AT-44: a self-supply organiser IS the fulfiller — same
@@ -1856,13 +1877,13 @@ describe("communityCampaignsService.listParticipantsForOrganiser — 'Participan
         userId: "buyer-1",
         user: { name: "Amina", email: "amina@example.com" },
         joinedAt: new Date("2026-01-01"),
-        contributions: [{ quantity: 2, amount: 2000, isOrganiserTopUp: false, createdAt: new Date() }],
+        contributions: [{ status: "PAID", quantity: 2, amount: 2000, isOrganiserTopUp: false, createdAt: new Date() }],
       },
     ] as never);
 
     const result = await communityCampaignsService.listParticipantsForOrganiser("organiser-user-1", "camp-1");
 
-    expect(result).toEqual([{ userId: "buyer-1", joinedAt: new Date("2026-01-01"), totalQuantity: 2, totalPaid: 2000, isOrganiser: false }]);
+    expect(result).toEqual([{ userId: "buyer-1", contributionStatus: "Confirmed", joinedAt: new Date("2026-01-01"), totalQuantity: 2, totalPaid: 2000, isOrganiser: false }]);
     expect(result[0]).not.toHaveProperty("name");
     expect(result[0]).not.toHaveProperty("email");
   });
@@ -3378,20 +3399,7 @@ describe("marketConfigurationService.listPublic/getPublic — SEC-01: public end
     updatedAt: new Date("2026-01-02"),
   };
 
-  const PUBLIC_KEYS = [
-    "countryCode",
-    "currency",
-    "communityBuyEnabled",
-    "communityBuyPaymentsEnabled",
-    "organiserApplicationsEnabled",
-    "supplierApplicationsEnabled",
-    "regularDeliveriesEnabled",
-    "communityBuyOffersRequired",
-    // M4 — global individual-delivery kill-switch, deliberately added to
-    // this public shape (see market-configuration.service.ts's own doc
-    // comment on the field) — not a leak, an intentional capability flag.
-    "individualDeliveryEnabled",
-  ].sort();
+  const PUBLIC_KEYS = ["countryCode", "currency", "communityBuyEnabled", "communityBuyPaymentsEnabled", "organiserApplicationsEnabled", "supplierApplicationsEnabled", "regularDeliveriesEnabled", "communityBuyOffersRequired", "individualDeliveryEnabled", "organiserTopUpEnabled", "deadlineExtensionEnabled", "marketRefundTimeframe"].sort();
 
   beforeEach(() => {
     m.marketConfiguration.count.mockResolvedValue(1 as never); // skip ensureDefaults() seeding
@@ -3413,6 +3421,9 @@ describe("marketConfigurationService.listPublic/getPublic — SEC-01: public end
     expect(items).toHaveLength(1);
     expect(Object.keys(items[0]).sort()).toEqual(PUBLIC_KEYS);
     expect(items[0]).toEqual({
+      organiserTopUpEnabled: true,
+      deadlineExtensionEnabled: true,
+      marketRefundTimeframe: "5 to 10 business days",
       countryCode: "GB",
       currency: "GBP",
       communityBuyEnabled: true,

@@ -505,6 +505,18 @@ export function parseReviewCriteria(raw: unknown): ReviewCriteria | undefined {
   return out;
 }
 
+/** CB48: what an organiser can see of each participant. Payment details are never part of this. */
+const ORGANISER_VISIBLE_CONTRIBUTIONS = ["PLEDGED", "PAID", "PAYMENT_PROCESSING", "PAYMENT_FAILED", "CHARGE_FAILED", "REFUND_PENDING", "REFUND_PROCESSING", "REFUND_FAILED", "REFUNDED"] as const;
+const COUNTED_CONTRIBUTIONS = new Set<string>(["PLEDGED", "PAID", "PAYMENT_PROCESSING"]);
+
+function participantContributionStatus(statuses: string[]): "Confirmed" | "Processing" | "Failed" | "Refunding" | "Refunded" {
+  if (statuses.some((s) => s === "PAID" || s === "PLEDGED")) return "Confirmed";
+  if (statuses.includes("PAYMENT_PROCESSING")) return "Processing";
+  if (statuses.some((s) => s === "REFUND_PENDING" || s === "REFUND_PROCESSING" || s === "REFUND_FAILED")) return "Refunding";
+  if (statuses.includes("REFUNDED")) return "Refunded";
+  return "Failed";
+}
+
 export const communityCampaignsService = {
   async create(userId: string, input: CreateCampaignInput) {
     if (!input.title?.trim()) throw new AppError("Title is required", 400);
@@ -1104,13 +1116,13 @@ export const communityCampaignsService = {
   async listParticipantsForOrganiser(userId: string, campaignId: string) {
     const campaign = await this.requireOwnedByOrganiser(userId, campaignId);
     const participants = await prisma.campaignParticipant.findMany({
-      where: { campaignId, contributions: { some: { status: "PAID" } } },
+      where: { campaignId, contributions: { some: { status: { in: [...ORGANISER_VISIBLE_CONTRIBUTIONS] } } } },
       include: {
         user: { select: { name: true, email: true } },
         contributions: {
-          where: { status: "PAID" },
+          where: { status: { in: [...ORGANISER_VISIBLE_CONTRIBUTIONS] } },
           select: {
-            quantity: true, amount: true, isOrganiserTopUp: true, createdAt: true,
+            status: true, quantity: true, amount: true, isOrganiserTopUp: true, createdAt: true,
             // Phase 3 — only ever read here (the owning organiser's own
             // participant list) and in getFulfilmentDeliveriesForVendor/
             // Account() (community-buy-manifest.service.ts) when the
@@ -1144,13 +1156,17 @@ export const communityCampaignsService = {
       });
     }
     return participants.map((p) => {
-      const latestPaid = p.contributions[p.contributions.length - 1];
+      const paid = p.contributions.filter((c) => c.status === "PAID");
+      const counted = p.contributions.filter((c) => COUNTED_CONTRIBUTIONS.has(c.status));
+      // Only someone who has paid has an address the organiser needs.
+      const latestPaid = paid[paid.length - 1];
       return {
         userId: p.userId,
-        ...(isSelfSupply ? {} : { name: p.user.name, email: p.user.email }),
+        contributionStatus: participantContributionStatus(p.contributions.map((c) => c.status)),
+        ...(isSelfSupply ? {} : { name: p.user.name, ...(paid.length > 0 ? { email: p.user.email } : {}) }),
         joinedAt: p.joinedAt,
-        totalQuantity: p.contributions.reduce((sum, c) => sum + c.quantity, 0),
-        totalPaid: p.contributions.reduce((sum, c) => sum + c.amount, 0),
+        totalQuantity: counted.reduce((sum, c) => sum + c.quantity, 0),
+        totalPaid: paid.reduce((sum, c) => sum + c.amount, 0),
         isOrganiser: p.contributions.some((c) => c.isOrganiserTopUp),
         ...(showAddress && latestPaid?.deliveryAddressLine1
           ? {
@@ -2513,6 +2529,9 @@ export const communityCampaignsService = {
     }
     if (campaign.extensionCount >= MAX_EXTENSIONS) {
       throw new AppError("This campaign has already used its permitted extension", 409);
+    }
+    if (campaign.country && (await marketConfigurationService.get(campaign.country))?.deadlineExtensionEnabled === false) {
+      throw new AppError("Deadline extensions aren't available in this market.", 409, undefined, "EXTENSION_NOT_AVAILABLE");
     }
     const requestedDeadline = new Date(input.requestedDeadline);
     if (Number.isNaN(requestedDeadline.getTime()) || requestedDeadline <= new Date()) {

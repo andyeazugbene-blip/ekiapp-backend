@@ -46,6 +46,7 @@ import {
   getPublicStoreTrackedOrderPage,
 } from "./modules/public-stores/public-stores.page";
 import { apiRouter } from "./routes";
+import { getReceiptPage } from "./modules/public-site/receipts-page";
 
 export const app = express();
 
@@ -62,7 +63,7 @@ app.disable("x-powered-by");
 // public HTML pages that use inline scripts.
 const publicHtmlPaths = new Set(["/", "/sell", "/find-order", "/help", "/support", "/privacy", "/terms", "/account-deletion", "/refund-policy", "/cookie-policy", "/subscription-policy", "/acceptable-use", "/vendor-agreement", "/vendor/subscription", "/vendor", "/cart", "/checkout", "/business-portal"]);
 const swaggerAndPublicPagePaths = (req: { path: string }) =>
-  req.path === "/api/docs" || req.path.startsWith("/store") || req.path.startsWith("/invite/") || req.path.startsWith("/community-buy/") || publicHtmlPaths.has(req.path);
+  req.path === "/api/docs" || req.path.startsWith("/store") || req.path.startsWith("/invite/") || req.path.startsWith("/community-buy/") || req.path.startsWith("/receipt/") || publicHtmlPaths.has(req.path);
 
 app.use((req, res, next) => {
   if (swaggerAndPublicPagePaths(req)) {
@@ -178,6 +179,9 @@ app.get("/acceptable-use", (req, res, next) => {
 });
 app.get("/vendor-agreement", (req, res, next) => {
   Promise.resolve(getPublicVendorAgreementPage(req, res)).catch(next);
+});
+app.get("/receipt/:token", (req, res, next) => {
+  Promise.resolve(getReceiptPage(req, res)).catch(next);
 });
 app.get("/community-buy/:id", (req, res, next) => {
   Promise.resolve(getPublicCommunityBuyPage(req, res)).catch(next);

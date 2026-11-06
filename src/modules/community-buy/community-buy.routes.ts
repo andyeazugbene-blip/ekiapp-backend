@@ -127,6 +127,8 @@ import {
   submitOrganiserCampaign,
   updateOrganiserCampaign,
   deleteOrganiserDraft,
+  requestMarketNotification,
+  createContributionReceiptLink,
 } from "./community-buy.controller";
 
 // Public discovery + participant actions — mounted at /community-buy.
@@ -134,6 +136,8 @@ export const communityBuyRouter = Router();
 communityBuyRouter.post("/campaigns/:id/interest", publicInterestRateLimiter, asyncHandler(async (request, response) => {
   response.status(201).json(await registerPublicCampaignInterest(String(request.params.id), (request.body as { email?: unknown } | undefined)?.email));
 }));
+communityBuyRouter.post("/markets/:country/notify-me", authenticate, asyncHandler(requestMarketNotification));
+communityBuyRouter.post("/contributions/:id/receipt-link", authenticate, asyncHandler(createContributionReceiptLink));
 communityBuyRouter.get("/launch-settings", asyncHandler(async (_request, response) => { response.json(await launchSettingsService.publicView()); }));
 communityBuyRouter.get("/markets", asyncHandler(listPublicMarketConfigs));
 communityBuyRouter.get("/markets/:country", asyncHandler(getPublicMarketConfig));

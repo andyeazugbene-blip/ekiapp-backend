@@ -113,6 +113,7 @@ import { getVendorOnboardingFunnel } from "./admin-vendor-funnel.controller";
 import { partnerCohortsService } from "./partner-cohorts.service";
 import { getAnalyticsGeography, getAnalyticsPayments } from "./admin-analytics-phase3.controller";
 import { getAdminRevenue } from "./admin-revenue.controller";
+import { campaignOperationsService } from "../community-buy/campaign-operations.service";
 import {
   createDeliveryZone,
   deleteDeliveryZone,
@@ -496,6 +497,12 @@ adminRouter.patch("/community-buy/markets/:id", asyncHandler(requireAdminPermiss
 adminRouter.patch("/community-buy/markets/:id/readiness", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(require2fa), asyncHandler(adminUpdateMarketReadiness));
 adminRouter.post("/community-buy/markets/:id/payments", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(require2fa), asyncHandler(adminSetMarketPayments));
 adminRouter.get("/community-buy/markets/:id/history", asyncHandler(requireAdminPermission("community_buy.read")), asyncHandler(adminGetMarketHistory));
+adminRouter.get("/community-buy/operations-summary", asyncHandler(requireAdminPermission("community_buy.read")), asyncHandler(async (_request, response) => {
+  response.json(await campaignOperationsService.summary());
+}));
+adminRouter.get("/community-campaigns/:id/monitoring", asyncHandler(requireAdminPermission("community_buy.read")), asyncHandler(async (request, response) => {
+  response.json(await campaignOperationsService.monitoring(String(request.params.id)));
+}));
 adminRouter.get("/community-buy/ledger", asyncHandler(requireAdminPermission("community_buy.read")), asyncHandler(adminGetLedgerSummary));
 adminRouter.get("/community-campaigns/:id/ledger", asyncHandler(requireAdminPermission("community_buy.read")), asyncHandler(adminGetCampaignLedger));
 

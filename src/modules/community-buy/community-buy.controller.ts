@@ -25,6 +25,7 @@ import { searchDataAccessLog, revokeDeliveryReferencesForSupplierAccount, isIndi
 import { buyerCountryService } from "./buyer-country.service";
 import { viewerIsTest } from "../../shared/test-accounts";
 import { reviewRequestsService } from "./review-requests.service";
+import { receiptsService } from "../public-site/receipts-page";
 
 // ─── Public market availability (used by the mobile app to decide whether
 // to show Regular Deliveries / Community Buy entry points at all — the
@@ -442,6 +443,18 @@ export async function requestCampaignCancellation(request: Request, response: Re
     request,
   });
   response.status(result.requiresReview ? 202 : 200).json(result);
+}
+
+export async function requestMarketNotification(request: Request, response: Response): Promise<void> {
+  const market = String(request.params.country).trim().toUpperCase();
+  if (!/^[A-Z]{2}$/.test(market)) throw new AppError("Unknown market", 400);
+  const userId = requireUserId(request);
+  await prisma.marketAvailabilityRequest.upsert({ where: { userId_market: { userId, market } }, create: { userId, market }, update: {} });
+  response.status(201).json({ registered: true });
+}
+
+export async function createContributionReceiptLink(request: Request, response: Response): Promise<void> {
+  response.json(await receiptsService.contributionLink(requireUserId(request), requireIdParam(request)));
 }
 
 export async function requestCampaignExtension(request: Request, response: Response): Promise<void> {
