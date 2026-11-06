@@ -35,7 +35,7 @@ export const LAUNCH_SETTINGS = {
     min: 0,
     max: 1,
     kind: "toggle",
-    source: "Phase 1 specification; Handbook 14.9 (temporary rollout setting)",
+    source: "Phase 1 specification; Handbook 14.9 (rollout setting)",
   },
   VENDOR_TRIAL_DAYS: {
     group: "Vendor plan",
