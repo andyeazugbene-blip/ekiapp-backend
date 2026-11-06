@@ -608,6 +608,14 @@ export const automationService = {
         return;
       }
 
+      eventsService.emit({
+        name: EVENT_NAMES.automation_eligible,
+        actorType: "system",
+        entityType: "AutomationRun",
+        secondaryEntities: { recipientUserId: input.recipientUserId, vendorId: input.vendorId ?? null },
+        source: "automation_engine",
+        payload: { type: input.type, subjectKey: input.subjectKey },
+      });
       await ensureTemplate(input.type);
 
       let run;

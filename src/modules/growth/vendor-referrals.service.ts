@@ -72,6 +72,11 @@ export const vendorReferralsService = {
   async overview(vendorUserId: string) {
     const user = await prisma.user.findUnique({ where: { id: vendorUserId }, select: { referralCode: true, vendor: { select: { id: true } } } });
     if (!user?.vendor) throw new AppError("Vendor profile required", 403);
+    // The first time a vendor opens their invitation link.
+    const createdKey = `referral_created:${vendorUserId}`;
+    if (user.referralCode && (await prisma.event.count({ where: { dedupeKey: createdKey } })) === 0) {
+      eventsService.emit({ name: EVENT_NAMES.referral_created, dedupeKey: createdKey, actorType: "vendor", actorId: vendorUserId, entityType: "Vendor", entityId: user.vendor.id, source: "vendor_app" });
+    }
     const [referrals, credits, needed, months, completedSale] = await Promise.all([
       prisma.referral.findMany({ where: { referrerId: vendorUserId }, orderBy: { createdAt: "desc" }, take: 100, select: { referredId: true, createdAt: true } }),
       prisma.vendorReferralCredit.findMany({ where: { referrerId: vendorUserId }, select: { referredUserId: true, status: true } }),

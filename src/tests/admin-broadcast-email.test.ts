@@ -29,6 +29,7 @@ vi.mock("../lib/prisma", () => {
     },
     communicationLog: {
       findMany: vi.fn().mockResolvedValue([]),
+      count: vi.fn().mockResolvedValue(0),
       createMany: vi.fn(async ({ data }: any) => { store.logs.push(...data.map((d: any) => ({ ...d }))); return { count: data.length }; }),
       update: vi.fn(async ({ where, data }: any) => {
         const row = store.logs.find((l) => l.id === where.id);
@@ -359,7 +360,7 @@ describe("broadcast -> canonical message events", () => {
     expect(byChannel.in_app).toBe("message_delivered");
     expect(byChannel.push).toBe("message_queued");
     expect(byChannel.email).toBe("message_queued");
-    expect(evs().every((e) => e.entityType === "CommunicationLog" && e.source === "admin_broadcast")).toBe(true);
+    expect(evs().filter((e) => e.name !== "message_drafted").every((e) => e.entityType === "CommunicationLog" && e.source === "admin_broadcast")).toBe(true);
   });
 
   it("a rejected push emits message_failed with the provider reason", async () => {

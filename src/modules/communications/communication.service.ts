@@ -1,3 +1,5 @@
+import { randomUUID } from "crypto";
+
 import type { NotificationType, Prisma } from "@prisma/client";
 
 import { logger } from "../../lib/logger";
@@ -251,6 +253,7 @@ function wrapEmailHtml(title: string, body: string): string {
 // ─── Logging ────────────────────────────────────────────────────────────────
 
 async function logCommunication(params: {
+  id?: string;
   recipientId: string;
   recipientType: string;
   eventKey: string;
@@ -263,6 +266,7 @@ async function logCommunication(params: {
   try {
     const row = await prisma.communicationLog.create({
       data: {
+        ...(params.id ? { id: params.id } : {}),
         recipientId: params.recipientId,
         recipientType: params.recipientType,
         eventKey: params.eventKey,
@@ -418,9 +422,11 @@ export const communicationService = {
           if (params.recipientEmail) {
             attemptedAnyChannel = true;
             const html = wrapEmailHtml(title, body);
+            const emailLogId = randomUUID();
             promises.push(
-              enqueueEmail({ to: params.recipientEmail, subject: title, html })
+              enqueueEmail({ to: params.recipientEmail, subject: title, html, tags: [{ name: "log_id", value: emailLogId }] })
                 .then(() => logSendOutcome({
+                  id: emailLogId,
                   recipientId: params.recipientId,
                   recipientType: template.recipientType,
                   eventKey: params.eventKey,
@@ -432,6 +438,7 @@ export const communicationService = {
                 .catch((err) => {
                   logger.warn("Communication email failed", { eventKey: params.eventKey, error: String(err) });
                   return logSendOutcome({
+                    id: emailLogId,
                     recipientId: params.recipientId,
                     recipientType: template.recipientType,
                     eventKey: params.eventKey,

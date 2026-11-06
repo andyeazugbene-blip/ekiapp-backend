@@ -522,7 +522,7 @@ export const automationRulesService = {
       windowDays: 30,
       byStatus: byStatus.map((s) => ({ status: s.status, count: s._count.id })),
       byType: byType.map((s) => ({ type: s.type, status: s.status, count: s._count.id })),
-      note: "Counts of runs only. Revenue attribution / incremental impact is intentionally not shown until an approved comparison method exists.",
+      note: "Counts of runs only. See Results for assisted revenue. Incremental impact isn't shown until an approved comparison method exists.",
     };
   },
 };

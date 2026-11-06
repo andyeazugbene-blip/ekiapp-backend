@@ -30,7 +30,7 @@ vi.mock("../modules/events/events.service", () => ({ eventsService: { emit: vi.f
 vi.mock("../modules/products/product-publication-events", () => ({ enqueueProductPublished: vi.fn() }));
 vi.mock("../modules/events/dispatch-notifications", () => ({ dispatchNotificationsAfterCommit: vi.fn() }));
 vi.mock("../modules/vendors/vendor-milestone-notifications.service", () => ({
-  vendorMilestoneNotificationsService: { maybeSendStoreReady: vi.fn() },
+  vendorMilestoneNotificationsService: { maybeSendStoreReady: vi.fn(), recordStoreReady: vi.fn() },
 }));
 
 const mockSend = vi.fn().mockResolvedValue({ outcome: "SENT" });

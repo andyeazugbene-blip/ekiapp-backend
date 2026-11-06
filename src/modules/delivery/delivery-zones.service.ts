@@ -77,6 +77,7 @@ export const deliveryZonesService = {
       // product+delivery-zone pair; see products.service.ts for the other
       // call site and vendor-milestone-notifications.service.ts for why
       // calling it from both is safe (idempotent real-state check).
+      void vendorMilestoneNotificationsService.recordStoreReady(vendor.id);
       if (process.env.R09_PUBLICATION_CONFIRMED_ENABLED !== "true") {
         void vendorMilestoneNotificationsService.maybeSendStoreReady(vendor.id);
       }

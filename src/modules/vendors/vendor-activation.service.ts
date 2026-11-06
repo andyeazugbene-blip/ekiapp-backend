@@ -73,6 +73,7 @@ export const vendorActivationService = {
       }
 
       void dispatchNotificationsAfterCommit();
+      void vendorMilestoneNotificationsService.recordStoreReady(vendorId);
       if (process.env.R09_PUBLICATION_CONFIRMED_ENABLED !== "true") {
         void vendorMilestoneNotificationsService.maybeSendStoreReady(vendorId);
       }

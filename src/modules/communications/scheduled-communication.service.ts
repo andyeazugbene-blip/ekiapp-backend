@@ -10,7 +10,8 @@ import {
   selectedChannels,
   type AdminBroadcastInput,
 } from "../admin/admin-communications.service";
-import { commsPauseService } from "./comms-pause.service";
+import { commsPauseService } from "./comms-pause.service";
+import { EVENT_NAMES, eventsService } from "../events/events.service";
 
 /** A claimed (SENDING) schedule untouched for this long is treated as interrupted. */
 const STUCK_SENDING_MS = 15 * 60 * 1000;
@@ -49,6 +50,7 @@ export const scheduledCommunicationService = {
           scheduledFor: scheduledDate,
         },
       });
+      eventsService.emit({ name: EVENT_NAMES.message_drafted, actorType: "admin", actorId: args.createdBy, entityType: "Broadcast", entityId: broadcast.id, source: "admin_web", payload: { audience: input.audience, category: input.category, scheduled: true } });
       return tx.scheduledCommunication.create({
         data: {
           audience: input.audience,

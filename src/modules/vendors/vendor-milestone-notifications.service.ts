@@ -18,7 +18,8 @@
  */
 import { prisma } from "../../lib/prisma";
 import { logger } from "../../lib/logger";
-import { communicationService } from "../communications/communication.service";
+import { communicationService } from "../communications/communication.service";
+import { EVENT_NAMES, eventsService } from "../events/events.service";
 
 export const vendorMilestoneNotificationsService = {
   /** Handoff V-01 "account.created". Fires once, right after a vendor account/store is created. */
@@ -35,6 +36,29 @@ export const vendorMilestoneNotificationsService = {
       });
     } catch (error) {
       logger.warn("Vendor welcome notification failed (non-blocking)", { vendorId, errorMessage: error instanceof Error ? error.message : String(error) });
+    }
+  },
+
+  /** Handbook 12 store_ready, and referral_store_ready for a referred vendor. Recorded once per vendor. */
+  async recordStoreReady(vendorId: string): Promise<void> {
+    try {
+      const dedupeKey = `store_ready:${vendorId}`;
+      const [vendor, productCount, zoneCount, already] = await Promise.all([
+        prisma.vendor.findUnique({ where: { id: vendorId }, select: { userId: true, user: { select: { referredBy: true } } } }),
+        prisma.product.count({ where: { vendorId, isActive: true } }),
+        prisma.deliveryZone.count({ where: { vendorId } }),
+        prisma.event.count({ where: { dedupeKey } }),
+      ]);
+      if (!vendor || productCount < 1 || zoneCount < 1 || already > 0) return;
+      eventsService.emit({ name: EVENT_NAMES.store_ready, dedupeKey, actorType: "vendor", actorId: vendor.userId, entityType: "Vendor", entityId: vendorId, source: "vendor_app" });
+      if (vendor.user?.referredBy) {
+        eventsService.emit({
+          name: EVENT_NAMES.referral_store_ready, dedupeKey: `referral_store_ready:${vendorId}`, actorType: "vendor", actorId: vendor.userId,
+          entityType: "Vendor", entityId: vendorId, secondaryEntities: { referrerId: vendor.user.referredBy }, source: "vendor_app",
+        });
+      }
+    } catch (error) {
+      logger.warn("Store-ready event failed (non-blocking)", { vendorId, errorMessage: error instanceof Error ? error.message : String(error) });
     }
   },
 

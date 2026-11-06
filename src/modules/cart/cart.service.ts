@@ -54,6 +54,10 @@ export const cartService = {
   // normalization into one checkout currency), never by blocking the add.
   async addItem(buyerId: string, input: AddCartItemInput): Promise<CartWithItems> {
     const result = await this.addItemTx(buyerId, input);
+    // One cart row lasts a buyer's lifetime, so a new basket is the first item in an empty one.
+    if (result.items?.length === 1 && result.items[0].quantity === input.quantity) {
+      eventsService.emit({ name: EVENT_NAMES.cart_created, actorType: "user", actorId: buyerId, entityType: "Cart", entityId: result.id, source: "api" });
+    }
     eventsService.emit({
       name: EVENT_NAMES.item_added_to_cart, actorType: "user", actorId: buyerId, entityType: "Product", entityId: input.productId,
       source: "api", payload: { quantity: input.quantity },

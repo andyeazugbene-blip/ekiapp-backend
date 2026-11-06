@@ -1,3 +1,4 @@
+import { automationAttributionService } from "./automation-attribution.service";
 import type { Request, Response } from "express";
 
 import { AppError } from "../../shared/errors/app-error";
@@ -68,6 +69,11 @@ export async function getAutomationFailures(_request: Request, response: Respons
 
 export async function getAutomationPerformance(_request: Request, response: Response): Promise<void> {
   response.json(await automationRulesService.performance());
+}
+
+export async function getAutomationAttribution(request: Request, response: Response): Promise<void> {
+  const vendorId = typeof request.query.vendorId === "string" ? request.query.vendorId : undefined;
+  response.json(await automationAttributionService.report({ vendorId }));
 }
 
 export async function listAdminEvents(request: Request, response: Response): Promise<void> {

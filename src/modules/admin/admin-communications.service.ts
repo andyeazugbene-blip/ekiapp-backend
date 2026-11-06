@@ -20,7 +20,8 @@ import {
   validateDeepLink,
   verifyTestToken,
 } from "../communications/comms-utils";
-import { commsPauseService, PAUSE_REASON } from "../communications/comms-pause.service";
+import { commsPauseService, PAUSE_REASON } from "../communications/comms-pause.service";
+import { EVENT_NAMES, eventsService } from "../events/events.service";
 
 export type BroadcastAudience =
   | "all" | "vendors" | "buyers"
@@ -437,6 +438,9 @@ export interface BroadcastCounts {
   failed: number;
   /** In-app only: notifications the recipient has opened. */
   read?: number;
+  /** Email only, from the Resend webhook. */
+  opened?: number;
+  clicked?: number;
 }
 
 async function countsFor(broadcastIds: string[]): Promise<Map<string, Record<string, BroadcastCounts>>> {
@@ -653,6 +657,7 @@ export const adminCommunicationsService = {
         },
       });
       broadcastId = created.id;
+      eventsService.emit({ name: EVENT_NAMES.message_drafted, actorType: "admin", actorId, entityType: "Broadcast", entityId: created.id, source: "admin_web", payload: { audience: input.audience, category: input.category } });
     } catch (error) {
       if ((error as { code?: string })?.code === "P2002" && opts.idempotencyKey) {
         const existing = await prisma.broadcast.findUnique({ where: { idempotencyKey: opts.idempotencyKey } });
@@ -817,6 +822,10 @@ export const adminCommunicationsService = {
       counts.in_app.read = await prisma.notification.count({
         where: { data: { path: ["broadcastId"], equals: id }, readAt: { not: null } },
       }).catch(() => 0);
+    }
+    if (counts.email) {
+      counts.email.opened = await prisma.communicationLog.count({ where: { broadcastId: id, channel: "email", openedAt: { not: null } } }).catch(() => 0);
+      counts.email.clicked = await prisma.communicationLog.count({ where: { broadcastId: id, channel: "email", clickedAt: { not: null } } }).catch(() => 0);
     }
     return { broadcast: b, counts };
   },
