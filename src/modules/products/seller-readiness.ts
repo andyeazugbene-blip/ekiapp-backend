@@ -2,7 +2,8 @@ import type { Prisma, PrismaClient } from "@prisma/client";
 
 import { prisma } from "../../lib/prisma";
 import { AppError } from "../../shared/errors/app-error";
-import { adminPlatformSettingsService } from "../admin/admin-platform-settings.service";
+import { adminPlatformSettingsService } from "../admin/admin-platform-settings.service";
+import { launchSettingsService } from "../admin/launch-settings.service";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -79,6 +80,12 @@ export function assessSellerReadiness(v: SellerReadinessInput): { ready: boolean
 }
 
 /** Prisma `where` for Vendor mirroring assessSellerReadiness (buyer feeds). */
+/** On when the env flag forces it, or when an admin has turned off selling before verification. */
+export async function isSellerReadinessGateActive(): Promise<boolean> {
+  if (isSellerReadinessGateEnabled()) return true;
+  return !(await launchSettingsService.isOn("UNVERIFIED_VENDORS_CAN_SELL"));
+}
+
 export function purchasableVendorWhere(): Prisma.VendorWhereInput {
   return {
     verificationStatus: "VERIFIED",
@@ -122,7 +129,7 @@ export async function assertVendorsPurchasable(
   vendorIds: string[],
   client: Prisma.TransactionClient | PrismaClient = prisma,
 ): Promise<void> {
-  if (!isSellerReadinessGateEnabled() || vendorIds.length === 0) return;
+  if (vendorIds.length === 0 || !(await isSellerReadinessGateActive())) return;
   const unique = Array.from(new Set(vendorIds));
   const [vendors, paused] = await Promise.all([
     client.vendor.findMany({ where: { id: { in: unique } }, select: SELLER_READINESS_SELECT }),

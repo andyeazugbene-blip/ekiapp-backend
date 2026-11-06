@@ -9,7 +9,16 @@ import { AppError } from "../../shared/errors/app-error";
 import { getRuleGate, noteRuleRan, noteRuleSkipped } from "./automation-rule-gate";
 import { MARKETING_AUTOMATION_TYPES, VENDOR_TOGGLEABLE_AUTOMATION_TYPES, EKI_MANAGED_AUTOMATION_TYPES, type ScheduleAutomationInput } from "./automation.types";
 import { claimRecipientForNonUrgentSend, TRANSACTIONAL_AUTOMATION_TYPES } from "./automation-coalesce-scope";
-import { localQuietHoursToUtc } from "../../shared/currency";
+import { localQuietHoursToUtc } from "../../shared/currency";
+import { createHash } from "crypto";
+import { launchSettingsService } from "../admin/launch-settings.service";
+
+/** The same buyer stays in the same group for an automation, so the comparison holds over time. */
+export function isInHoldout(userId: string, type: string, percent: number): boolean {
+  if (percent <= 0) return false;
+  const bucket = parseInt(createHash("sha256").update(`${userId}:${type}`).digest("hex").slice(0, 8), 16) % 100;
+  return bucket < percent;
+}
 
 // Server-time quiet hours (UTC). A per-user-timezone version would need a
 // timezone field on User, which doesn't exist yet — documented limitation,
@@ -605,6 +614,12 @@ export const automationService = {
       if (!eligibility.eligible) {
         logger.info("Automation not eligible", { type: input.type, subjectKey: input.subjectKey, reason: eligibility.reason });
         await recordSuppression(input, eligibility.reason ?? "ineligible");
+        return;
+      }
+
+      // Handbook 12.1: a stable share of buyers forms the comparison group for incremental revenue.
+      if (input.requiresMarketingConsent && isInHoldout(input.recipientUserId, input.type, await launchSettingsService.get("INCREMENTAL_HOLDOUT_PERCENT"))) {
+        await recordSuppression(input, "holdout");
         return;
       }
 

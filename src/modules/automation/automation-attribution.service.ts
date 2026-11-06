@@ -52,6 +52,20 @@ export function attributeOrders(runs: Run[], orders: Order[], windowMs: number):
   return attributed;
 }
 
+const MIN_COMPARISON_BUYERS = 30;
+
+/** Handbook 12.1: uplift over natural conversion. Null until both groups are large enough to mean anything. */
+export function incrementalEstimate(input: { exposedBuyers: number; exposedConverted: number; holdoutBuyers: number; holdoutConverted: number; assisted: { currency: string; gross: number }[] }) {
+  if (input.exposedBuyers < MIN_COMPARISON_BUYERS || input.holdoutBuyers < MIN_COMPARISON_BUYERS) return null;
+  const exposedRate = input.exposedConverted / input.exposedBuyers;
+  const holdoutRate = input.holdoutConverted / input.holdoutBuyers;
+  const share = exposedRate > 0 ? Math.max(0, 1 - holdoutRate / exposedRate) : 0;
+  return {
+    exposedRate, holdoutRate, exposedBuyers: input.exposedBuyers, holdoutBuyers: input.holdoutBuyers,
+    byCurrency: input.assisted.map((row) => ({ currency: row.currency, amount: Math.round(row.gross * share) })),
+  };
+}
+
 export const automationAttributionService = {
   async report(params: { vendorId?: string } = {}) {
     const windowDays = await launchSettingsService.get("ATTRIBUTION_WINDOW_DAYS");
@@ -114,6 +128,29 @@ export const automationAttributionService = {
       ? null
       : await prisma.vendorReferralCredit.count({ where: { status: { in: ["QUALIFIED", "RELEASED"] }, qualifiedAt: { gte: since } } });
 
+    const heldBack = await prisma.automationRun.findMany({
+      where: { status: "SUPPRESSED", suppressedReason: "holdout", isTest: false, createdAt: { gte: since }, ...vendorFilter },
+      select: { recipientUserId: true, createdAt: true },
+      take: MAX_RUNS,
+    });
+    const holdoutBuyers = new Map<string, Date>();
+    for (const row of heldBack) if (!holdoutBuyers.has(row.recipientUserId)) holdoutBuyers.set(row.recipientUserId, row.createdAt);
+    const holdoutOrders = holdoutBuyers.size
+      ? await prisma.order.findMany({ where: { buyerId: { in: [...holdoutBuyers.keys()] }, isTest: false, status: { in: [...PAID_STATUSES] }, createdAt: { gte: since } }, select: { buyerId: true, createdAt: true } })
+      : [];
+    const windowMs = windowDays * DAY_MS;
+    const holdoutConverted = new Set(holdoutOrders.filter((order) => {
+      const start = holdoutBuyers.get(order.buyerId)?.getTime() ?? 0;
+      const at = order.createdAt.getTime();
+      return at >= start && at - start <= windowMs;
+    }).map((order) => order.buyerId));
+    const exposedConverted = new Set(orders.filter((order) => attributeOrders(runs, [{ ...order, refunds: [] }], windowMs).length > 0).map((order) => order.buyerId));
+    const estimatedIncremental = incrementalEstimate({
+      exposedBuyers: buyerIds.length, exposedConverted: exposedConverted.size,
+      holdoutBuyers: holdoutBuyers.size, holdoutConverted: holdoutConverted.size,
+      assisted: [...groups.values()],
+    });
+
     return {
       reportDays: REPORT_DAYS,
       windowDays,
@@ -123,11 +160,13 @@ export const automationAttributionService = {
       assisted: [...groups.values()].sort((a, b) => b.gross - a.gross),
       subscriptionRecovery: [...recovery.values()],
       qualifiedReferrals,
-      estimatedIncremental: null,
+      estimatedIncremental,
       notes: {
         assisted: `Orders placed within ${windowDays} days of an automation reaching the buyer. This shows association, not proof the automation caused the order.`,
         net: "Net is after completed refunds. No automation gives a discount or has a recorded cost today, so neither is deducted.",
-        incremental: "Estimated incremental revenue isn't shown, because it needs a comparison or holdout group and none exists yet.",
+        incremental: estimatedIncremental
+          ? "The share of assisted revenue above what the comparison group bought without automations. It's an estimate."
+          : "Not enough data yet. Set a comparison group in Settings → Launch decisions; each group needs at least 30 buyers.",
         recovery: "Renewals that failed at least once and were later paid.",
       },
     };

@@ -861,11 +861,24 @@ export async function organiserConfirmFulfilmentCompletion(request: Request, res
 /** M5 — supplier-facing exception report; an informational overlay, never a fulfilment-status change. */
 export async function reportFulfilmentException(request: Request, response: Response): Promise<void> {
   const acting = await resolveActingSupplier(requireUserId(request));
-  const note = request.body?.note;
-  if (typeof note !== "string" || !note.trim()) throw new AppError("note is required", 400);
+  const rawNote = request.body?.note;
+  if (typeof rawNote !== "string" || !rawNote.trim()) throw new AppError("note is required", 400);
+  const kindLabel = ({ PARTIALLY_FULFILLED: "Partially fulfilled", DELIVERY_PROBLEM: "Delivery problem" } as Record<string, string>)[String(request.body?.kind)];
+  const note = kindLabel ? `${kindLabel}: ${rawNote.trim()}` : rawNote;
   const result = acting.kind === "vendor"
     ? await campaignFulfilmentService.reportExceptionForVendor(acting.vendorId, requireIdParam(request), note)
     : await campaignFulfilmentService.reportExceptionForAccount(acting.userId, requireIdParam(request), note);
+  response.status(201).json(result);
+}
+
+/** CB74: a photo or document supporting the packing record. */
+export async function addFulfilmentEvidence(request: Request, response: Response): Promise<void> {
+  const acting = await resolveActingSupplier(requireUserId(request));
+  const url = request.body?.url;
+  if (typeof url !== "string" || !/^https?:\/\//.test(url)) throw new AppError("A valid file link is required", 400);
+  const result = acting.kind === "vendor"
+    ? await campaignFulfilmentService.addEvidenceForVendor(acting.vendorId, requireIdParam(request), url)
+    : await campaignFulfilmentService.addEvidenceForAccount(acting.userId, requireIdParam(request), url);
   response.status(201).json(result);
 }
 
@@ -927,7 +940,7 @@ export async function adminGetFulfilmentEvents(request: Request, response: Respo
 
 // ─── Support cases — doc Phase 9 ───────────────────────────────────────
 
-const VALID_CASE_TYPES = ["PAYMENT_ISSUE", "REFUND_ISSUE", "FULFILMENT_ISSUE", "ORGANISER_CONDUCT", "SUPPLIER_CONDUCT", "OTHER"];
+const VALID_CASE_TYPES = ["PRODUCT_QUALITY", "PAYMENT_ISSUE", "REFUND_ISSUE", "FULFILMENT_ISSUE", "ORGANISER_CONDUCT", "SUPPLIER_CONDUCT", "OTHER"];
 const VALID_CASE_STATUSES = ["OPEN", "IN_PROGRESS", "ESCALATED", "RESOLVED", "CLOSED"];
 
 export async function createSupportCase(request: Request, response: Response): Promise<void> {

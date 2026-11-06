@@ -5,12 +5,13 @@ import { prisma } from "../../lib/prisma";
 import { AppError } from "../../shared/errors/app-error";
 import { recordAudit, requireAuditReason } from "../../shared/utils/audit";
 import { EVENT_NAMES, eventsService } from "../events/events.service";
-import { notificationsService } from "../notifications/notifications.service";
+import { notificationsService } from "../notifications/notifications.service";
+import { campaignContributionsService } from "./campaign-contributions.service";
 
 /** Handbook 10.2: only these states can move to disputed. */
 const DISPUTABLE_STATUSES = ["FULFILLING", "COMPLETED"];
 /** A participant's issue about money or delivery holds the release until someone reviews it. */
-const HOLDING_CASE_TYPES = ["PAYMENT_ISSUE", "REFUND_ISSUE", "FULFILMENT_ISSUE", "SUPPLIER_CONDUCT"] as const;
+const HOLDING_CASE_TYPES = ["PAYMENT_ISSUE", "REFUND_ISSUE", "FULFILMENT_ISSUE", "SUPPLIER_CONDUCT", "PRODUCT_QUALITY"] as const;
 const OPEN_CASE_STATUSES = ["OPEN", "IN_PROGRESS", "ESCALATED"] as const;
 
 /**
@@ -102,6 +103,14 @@ function campaignIdOf(request: Request): string {
   const id = request.params.id;
   if (typeof id !== "string" || !id) throw new AppError("Invalid id", 400);
   return id;
+}
+
+export async function adminRecheckContribution(request: Request, response: Response): Promise<void> {
+  if (!request.user) throw new AppError("Unauthorized", 401);
+  const id = campaignIdOf(request);
+  const result = await campaignContributionsService.recheckForAdmin(id);
+  await recordAudit({ actorId: request.user.id, action: "community_contribution.provider_rechecked", entityType: "CampaignContribution", entityId: id, afterState: result, request });
+  response.status(200).json(result);
 }
 
 export async function adminDisputeCampaign(request: Request, response: Response): Promise<void> {

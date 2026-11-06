@@ -111,6 +111,19 @@ async function runHealthChecks(): Promise<HealthReport> {
     checks.stripe_raw = { status: "error", latencyMs: Date.now() - rawStripeStart, detail: error instanceof Error ? `${error.name}: ${error.message}` : String(error) };
   }
 
+  // Connect, read-only: a connected account proves Connect works. This list also comes
+  // back empty on an account without Connect, so an empty list proves nothing and isn't
+  // reported as ok. It creates nothing and moves no money.
+  const connectStart = Date.now();
+  try {
+    const accounts = await stripe.accounts.list({ limit: 1 });
+    checks.stripe_connect = accounts.data.length > 0
+      ? { status: "ok", latencyMs: Date.now() - connectStart, detail: "Connect active: connected accounts exist" }
+      : { status: "skipped", latencyMs: Date.now() - connectStart, detail: "Not confirmed: no connected accounts yet" };
+  } catch (error) {
+    checks.stripe_connect = { status: "error", latencyMs: Date.now() - connectStart, detail: error instanceof Error ? error.message : String(error) };
+  }
+
   // Paystack (optional — only check if configured)
   if (paystack.isConfigured()) {
     const psStart = Date.now();

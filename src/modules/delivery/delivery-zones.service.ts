@@ -59,6 +59,7 @@ export const deliveryZonesService = {
         flag: input.flag,
         baseFeeAmount: input.baseFeeAmount,
         feePerKgAmount: input.feePerKgAmount,
+        maxWeightGrams: input.maxWeightGrams ?? null,
         // Always derive from country — never trust a client-supplied currency
         // for a delivery zone. A mismatched currency here (e.g. a "United
         // States" zone saved as EUR) blocks checkout for every buyer whose

@@ -26,6 +26,7 @@ import {
   cancelBuyerSubscription,
   changeBuyerSubscriptionFrequency,
   confirmRenewalStock,
+  proposeRenewalPriceChange,
   confirmSetupIntent,
   createBuyerSubscription,
   createSetupIntent,
@@ -105,6 +106,7 @@ regularDeliveriesVendorRouter.get("/insights", asyncHandler(getVendorRegularDeli
 // at /renewals. Per-route auth since the action taken determines the role.
 export const renewalsRouter = Router();
 renewalsRouter.post("/:id/stock-confirmation", authenticate, requireVendorProfile(), asyncHandler(confirmRenewalStock));
+renewalsRouter.post("/:id/propose-price", authenticate, requireVendorProfile(), asyncHandler(proposeRenewalPriceChange));
 renewalsRouter.post("/:id/price-change", authenticate, asyncHandler(decideRenewalPriceChange));
 renewalsRouter.post("/:id/retry-payment", authenticate, asyncHandler(retryRenewalPayment));
 renewalsRouter.post("/:id/remove-item", authenticate, asyncHandler(removeRenewalItem));

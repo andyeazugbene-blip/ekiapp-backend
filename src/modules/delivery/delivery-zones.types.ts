@@ -4,6 +4,7 @@ export interface CreateDeliveryZoneInput {
   flag?: string;
   baseFeeAmount: number;
   feePerKgAmount: number;
+  maxWeightGrams?: number | null;
   currency?: string;
   isActive?: boolean;
 }
@@ -14,6 +15,7 @@ export interface UpdateDeliveryZoneInput {
   flag?: string | null;
   baseFeeAmount?: number;
   feePerKgAmount?: number;
+  maxWeightGrams?: number | null;
   currency?: string;
   isActive?: boolean;
 }

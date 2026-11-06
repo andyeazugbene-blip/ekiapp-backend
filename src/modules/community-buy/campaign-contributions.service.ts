@@ -540,6 +540,34 @@ export const campaignContributionsService = {
    * the SAME stored idempotencyKey; Stripe guarantees this is safe even if
    * the original request actually succeeded.
    */
+  /** CB83: asks Stripe for the real state. Only provider evidence can change the contribution. */
+  async recheckForAdmin(contributionId: string) {
+    const contribution = await prisma.campaignContribution.findUnique({
+      where: { id: contributionId },
+      select: { status: true, stripePaymentIntentId: true },
+    });
+    if (!contribution) throw new AppError("Contribution not found", 404);
+    let providerStatus: string | null = null;
+    // A provider error never changes the money state. It's reported, and the admin can try again.
+    try {
+      if (contribution.stripePaymentIntentId) {
+        const intent = await stripe.paymentIntents.retrieve(contribution.stripePaymentIntentId);
+        providerStatus = intent.status;
+        if (contribution.status === "PAYMENT_PROCESSING" && (intent.status === "succeeded" || intent.status === "canceled" || intent.status === "requires_payment_method")) {
+          const succeeded = intent.status === "succeeded";
+          await this.resolveProcessingCharge(contributionId, intent.id, succeeded, succeeded ? undefined : "Payment failed after processing");
+        }
+      } else if (contribution.status === "PAYMENT_PROCESSING") {
+        await this.requeryAmbiguousCharge(contributionId);
+      }
+    } catch (error) {
+      logger.warn("Could not recheck a contribution with the provider", { contributionId, error: error instanceof Error ? error.message : String(error) });
+      providerStatus = "unavailable";
+    }
+    const after = await prisma.campaignContribution.findUniqueOrThrow({ where: { id: contributionId }, select: { status: true } });
+    return { ekiStatus: after.status, providerStatus, countedTowardsCampaign: ["PLEDGED", "PAID", "PAYMENT_PROCESSING"].includes(after.status), checkedAt: new Date().toISOString() };
+  },
+
   async requeryAmbiguousCharge(contributionId: string) {
     const attempt = await prisma.campaignChargeAttempt.findFirst({
       where: { contributionId, status: "PENDING", stripePaymentIntentId: null },

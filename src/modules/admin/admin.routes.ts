@@ -317,7 +317,7 @@ import { adminProvisionDemoAccount, adminCreateDemoAccount, adminFillDemoAccount
 import { adminCampaignsRouter } from "../campaigns/campaigns.routes";
 import { adminResetUsers } from "./admin-reset.controller";
 import { adminContactPrivacy, revealSupplierContact, revealUserContact, revealVendorContact } from "./admin-pii";
-import { adminDisputeCampaign, adminResolveCampaignDispute } from "../community-buy/campaign-dispute.service";
+import { adminDisputeCampaign, adminRecheckContribution, adminResolveCampaignDispute } from "../community-buy/campaign-dispute.service";
 
 function requireAdminUserId(request: unknown): string {
   const id = (request as { user?: { id?: string } }).user?.id;
@@ -424,6 +424,7 @@ adminRouter.get("/community-campaigns/closed", asyncHandler(requireAdminPermissi
 adminRouter.post("/community-campaigns/:id/approve", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(require2fa), asyncHandler(adminApproveCampaign));
 adminRouter.post("/community-campaigns/:id/request-changes", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(require2fa), asyncHandler(adminRequestCampaignChanges));
 adminRouter.post("/community-campaigns/:id/reject", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(require2fa), asyncHandler(adminRejectCampaign));
+adminRouter.post("/community-buy/contributions/:id/recheck", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(adminRecheckContribution));
 adminRouter.post("/community-campaigns/:id/dispute", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(require2fa), asyncHandler(adminDisputeCampaign));
 adminRouter.post("/community-campaigns/:id/dispute/resolve", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(require2fa), asyncHandler(adminResolveCampaignDispute));
 adminRouter.post("/community-campaigns/:id/pause", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(require2fa), asyncHandler(adminPauseCampaign));

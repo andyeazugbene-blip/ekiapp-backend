@@ -5,7 +5,7 @@ import {
   SELLER_READINESS_SELECT,
   SELLER_REASON_MESSAGES,
   assessSellerReadiness,
-  isSellerReadinessGateEnabled,
+  isSellerReadinessGateActive,
 } from "../products/seller-readiness";
 import { buildVendorShareUrl } from "./vendors.service";
 
@@ -124,7 +124,7 @@ export const vendorStorePreviewService = {
     if (!vendor) {
       throw new AppError("Vendor profile required", 403);
     }
-    const gateEnabled = isSellerReadinessGateEnabled();
+    const gateEnabled = await isSellerReadinessGateActive();
     const a = assessSellerReadiness(vendor);
     return {
       gateEnabled,

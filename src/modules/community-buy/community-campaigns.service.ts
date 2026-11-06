@@ -2201,9 +2201,15 @@ export const communityCampaignsService = {
   //   confirmed <  minimum   -> RESCUE_WINDOW opens, no supplier order yet
 
   async closeDueCampaigns(): Promise<{ closed: number; succeeded: number; failed: number; rescued: number }> {
-    const due = await prisma.communityCampaign.findMany({
+    const pastDeadline = await prisma.communityCampaign.findMany({
       where: { status: "LIVE", deadline: { lte: new Date() }, ...REAL_CAMPAIGN },
     });
+    // Workflow section 3: reaching the maximum before the deadline closes the campaign as a success.
+    const stillOpen = await prisma.communityCampaign.findMany({
+      where: { status: "LIVE", paymentMode: "PLEDGE_THEN_CHARGE", deadline: { gt: new Date() }, maximumShares: { not: null }, ...REAL_CAMPAIGN },
+    });
+    const full = (stillOpen ?? []).filter((c) => c.maximumShares !== null && c.confirmedShares >= c.maximumShares);
+    const due = [...new Map([...pastDeadline, ...full].map((c) => [c.id, c])).values()];
 
     let succeeded = 0;
     let failed = 0;
@@ -2228,7 +2234,8 @@ export const communityCampaignsService = {
       const goal = campaign.goalShares ?? 0;
 
       if (campaign.confirmedShares >= minimum) {
-        const outcome = campaign.confirmedShares >= goal ? "GOAL_REACHED" : "MINIMUM_REACHED";
+        const atMaximum = campaign.maximumShares !== null && campaign.maximumShares > goal && campaign.confirmedShares >= campaign.maximumShares;
+        const outcome = atMaximum ? "MAXIMUM_REACHED" : campaign.confirmedShares >= goal ? "GOAL_REACHED" : "MINIMUM_REACHED";
         // Atomic claim — guards against two overlapping sweep runs (e.g. a
         // manual /jobs/community-buy-sweep trigger racing the daily cron)
         // both deciding the same campaign's outcome and double-firing the

@@ -84,7 +84,7 @@ async function recordFulfilmentEvent(entry: {
   contributionId?: string | null;
   actorUserId: string;
   actorRole: "SUPPLIER" | "ORGANISER" | "PARTICIPANT" | "ADMIN";
-  eventType: "INVENTORY_CONFIRMED" | "PLAN_SET" | "PACKING_STARTED" | "READY" | "DISPATCHED" | "COLLECTED" | "COMPLETED" | "EXCEPTION" | "PARTICIPANT_RECEIPT_CONFIRMED" | "PARTICIPANT_PROBLEM_REPORTED";
+  eventType: "INVENTORY_CONFIRMED" | "PLAN_SET" | "PACKING_STARTED" | "READY" | "DISPATCHED" | "COLLECTED" | "COMPLETED" | "EXCEPTION" | "EVIDENCE_ADDED" | "PARTICIPANT_RECEIPT_CONFIRMED" | "PARTICIPANT_PROBLEM_REPORTED";
   note?: string | null;
   metadata?: Record<string, unknown> | null;
 }): Promise<void> {
@@ -486,6 +486,20 @@ export const campaignFulfilmentService = {
   // ─── M5 — supplier-facing exception reporting. Informational overlay
   // only (Appendix B's delivery_exception is an EVENT, not a distinct
   // CampaignFulfilment status) — never changes fulfilment.status itself.
+
+  async addEvidenceForVendor(vendorId: string, campaignId: string, url: string) {
+    const { actorUserId } = await requireSupplierOwned(vendorId, campaignId);
+    await recordFulfilmentEvent({ campaignId, actorUserId, actorRole: "SUPPLIER", eventType: "EVIDENCE_ADDED", metadata: { url } });
+    return { recorded: true };
+  },
+
+  async addEvidenceForAccount(userId: string, campaignId: string, url: string) {
+    const account = await prisma.supplierAccount.findUnique({ where: { userId }, select: { id: true } });
+    const campaign = await prisma.communityCampaign.findUnique({ where: { id: campaignId }, select: { supplierAccountId: true } });
+    if (!account || campaign?.supplierAccountId !== account.id) throw new AppError("Campaign not found", 404);
+    await recordFulfilmentEvent({ campaignId, actorUserId: userId, actorRole: "SUPPLIER", eventType: "EVIDENCE_ADDED", metadata: { url } });
+    return { recorded: true };
+  },
 
   async reportExceptionForVendor(vendorId: string, campaignId: string, note: string) {
     const { campaign, actorUserId } = await requireSupplierOwned(vendorId, campaignId);

@@ -14,7 +14,7 @@ import {
   SELLER_READINESS_SELECT,
   SELLER_REASON_MESSAGES,
   assessSellerReadiness,
-  isSellerReadinessGateEnabled,
+  isSellerReadinessGateActive,
 } from "../products/seller-readiness";
 
 /**
@@ -52,13 +52,13 @@ function productStatus(p: { status: RealProductStatus }): ProductStatus {
   return "DRAFT";
 }
 
-function readinessView(vendor: Parameters<typeof assessSellerReadiness>[0]) {
+function readinessView(vendor: Parameters<typeof assessSellerReadiness>[0], gateEnabled: boolean) {
   const a = assessSellerReadiness(vendor);
   return {
     ready: a.ready,
     reason: a.reason,
     message: a.reason ? SELLER_REASON_MESSAGES[a.reason] : null,
-    gateEnabled: isSellerReadinessGateEnabled(),
+    gateEnabled,
   };
 }
 
@@ -148,8 +148,9 @@ export const adminProductsService = {
       take: 200,
     });
 
+    const gateEnabled = await isSellerReadinessGateActive();
     const items = rows.map((p) => {
-      const readiness = p.vendor ? readinessView(p.vendor) : null;
+      const readiness = p.vendor ? readinessView(p.vendor, gateEnabled) : null;
       return {
         id: p.id,
         productCode: p.productCode,
@@ -235,7 +236,7 @@ export const adminProductsService = {
     ];
 
     const vendor = product.vendor;
-    const readiness = vendor ? readinessView(vendor) : null;
+    const readiness = vendor ? readinessView(vendor, await isSellerReadinessGateActive()) : null;
     const { vendor: _v, subscriptionOfferProducts, ...rest } = product;
 
     return {
