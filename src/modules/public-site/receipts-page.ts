@@ -68,7 +68,7 @@ export function renderReceipt(title: string, rows: [string, string][]): string {
 }
 
 /** A short-lived link, so the app can open a receipt in a browser without putting the session there. */
-function signReceiptLink(kind: "contribution", id: string, userId: string): string {
+function signReceiptLink(kind: "contribution" | "renewal", id: string, userId: string): string {
   const token = jwt.sign({ purpose: PURPOSE, kind, id }, env.jwtSecret, { subject: userId, expiresIn: LIFETIME });
   return `${env.frontendUrl}/receipt/${token}`;
 }
@@ -78,6 +78,13 @@ export const receiptsService = {
     const contribution = await prisma.campaignContribution.findUnique({ where: { id: contributionId }, select: { participant: { select: { userId: true } } } });
     if (!contribution || contribution.participant.userId !== userId) throw new AppError("Contribution not found", 404);
     return { url: signReceiptLink("contribution", contributionId, userId) };
+  },
+
+  async renewalLink(userId: string, renewalId: string): Promise<{ url: string }> {
+    const renewal = await prisma.renewal.findUnique({ where: { id: renewalId }, select: { orderId: true, subscription: { select: { buyerId: true } } } });
+    if (!renewal || renewal.subscription.buyerId !== userId) throw new AppError("Renewal not found", 404);
+    if (!renewal.orderId) throw new AppError("There's no receipt until this renewal has been paid.", 409, undefined, "RECEIPT_NOT_AVAILABLE");
+    return { url: signReceiptLink("renewal", renewalId, userId) };
   },
 };
 
@@ -92,7 +99,41 @@ export async function getReceiptPage(request: Request, response: Response): Prom
     expired();
     return;
   }
-  if (claims.purpose !== PURPOSE || claims.kind !== "contribution" || typeof claims.id !== "string") {
+  if (claims.purpose !== PURPOSE || typeof claims.id !== "string") {
+    expired();
+    return;
+  }
+  if (claims.kind === "renewal") {
+    const renewal = await prisma.renewal.findUnique({
+      where: { id: claims.id },
+      select: {
+        id: true,
+        currency: true,
+        subscription: { select: { buyerId: true, offer: { select: { vendor: { select: { storeName: true } } } } } },
+        items: { select: { quantity: true, currentUnitPrice: true, product: { select: { title: true } } } },
+        order: { select: { orderNumber: true, subtotalAmount: true, deliveryFeeAmount: true, totalAmount: true, createdAt: true, payment: { select: { status: true } } } },
+      },
+    });
+    if (!renewal || !renewal.order || renewal.subscription.buyerId !== claims.sub) {
+      expired();
+      return;
+    }
+    const listed = renewal.items.reduce((sum, i) => sum + i.currentUnitPrice * i.quantity, 0);
+    const paid = renewal.order.payment?.status === "SUCCEEDED";
+    response.status(200).send(renderReceipt("Regular Delivery receipt", [
+      ["Store", renewal.subscription.offer.vendor.storeName],
+      ["Order reference", renewal.order.orderNumber.slice(-10).toUpperCase()],
+      ["Renewal reference", renewal.id.slice(-10).toUpperCase()],
+      ["Payment status", paid ? "Paid" : "Payment under review"],
+      ["Foodstuff", renewal.items.map((i) => `${i.product.title} x${i.quantity}`).join(", ")],
+      ["Delivery", money(renewal.order.deliveryFeeAmount, renewal.currency)],
+      ["Discount", money(Math.max(0, listed - renewal.order.subtotalAmount), renewal.currency)],
+      [paid ? "Total paid" : "Total", money(renewal.order.totalAmount, renewal.currency)],
+      ["Date", dateTime(renewal.order.createdAt)],
+    ]));
+    return;
+  }
+  if (claims.kind !== "contribution") {
     expired();
     return;
   }
