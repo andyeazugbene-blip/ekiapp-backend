@@ -175,6 +175,9 @@ export function validateListProductsQuery(query: Record<string, unknown>): ListP
   return {
     category: optionalString(query.category, "category"),
     vendorId: optionalString(query.vendorId, "vendorId"),
+    search: optionalString(query.search, "search")?.slice(0, 100),
+    // An unknown value is ignored, because older app versions send other sort names.
+    sort: query.sort === "recommended" || query.sort === "popular" || query.sort === "newest" ? query.sort : undefined,
     limit,
     cursor: optionalString(query.cursor, "cursor"),
   };

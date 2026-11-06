@@ -28,6 +28,8 @@ export interface UpdateProductInput {
 export interface ListProductsQuery {
   category?: string;
   vendorId?: string;
+  search?: string;
+  sort?: "recommended" | "popular" | "newest";
   limit: number;
   cursor?: string;
 }

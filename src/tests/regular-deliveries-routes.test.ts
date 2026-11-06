@@ -114,7 +114,8 @@ vi.mock("../lib/prisma", async () => {
             count: (...a: unknown[]) => mockSubscriptionCount(...a),
           };
         }
-        if (prop === "renewal") return { findMany: (...a: unknown[]) => mockRenewalFindMany(...a) };
+        if (prop === "renewal") return { findMany: (...a: unknown[]) => mockRenewalFindMany(...a), count: async () => 0 };
+        if (prop === "subscriptionItem") return { groupBy: async () => [] };
         return (target as any)[prop];
       },
     }),
