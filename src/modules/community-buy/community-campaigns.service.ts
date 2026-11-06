@@ -20,7 +20,8 @@ import { slugify } from "../../shared/utils/slug";
 import { isSupplierPayoutReady } from "./supplier-account.service";
 import { assertCampaignTransition } from "./campaign-transitions";
 import { notifyUserInAppAndEmail } from "./community-buy-notices";
-import { notifyCampaignLiveDiscovery, notifyClosingSoonDiscovery } from "./campaign-notifications";
+import { notifyCampaignLiveDiscovery, notifyClosingSoonDiscovery } from "./campaign-notifications";
+import { buyerCampaignView } from "./campaign-views";
 
 // Community Buy Workstream 2: only `title` and `country` are hard
 // requirements to start a draft (spec §7 — "any authenticated user can
@@ -506,6 +507,9 @@ export function parseReviewCriteria(raw: unknown): ReviewCriteria | undefined {
 }
 
 /** CB48: what an organiser can see of each participant. Payment details are never part of this. */
+/** Background jobs skip demo campaigns, so they can never close, charge or refund one. */
+const REAL_CAMPAIGN = { organiser: { user: { isTest: false } } };
+
 const ORGANISER_VISIBLE_CONTRIBUTIONS = ["PLEDGED", "PAID", "PAYMENT_PROCESSING", "PAYMENT_FAILED", "CHARGE_FAILED", "REFUND_PENDING", "REFUND_PROCESSING", "REFUND_FAILED", "REFUNDED"] as const;
 const COUNTED_CONTRIBUTIONS = new Set<string>(["PLEDGED", "PAID", "PAYMENT_PROCESSING"]);
 
@@ -1875,7 +1879,7 @@ export const communityCampaignsService = {
    */
   async openScheduledCampaigns(): Promise<{ opened: number }> {
     const due = await prisma.communityCampaign.findMany({
-      where: { status: "APPROVED", publishedAt: { not: null }, scheduledOpenAt: { lte: new Date() } },
+      where: { status: "APPROVED", publishedAt: { not: null }, scheduledOpenAt: { lte: new Date() }, ...REAL_CAMPAIGN },
       include: { organiser: true },
     });
     let opened = 0;
@@ -2015,11 +2019,11 @@ export const communityCampaignsService = {
     // real OrganiserProfile.isVerified flag, not inferred from anything else.
     return campaigns.map((c) => {
       const { organiser, ...rest } = c;
-      return {
+      return buyerCampaignView({
         ...rest,
         organiserDisplayName: resolveOrganiserDisplayName(organiser.user.name, organiser.firstNameOnlyDisplay),
         organiserVerified: organiser.isVerified,
-      };
+      });
     });
   },
 
@@ -2159,20 +2163,21 @@ export const communityCampaignsService = {
       prisma.organiserProfile.findUnique({ where: { userId }, select: { id: true } }),
       prisma.campaignParticipant.findFirst({ where: { campaignId, userId }, select: { id: true } }),
     ]);
-    let involved = user?.role === "ADMIN" || organiser?.id === gate.organiserId || !!participant;
-    if (!involved && gate.supplierAccountId) {
+    // A participant may always open their campaign, but only these see its commercial terms.
+    let isParty = user?.role === "ADMIN" || organiser?.id === gate.organiserId;
+    if (!isParty && gate.supplierAccountId) {
       const account = await prisma.supplierAccount.findUnique({ where: { userId }, select: { id: true } });
-      involved = account?.id === gate.supplierAccountId;
+      isParty = account?.id === gate.supplierAccountId;
     }
-    if (!involved && gate.supplierId) {
+    if (!isParty && gate.supplierId) {
       const vendor = await prisma.vendor.findUnique({ where: { userId }, select: { id: true } });
       if (vendor) {
         const supplierProfile = await prisma.supplierProfile.findUnique({ where: { vendorId: vendor.id }, select: { id: true } });
-        involved = supplierProfile?.id === gate.supplierId;
+        isParty = supplierProfile?.id === gate.supplierId;
       }
     }
 
-    if (!involved) {
+    if (!isParty && !participant) {
       // Demo and real accounts never see each other's campaigns.
       const gateOrganiser = await prisma.organiserProfile.findUnique({ where: { id: gate.organiserId }, select: { user: { select: { isTest: true } } } });
       if ((gateOrganiser?.user?.isTest ?? false) !== (user?.isTest ?? false)) throw new AppError("Campaign not found", 404);
@@ -2182,7 +2187,8 @@ export const communityCampaignsService = {
       }
     }
 
-    return this.get(campaignId);
+    const campaign = await this.get(campaignId);
+    return isParty ? campaign : buyerCampaignView(campaign);
   },
 
   // ─── Closing workflow — doc §7 Deadline Evaluation ─────────────────────
@@ -2196,7 +2202,7 @@ export const communityCampaignsService = {
 
   async closeDueCampaigns(): Promise<{ closed: number; succeeded: number; failed: number; rescued: number }> {
     const due = await prisma.communityCampaign.findMany({
-      where: { status: "LIVE", deadline: { lte: new Date() } },
+      where: { status: "LIVE", deadline: { lte: new Date() }, ...REAL_CAMPAIGN },
     });
 
     let succeeded = 0;
@@ -2397,7 +2403,7 @@ export const communityCampaignsService = {
   /** Evaluates campaigns whose rescue window has expired — run from the cron sweep alongside closeDueCampaigns(). */
   async evaluateRescueExpiry(): Promise<{ rescued: number; failed: number }> {
     const expired = await prisma.communityCampaign.findMany({
-      where: { status: "RESCUE_WINDOW", rescueEndsAt: { lte: new Date() } },
+      where: { status: "RESCUE_WINDOW", rescueEndsAt: { lte: new Date() }, ...REAL_CAMPAIGN },
     });
     let rescued = 0;
     let failed = 0;
@@ -2730,7 +2736,7 @@ export const communityCampaignsService = {
   async remindApproachingDeadlines(): Promise<number> {
     const soon = new Date(Date.now() + 24 * 60 * 60 * 1000);
     const campaigns = await prisma.communityCampaign.findMany({
-      where: { status: "LIVE", deadline: { lte: soon, gt: new Date() } },
+      where: { status: "LIVE", deadline: { lte: soon, gt: new Date() }, ...REAL_CAMPAIGN },
       include: { participants: true },
     });
     let notified = 0;

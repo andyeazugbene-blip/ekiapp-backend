@@ -256,7 +256,7 @@ describe("Scheduled campaign opening", () => {
     await communityCampaignsService.openScheduledCampaigns();
 
     expect(m.communityCampaign.findMany).toHaveBeenCalledWith(
-      expect.objectContaining({ where: { status: "APPROVED", publishedAt: { not: null }, scheduledOpenAt: { lte: expect.any(Date) } } }),
+      expect.objectContaining({ where: { status: "APPROVED", publishedAt: { not: null }, scheduledOpenAt: { lte: expect.any(Date) }, organiser: { user: { isTest: false } } } }),
     );
   });
 });

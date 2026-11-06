@@ -958,7 +958,10 @@ export const campaignContributionsService = {
   },
 
   async processPendingRefunds(limit = 50): Promise<{ processed: number; failed: number }> {
-    const pending = await prisma.campaignRefund.findMany({ where: { status: "REFUND_PENDING" }, take: limit });
+    const pending = await prisma.campaignRefund.findMany({
+      where: { status: "REFUND_PENDING", contribution: { campaign: { organiser: { user: { isTest: false } } } } },
+      take: limit,
+    });
     let processed = 0;
     let failed = 0;
     for (const refund of pending) {
