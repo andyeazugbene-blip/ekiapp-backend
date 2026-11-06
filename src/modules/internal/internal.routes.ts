@@ -30,6 +30,7 @@ import { registerCoreEventHandlers } from "../events/core-event-handlers";
 import { notificationDeliveryService } from "../notifications/notification-delivery.service";
 import { supplierOffersService } from "../community-buy/supplier-offers.service";
 import { firstSaleCampaignService } from "../growth/first-sale-campaign.service";
+import { recordVendorTrialEndingEvents } from "../automation/vendor-trial-ending";
 
 export const internalRouter = Router();
 registerCoreEventHandlers();
@@ -472,6 +473,7 @@ const jobs: [string, string, () => Promise<Record<string, unknown>>][] = [
   ["first-sale-campaign-sweep", "First Sale Campaign outcomes", () => firstSaleCampaignService.sweep()],
   ["demand-matching", "match foodstuff demand to suppliers", () => supplierOffersService.matchDemandToSuppliers()],
   ["demand-digest", "daily foodstuff request digest", () => supplierOffersService.sendDemandDigest()],
+  ["vendor-trial-ending-events", "record vendor trials ending soon", () => recordVendorTrialEndingEvents()],
 ];
 
 for (const [path, name, run] of jobs) {

@@ -8,6 +8,7 @@ import { AppError } from "../../shared/errors/app-error";
 import { recordAudit } from "../../shared/utils/audit";
 import { adminPlatformSettingsService } from "../admin/admin-platform-settings.service";
 import { communicationService } from "../communications/communication.service";
+import { EVENT_NAMES, eventsService } from "../events/events.service";
 import { suspiciousReferralReason, vendorReferralsService } from "../growth/vendor-referrals.service";
 
 const REFERRAL_BONUS_AMOUNT = 500; // 500 cents = €5
@@ -124,6 +125,7 @@ export const referralsService = {
       where: { id: referredUserId },
       data: { referredBy: referrer.id },
     });
+    eventsService.emit({ name: EVENT_NAMES.referred_account_created, dedupeKey: `referred_account_created:${referredUserId}`, actorType: "user", actorId: referredUserId, entityType: "User", entityId: referredUserId, secondaryEntities: { referrerId: referrer.id }, source: "api" });
   },
 
   /**

@@ -11,16 +11,20 @@ import { eventsService, EVENT_NAMES } from "../events/events.service";
  *                        real Expo push receipt reported OK.
  *  - message_failed    : the channel dispatch failed (or Expo reported failure).
  *
- * message_opened / message_clicked are NOT emitted: no open/click tracking
- * path exists. Delivery is at-least-once; payload.eventKey is stable per
+ *  - message_opened / message_clicked : Resend reported it, or the recipient
+ *                        tapped the notification.
+ *
+ * Delivery is at-least-once; payload.eventKey is stable per
  * (outcome, communication log row) so consumers dedupe. Never throws.
  */
-export type MessageOutcome = "queued" | "delivered" | "failed";
+export type MessageOutcome = "queued" | "delivered" | "failed" | "opened" | "clicked";
 
 const NAME: Record<MessageOutcome, string> = {
   queued: EVENT_NAMES.message_queued,
   delivered: EVENT_NAMES.message_delivered,
   failed: EVENT_NAMES.message_failed,
+  opened: EVENT_NAMES.message_opened,
+  clicked: EVENT_NAMES.message_clicked,
 };
 
 export function emitMessageEvent(

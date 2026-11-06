@@ -117,6 +117,7 @@ app.use(requestLogger);
 // Body parsing (Stripe webhook needs raw body BEFORE json parser)
 app.use("/api/stripe/webhook", express.raw({ type: "application/json" }));
 app.use("/api/paystack/webhook", express.raw({ type: "application/json" }));
+app.use("/api/resend/webhook", express.raw({ type: "application/json" }));
 app.use(express.json({ limit: "5mb" }));
 app.use(express.urlencoded({ extended: true, limit: "2mb" }));
 

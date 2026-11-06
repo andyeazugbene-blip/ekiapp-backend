@@ -1,6 +1,7 @@
 import type { Request, Response } from "express";
 
 import { AppError } from "../../shared/errors/app-error";
+import { EVENT_NAMES, eventsService } from "../events/events.service";
 import { productsService } from "./products.service";
 import { inventoryCountsService } from "./inventory-counts.service";
 import {
@@ -87,5 +88,11 @@ export async function getMyProduct(request: Request, response: Response): Promis
 
 export async function getProduct(request: Request, response: Response): Promise<void> {
   const product = await productsService.getProductById(requireIdParam(request), await viewerIsTest(request.user?.id));
+  if (request.user?.id !== product.vendor?.userId && request.user?.role !== "ADMIN") {
+    eventsService.emit({
+      name: EVENT_NAMES.product_viewed, actorType: request.user ? "user" : "anonymous", actorId: request.user?.id ?? null,
+      entityType: "Product", entityId: product.id, secondaryEntities: { vendorId: product.vendorId }, source: "api",
+    });
+  }
   response.status(200).json({ product: stripInternalCost(product as unknown as Record<string, unknown>) });
 }

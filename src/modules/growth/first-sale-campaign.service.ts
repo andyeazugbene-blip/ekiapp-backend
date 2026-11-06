@@ -5,7 +5,8 @@ import { AppError } from "../../shared/errors/app-error";
 import { countryNamesForMarketCode, resolveMarketCode } from "../../shared/currency";
 import { recordAudit } from "../../shared/utils/audit";
 import { launchSettingsService } from "../admin/launch-settings.service";
-import { notificationsService } from "../notifications/notifications.service";
+import { notificationsService } from "../notifications/notifications.service";
+import { EVENT_NAMES, eventsService } from "../events/events.service";
 
 const LAUNCH_PRODUCT_COUNT = 3;
 const PAID_STATUSES = ["PAID", "CONFIRMED", "PROCESSING", "DISPATCHED", "IN_TRANSIT", "DELIVERED", "COMPLETED", "PAYMENT_SECURED", "VENDOR_CONFIRMED"] as const;
@@ -136,6 +137,10 @@ export const firstSaleCampaignService = {
     } catch (error) {
       if ((error as { code?: string })?.code === "P2002") throw new AppError("Your First Sale Campaign has already started.", 409, undefined, "FIRST_SALE_ALREADY_STARTED");
       throw error;
+    }
+    // The vendor creates, approves and launches in one step.
+    for (const name of [EVENT_NAMES.campaign_created, EVENT_NAMES.campaign_approved, EVENT_NAMES.campaign_launched]) {
+      eventsService.emit({ name, actorType: "vendor", actorId: vendorUserId, entityType: "FirstSaleCampaign", entityId: campaign.id, secondaryEntities: { vendorId: vendor.id }, source: "vendor_app" });
     }
     const cap = await launchSettingsService.get("FIRST_SALE_MAX_BUYERS");
     const categories = (await prisma.product.findMany({ where: { id: { in: productIds } }, select: { category: true } })).map((p) => p.category).filter((c): c is string => !!c);

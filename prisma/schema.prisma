@@ -2105,8 +2105,12 @@ model CommunicationLog {
   providerRef   String?
   statusDetail  String?
   deliveredAt   DateTime?
+  // Handbook 6.2: real provider signals from the Resend webhook.
+  openedAt      DateTime?
+  clickedAt     DateTime?
   createdAt     DateTime  @default(now())
 
+  @@index([providerRef])
   @@index([broadcastId])
   @@index([recipientId])
   @@index([eventKey])

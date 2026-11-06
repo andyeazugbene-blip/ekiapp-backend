@@ -2,6 +2,7 @@ import type Stripe from "stripe";
 
 import { prisma } from "../../lib/prisma";
 import { logger } from "../../lib/logger";
+import { EVENT_NAMES, eventsService } from "../events/events.service";
 import { automationService } from "./automation.service";
 
 function formatMoney(minor: number, currency: string): string {
@@ -22,6 +23,32 @@ export async function notifyVendorTrialEnding(stripeSubscription: Stripe.Subscri
     stripeSubscriptionId: stripeSubscription.id,
   });
   return "ignored";
+}
+
+/**
+ * Handbook 12 vendor_trial_ending. This records the fact for reporting, so it
+ * runs whether or not the R30 reminder itself is switched on. Once per trial end.
+ */
+export async function recordVendorTrialEndingEvents(now = new Date()): Promise<{ recorded: number }> {
+  const subscriptions = await prisma.vendorSubscription.findMany({
+    where: {
+      status: "ACTIVE",
+      cancelledAt: null,
+      trialStartedAt: { not: null },
+      trialEndsAt: { gt: now, lte: new Date(now.getTime() + 7 * 24 * 60 * 60 * 1000) },
+    },
+    select: { id: true, vendorId: true, trialEndsAt: true },
+    take: 500,
+  });
+  let recorded = 0;
+  for (const sub of subscriptions) {
+    if (!sub.trialEndsAt) continue;
+    const dedupeKey = `vendor_trial_ending:${sub.id}:${sub.trialEndsAt.getTime()}`;
+    if ((await prisma.event.count({ where: { dedupeKey } })) > 0) continue;
+    eventsService.emit({ name: EVENT_NAMES.vendor_trial_ending, dedupeKey, actorType: "system", entityType: "Vendor", entityId: sub.vendorId, source: "daily_sweep", payload: { trialEndsAt: sub.trialEndsAt.toISOString() } });
+    recorded += 1;
+  }
+  return { recorded };
 }
 
 /**

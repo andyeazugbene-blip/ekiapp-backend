@@ -24,6 +24,8 @@ export interface SendEmailInput {
   text?: string;
   /** Extra headers, e.g. List-Unsubscribe for marketing mail. */
   headers?: Record<string, string>;
+  /** Returned on provider webhooks, so an event can be matched to its log row. */
+  tags?: { name: string; value: string }[];
 }
 
 export interface SendEmailResult {
@@ -63,6 +65,7 @@ export async function sendEmailDetailed(input: SendEmailInput): Promise<SendEmai
       html: input.html,
       text: input.text,
       headers: input.headers,
+      ...(input.tags ? { tags: input.tags } : {}),
     });
 
     if (result.error) {

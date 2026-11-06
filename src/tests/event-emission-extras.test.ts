@@ -31,7 +31,7 @@ vi.mock("../modules/community-buy/organiser-stripe-connect.service", () => ({ or
 vi.mock("../modules/vendors/stripe-connect.service", () => ({ stripeConnectService: {} }));
 const mockMaybeSendFirstVisit = vi.fn();
 vi.mock("../modules/vendors/vendor-milestone-notifications.service", () => ({
-  vendorMilestoneNotificationsService: { maybeSendFirstVisit: (...a: unknown[]) => mockMaybeSendFirstVisit(...a) },
+  vendorMilestoneNotificationsService: { maybeSendFirstVisit: (...a: unknown[]) => mockMaybeSendFirstVisit(...a), recordStoreReady: vi.fn() },
 }));
 vi.mock("../shared/utils/audit", async () => {
   const actual = await vi.importActual<typeof import("../shared/utils/audit")>("../shared/utils/audit");

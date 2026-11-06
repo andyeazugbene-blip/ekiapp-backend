@@ -3,6 +3,7 @@ import type { Campaign } from "@prisma/client";
 
 import { prisma } from "../../lib/prisma";
 import { AppError } from "../../shared/errors/app-error";
+import { EVENT_NAMES, eventsService } from "../events/events.service";
 import {
   optionalDate,
   optionalDiscountType,
@@ -85,6 +86,10 @@ export const campaignsService = {
         discountValue: input.discountValue ?? null,
       },
     });
+    eventsService.emit({ name: EVENT_NAMES.campaign_created, actorType: "admin", entityType: "Campaign", entityId: campaign.id, source: "admin_web", payload: { type: campaign.type } });
+    if (campaign.active) {
+      eventsService.emit({ name: EVENT_NAMES.campaign_launched, actorType: "admin", entityType: "Campaign", entityId: campaign.id, source: "admin_web", payload: { type: campaign.type } });
+    }
     return toView(campaign);
   },
 

@@ -187,7 +187,7 @@ import {
 import { getAdminAutomationSummary } from "../automation/automation.controller";
 import {
   archiveAutomationRule, automationEmergencyStop, automationReleaseEmergencyStop, duplicateAutomationRule, getAutomationFailures,
-  getAutomationPerformance, listAdminEvents, listAutomationRules, listAutomationRuns, pauseAutomationRule, resumeAutomationRule,
+  getAutomationAttribution, getAutomationPerformance, listAdminEvents, listAutomationRules, listAutomationRuns, pauseAutomationRule, resumeAutomationRule,
   retryAutomationRun, testAutomationRule, updateAutomationRule,
 } from "../automation/automation-admin.controller";
 import {
@@ -406,6 +406,7 @@ adminRouter.post("/automation/emergency-stop/release", asyncHandler(requireAdmin
 adminRouter.get("/automation/runs", asyncHandler(requireAdminPermission("automation.read")), asyncHandler(listAutomationRuns));
 adminRouter.post("/automation/runs/:id/retry", asyncHandler(requireAdminPermission("automation.mutate")), asyncHandler(require2fa), asyncHandler(retryAutomationRun));
 adminRouter.get("/automation/failures", asyncHandler(requireAdminPermission("automation.read")), asyncHandler(getAutomationFailures));
+adminRouter.get("/automation/attribution", asyncHandler(requireAdminPermission("automation.read")), asyncHandler(getAutomationAttribution));
 adminRouter.get("/automation/performance", asyncHandler(requireAdminPermission("automation.read")), asyncHandler(getAutomationPerformance));
 adminRouter.get("/events", asyncHandler(requireAdminPermission("automation.read")), asyncHandler(listAdminEvents));
 // Regular Delivery admin actions (list/retry-payment/force-cancel/contact-buyer/

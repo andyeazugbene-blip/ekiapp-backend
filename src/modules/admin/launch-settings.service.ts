@@ -168,6 +168,17 @@ export const LAUNCH_SETTINGS = {
     unit: "hours",
     source: "Community Buy workflow",
   },
+  ATTRIBUTION_WINDOW_DAYS: {
+    group: "Results",
+    label: "Automation-assisted window",
+    help: "An order counts as assisted if it follows an automation reaching the buyer within this time. Changes the report straight away, for past and future orders.",
+    default: 7,
+    min: 1,
+    max: 30,
+    kind: "number",
+    unit: "days",
+    source: "Handbook 12.1 asks for a configured window; 7 days is the engineering default",
+  },
   ABANDONED_CHECKOUT_MINUTES: {
     group: "Community Buy payments",
     label: "Release an unfinished card save after",

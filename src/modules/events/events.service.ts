@@ -120,6 +120,8 @@ export type EventName = (typeof EVENT_NAMES)[keyof typeof EVENT_NAMES];
 
 export interface EmitEventInput {
   name: EventName | string;
+  /** Makes a once-only event safe to emit twice. */
+  dedupeKey?: string;
   occurredAt?: Date;
   timezone?: string;
   actorType?: "user" | "vendor" | "admin" | "system" | "stripe" | string;
@@ -145,6 +147,7 @@ async function persist(input: EmitEventInput): Promise<void> {
   await prisma.event.create({
     data: {
       name: input.name,
+      ...(input.dedupeKey ? { dedupeKey: input.dedupeKey } : {}),
       occurredAt: input.occurredAt ?? new Date(),
       timezone: input.timezone ?? "UTC",
       actorType: input.actorType ?? null,

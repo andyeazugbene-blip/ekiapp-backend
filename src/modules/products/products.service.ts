@@ -141,6 +141,7 @@ export const productsService = {
         });
         if (created.isActive) {
           void dispatchNotificationsAfterCommit();
+          void vendorMilestoneNotificationsService.recordStoreReady(vendor.id);
           if (process.env.R09_PUBLICATION_CONFIRMED_ENABLED !== "true") {
             void vendorMilestoneNotificationsService.maybeSendStoreReady(vendor.id);
           }

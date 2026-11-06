@@ -6,6 +6,8 @@ import { sendPushToUser } from "../../lib/expo-push";
 import { CURSOR_ORDER_BY } from "../../shared/constants";
 import { notificationsQueue } from "../../queues";
 import { AppError } from "../../shared/errors/app-error";
+import { emitMessageEvent } from "../communications/message-events";
+import { EVENT_NAMES, eventsService } from "../events/events.service";
 
 const DEFAULT_LIMIT = 20;
 const MAX_LIMIT = 100;
@@ -258,11 +260,24 @@ export const notificationsService = {
     // The authenticated single-item read endpoint is invoked by the mobile
     // notification tap handler. Keep this attribution separate from inbox
     // bulk-read actions, which do not imply a click.
-    await prisma.notificationOutcome.upsert({
-      where: { notificationId },
-      create: { notificationId, clickedAt: new Date() },
-      update: {},
-    });
+    const prior = await prisma.notificationOutcome.findUnique({ where: { notificationId }, select: { clickedAt: true } });
+    if (!prior?.clickedAt) {
+      const clickedAt = new Date();
+      await prisma.notificationOutcome.upsert({
+        where: { notificationId },
+        create: { notificationId, clickedAt },
+        update: { clickedAt },
+      });
+      const message = { recipientId: userId, channel: "in_app", eventKey: notification.type, source: "notification_tap" };
+      emitMessageEvent("opened", message);
+      emitMessageEvent("clicked", message);
+      if (notification.type === "AUTOMATION_MESSAGE") {
+        eventsService.emit({
+          name: EVENT_NAMES.automation_clicked, actorType: "user", actorId: userId,
+          entityType: "Notification", entityId: notificationId, source: "notification_tap",
+        });
+      }
+    }
     return notification;
   },
 
