@@ -1,6 +1,7 @@
 import type { Request, Response } from "express";
 
 import { authService } from "../auth/auth.service";
+import { EVENT_NAMES, eventsService } from "../events/events.service";
 
 const VENDOR_PORTAL_COOKIE = "eki_vp_session";
 
@@ -2150,12 +2151,13 @@ function renderStripeConnectReturnLayout(kind: "refresh" | "success"): string {
 }
 
 /** A partner's link. Without the app, the code has to travel by hand, so the page shows it. */
-function renderPartnerInviteLayout(code: string, intent: "sell" | "supply"): string {
+function renderPartnerInviteLayout(code: string, intent: "sell" | "supply", isVendorReferral = false): string {
+  const codeName = isVendorReferral ? "referral code" : "partner code";
   const safeCode = escape(code.trim().toUpperCase());
   const heading = intent === "sell" ? "Set up your store on Eki" : "Supply bulk orders on Eki";
   const body = intent === "sell"
-    ? "Reach buyers looking for foodstuff. Get the app, then add this partner code when you sign up."
-    : "Publish bulk offers that organisers can build Community Buys on. Get the app, then add this partner code when you sign up.";
+    ? `Reach buyers looking for foodstuff. Get the app, then add this ${codeName} when you sign up.`
+    : `Publish bulk offers that organisers can build Community Buys on. Get the app, then add this ${codeName} when you sign up.`;
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -2179,7 +2181,7 @@ function renderPartnerInviteLayout(code: string, intent: "sell" | "supply"): str
     <h1>${heading}</h1>
     <p>${body}</p>
     <div class="code">${safeCode}</div>
-    <a class="primary" href="ekiapp://invite/${encodeURIComponent(code.trim())}?intent=${intent}">Open in the Eki app</a>
+    <a class="primary" href="ekiapp://invite/${encodeURIComponent(code.trim())}?intent=${intent}${isVendorReferral ? "&ref=1" : ""}">Open in the Eki app</a>
     <a class="secondary" href="https://apps.apple.com/app/id6776307497">Download on the App Store</a>
     <a class="secondary" href="https://play.google.com/store/apps/details?id=com.ekiapp.mobile">Get it on Google Play</a>
   </main>
@@ -2728,7 +2730,11 @@ export async function getPublicInvitePage(request: Request, response: Response):
   response.setHeader("Cache-Control", "public, max-age=300, s-maxage=900");
   const intent = request.query.intent;
   const code = String(request.params.code ?? "");
-  response.status(200).send(intent === "sell" || intent === "supply" ? renderPartnerInviteLayout(code, intent) : renderReferralInviteLayout(code));
+  const isVendorReferral = request.query.ref === "1";
+  if (isVendorReferral) {
+    eventsService.emit({ name: EVENT_NAMES.invitation_opened, actorType: "guest", entityType: "Referral", entityId: code.slice(0, 64), source: "web", payload: {} });
+  }
+  response.status(200).send(intent === "sell" || intent === "supply" ? renderPartnerInviteLayout(code, intent, isVendorReferral) : renderReferralInviteLayout(code));
 }
 
 /** See renderStripeConnectReturnLayout's doc comment. Never cached: the ?success=/?refresh= query is Stripe's own callback state. */

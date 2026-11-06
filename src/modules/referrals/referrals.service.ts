@@ -8,6 +8,7 @@ import { AppError } from "../../shared/errors/app-error";
 import { recordAudit } from "../../shared/utils/audit";
 import { adminPlatformSettingsService } from "../admin/admin-platform-settings.service";
 import { communicationService } from "../communications/communication.service";
+import { suspiciousReferralReason, vendorReferralsService } from "../growth/vendor-referrals.service";
 
 const REFERRAL_BONUS_AMOUNT = 500; // 500 cents = €5
 const REFERRAL_CURRENCY = "eur";
@@ -355,6 +356,14 @@ export const referralsService = {
     const creditMonths = await adminPlatformSettingsService.getValue("VENDOR_REFERRAL_CREDIT_MONTHS");
     if (creditMonths == null) return { credited: false }; // not configured — never guess, never credit.
 
+    // Handbook 8.6: a duplicate business or payment method never earns a credit.
+    const suspicious = await suspiciousReferralReason(referral.referrerId, vendor.userId);
+    if (suspicious) {
+      await vendorReferralsService.recordRejected(referral.id, referral.referrerId, vendor.userId, vendor.id, suspicious);
+      logger.warn("Vendor referral not credited", { referralId: referral.id, reason: suspicious });
+      return { credited: false };
+    }
+
     // Atomic claim: creditedAt doubles as the dedupe marker so a retried
     // webhook (or a concurrent call) can never credit the same referral twice.
     const claim = await prisma.referral.updateMany({
@@ -362,6 +371,7 @@ export const referralsService = {
       data: { creditedAt: new Date() },
     });
     if (claim.count !== 1) return { credited: false };
+    await vendorReferralsService.recordQualified(referral.id, referral.referrerId, vendor.userId, vendor.id);
 
     await recordAudit({
       actorId: "system:vendor-referral-credit",
@@ -373,7 +383,7 @@ export const referralsService = {
         referredVendorId: vendor.id,
         referredUserId: vendor.userId,
         creditMonths,
-        note: "Recorded as owed; not auto-applied to Stripe billing. Apply manually (coupon/invoice credit) or via a future automated step.",
+        note: "Recorded as owed in VendorReferralCredit. An admin releases it as a Stripe balance credit. Was: automated step.",
       },
     });
 
