@@ -206,6 +206,7 @@ export const subscriptionAdminService = {
           include: {
             items: { include: { product: { select: { title: true } } } },
             paymentAttempts: { orderBy: { attemptNumber: "asc" } },
+            priceChangeRequest: { select: { approvalRequired: true, buyerDecision: true } },
             order: { select: { id: true, orderNumber: true, status: true, totalAmount: true, currency: true, createdAt: true } },
           },
         },
@@ -350,6 +351,8 @@ export const subscriptionAdminService = {
         failureReason: r.failureReason,
         nextRetryAt: r.nextRetryAt,
         escalated: r.escalated,
+        stockConfirmedAt: r.stockConfirmedAt,
+        priceChange: r.priceChangeRequest,
         attempts: r.paymentAttempts.map((p) => ({ attemptNumber: p.attemptNumber, status: p.status, failureCode: p.failureCode, failureMessage: p.failureMessage, createdAt: p.createdAt })),
         order: r.order,
         items: r.items.map((i) => ({ title: i.product.title, quantity: i.quantity, unitAmount: i.currentUnitPrice, stockAvailable: i.stockAvailable })),

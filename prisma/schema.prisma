@@ -2625,6 +2625,7 @@ model BuyerSubscription {
   items                       SubscriptionItem[]
   renewals                    Renewal[]
   actionHistory               SubscriptionActionHistory[]
+  supportCases                SubscriptionSupportCase[]
   createdAt                   DateTime                    @default(now())
   updatedAt                   DateTime                    @updatedAt
 
@@ -3228,6 +3229,9 @@ model CommunityCampaign {
   confirmedShares           Int                                @default(0)
   fundingOutcome            FundingOutcome                     @default(PENDING)
   supplierCommitted         Boolean                            @default(false)
+  // CB69: CONFIRMED, LIMITED or NO_LONGER_AVAILABLE, as the supplier last reported it.
+  supplierInventoryStatus   String?
+  supplierInventoryStatusAt DateTime?
   supplierCommittedAt       DateTime?
   // Distinct from CHANGES_REQUIRED (which always means "admin sent this
   // back to the organiser") — a supplier decline never touches campaign
@@ -4697,4 +4701,41 @@ model MarketAvailabilityRequest {
 
   @@unique([userId, market])
   @@index([market, notifiedAt])
+}
+
+/// S63: a Foodstuff Subscription support case, opened by an admin.
+enum SubscriptionSupportCaseType {
+  PAYMENT
+  RENEWAL
+  PRICE_CHANGE
+  STOCK
+  DELIVERY
+  CANCELLATION
+  REFUND
+  VENDOR_CONDUCT
+}
+
+model SubscriptionSupportCase {
+  id                      String                      @id @default(cuid())
+  subscriptionId          String
+  subscription            BuyerSubscription           @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+  renewalId               String?
+  caseType                SubscriptionSupportCaseType
+  description             String
+  evidenceUrls            String[]                    @default([])
+  status                  SupportCaseStatus           @default(OPEN)
+  // Admin-only, never shown to the buyer or vendor.
+  internalNotes           String?
+  // Shown to the buyer once set.
+  customerVisibleResponse String?
+  escalated               Boolean                     @default(false)
+  escalatedAt             DateTime?
+  createdById             String
+  resolvedById            String?
+  resolvedAt              DateTime?
+  createdAt               DateTime                    @default(now())
+  updatedAt               DateTime                    @updatedAt
+
+  @@index([subscriptionId])
+  @@index([status, escalated])
 }

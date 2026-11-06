@@ -50,7 +50,13 @@ import {
   resumeBuyerSubscription,
   resumeSubscriptionOfferProduct,
   resumeSubscriptionOfferRenewals,
-  rescheduleNextBuyerSubscription,
+  rescheduleNextBuyerSubscription,
+  listStockShortages,
+  resolveStockShortage,
+  adminRecheckRenewalProvider,
+  adminListSubscriptionSupportCases,
+  adminCreateSubscriptionSupportCase,
+  adminUpdateSubscriptionSupportCase,
   removeRenewalItem,
   createRenewalReceiptLink,
   adminSubscriptionOperationsSummary,
@@ -91,6 +97,8 @@ regularDeliveriesVendorRouter.get("/subscription-offers", asyncHandler(listVendo
 regularDeliveriesVendorRouter.get("/subscribers", asyncHandler(listVendorSubscribers));
 regularDeliveriesVendorRouter.get("/subscribers/:id", asyncHandler(getVendorSubscriberDetail));
 regularDeliveriesVendorRouter.get("/renewals", asyncHandler(listVendorRenewals));
+regularDeliveriesVendorRouter.get("/stock-shortages", asyncHandler(listStockShortages));
+regularDeliveriesVendorRouter.post("/stock-shortages/:id/resolve", asyncHandler(resolveStockShortage));
 regularDeliveriesVendorRouter.get("/insights", asyncHandler(getVendorRegularDeliveryInsights));
 
 // Renewal actions (vendor stock confirmation, buyer decisions) — mounted
@@ -142,6 +150,9 @@ export const adminSubscriptionsRouter = Router();
 adminSubscriptionsRouter.use(authenticate, requireRole("ADMIN"));
 adminSubscriptionsRouter.get("/", read, asyncHandler(adminListSubscriptions));
 adminSubscriptionsRouter.get("/operations-summary", read, asyncHandler(adminSubscriptionOperationsSummary));
+adminSubscriptionsRouter.patch("/support-cases/:id", mutate, asyncHandler(adminUpdateSubscriptionSupportCase));
+adminSubscriptionsRouter.get("/:id/support-cases", read, asyncHandler(adminListSubscriptionSupportCases));
+adminSubscriptionsRouter.post("/:id/support-cases", mutate, asyncHandler(adminCreateSubscriptionSupportCase));
 adminSubscriptionsRouter.get("/exceptions", read, asyncHandler(adminListSubscriptionExceptions));
 adminSubscriptionsRouter.get("/reports", read, asyncHandler(adminSubscriptionReports));
 adminSubscriptionsRouter.get("/:id", read, asyncHandler(adminGetSubscription));
@@ -158,6 +169,8 @@ adminSubscriptionsRouter.post("/:id/contact-buyer", mutate, asyncHandler(adminCo
 export const adminRenewalsRouter = Router();
 adminRenewalsRouter.use(authenticate, requireRole("ADMIN"));
 adminRenewalsRouter.post("/:id/contact-buyer", mutate, asyncHandler(adminContactBuyerFromRenewal));
+// Only reads Stripe and applies the outcome it reports, so it needs no 2FA.
+adminRenewalsRouter.post("/:id/recheck-provider", mutate, asyncHandler(adminRecheckRenewalProvider));
 adminRenewalsRouter.post("/:id/resend-price-change", mutate, asyncHandler(adminResendPriceChangeNotification));
 adminRenewalsRouter.post("/:id/cancel-price-change", mutate, twoFa, asyncHandler(adminCancelInvalidPriceChange));
 adminRenewalsRouter.post("/:id/admin-skip", mutate, twoFa, asyncHandler(adminSkipRenewal));
