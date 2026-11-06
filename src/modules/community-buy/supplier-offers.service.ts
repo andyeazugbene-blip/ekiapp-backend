@@ -6,6 +6,7 @@ import { communityCampaignsService } from "./community-campaigns.service";
 import { marketConfigurationService } from "./market-configuration.service";
 import { isUniqueViolation, notifyOfferCampaignLive, reviewRequestsService } from "./review-requests.service";
 import { isSupplierPayoutReady } from "./supplier-account.service";
+import { notifyUserInAppAndEmail } from "./community-buy-notices";
 
 const V1_MARKET = "GB";
 const AUTO_APPROVAL_ACTOR = "system:auto-approval";
@@ -244,7 +245,7 @@ export const supplierOffersService = {
     return prisma.communityCampaign.findMany({
       where: { supplierAccountId: account.id, supplierOfferId: { not: null } },
       orderBy: { deadline: "asc" },
-      select: { id: true, title: true, status: true, deadline: true, confirmedShares: true, minimumShares: true, goalShares: true, maximumShares: true, reconfirmationQuantity: true, supplierOffer: { select: { foodstuffName: true } } },
+      select: { extensionRequests: { where: { status: "PENDING" }, select: { id: true, requestedDeadline: true, reason: true, supplierReconfirmed: true } }, id: true, title: true, status: true, deadline: true, confirmedShares: true, minimumShares: true, goalShares: true, maximumShares: true, reconfirmationQuantity: true, supplierOffer: { select: { foodstuffName: true } } },
     });
   },
 
@@ -404,6 +405,32 @@ export const supplierOffersService = {
       update: {},
     });
     return { registered: true, count: await prisma.campaignInterest.count({ where: { campaignId } }) };
+  },
+
+  /** Phase 1: admins get one daily summary of what organisers asked for, not a message per request. */
+  async sendDemandDigest(now = new Date()) {
+    const since = new Date(now.getTime() - 86_400_000);
+    const groups = await prisma.demandRequest.groupBy({
+      by: ["foodstuff"],
+      where: { createdAt: { gte: since }, user: { isTest: false } },
+      _count: { foodstuff: true },
+      orderBy: { _count: { foodstuff: "desc" } },
+      take: 20,
+    });
+    if (groups.length === 0) return { sent: 0, foodstuffs: 0 };
+    const admins = await prisma.user.findMany({ where: { role: "ADMIN", isTest: false }, select: { id: true } });
+    const list = groups.map((g) => `${g.foodstuff} (${g._count.foodstuff})`).join(", ");
+    const day = now.toISOString().slice(0, 10);
+    for (const admin of admins) {
+      await notifyUserInAppAndEmail({
+        userId: admin.id,
+        title: "Foodstuff requests today",
+        body: `Organisers asked for: ${list}.`,
+        event: "demand_digest",
+        dedupeKey: `demand_digest:${day}:${admin.id}`,
+      });
+    }
+    return { sent: admins.length, foodstuffs: groups.length };
   },
 
   async listDemandForAdmin() {

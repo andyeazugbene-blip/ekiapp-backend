@@ -216,7 +216,12 @@ export const launchSettingsService = {
 
   /** What the apps need. Holds no admin detail. */
   async publicView() {
-    const [ukLaunchMode, vendorTrialDays] = await Promise.all([this.isOn("UK_LAUNCH_MODE"), this.get("VENDOR_TRIAL_DAYS")]);
-    return { ukLaunchMode, launchMarket: "GB", vendorTrialDays };
+    const [ukLaunchMode, vendorTrialDays, offerReviewHours, campaignReviewHours] = await Promise.all([
+      this.isOn("UK_LAUNCH_MODE"),
+      this.get("VENDOR_TRIAL_DAYS"),
+      this.get("REVIEW_HOURS_SUPPLIER_OFFER"),
+      this.get("REVIEW_HOURS_CAMPAIGN"),
+    ]);
+    return { ukLaunchMode, launchMarket: "GB", vendorTrialDays, offerReviewHours, campaignReviewHours };
   },
 };

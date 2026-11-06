@@ -2508,8 +2508,8 @@ export const communityCampaignsService = {
     input: { requestedDeadline: string; reason: string; supplierReconfirmed: boolean; priceUnchangedConfirmed: boolean; participantTermsUnchanged: boolean },
   ) {
     const campaign = await this.requireOwnedByOrganiserForWrite(userId, campaignId);
-    if (campaign.status !== "RESCUE_WINDOW") {
-      throw new AppError("An extension can only be requested while a campaign is in its rescue window", 409);
+    if (campaign.status !== "RESCUE_WINDOW" && campaign.status !== "LIVE") {
+      throw new AppError("An extension can only be requested while a campaign is live or in its rescue window", 409);
     }
     if (campaign.extensionCount >= MAX_EXTENSIONS) {
       throw new AppError("This campaign has already used its permitted extension", 409);
@@ -2518,17 +2518,62 @@ export const communityCampaignsService = {
     if (Number.isNaN(requestedDeadline.getTime()) || requestedDeadline <= new Date()) {
       throw new AppError("Requested deadline must be a valid future date", 400);
     }
-    return prisma.campaignExtensionRequest.create({
+    if (campaign.deadline && requestedDeadline <= campaign.deadline) {
+      throw new AppError("The new deadline must be later than the current one", 400, undefined, "EXTENSION_NOT_LATER");
+    }
+    // A card hold lasts about seven days, so a hold already placed could lapse before a later capture.
+    if (campaign.paymentMode === "AUTHORISE_THEN_CAPTURE" && campaign.holdWindowStartsAt && campaign.holdWindowStartsAt <= new Date()) {
+      throw new AppError("Card holds have started, so this deadline can't change.", 409, undefined, "EXTENSION_AFTER_HOLDS");
+    }
+    const open = await prisma.campaignExtensionRequest.findFirst({ where: { campaignId, status: "PENDING" }, select: { id: true } });
+    if (open) throw new AppError("You've already asked for an extension. We'll let you know the decision.", 409, undefined, "EXTENSION_ALREADY_OPEN");
+
+    let offerSupplierUserId: string | null = null;
+    if (campaign.supplierOfferId) {
+      const offer = await prisma.supplierOffer.findUnique({
+        where: { id: campaign.supplierOfferId },
+        select: { windowEndsAt: true, supplierAccount: { select: { userId: true } } },
+      });
+      if (offer && requestedDeadline > offer.windowEndsAt) {
+        throw new AppError("Choose a deadline within this offer's window.", 400, undefined, "CAMPAIGN_OUTSIDE_OFFER_LIMITS");
+      }
+      offerSupplierUserId = offer?.supplierAccount.userId ?? null;
+    }
+    const created = await prisma.campaignExtensionRequest.create({
       data: {
         campaignId,
         requestedDeadline,
         reason: input.reason,
-        supplierReconfirmed: input.supplierReconfirmed,
+        // An offer's supplier confirms this themselves. Only a campaign with no offer can record the organiser's word.
+        supplierReconfirmed: campaign.supplierOfferId ? false : input.supplierReconfirmed,
         priceUnchangedConfirmed: input.priceUnchangedConfirmed,
         participantTermsUnchanged: input.participantTermsUnchanged,
         status: "PENDING",
       },
     });
+    if (offerSupplierUserId) {
+      await notifyCampaign(offerSupplierUserId, "extension_reconfirm", "Can you keep this offer open longer?", `The organiser of ${campaign.title} has asked for a later deadline. Please confirm whether you can still supply it.`, campaignId);
+    }
+    return created;
+  },
+
+  /** The offer's supplier confirms they can still supply to the later deadline. */
+  async reconfirmExtensionAsSupplier(userId: string, requestId: string, canSupply: boolean) {
+    const request = await prisma.campaignExtensionRequest.findUnique({
+      where: { id: requestId },
+      include: { campaign: { select: { id: true, title: true, organiser: { select: { userId: true } }, supplierOffer: { select: { supplierAccount: { select: { userId: true } } } } } } },
+    });
+    if (!request || request.campaign.supplierOffer?.supplierAccount.userId !== userId) throw new AppError("Extension request not found", 404);
+    if (request.status !== "PENDING") throw new AppError("This extension request has already been decided", 409);
+    if (canSupply) {
+      return prisma.campaignExtensionRequest.update({ where: { id: requestId }, data: { supplierReconfirmed: true } });
+    }
+    const declined = await prisma.campaignExtensionRequest.update({
+      where: { id: requestId },
+      data: { status: "REJECTED", supplierReconfirmed: false, reviewedAt: new Date(), reviewNotes: "The supplier can't keep this offer open longer." },
+    });
+    await notifyCampaign(request.campaign.organiser.userId, "extension_rejected", "Extension not available", `The supplier can't extend ${request.campaign.title}, so the deadline stays the same.`, request.campaign.id, undefined, "organiser");
+    return declined;
   },
 
   async approveExtension(adminId: string, requestId: string) {
@@ -2537,7 +2582,7 @@ export const communityCampaignsService = {
     if (request.status !== "PENDING") throw new AppError("This extension request has already been decided", 409);
     if (request.campaign.extensionCount >= MAX_EXTENSIONS) throw new AppError("This campaign has already used its permitted extension", 409);
     if (!request.supplierReconfirmed || !request.priceUnchangedConfirmed) {
-      throw new AppError("Supplier reconfirmation and price-unchanged confirmation are required before approval", 400);
+      throw new AppError("The supplier hasn't confirmed this extension yet.", 409, undefined, "SUPPLIER_NOT_RECONFIRMED");
     }
 
     // Phase 8 — an extension approval typically takes real admin review
@@ -2548,6 +2593,7 @@ export const communityCampaignsService = {
     // campaign back to LIVE, or clobber a campaign the sweep just started
     // charging. Both claims are guarded inside one transaction so either
     // both land or neither does.
+    const schedule = defaultAuthorisationSchedule(request.requestedDeadline, await launchSettingsService.get("HOLD_HOURS_BEFORE_DEADLINE"), await launchSettingsService.get("DECISION_HOURS_AFTER_DEADLINE"));
     const claimed = await prisma.$transaction(async (tx) => {
       const requestClaim = await tx.campaignExtensionRequest.updateMany({
         where: { id: requestId, status: "PENDING" },
@@ -2555,8 +2601,14 @@ export const communityCampaignsService = {
       });
       if (requestClaim.count !== 1) return false;
       const campaignClaim = await tx.communityCampaign.updateMany({
-        where: { id: request.campaignId, status: "RESCUE_WINDOW" },
-        data: { status: "LIVE", deadline: request.requestedDeadline, rescueEndsAt: null, extensionCount: { increment: 1 } },
+        where: { id: request.campaignId, status: { in: ["RESCUE_WINDOW", "LIVE"] } },
+        data: {
+          status: "LIVE",
+          deadline: request.requestedDeadline,
+          rescueEndsAt: null,
+          extensionCount: { increment: 1 },
+          ...(request.campaign.paymentMode === "AUTHORISE_THEN_CAPTURE" ? schedule : {}),
+        },
       });
       return campaignClaim.count === 1;
     });

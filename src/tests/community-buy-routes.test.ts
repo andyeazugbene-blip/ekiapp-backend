@@ -339,7 +339,9 @@ vi.mock("../lib/prisma", async () => {
         // a real DB call, which this test environment can't make. No admin
         // in these tests has 2FA enrolled.
         // approve/reject read the campaign status for the audit beforeState.
-        if (prop === "communityCampaign") return { findUnique: vi.fn().mockResolvedValue({ status: "UNDER_REVIEW" }) };
+        if (prop === "communityCampaign") return { findUnique: vi.fn().mockResolvedValue({ status: "UNDER_REVIEW" }), findUniqueOrThrow: vi.fn().mockResolvedValue({ country: "GB" }) };
+        // An extension request also opens a record in the Approvals queue.
+        if (prop === "reviewRequest") return { findFirst: vi.fn().mockResolvedValue(null), create: vi.fn().mockResolvedValue({ id: "rr-1" }), updateMany: vi.fn().mockResolvedValue({ count: 1 }) };
         if (prop === "adminTwoFactor") return { findUnique: vi.fn().mockResolvedValue(null) };
         return (target as any)[prop];
       },

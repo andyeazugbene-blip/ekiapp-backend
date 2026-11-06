@@ -334,8 +334,8 @@ describe("supplierAccountService.applyAsSupplier — Vendor-independent onboardi
     p.supplierAccount.upsert.mockResolvedValue({ id: "sa-1", userId: "buyer-1", supplierState: "UNDER_REVIEW", categories: [], coverageRegions: ["GB"] });
     const { supplierAccountService } = await import("../modules/community-buy/supplier-account.service");
     await supplierAccountService.applyAsSupplier("buyer-1", { country: "GB" });
+    // Reading the vendor is allowed: a verified vendor gets a notice that their details are saved.
     expect(p.vendor.create).not.toHaveBeenCalled();
-    expect(p.vendor.findUnique).not.toHaveBeenCalled();
     expect(p.vendor.update).not.toHaveBeenCalled();
   });
 
