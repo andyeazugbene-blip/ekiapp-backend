@@ -132,10 +132,12 @@ import {
   askCampaignQuestion,
   getOrganiserHistory,
   createContributionReceiptLink,
-} from "./community-buy.controller";
+} from "./community-buy.controller";
+import { hideStaffFields } from "./campaign-views";
 
 // Public discovery + participant actions — mounted at /community-buy.
 export const communityBuyRouter = Router();
+communityBuyRouter.use(hideStaffFields);
 communityBuyRouter.post("/campaigns/:id/interest", publicInterestRateLimiter, asyncHandler(async (request, response) => {
   response.status(201).json(await registerPublicCampaignInterest(String(request.params.id), (request.body as { email?: unknown } | undefined)?.email));
 }));
@@ -195,6 +197,7 @@ communityBuyRouter.post("/supplier-invitations/:token/decline", asyncHandler(dec
 
 // Organiser — mounted at /organiser.
 export const organiserRouter = Router();
+organiserRouter.use(hideStaffFields);
 organiserRouter.use(authenticate);
 
 // Phase 1: Community Buys built on an approved supplier offer.
@@ -284,6 +287,7 @@ organiserRouter.post("/campaigns/:id/cancel", asyncHandler(legacyCancelFailedCam
 // (accepting/declining obligations, fulfilment, payment views) require an
 // approved SupplierAccount, via requireApprovedSupplier() below.
 export const supplierRouter = Router();
+supplierRouter.use(hideStaffFields);
 supplierRouter.use(authenticate);
 
 // Phase 1: bulk offers. Any account can prepare one; approval decides what organisers see.

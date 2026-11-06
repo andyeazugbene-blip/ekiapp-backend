@@ -313,7 +313,7 @@ import {
   adminRequestReviewInformation,
 } from "../community-buy/supplier-offers.controller";
 import { adminRestoreProduct, adminUnpublishProduct } from "./admin-products.controller";
-import { adminProvisionDemoAccount, adminCreateDemoAccount } from "./admin-demo-accounts.controller";
+import { adminProvisionDemoAccount, adminCreateDemoAccount, adminFillDemoAccount } from "./admin-demo-accounts.controller";
 import { adminCampaignsRouter } from "../campaigns/campaigns.routes";
 import { adminResetUsers } from "./admin-reset.controller";
 import { adminContactPrivacy, revealSupplierContact, revealUserContact, revealVendorContact } from "./admin-pii";
@@ -776,6 +776,7 @@ adminRouter.post("/users/bulk-suspend", asyncHandler(requireAdminPermission("use
 adminRouter.post("/users/bulk-unsuspend", asyncHandler(requireAdminPermission("users.mutate")), asyncHandler(require2fa), asyncHandler(bulkUnsuspendUsers));
 adminRouter.post("/users/bulk-delete", asyncHandler(requireAdminPermission("users.mutate")), asyncHandler(require2fa), asyncHandler(bulkDeleteUsers));
 adminRouter.post("/users/:id/demo-provision", asyncHandler(requireAdminPermission("users.mutate")), asyncHandler(require2fa), asyncHandler(adminProvisionDemoAccount));
+adminRouter.post("/users/:id/demo-fill", asyncHandler(requireAdminPermission("users.mutate")), asyncHandler(require2fa), asyncHandler(adminFillDemoAccount));
 adminRouter.post("/users/demo-create", asyncHandler(requireAdminPermission("users.mutate")), asyncHandler(require2fa), asyncHandler(adminCreateDemoAccount));
 
 // Escrow health monitoring

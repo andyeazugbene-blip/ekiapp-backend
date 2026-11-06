@@ -39,6 +39,15 @@ export async function adminProvisionDemoAccount(request: Request, response: Resp
   response.status(200).json(result);
 }
 
+export async function adminFillDemoAccount(request: Request, response: Response): Promise<void> {
+  const actorId = requireUserId(request);
+  const targetUserId = requireIdParam(request);
+  const reason = requireAuditReason(request.body?.reason, "demo data reason");
+  const result = await adminDemoShowcaseService.fillExisting(targetUserId, reason);
+  await recordAudit({ request, actorId, action: "user.demo_fill", entityType: "User", entityId: targetUserId, reason, afterState: result, failClosed: true });
+  response.status(200).json(result);
+}
+
 export async function adminCreateDemoAccount(request: Request, response: Response): Promise<void> {
   const actorId = requireUserId(request);
   const reason = requireAuditReason(request.body?.reason, "demo account creation reason");

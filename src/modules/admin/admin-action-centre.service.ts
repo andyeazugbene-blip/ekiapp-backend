@@ -11,7 +11,10 @@ import { OrderStatus, Prisma } from "@prisma/client";
 import { prisma } from "../../lib/prisma";
 import { logger } from "../../lib/logger";
 import { notTest, notTestOf, runWithTestScope } from "../../shared/utils/test-records";
-import { adminRolesService, permissionMatches } from "./admin-roles.service";
+import { adminRolesService, permissionMatches } from "./admin-roles.service";
+
+/** Follows the same test-record setting as the rest of the Overview. */
+const realCampaign = () => (notTest().isTest === false ? { organiser: { user: { isTest: false } } } : {});
 
 export type Severity = "critical" | "high" | "medium" | "low" | "ok";
 
@@ -343,8 +346,8 @@ async function communityBuy(): Promise<ActionSection> {
   const soon = new Date(Date.now() + ACTION_CENTRE_THRESHOLDS.campaignClosingSoonHours * HOUR);
   const belowTargetStatuses = ["CLOSING", "RESCUE_WINDOW", "DECISION_REQUIRED", "AWAITING_SUPPLIER_RECONFIRMATION"] as const;
   const [closingSoon, belowTarget, fulfilmentLate, refunds] = await Promise.all([
-    prisma.communityCampaign.count({ where: { status: "LIVE", deadline: { gte: now, lte: soon } } }),
-    prisma.communityCampaign.count({ where: { status: { in: [...belowTargetStatuses] } } }),
+    prisma.communityCampaign.count({ where: { status: "LIVE", deadline: { gte: now, lte: soon }, ...realCampaign() } }),
+    prisma.communityCampaign.count({ where: { status: { in: [...belowTargetStatuses] }, ...realCampaign() } }),
     prisma.supplierFulfilmentAlert.count({ where: { status: { in: ["OPEN", "CONTACTED", "ESCALATED"] } } }),
     prisma.campaignRefund.groupBy({
       by: ["currency"], where: { status: { in: ["REFUND_PENDING", "REFUND_PROCESSING", "REFUND_FAILED"] } },

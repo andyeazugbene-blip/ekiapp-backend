@@ -4,6 +4,8 @@ import bcrypt from "bcryptjs";
 import { UserRole } from "@prisma/client";
 
 import { logger } from "../../lib/logger";
+import { AppError } from "../../shared/errors/app-error";
+import { adminDemoGalleryService } from "./admin-demo-gallery.service";
 import { prisma } from "../../lib/prisma";
 import { currencyFromCountry, marketCodeToCountryName, resolveMarketCode } from "../../shared/currency";
 import { resolveUniqueSlug, resolveUniqueText } from "../../shared/utils/slug";
@@ -139,6 +141,39 @@ async function createLiveCampaign(actorId: string, organiserUserId: string, coun
  * Each step is independent: a failure is reported rather than losing the rest.
  */
 export const adminDemoShowcaseService = {
+  /** For a demo account made before this existed. Safe to run again: it only adds what's missing. */
+  async fillExisting(userId: string, reason: string) {
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { id: true, name: true, isTest: true, country: true, vendor: { select: { id: true, storeName: true, country: true } }, supplierAccount: { select: { id: true } } },
+    });
+    if (!user) throw new AppError("User not found", 404);
+    if (!user.isTest) throw new AppError("Only a demo account can be filled with demo data.", 409, undefined, "NOT_A_DEMO_ACCOUNT");
+    const country = user.vendor?.country ?? user.country ?? "GB";
+    const supplierAccountId = user.supplierAccount?.id ?? (await prisma.supplierAccount.create({
+      data: {
+        userId, supplierState: "APPROVED", chargesEnabled: true, payoutsEnabled: true, detailsSubmitted: true, approvedAt: new Date(), termsAcceptedAt: new Date(),
+        coverageRegions: [resolveMarketCode(country) ?? country], businessName: user.vendor?.storeName ?? user.name ?? "Eki Demo Foods",
+        categories: ["Grains", "Fish", "Staples"], fulfilmentMethods: ["DELIVERY", "COLLECTION"], collectionCapacityPerDay: 100,
+      },
+      select: { id: true },
+    })).id;
+    // Reuse the demo store from an earlier run, so a repeat doesn't add another.
+    const previous = await prisma.communityCampaign.findFirst({
+      where: { adminIssueNotes: { startsWith: `demo_gallery:${userId}:buyer-` } },
+      select: { organiser: { select: { userId: true, user: { select: { vendor: { select: { id: true } } } } } } },
+    });
+    let companion = previous?.organiser.user.vendor ? { userId: previous.organiser.userId, vendorId: previous.organiser.user.vendor.id } : null;
+    if (!companion) {
+      const made = await createCompanion(country, reason);
+      const products = await createProducts(made.userId, COMPANION_PRODUCTS);
+      await createOffer(made.vendorId, products.map((p) => p.id), "Monthly Family Staples");
+      companion = { userId: made.userId, vendorId: made.vendorId };
+    }
+    const created = await adminDemoGalleryService.seed({ userId, vendorId: user.vendor?.id ?? null, supplierAccountId, country }, companion);
+    return { supplierAccountId, created };
+  },
+
   async seed(actorId: string, main: ShowcaseMain, reason: string): Promise<ShowcaseResult> {
     const created: string[] = [];
     const warnings: string[] = [];
@@ -187,6 +222,9 @@ export const adminDemoShowcaseService = {
     }
 
     await step("Own Community Buy", () => createLiveCampaign(actorId, main.userId, main.country, "My Demo Yam Community Buy", { fulfilmentOwner: "SELF" }));
+    if (companion) {
+      await step("Every Community Buy, supplier, order and subscription status", () => adminDemoGalleryService.seed(main, companion));
+    }
 
     return { companionStoreName: companion?.storeName ?? null, created, warnings };
   },

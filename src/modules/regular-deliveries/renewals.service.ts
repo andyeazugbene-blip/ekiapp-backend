@@ -70,7 +70,7 @@ export const renewalsService = {
   async generateDueRenewals(): Promise<{ created: number; skipped: number }> {
     const now = new Date();
     const due = await prisma.buyerSubscription.findMany({
-      where: { status: "ACTIVE", nextRenewalAt: { lte: now } },
+      where: { status: "ACTIVE", nextRenewalAt: { lte: now }, buyer: { isTest: false } },
       include: { items: { include: { product: true } }, offer: { select: { renewalsPaused: true } } },
     });
 
