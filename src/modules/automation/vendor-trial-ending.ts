@@ -4,9 +4,6 @@ import { prisma } from "../../lib/prisma";
 import { logger } from "../../lib/logger";
 import { automationService } from "./automation.service";
 
-/** Vendor free trial length in days (single source: subscriptions.service GROWTH_TRIAL_DAYS = 14). */
-export const VENDOR_TRIAL_DAYS = 14;
-
 function formatMoney(minor: number, currency: string): string {
   try {
     return new Intl.NumberFormat("en-GB", { style: "currency", currency }).format(minor / 100);

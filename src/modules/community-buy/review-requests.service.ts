@@ -1,17 +1,18 @@
 import { Prisma, type ReviewRequestStatus, type ReviewRequestType } from "@prisma/client";
 
 import { prisma } from "../../lib/prisma";
+import { launchSettingsService, type LaunchSettingKey } from "../admin/launch-settings.service";
 import { AppError } from "../../shared/errors/app-error";
 import { recordAudit } from "../../shared/utils/audit";
 import { communityCampaignsService } from "./community-campaigns.service";
 import { notifyUserInAppAndEmail } from "./community-buy-notices";
 import { supplierAccountService } from "./supplier-account.service";
 
-const SLA_HOURS: Record<ReviewRequestType, number> = {
-  SUPPLIER_ELIGIBILITY: 72,
-  SUPPLIER_OFFER: 24,
-  COMMUNITY_BUY_CAMPAIGN: 24,
-  EXTENSION: 24,
+const SLA_SETTING: Record<ReviewRequestType, LaunchSettingKey> = {
+  SUPPLIER_ELIGIBILITY: "REVIEW_HOURS_SUPPLIER_ELIGIBILITY",
+  SUPPLIER_OFFER: "REVIEW_HOURS_SUPPLIER_OFFER",
+  COMMUNITY_BUY_CAMPAIGN: "REVIEW_HOURS_CAMPAIGN",
+  EXTENSION: "REVIEW_HOURS_EXTENSION",
 };
 
 export const OPEN_REVIEW_STATUSES: ReviewRequestStatus[] = ["SUBMITTED", "UNDER_REVIEW", "INFO_REQUIRED"];
@@ -39,8 +40,8 @@ export function isUniqueViolation(error: unknown): boolean {
   return error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002";
 }
 
-function slaDueAt(type: ReviewRequestType, from = new Date()): Date {
-  return new Date(from.getTime() + SLA_HOURS[type] * 3_600_000);
+async function slaDueAt(type: ReviewRequestType, from = new Date()): Promise<Date> {
+  return new Date(from.getTime() + (await launchSettingsService.get(SLA_SETTING[type])) * 3_600_000);
 }
 
 /** Who a request's subject belongs to, for notices and separation of duties. */
@@ -83,12 +84,12 @@ export const reviewRequestsService = {
       if (existing.status !== "INFO_REQUIRED") return existing;
       return tx.reviewRequest.update({
         where: { id: existing.id },
-        data: { status: "SUBMITTED", infoMessage: null, submittedAt: new Date(), slaDueAt: slaDueAt(input.type) },
+        data: { status: "SUBMITTED", infoMessage: null, submittedAt: new Date(), slaDueAt: await slaDueAt(input.type) },
       });
     }
     try {
       return await tx.reviewRequest.create({
-        data: { ...input, status: "SUBMITTED", slaDueAt: slaDueAt(input.type) },
+        data: { ...input, status: "SUBMITTED", slaDueAt: await slaDueAt(input.type) },
       });
     } catch (error) {
       // Inside a transaction Postgres has already aborted it, so the caller has to recover.
@@ -104,7 +105,7 @@ export const reviewRequestsService = {
   async recordAutoApproved(input: OpenRequestInput) {
     const now = new Date();
     return prisma.reviewRequest.create({
-      data: { ...input, status: "APPROVED", autoApproved: true, decidedAt: now, slaDueAt: slaDueAt(input.type, now) },
+      data: { ...input, status: "APPROVED", autoApproved: true, decidedAt: now, slaDueAt: await slaDueAt(input.type, now) },
     });
   },
 

@@ -8,6 +8,7 @@ import type {
 } from "@prisma/client";
 
 import { prisma } from "../../lib/prisma";
+import { launchSettingsService } from "../admin/launch-settings.service";
 import { stripe } from "../../lib/stripe";
 import { AppError } from "../../shared/errors/app-error";
 import {
@@ -26,9 +27,6 @@ type SellerPlanWithTiers = SellerPlan & { commissionTiers: CommissionTier[] };
 type VendorSubscriptionWithPlan = VendorSubscription & {
   sellerPlan: SellerPlanWithTiers | null;
 };
-
-/** Free trial for the Growth plan — the only paid vendor service on offer. */
-const GROWTH_TRIAL_DAYS = 14;
 
 function percentFromBps(bps: number): string {
   return `${(bps / 100).toFixed(2).replace(/\.00$/, "").replace(/(\.\d)0$/, "$1")}%`;
@@ -882,7 +880,8 @@ export const subscriptionsService = {
     // First-time Growth subscribers get a 14-day free trial before the paid
     // plan takes over. Vendors who have already had a Stripe subscription
     // (i.e. are re-subscribing after a cancellation) don't get a second one.
-    const eligibleForTrial = planConfig.slug === "growth" && !subscription?.stripeSubscriptionId;
+    // Free trial for the Growth plan, the only paid vendor service on offer. Length is an admin setting.
+    const trialDays = planConfig.slug === "growth" && !subscription?.stripeSubscriptionId ? await launchSettingsService.get("VENDOR_TRIAL_DAYS") : 0;
 
     const session = await stripe.checkout.sessions.create({
       customer: customerId,
@@ -893,7 +892,7 @@ export const subscriptionsService = {
       metadata,
       subscription_data: {
         metadata,
-        ...(eligibleForTrial ? { trial_period_days: GROWTH_TRIAL_DAYS } : {}),
+        ...(trialDays > 0 ? { trial_period_days: trialDays } : {}),
       },
     });
 
