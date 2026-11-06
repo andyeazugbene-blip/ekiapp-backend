@@ -1,6 +1,10 @@
 import { Prisma, type ReviewRequestStatus, type ReviewRequestType } from "@prisma/client";
 
 import { prisma } from "../../lib/prisma";
+import { logger } from "../../lib/logger";
+import { emailTemplates } from "../../lib/email-templates";
+import { enqueueEmail } from "../../lib/email-queue";
+import { env } from "../../config/env";
 import { launchSettingsService, type LaunchSettingKey } from "../admin/launch-settings.service";
 import { AppError } from "../../shared/errors/app-error";
 import { recordAudit } from "../../shared/utils/audit";
@@ -305,13 +309,33 @@ async function applyApproval(request: { type: ReviewRequestType; subjectId: stri
   }
 }
 
+/** Keeps the coming-soon promise: tells people once, then forgets any email address. Never blocks going live. */
+async function notifyInterested(campaignId: string, title: string): Promise<void> {
+  try {
+    const waiting = await prisma.campaignInterest.findMany({ where: { campaignId, notifiedAt: null }, select: { id: true, userId: true, email: true } });
+    const body = `${title} is now open on Eki. Join before the deadline.`;
+    for (const person of waiting) {
+      if (person.userId) {
+        await notifyUserInAppAndEmail({ userId: person.userId, title: "A Community Buy you liked is open", body, event: "campaign_interest_open", data: { campaignId }, dedupeKey: `campaign_interest_open:${campaignId}:${person.userId}` });
+      } else if (person.email) {
+        const template = emailTemplates.adminBroadcast({ subject: "A Community Buy you liked is open", body: `${body} ${env.frontendUrl}/community-buy/${campaignId}` });
+        await enqueueEmail({ to: person.email, subject: template.subject, html: template.html });
+      }
+      await prisma.campaignInterest.update({ where: { id: person.id }, data: { notifiedAt: new Date(), email: null } });
+    }
+  } catch (error) {
+    logger.error("Could not tell interested people a Community Buy opened", { campaignId, errorMessage: error instanceof Error ? error.message : String(error) });
+  }
+}
+
 /** Tells the organiser and the offer's supplier that a campaign has gone live. Only offer-based campaigns have a supplier to tell. */
 export async function notifyOfferCampaignLive(campaignId: string): Promise<void> {
   const campaign = await prisma.communityCampaign.findUnique({
     where: { id: campaignId },
-    select: { organiser: { select: { userId: true } }, supplierOffer: { select: { foodstuffName: true, supplierAccount: { select: { userId: true } } } } },
+    select: { title: true, organiser: { select: { userId: true } }, supplierOffer: { select: { foodstuffName: true, supplierAccount: { select: { userId: true } } } } },
   });
   if (!campaign) return;
+  await notifyInterested(campaignId, campaign.title);
   await notifyUserInAppAndEmail({
     userId: campaign.organiser.userId,
     title: "Your Community Buy is live",

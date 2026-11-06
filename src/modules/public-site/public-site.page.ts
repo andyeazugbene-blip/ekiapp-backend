@@ -2149,6 +2149,44 @@ function renderStripeConnectReturnLayout(kind: "refresh" | "success"): string {
 </html>`;
 }
 
+/** A partner's link. Without the app, the code has to travel by hand, so the page shows it. */
+function renderPartnerInviteLayout(code: string, intent: "sell" | "supply"): string {
+  const safeCode = escape(code.trim().toUpperCase());
+  const heading = intent === "sell" ? "Set up your store on Eki" : "Supply bulk orders on Eki";
+  const body = intent === "sell"
+    ? "Reach buyers looking for foodstuff. Get the app, then add this partner code when you sign up."
+    : "Publish bulk offers that organisers can build Community Buys on. Get the app, then add this partner code when you sign up.";
+  return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>${heading} | Eki</title>
+  <meta name="description" content="${body}" />
+  <style>
+    *{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;padding:16px;background:#f6f8f7;color:#111827;font-family:Inter,Arial,sans-serif}
+    .card{width:min(100%,460px);background:#fff;border:1px solid #dde7e2;border-radius:24px;padding:28px}
+    .logo{display:inline-grid;place-items:center;width:52px;height:52px;border-radius:14px;background:#076b51;color:#fff;font-weight:800;margin-bottom:18px}
+    h1{margin:0;font-size:28px;letter-spacing:-.03em}p{color:#5f6b66;line-height:1.55}
+    .code{margin:18px 0;padding:14px;border-radius:14px;background:#eff8f3;color:#076b51;font-weight:800;text-align:center;letter-spacing:.08em}
+    a{display:grid;place-items:center;height:50px;border-radius:14px;font-weight:700;text-decoration:none;margin-top:10px}
+    .primary{background:#076b51;color:#fff}.secondary{border:1px solid #cfe1da;color:#076b51;background:#fff}
+  </style>
+</head>
+<body>
+  <main class="card">
+    <div class="logo">eki</div>
+    <h1>${heading}</h1>
+    <p>${body}</p>
+    <div class="code">${safeCode}</div>
+    <a class="primary" href="ekiapp://invite/${encodeURIComponent(code.trim())}?intent=${intent}">Open in the Eki app</a>
+    <a class="secondary" href="https://apps.apple.com/app/id6776307497">Download on the App Store</a>
+    <a class="secondary" href="https://play.google.com/store/apps/details?id=com.ekiapp.mobile">Get it on Google Play</a>
+  </main>
+</body>
+</html>`;
+}
+
 function renderReferralInviteLayout(code: string): string {
   const safeCode = escape(code.trim().toUpperCase());
   return `<!doctype html>
@@ -2688,7 +2726,9 @@ export async function getPublicVendorAgreementPage(_request: Request, response: 
 export async function getPublicInvitePage(request: Request, response: Response): Promise<void> {
   response.setHeader("Content-Type", "text/html; charset=utf-8");
   response.setHeader("Cache-Control", "public, max-age=300, s-maxage=900");
-  response.status(200).send(renderReferralInviteLayout(String(request.params.code ?? "")));
+  const intent = request.query.intent;
+  const code = String(request.params.code ?? "");
+  response.status(200).send(intent === "sell" || intent === "supply" ? renderPartnerInviteLayout(code, intent) : renderReferralInviteLayout(code));
 }
 
 /** See renderStripeConnectReturnLayout's doc comment. Never cached: the ?success=/?refresh= query is Stripe's own callback state. */

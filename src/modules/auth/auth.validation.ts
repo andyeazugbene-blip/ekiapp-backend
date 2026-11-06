@@ -1,6 +1,7 @@
 import { UserRole } from "@prisma/client";
 
 import { parseSignupAttribution } from "../../lib/automation-events";
+import { normalisePartnerCode } from "../admin/partner-cohorts.service";
 import { AppError } from "../../shared/errors/app-error";
 import { normalizePhoneNumber } from "../../shared/utils/phone";
 import type {
@@ -37,7 +38,7 @@ export function validateRegisterInput(input: unknown): RegisterInput {
     throw new AppError("Invalid request body", 400);
   }
 
-  const { email, password, name, phone, country, referralCode, role } = input as Record<string, unknown>;
+  const { email, password, name, phone, country, referralCode, partnerCode, role } = input as Record<string, unknown>;
 
   if (!email || typeof email !== "string" || !EMAIL_REGEX.test(email)) {
     throw new AppError("Invalid email", 400);
@@ -62,6 +63,7 @@ export function validateRegisterInput(input: unknown): RegisterInput {
       typeof referralCode === "string" && referralCode.trim().length > 0
         ? referralCode.trim().toUpperCase()
         : undefined,
+    partnerCode: normalisePartnerCode(partnerCode),
     role:
       role === "VENDOR" || role === "vendor"
         ? UserRole.VENDOR

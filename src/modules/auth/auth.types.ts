@@ -8,6 +8,7 @@ export interface RegisterInput {
   phone?: string;
   country?: string;
   referralCode?: string;
+  partnerCode?: string;
   role?: Exclude<UserRole, "ADMIN">;
   attribution?: SignupAttribution;
 }

@@ -62,6 +62,13 @@ export const authRateLimiter = createRateLimiter({
   message: { error: "Too many authentication attempts, please try again later." },
 });
 
+/** Its own count, so a busy coming-soon page on shared Wi-Fi can't lock anyone out of signing in. */
+export const publicInterestRateLimiter = createRateLimiter({
+  windowMs: 15 * 60 * 1000,
+  max: 20,
+  message: { error: "Too many requests. Please try again later." },
+});
+
 export const paymentsRateLimiter = createRateLimiter({
   windowMs: 60 * 1000,
   max: 20,
