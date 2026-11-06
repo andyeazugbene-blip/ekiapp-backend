@@ -5,6 +5,25 @@ import { stripe } from "../../lib/stripe";
 import { paystack } from "../../lib/paystack";
 import { isSentryEnabled } from "../../lib/sentry";
 import { isStorageConfigured } from "../../lib/storage";
+import { constantTimeEqual } from "../../shared/utils/crypto";
+
+type HealthCheck = { status: "ok" | "error" | "skipped"; latencyMs?: number; detail?: string };
+type HealthReport = { critical: boolean; overall: "ok" | "degraded"; checks: Record<string, HealthCheck> };
+
+const ANONYMOUS_CACHE_MS = 60_000;
+let anonymousCache: { expiresAt: number; report: Promise<HealthReport> } | null = null;
+
+/** Same secret and headers as the internal job routes. */
+function hasOperatorAccess(request: Request): boolean {
+  const secret = process.env.CRON_SECRET;
+  if (!secret) return false;
+  const bearer = request.headers.authorization?.replace(/^Bearer\s+/i, "");
+  const jobSecret = request.headers["x-job-secret"];
+  return (
+    (typeof bearer === "string" && constantTimeEqual(bearer, secret)) ||
+    (typeof jobSecret === "string" && constantTimeEqual(jobSecret, secret))
+  );
+}
 
 export function getHealth(_request: Request, response: Response): void {
   response.status(200).json({ status: "ok" });
@@ -13,9 +32,14 @@ export function getHealth(_request: Request, response: Response): void {
 /**
  * GET /api/health/sentry-test
  * Triggers a safe test error to verify Sentry is capturing exceptions.
- * Only available in non-production or when explicitly enabled.
+ * Needs the cron secret, so the public can't fill Sentry with test errors.
  */
 export function sentryTest(_request: Request, _response: Response): void {
+  if (!hasOperatorAccess(_request)) {
+    _response.status(401).json({ error: "Unauthorized" });
+    return;
+  }
+
   if (!isSentryEnabled()) {
     _response.status(200).json({ sentry: "disabled", message: "SENTRY_DSN not configured" });
     return;
@@ -28,9 +52,30 @@ export function sentryTest(_request: Request, _response: Response): void {
 /**
  * Detailed health check — verifies all critical dependencies.
  * Returns 200 if all critical checks pass, 503 if any fail.
+ *
+ * Anonymous callers, such as uptime monitors, get each check's status from a
+ * short cache: no error text, Stripe mode or latency, and no way to drive
+ * Stripe calls by repeating the request. The cron secret gets a fresh, full report.
  */
-export async function getHealthDetailed(_request: Request, response: Response): Promise<void> {
-  const checks: Record<string, { status: "ok" | "error" | "skipped"; latencyMs?: number; detail?: string }> = {};
+export async function getHealthDetailed(request: Request, response: Response): Promise<void> {
+  if (hasOperatorAccess(request)) {
+    const report = await runHealthChecks();
+    response.status(report.critical ? 200 : 503).json({ status: report.overall, checks: report.checks });
+    return;
+  }
+
+  if (!anonymousCache || anonymousCache.expiresAt <= Date.now()) {
+    anonymousCache = { expiresAt: Date.now() + ANONYMOUS_CACHE_MS, report: runHealthChecks() };
+  }
+  const report = await anonymousCache.report;
+  const checks = Object.fromEntries(
+    Object.entries(report.checks).map(([name, check]) => [name, { status: check.status }]),
+  );
+  response.status(report.critical ? 200 : 503).json({ status: report.overall, checks });
+}
+
+async function runHealthChecks(): Promise<HealthReport> {
+  const checks: Record<string, HealthCheck> = {};
 
   // Database
   const dbStart = Date.now();
@@ -93,5 +138,5 @@ export async function getHealthDetailed(_request: Request, response: Response): 
     checks.storage.status === "ok";
   const overall = critical ? "ok" : "degraded";
 
-  response.status(critical ? 200 : 503).json({ status: overall, checks });
+  return { critical, overall, checks };
 }
