@@ -7,7 +7,7 @@ import { CURSOR_ORDER_BY } from "../../shared/constants";
 import { currencyFromCountry } from "../../shared/currency";
 import { AppError } from "../../shared/errors/app-error";
 import { subscriptionsService } from "../subscriptions/subscriptions.service";
-import { isSellerReadinessGateEnabled, purchasableVendorWhere } from "./seller-readiness";
+import { isSellerReadinessGateActive, purchasableVendorWhere } from "./seller-readiness";
 import { enqueueProductStockDepleted } from "./product-stock-events";
 import { enqueueProductPublished } from "./product-publication-events";
 import { dispatchNotificationsAfterCommit } from "../events/dispatch-notifications";
@@ -383,7 +383,7 @@ export const productsService = {
     const where: Prisma.ProductWhereInput = {
         isActive: true,
         // B15: hide products whose seller cannot receive payment.
-        vendor: { isTest: viewerIsTest, ...(isSellerReadinessGateEnabled() ? purchasableVendorWhere() : {}) },
+        vendor: { isTest: viewerIsTest, ...((await isSellerReadinessGateActive()) ? purchasableVendorWhere() : {}) },
         ...(query.category ? { category: query.category } : {}),
         ...(query.vendorId ? { vendorId: query.vendorId } : {}),
         ...(query.search

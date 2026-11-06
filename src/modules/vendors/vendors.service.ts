@@ -106,6 +106,7 @@ export const vendorsService = {
     const search = input?.search?.trim();
     const limit = Math.min(Math.max(input?.limit ?? 20, 1), 100);
     const sort = input?.sort ?? "popular";
+    const unverifiedCanSell = await launchSettingsService.isOn("UNVERIFIED_VENDORS_CAN_SELL");
 
     const vendors = await prisma.vendor.findMany({
       where: {
@@ -113,7 +114,7 @@ export const vendorsService = {
         isTest: input?.viewerIsTest ?? false,
         // Unverified vendors sell live and verify at withdrawal, so being listed
         // depends on having something to sell, not on verification.
-        AND: [{ OR: [{ verificationStatus: "VERIFIED" }, { products: { some: { isActive: true, status: "PUBLISHED" } } }] }],
+        AND: [{ OR: [{ verificationStatus: "VERIFIED" }, ...(unverifiedCanSell ? [{ products: { some: { isActive: true, status: "PUBLISHED" as const } } }] : [])] }],
         ...(search
           ? {
               OR: [

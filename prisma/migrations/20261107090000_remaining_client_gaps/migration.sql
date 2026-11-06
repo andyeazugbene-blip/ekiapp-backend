@@ -1,0 +1,8 @@
+ALTER TYPE "FundingOutcome" ADD VALUE 'MAXIMUM_REACHED';
+ALTER TYPE "SupportCaseType" ADD VALUE 'PRODUCT_QUALITY';
+ALTER TYPE "FulfilmentEventType" ADD VALUE 'EVIDENCE_ADDED';
+
+ALTER TABLE "PriceChangeRequest" ADD COLUMN "reason" TEXT,
+ADD COLUMN "proposedByVendor" BOOLEAN NOT NULL DEFAULT false;
+
+ALTER TABLE "DeliveryZone" ADD COLUMN "maxWeightGrams" INTEGER;

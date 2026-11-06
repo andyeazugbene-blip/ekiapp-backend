@@ -175,6 +175,8 @@ export const ordersService = {
         buyer: {
           select: { id: true, name: true, email: true, avatar: true },
         },
+        // S21: a Regular Delivery order shows which renewal it came from.
+        renewal: { select: { id: true, cycleDate: true, status: true, stockConfirmedAt: true } },
       },
     });
 

@@ -216,7 +216,8 @@ describe("charge.dispute.created — Community Buy Direct Charge resolution", ()
       const tx = {
         webhookEvent: { create: vi.fn().mockResolvedValue({}), update: vi.fn().mockResolvedValue({}) },
         checkout: { findUnique: vi.fn().mockResolvedValue(null) },
-        communityBuyPaymentAuthorisation: { findUnique: vi.fn().mockResolvedValue({ campaignId: "camp-1" }) },
+        communityBuyPaymentAuthorisation: { findUnique: vi.fn().mockResolvedValue({ campaignId: "camp-1", contributionId: "con-1" }) },
+        campaignContribution: { findFirst: vi.fn().mockResolvedValue(null) },
         stripeDispute: { upsert: vi.fn().mockResolvedValue({}) },
       };
       return cb(tx);
@@ -229,6 +230,34 @@ describe("charge.dispute.created — Community Buy Direct Charge resolution", ()
     expect(campaignPayoutService.holdForSystemReason).toHaveBeenCalledWith("camp-1", "dispute_open");
   });
 
+  it("Part N test 29: a chargeback on a charged pledge holds the campaign and opens an escalated case, flagged when the supplier was already paid", async () => {
+    constructEvent.mockReturnValue({
+      id: "evt_dispute_pledge", type: "charge.dispute.created",
+      data: { object: { id: "dp_9", payment_intent: "pi_pledge_1", amount: 1900, currency: "gbp", reason: "fraudulent", status: "needs_response" } },
+    } as never);
+    const updateMany = vi.fn().mockResolvedValue({ count: 1 });
+    const createCase = vi.fn().mockResolvedValue({});
+    $transaction.mockImplementationOnce(async (cb: (tx: unknown) => unknown) => {
+      const tx = {
+        webhookEvent: { create: vi.fn().mockResolvedValue({}), update: vi.fn().mockResolvedValue({}) },
+        checkout: { findUnique: vi.fn().mockResolvedValue(null) },
+        communityBuyPaymentAuthorisation: { findUnique: vi.fn().mockResolvedValue(null) },
+        campaignContribution: { findFirst: vi.fn().mockResolvedValue({ campaignId: "camp-9", participant: { userId: "buyer-9" }, campaign: { supplierPayment: { status: "PAID" } } }) },
+        communityCampaign: { updateMany },
+        communityBuySupportCase: { create: createCase },
+        stripeDispute: { upsert: vi.fn().mockResolvedValue({}) },
+      };
+      return cb(tx);
+    });
+
+    await stripeWebhookService.handleWebhook({ signature: "sig", rawBody: Buffer.from("x") });
+
+    expect(updateMany).toHaveBeenCalledWith(expect.objectContaining({ where: { id: "camp-9", disputedAt: null } }));
+    const created = createCase.mock.calls[0][0].data;
+    expect(created).toMatchObject({ campaignId: "camp-9", participantId: "buyer-9", caseType: "PAYMENT_ISSUE", status: "ESCALATED", escalated: true });
+    expect(created.internalNotes).toContain("Financial exception");
+  });
+
   it("never re-throws when the post-commit Community Buy resolution itself fails — the webhook is already acknowledged", async () => {
     constructEvent.mockReturnValue({
       id: "evt_dispute_2", type: "charge.dispute.created",
@@ -238,7 +267,8 @@ describe("charge.dispute.created — Community Buy Direct Charge resolution", ()
       const tx = {
         webhookEvent: { create: vi.fn().mockResolvedValue({}), update: vi.fn().mockResolvedValue({}) },
         checkout: { findUnique: vi.fn().mockResolvedValue(null) },
-        communityBuyPaymentAuthorisation: { findUnique: vi.fn().mockResolvedValue({ campaignId: "camp-2" }) },
+        communityBuyPaymentAuthorisation: { findUnique: vi.fn().mockResolvedValue({ campaignId: "camp-2", contributionId: "con-1" }) },
+        campaignContribution: { findFirst: vi.fn().mockResolvedValue(null) },
         stripeDispute: { upsert: vi.fn().mockResolvedValue({}) },
       };
       return cb(tx);

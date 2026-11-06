@@ -2,7 +2,7 @@ import type { DeliveryZone } from "@prisma/client";
 
 import { prisma } from "../lib/prisma";
 
-export type VendorEligibilityReason = "VENDOR_ZONE_INACTIVE" | "NO_COVERAGE";
+export type VendorEligibilityReason = "VENDOR_ZONE_INACTIVE" | "NO_COVERAGE" | "OVER_MAX_WEIGHT";
 
 export interface VendorEligibilityResult {
   vendorId: string;

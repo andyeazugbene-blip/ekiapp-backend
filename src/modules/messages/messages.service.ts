@@ -15,7 +15,13 @@ import type {
   ListConversationsQuery,
   ListMessagesQuery,
   SendMessageInput,
-} from "./messages.types";
+} from "./messages.types";
+import { launchSettingsService } from "../admin/launch-settings.service";
+
+/** Architecture Module 7. Needs at least 10 digits, so prices, dates and quantities are left alone. */
+export function hidePhoneNumbers(text: string): string {
+  return text.replace(/(?<![\w.-])(?!\d{1,2}-\d{1,2}-\d{2,4})\(?\+?\d(?:[\s()-]{0,2}\d){9,14}(?![\w])/g, "[phone number hidden]");
+}
 
 registerCoreEventHandlers();
 
@@ -506,6 +512,10 @@ export const messagesService = {
     });
     if (!conversation) {
       throw new AppError("Conversation not found", 404);
+    }
+
+    if (!options.isInternal && conversation.type !== "SUPPORT" && typeof input.text === "string" && (await launchSettingsService.isOn("HIDE_PHONE_NUMBERS_IN_MESSAGES"))) {
+      input = { ...input, text: hidePhoneNumbers(input.text) };
     }
 
     if (options.isInternal) {

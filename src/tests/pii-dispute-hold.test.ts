@@ -139,7 +139,7 @@ describe("campaign dispute hold", () => {
   it("only counts issues about money, delivery or the supplier, and only open ones", async () => {
     await campaignDisputeBlockers("c1");
     const where = m.caseCount.mock.calls[0][0].where;
-    expect(where.caseType.in).toEqual(["PAYMENT_ISSUE", "REFUND_ISSUE", "FULFILMENT_ISSUE", "SUPPLIER_CONDUCT"]);
+    expect(where.caseType.in).toEqual(["PAYMENT_ISSUE", "REFUND_ISSUE", "FULFILMENT_ISSUE", "SUPPLIER_CONDUCT", "PRODUCT_QUALITY"]);
     expect(where.status.in).toEqual(["OPEN", "IN_PROGRESS", "ESCALATED"]);
   });
 });

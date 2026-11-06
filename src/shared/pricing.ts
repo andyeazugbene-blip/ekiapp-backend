@@ -55,12 +55,15 @@ export function calculateDeliveryFee(input: {
   baseFeeAmount: number;
   feePerKgAmount: number;
   totalWeightGrams: number;
+  /** Architecture Module 6: the higher of weight cost and the base fee, in place of adding them. */
+  minimumFeeFormula?: boolean;
 }): number {
   const { baseFeeAmount, feePerKgAmount, totalWeightGrams } = input;
   if (baseFeeAmount < 0 || feePerKgAmount < 0 || totalWeightGrams < 0) {
     throw new Error("delivery fee inputs must be non-negative");
   }
   const weightKgCeil = Math.ceil(totalWeightGrams / 1000);
+  if (input.minimumFeeFormula) return Math.max(weightKgCeil * feePerKgAmount, baseFeeAmount);
   return baseFeeAmount + weightKgCeil * feePerKgAmount;
 }
 

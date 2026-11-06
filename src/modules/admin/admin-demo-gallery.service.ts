@@ -53,6 +53,10 @@ const CONTRIBUTION_FOR: Partial<Record<CampaignStatus, ContributionStatus>> = {
   COMPLETED: "PAID",
   FINANCIALLY_CLOSED: "PAID",
   FAILED: "CANCELLED",
+  HOLD_WINDOW: "PLEDGED",
+  DECISION_REQUIRED: "PLEDGED",
+  AWAITING_SUPPLIER_RECONFIRMATION: "PLEDGED",
+  PAYMENT_CAPTURE: "PLEDGED",
   REFUNDING: "REFUND_PROCESSING",
   CANCELLED: "REFUNDED",
 };
@@ -71,6 +75,11 @@ const ORGANISER_CAMPAIGNS: CampaignSpec[] = [
   { key: "completion", label: "Completion period", status: "RESCUE_WINDOW", shares: 3, extra: { rescueEndsAt: afterDays(30), fundingOutcome: "BELOW_MINIMUM" } },
   { key: "succeeded-minimum", label: "Succeeded at minimum", status: "SUCCEEDED", shares: 8, extra: { fundingOutcome: "MINIMUM_REACHED", closedAt: afterDays(-1) } },
   { key: "succeeded-goal", label: "Succeeded at goal", status: "SUCCEEDED", shares: GOAL, extra: { fundingOutcome: "GOAL_REACHED", closedAt: afterDays(-1) } },
+  { key: "succeeded-maximum", label: "Succeeded at maximum", status: "SUCCEEDED", shares: MAXIMUM, extra: { fundingOutcome: "MAXIMUM_REACHED", closedAt: afterDays(-1) } },
+  { key: "hold-window", label: "Card holds being placed", status: "HOLD_WINDOW", shares: 6, extra: { paymentMode: "AUTHORISE_THEN_CAPTURE" as const, holdWindowStartsAt: afterDays(-1), decisionDeadline: afterDays(30) } },
+  { key: "decision", label: "Your decision needed, below minimum", status: "DECISION_REQUIRED", shares: 3, extra: { paymentMode: "AUTHORISE_THEN_CAPTURE" as const, decisionRequiredAt: new Date(), decisionDeadline: afterDays(30) } },
+  { key: "awaiting-supplier", label: "Waiting for supplier to reconfirm", status: "AWAITING_SUPPLIER_RECONFIRMATION", shares: 3, extra: { paymentMode: "AUTHORISE_THEN_CAPTURE" as const, reconfirmationRequestedAt: new Date(), reconfirmationDeadline: afterDays(30), reconfirmationQuantity: 3 } },
+  { key: "capture", label: "Taking payment", status: "PAYMENT_CAPTURE", shares: 8, extra: { paymentMode: "AUTHORISE_THEN_CAPTURE" as const, fundingOutcome: "MINIMUM_REACHED" } },
   { key: "failed", label: "Ended below minimum", status: "FAILED", shares: 2, extra: { fundingOutcome: "BELOW_MINIMUM", closedAt: afterDays(-1) } },
   { key: "refunding", label: "Refunds in progress", status: "REFUNDING", shares: 2, extra: { fundingOutcome: "BELOW_MINIMUM", closedAt: afterDays(-2) } },
   { key: "fulfilling", label: "Fulfilment in progress", status: "FULFILLING", shares: 8, fulfilment: "PACKING", extra: { fundingOutcome: "MINIMUM_REACHED", closedAt: afterDays(-3) } },
@@ -99,7 +108,7 @@ const SUPPLIER_CAMPAIGNS: CampaignSpec[] = [
   { key: "supplier-invited", label: "Invitation to answer", status: "UNDER_REVIEW" },
   { key: "supplier-declined", label: "Invitation you declined", status: "CHANGES_REQUIRED", extra: { supplierDeclinedAt: afterDays(-2), supplierDeclineReason: "Demo: stock isn't available for these dates." } },
   { key: "supplier-accepted", label: "Accepted, campaign live", status: "LIVE", shares: 4, extra: COMMITTED },
-  { key: "supplier-final-order", label: "Final order to accept", status: "SUCCEEDED", shares: 8, extra: { ...COMMITTED, fundingOutcome: "MINIMUM_REACHED", closedAt: afterDays(-1), reconfirmationRequestedAt: new Date(), reconfirmationDeadline: afterDays(14), reconfirmationQuantity: 8 } },
+  { key: "supplier-final-order-accept", label: "Final order: accept or decline", status: "AWAITING_SUPPLIER_RECONFIRMATION", shares: 3, extra: { ...COMMITTED, paymentMode: "AUTHORISE_THEN_CAPTURE" as const, reconfirmationRequestedAt: new Date(), reconfirmationDeadline: afterDays(30), reconfirmationQuantity: 3 } },
   { key: "supplier-confirm-stock", label: "Confirm inventory", status: "FULFILLING", shares: 8, fulfilment: "AWAITING_INVENTORY_CONFIRMATION", supplierPayment: "NOT_RELEASED", extra: { ...COMMITTED, fundingOutcome: "MINIMUM_REACHED", closedAt: afterDays(-2) } },
   { key: "supplier-inventory", label: "Set fulfilment plan", status: "FULFILLING", shares: 8, fulfilment: "INVENTORY_CONFIRMED", supplierPayment: "NOT_RELEASED", extra: { ...COMMITTED, fundingOutcome: "MINIMUM_REACHED", closedAt: afterDays(-3) } },
   { key: "supplier-packing", label: "Packing", status: "FULFILLING", shares: 8, fulfilment: "PACKING", supplierPayment: "NOT_RELEASED", extra: { ...COMMITTED, fundingOutcome: "MINIMUM_REACHED", closedAt: afterDays(-4) } },
@@ -253,16 +262,25 @@ const SUBSCRIPTION_STATES: SubscriptionSpec[] = [
   { status: "ACTIVE", renewal: "SCHEDULED" },
   { status: "ACTIVE", renewal: "AWAITING_STOCK" },
   { status: "ACTIVE", renewal: "ORDER_CREATED" },
+  { status: "ACTIVE", renewal: "AWAITING_PRICE_APPROVAL" },
   { status: "PAUSED" },
   { status: "PAYMENT_ATTENTION", renewal: "PAYMENT_FAILED", failure: "Demo: your card was declined." },
   { status: "CANCELLED" },
 ];
 
+const DEMO_RAISED_PRICE = Math.round(PRICE * 1.2);
+const renewalItem = (productId: string, currency: string) => ({ productId, quantity: 1, previousUnitPrice: PRICE, currentUnitPrice: PRICE, currency, stockAvailable: true });
+
 async function seedSubscriptions(buyerId: string, vendorId: string, currency: string): Promise<number> {
   const offer = await prisma.subscriptionOffer.findFirst({ where: { vendorId }, select: { id: true, products: { select: { productId: true }, take: 1 } } });
   const productId = offer?.products[0]?.productId;
   if (!offer || !productId) return 0;
-  if (await prisma.buyerSubscription.findFirst({ where: { buyerId, offerId: offer.id }, select: { id: true } })) return 0;
+  if (await prisma.buyerSubscription.findFirst({ where: { buyerId, offerId: offer.id }, select: { id: true } })) {
+    // Older demo accounts have renewals with no items, which hides the vendor's price change.
+    const bare = await prisma.renewal.findMany({ where: { subscription: { buyerId, offerId: offer.id }, items: { none: {} } }, select: { id: true } });
+    for (const renewal of bare) await prisma.renewalItem.create({ data: { renewalId: renewal.id, ...renewalItem(productId, currency) } });
+    return 0;
+  }
 
   const address = await prisma.buyerAddress.create({
     data: { buyerId, recipientName: "Demo Buyer", line1: "1 Demo Street", city: "Demo City", postalCode: "DE1 1MO", country: "United Kingdom" },
@@ -282,10 +300,15 @@ async function seedSubscriptions(buyerId: string, vendorId: string, currency: st
       select: { id: true },
     });
     if (state.renewal) {
+      const priceChange = state.renewal === "AWAITING_PRICE_APPROVAL"
+        ? await prisma.priceChangeRequest.create({ data: { previousUnitPrice: PRICE, proposedUnitPrice: DEMO_RAISED_PRICE, percentageDifference: ((DEMO_RAISED_PRICE - PRICE) / PRICE) * 100, approvalLimitBps: 500, approvalRequired: true, reason: "Demo: the supplier's cost went up.", proposedByVendor: true } })
+        : null;
       await prisma.renewal.create({
         data: {
+          priceChangeRequestId: priceChange?.id ?? null,
           subscriptionId: sub.id, cycleDate: afterDays(14), status: state.renewal, subtotalAmount: PRICE, currency, failureReason: state.failure ?? null,
           awaitingStockSince: state.renewal === "AWAITING_STOCK" ? new Date() : null,
+          items: { create: [{ ...renewalItem(productId, currency), ...(priceChange ? { currentUnitPrice: DEMO_RAISED_PRICE } : {}) }] },
         },
       });
     }

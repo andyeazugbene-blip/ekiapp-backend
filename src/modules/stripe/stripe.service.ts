@@ -1965,8 +1965,31 @@ class StripeWebhookService {
         // Buy Direct Charge hold instead (see handleChargeRefunded()'s
         // identical fallback for why no Checkout row exists for these).
         const communityBuyHold = !checkout && paymentIntentId
-          ? await tx.communityBuyPaymentAuthorisation.findUnique({ where: { paymentIntentId }, select: { campaignId: true } })
+          ? await tx.communityBuyPaymentAuthorisation.findUnique({ where: { paymentIntentId }, select: { campaignId: true, contributionId: true } })
           : null;
+
+        // Workflow Part N test 29: a chargeback holds the campaign's money. If the supplier
+        // was already paid, that's a financial exception a person must resolve.
+        const disputedContribution = !checkout && paymentIntentId
+          ? await tx.campaignContribution.findFirst({
+              where: communityBuyHold ? { id: communityBuyHold.contributionId } : { stripePaymentIntentId: paymentIntentId },
+              select: { campaignId: true, participant: { select: { userId: true } }, campaign: { select: { supplierPayment: { select: { status: true } } } } },
+            })
+          : null;
+        if (disputedContribution) {
+          const supplierPaid = disputedContribution.campaign.supplierPayment?.status === "PAID";
+          await tx.communityCampaign.updateMany({
+            where: { id: disputedContribution.campaignId, disputedAt: null },
+            data: { disputedAt: new Date(), disputeReason: `Bank chargeback ${dispute.id}` },
+          });
+          await tx.communityBuySupportCase.create({
+            data: {
+              campaignId: disputedContribution.campaignId, participantId: disputedContribution.participant.userId, caseType: "PAYMENT_ISSUE", status: "ESCALATED", escalated: true, escalatedAt: new Date(),
+              description: `A bank chargeback was opened on this contribution (${dispute.reason}).`,
+              internalNotes: supplierPaid ? `Financial exception: the supplier was already paid. Stripe dispute ${dispute.id}.` : `Stripe dispute ${dispute.id}.`,
+            },
+          });
+        }
 
         // Log dispute for manual review. Chargebacks require human investigation —
         // there is no automated hold/reversal here (that would mean inventing an

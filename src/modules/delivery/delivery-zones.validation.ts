@@ -41,6 +41,7 @@ export function validateCreateDeliveryZoneInput(input: unknown): CreateDeliveryZ
     flag: typeof raw.flag === "string" && raw.flag.trim().length > 0 ? raw.flag.trim() : undefined,
     baseFeeAmount: nonNegativeInt(raw.baseFeeAmount, "baseFeeAmount"),
     feePerKgAmount: nonNegativeInt(raw.feePerKgAmount, "feePerKgAmount"),
+    maxWeightGrams: raw.maxWeightGrams === null || raw.maxWeightGrams === undefined ? null : nonNegativeInt(raw.maxWeightGrams, "maxWeightGrams"),
     currency: typeof raw.currency === "string" ? raw.currency.trim().toLowerCase() : undefined,
     isActive: raw.isActive === false ? false : true,
   };
@@ -60,6 +61,7 @@ export function validateUpdateDeliveryZoneInput(input: unknown): UpdateDeliveryZ
   }
   if (raw.baseFeeAmount !== undefined) update.baseFeeAmount = nonNegativeInt(raw.baseFeeAmount, "baseFeeAmount");
   if (raw.feePerKgAmount !== undefined) update.feePerKgAmount = nonNegativeInt(raw.feePerKgAmount, "feePerKgAmount");
+  if (raw.maxWeightGrams !== undefined) update.maxWeightGrams = raw.maxWeightGrams === null ? null : nonNegativeInt(raw.maxWeightGrams, "maxWeightGrams");
   if (raw.currency !== undefined) {
     update.currency = typeof raw.currency === "string" ? raw.currency.trim().toLowerCase() : undefined;
   }

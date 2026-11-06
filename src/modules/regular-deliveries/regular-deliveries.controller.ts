@@ -160,6 +160,15 @@ export async function listVendorRenewals(request: Request, response: Response): 
   response.json({ items });
 }
 
+export async function proposeRenewalPriceChange(request: Request, response: Response): Promise<void> {
+  const userId = requireUserId(request);
+  const renewalId = requireIdParam(request);
+  const body = (request.body ?? {}) as { itemId?: unknown; newUnitPrice?: unknown; reason?: unknown };
+  const result = await renewalsService.proposePriceChange(userId, renewalId, { itemId: String(body.itemId ?? ""), newUnitPrice: Number(body.newUnitPrice), reason: String(body.reason ?? "") });
+  await recordAudit({ actorId: userId, action: "renewal.price_change_proposed", entityType: "Renewal", entityId: renewalId, afterState: { ...result, itemId: body.itemId, newUnitPrice: body.newUnitPrice }, reason: String(body.reason ?? ""), request });
+  response.status(200).json(result);
+}
+
 export async function confirmRenewalStock(request: Request, response: Response): Promise<void> {
   const userId = requireUserId(request);
   const renewalId = requireIdParam(request);
@@ -207,7 +216,7 @@ export async function getVendorRegularDeliveryInsights(request: Request, respons
   const since30d = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
   const in7d = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
 
-  const [activeCount, pausedCount, cancelledLast30d, paidRenewalsLast30d, upcomingRenewalsCount, failedRenewalsLast30d, subscribedItems] = await Promise.all([
+  const [activeCount, pausedCount, cancelledLast30d, paidRenewalsLast30d, upcomingRenewalsCount, failedRenewalsLast30d, subscribedItems, completedRenewals, skippedRenewals, paymentFailures] = await Promise.all([
     prisma.buyerSubscription.count({ where: { offerId: { in: offerIds }, status: "ACTIVE" } }),
     prisma.buyerSubscription.count({ where: { offerId: { in: offerIds }, status: "PAUSED" } }),
     prisma.buyerSubscription.count({ where: { offerId: { in: offerIds }, status: "CANCELLED", cancelledAt: { gte: since30d } } }),
@@ -218,6 +227,9 @@ export async function getVendorRegularDeliveryInsights(request: Request, respons
     prisma.buyerSubscription.count({ where: { offerId: { in: offerIds }, status: "ACTIVE", nextRenewalAt: { lte: in7d } } }),
     prisma.renewal.count({ where: { subscription: { offerId: { in: offerIds } }, status: "PAYMENT_FAILED", updatedAt: { gte: since30d } } }),
     prisma.subscriptionItem.groupBy({ by: ["productId"], where: { subscription: { offerId: { in: offerIds }, status: "ACTIVE" } }, _count: { id: true } }),
+    prisma.renewal.count({ where: { subscription: { offerId: { in: offerIds } }, status: { in: ["PAID", "ORDER_CREATED"] } } }),
+    prisma.renewal.count({ where: { subscription: { offerId: { in: offerIds } }, status: "SKIPPED" } }),
+    prisma.renewal.count({ where: { subscription: { offerId: { in: offerIds } }, paymentAttempts: { some: { status: "FAILED" } } } }),
   ]);
 
   const settledRenewals = paidRenewalsLast30d.length + failedRenewalsLast30d;
@@ -238,6 +250,9 @@ export async function getVendorRegularDeliveryInsights(request: Request, respons
     upcomingRenewalsNext7Days: upcomingRenewalsCount,
     renewalSuccessRate: settledRenewals > 0 ? Math.round((paidRenewalsLast30d.length / settledRenewals) * 100) : null,
     mostSubscribedProduct: topProduct?.title ?? null,
+    completedRenewals,
+    skippedRenewals,
+    paymentFailures,
   });
 }
 

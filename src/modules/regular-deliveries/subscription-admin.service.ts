@@ -331,6 +331,9 @@ export const subscriptionAdminService = {
         country: sub.deliveryAddress.country,
       },
       paymentMethod: sub.paymentMethod,
+      // S60. Stripe holds the card itself, so this is about Eki's right to charge it.
+      paymentAuthorisation: sub.status === "CANCELLED" || !sub.paymentMethod ? "expired" : sub.recurringConsentAt ? "valid" : "not_recorded",
+      recurringConsentAt: sub.recurringConsentAt,
       basket,
       money: {
         currency: latest?.currency ?? basket[0]?.currency ?? null,

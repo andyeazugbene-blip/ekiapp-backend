@@ -809,6 +809,8 @@ model DeliveryZone {
   flag            String?
   baseFeeAmount   Int
   feePerKgAmount  Int
+  // Architecture Module 6: heaviest order this zone accepts. Null means no limit.
+  maxWeightGrams  Int?
   currency        String           @default("EUR")
   isActive        Boolean          @default(true)
   vendorId        String?
@@ -2187,6 +2189,7 @@ model ContentReport {
 // customer-visible-response split, evidence, and an escalation flag.
 
 enum SupportCaseType {
+  PRODUCT_QUALITY
   PAYMENT_ISSUE
   REFUND_ISSUE
   FULFILMENT_ISSUE
@@ -2729,6 +2732,9 @@ model PriceChangeRequest {
   percentageDifference Float
   approvalLimitBps     Int
   approvalRequired     Boolean
+  // S18: set when the vendor proposed this change, shown to the buyer.
+  reason               String?
+  proposedByVendor     Boolean   @default(false)
   buyerDecision        String? // "accepted" | "declined" | null (pending)
   decidedAt            DateTime?
   renewal              Renewal?  @relation("RenewalPriceChange")
@@ -3336,6 +3342,7 @@ enum FundingOutcome {
   GOAL_REACHED
   MINIMUM_REACHED
   BELOW_MINIMUM
+  MAXIMUM_REACHED
 }
 
 enum ExtensionRequestStatus {
@@ -3573,6 +3580,7 @@ enum FulfilmentEventType {
   COLLECTED
   COMPLETED
   EXCEPTION
+  EVIDENCE_ADDED
   PARTICIPANT_RECEIPT_CONFIRMED
   PARTICIPANT_PROBLEM_REPORTED
 }

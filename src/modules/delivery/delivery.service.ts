@@ -4,6 +4,7 @@ import { calculateDeliveryFee } from "../../shared/pricing";
 import { getFxRate, normalizeMoneyMinor } from "../../shared/fx-normalizer";
 import { findGlobalDeliveryZone, resolveVendorDeliveryZone } from "../../shared/delivery-eligibility";
 import type { CalculateDeliveryInput, CalculateDeliveryResult, VendorDeliveryEligibility } from "./delivery.types";
+import { launchSettingsService } from "../admin/launch-settings.service";
 
 export const deliveryService = {
   async calculate(
@@ -98,10 +99,22 @@ export const deliveryService = {
       }
 
       const effectiveZone = resolution.zone;
+      if (effectiveZone.maxWeightGrams && vendorWeight > effectiveZone.maxWeightGrams) {
+        vendorEligibility.push({
+          vendorId,
+          vendorName: vendorNameById.get(vendorId) ?? "Vendor",
+          eligible: false,
+          reason: "OVER_MAX_WEIGHT",
+          productIds,
+          productTitles,
+        });
+        continue;
+      }
       const deliveryFeeNative = calculateDeliveryFee({
         baseFeeAmount: effectiveZone.baseFeeAmount,
         feePerKgAmount: effectiveZone.feePerKgAmount,
         totalWeightGrams: vendorWeight,
+        minimumFeeFormula: await launchSettingsService.isOn("SHIPPING_MINIMUM_FEE_FORMULA"),
       });
 
       const subtotalFx = getFxRate(vendorCurrency, checkoutCurrency);

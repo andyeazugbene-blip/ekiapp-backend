@@ -383,6 +383,47 @@ export const renewalsService = {
     return { providerStatus: intent.status, changed, renewalStatus: updated?.status ?? renewal.status };
   },
 
+  /** S18: the vendor changes one item's price for this renewal only, with a reason. */
+  async proposePriceChange(vendorUserId: string, renewalId: string, input: { itemId: string; newUnitPrice: number; reason: string }) {
+    const vendor = await prisma.vendor.findUnique({ where: { userId: vendorUserId }, select: { id: true } });
+    if (!vendor) throw new AppError("Vendor profile required", 403);
+    const renewal = await prisma.renewal.findUnique({
+      where: { id: renewalId },
+      include: { items: true, subscription: { include: { offer: { select: { vendorId: true } } } } },
+    });
+    if (!renewal) throw new AppError("Renewal not found", 404);
+    if (renewal.subscription.offer.vendorId !== vendor.id) throw new AppError("Forbidden", 403);
+    if (renewal.status !== "AWAITING_STOCK" && renewal.status !== "READY_FOR_PAYMENT") {
+      throw new AppError("The price can only change before payment starts.", 409, undefined, "RENEWAL_PRICE_LOCKED");
+    }
+    const item = renewal.items.find((row) => row.id === input.itemId);
+    if (!item) throw new AppError("This item isn't in the renewal.", 404);
+    if (!Number.isInteger(input.newUnitPrice) || input.newUnitPrice <= 0) throw new AppError("Enter a valid price.", 400);
+    const reason = input.reason?.trim();
+    if (!reason) throw new AppError("A reason for the change is required.", 400);
+
+    const subtotalAmount = renewal.items.reduce((sum, row) => sum + (row.id === item.id ? input.newUnitPrice : row.currentUnitPrice) * row.quantity, 0);
+    await prisma.$transaction([
+      prisma.renewalItem.update({ where: { id: item.id }, data: { currentUnitPrice: input.newUnitPrice } }),
+      prisma.renewal.update({ where: { id: renewalId }, data: { subtotalAmount } }),
+    ]);
+    const limitBps = renewal.subscription.priceChangeApprovalLimitBps ?? PRICE_CHANGE_APPROVAL_DEFAULT_BPS;
+    const pctBps = item.previousUnitPrice > 0 ? ((input.newUnitPrice - item.previousUnitPrice) / item.previousUnitPrice) * 10000 : 0;
+    const approvalRequired = pctBps > limitBps;
+    if (approvalRequired) {
+      const terms = { previousUnitPrice: item.previousUnitPrice, proposedUnitPrice: input.newUnitPrice, percentageDifference: pctBps / 100, approvalLimitBps: limitBps, approvalRequired: true, reason, proposedByVendor: true };
+      if (renewal.priceChangeRequestId) {
+        await prisma.priceChangeRequest.update({ where: { id: renewal.priceChangeRequestId }, data: { ...terms, buyerDecision: null, decidedAt: null } });
+      } else {
+        const request = await prisma.priceChangeRequest.create({ data: terms });
+        await prisma.renewal.update({ where: { id: renewalId }, data: { priceChangeRequestId: request.id } });
+      }
+    }
+    // Awaiting stock: the buyer is asked when the vendor confirms stock, because payment can't start before then.
+    if (renewal.status === "READY_FOR_PAYMENT") await this.evaluatePriceChange(renewalId);
+    return { approvalRequired, percentageChange: pctBps / 100 };
+  },
+
   /** spec §6.6 — a material price increase (above the buyer's approval limit) pauses the renewal for buyer approval. */
   async evaluatePriceChange(renewalId: string) {
     const renewal = await prisma.renewal.findUniqueOrThrow({
@@ -403,15 +444,17 @@ export const renewalsService = {
     }
 
     if (worstItem && worstPct > limitBps) {
-      const request = await prisma.priceChangeRequest.create({
-        data: {
+      const priceTerms = {
           previousUnitPrice: worstItem.previousUnitPrice,
           proposedUnitPrice: worstItem.currentUnitPrice,
           percentageDifference: worstPct / 100,
           approvalLimitBps: limitBps,
           approvalRequired: true,
-        },
-      });
+      };
+      // A vendor's proposal already holds the reason, so it's updated in place.
+      const request = renewal.priceChangeRequestId
+        ? await prisma.priceChangeRequest.update({ where: { id: renewal.priceChangeRequestId }, data: priceTerms })
+        : await prisma.priceChangeRequest.create({ data: priceTerms });
       await prisma.renewal.update({
         where: { id: renewalId },
         data: { status: "AWAITING_PRICE_APPROVAL", priceChangeRequestId: request.id },

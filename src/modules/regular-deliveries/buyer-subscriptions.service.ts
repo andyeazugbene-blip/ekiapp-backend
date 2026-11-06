@@ -328,7 +328,8 @@ export const buyerSubscriptionsService = {
         // currently excluded from renewals (pauseReason/pauseExpectedReturnAt)
         // instead of it just silently disappearing from their next order.
         offer: { include: { vendor: { select: { storeName: true } }, products: true } },
-        renewals: { orderBy: { cycleDate: "desc" }, take: 12, include: { items: { include: { product: { select: { title: true } } } } } },
+        renewals: { orderBy: { cycleDate: "desc" }, take: 12, include: { items: { include: { product: { select: { title: true } } } }, priceChangeRequest: { select: { reason: true, proposedByVendor: true } } } },
+        paymentMethod: { select: { brand: true, last4: true } },
       },
     });
     if (!sub || sub.buyerId !== buyerId) throw new AppError("Subscription not found", 404);

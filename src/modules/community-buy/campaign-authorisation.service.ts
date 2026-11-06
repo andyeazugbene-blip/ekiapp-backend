@@ -444,7 +444,7 @@ export const campaignAuthorisationService = {
   async openHoldWindows(): Promise<{ campaignsProcessed: number; holdsCreated: number }> {
     await this.releaseAbandonedCommitments();
     const due = await prisma.communityCampaign.findMany({
-      where: { status: { in: ["LIVE", "HOLD_WINDOW"] }, paymentMode: "AUTHORISE_THEN_CAPTURE", holdWindowStartsAt: { lte: new Date() } },
+      where: { organiser: { user: { isTest: false } }, status: { in: ["LIVE", "HOLD_WINDOW"] }, paymentMode: "AUTHORISE_THEN_CAPTURE", holdWindowStartsAt: { lte: new Date() } },
     });
     let holdsCreated = 0;
     for (const campaign of due) {
@@ -685,7 +685,7 @@ export const campaignAuthorisationService = {
   /** decision_deadline job — evaluates every HOLD_WINDOW campaign whose decisionDeadline has passed. */
   async evaluateAuthorisationDecisions(): Promise<{ evaluated: number; proceeded: number; decisionRequired: number }> {
     const due = await prisma.communityCampaign.findMany({
-      where: { status: "HOLD_WINDOW", paymentMode: "AUTHORISE_THEN_CAPTURE", decisionDeadline: { lte: new Date() } },
+      where: { organiser: { user: { isTest: false } }, status: "HOLD_WINDOW", paymentMode: "AUTHORISE_THEN_CAPTURE", decisionDeadline: { lte: new Date() } },
     });
     let proceeded = 0;
     let decisionRequired = 0;
@@ -871,7 +871,7 @@ export const campaignAuthorisationService = {
   /** supplier_reconfirmation_timeout companion — decision_deadline's own 24h timeout (AT-13). */
   async evaluateDecisionTimeouts(): Promise<{ cancelled: number }> {
     const cutoff = new Date(Date.now() - DECISION_WINDOW_MS);
-    const expired = await prisma.communityCampaign.findMany({ where: { status: "DECISION_REQUIRED", decisionRequiredAt: { lte: cutoff } } });
+    const expired = await prisma.communityCampaign.findMany({ where: { organiser: { user: { isTest: false } }, status: "DECISION_REQUIRED", decisionRequiredAt: { lte: cutoff } } });
     let cancelled = 0;
     for (const campaign of expired) {
       const claim = await prisma.communityCampaign.updateMany({ where: { id: campaign.id, status: "DECISION_REQUIRED" }, data: { status: "FAILED", fundingOutcome: "BELOW_MINIMUM", closedAt: new Date() } });
@@ -978,6 +978,13 @@ export const campaignAuthorisationService = {
       await recordAudit({ actorId, action: "community_campaign.reconfirmation_declined", entityType: "CommunityCampaign", entityId: campaign.id, reason, metadata: { supplierDeclineReason: reason?.trim() || null } });
       const organiser = await prisma.organiserProfile.findUnique({ where: { id: campaign.organiserId } });
       if (organiser) {
+        // Workflow Part N test 23: a refused final quantity is an exception Eki can see and follow up.
+        await prisma.communityBuySupportCase.create({
+          data: {
+            campaignId: campaign.id, participantId: organiser.userId, caseType: "SUPPLIER_CONDUCT", status: "ESCALATED", escalated: true, escalatedAt: new Date(),
+            description: `The supplier declined the final quantity.${reason ? ` Reason: ${reason}` : ""}`,
+          },
+        });
         await notifyParticipant(organiser.userId, "supplier_declined_reconfirmation", "Supplier declined the reduced quantity", reason ? `The supplier declined: ${reason}. ${campaign.title} was cancelled. Participants were not charged.` : `The supplier declined to fulfil the reduced quantity. ${campaign.title} was cancelled. Participants were not charged.`, campaign.id);
       }
       return prisma.communityCampaign.findUniqueOrThrow({ where: { id: campaign.id } });
@@ -1006,7 +1013,7 @@ export const campaignAuthorisationService = {
   },
 
   async evaluateReconfirmationTimeouts(): Promise<{ cancelled: number }> {
-    const expired = await prisma.communityCampaign.findMany({ where: { status: "AWAITING_SUPPLIER_RECONFIRMATION", reconfirmationDeadline: { lte: new Date() } } });
+    const expired = await prisma.communityCampaign.findMany({ where: { organiser: { user: { isTest: false } }, status: "AWAITING_SUPPLIER_RECONFIRMATION", reconfirmationDeadline: { lte: new Date() } } });
     let cancelled = 0;
     for (const campaign of expired) {
       const claim = await prisma.communityCampaign.updateMany({ where: { id: campaign.id, status: "AWAITING_SUPPLIER_RECONFIRMATION" }, data: { status: "FAILED", fundingOutcome: "BELOW_MINIMUM", closedAt: new Date() } });

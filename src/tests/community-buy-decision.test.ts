@@ -9,6 +9,7 @@ vi.mock("../lib/prisma", () => ({
   prisma: {
     communityCampaign: { findUnique: vi.fn(), findUniqueOrThrow: vi.fn(), findMany: vi.fn(), update: vi.fn(), updateMany: vi.fn() },
     campaignContribution: { findMany: vi.fn(), findUnique: vi.fn(), findUniqueOrThrow: vi.fn(), update: vi.fn(), updateMany: vi.fn() },
+    communityBuySupportCase: { create: vi.fn().mockResolvedValue({ id: "case-1" }) },
     communityBuyPaymentAuthorisation: { findMany: vi.fn(), findUnique: vi.fn(), findUniqueOrThrow: vi.fn(), update: vi.fn(), updateMany: vi.fn() },
     communityBuyPayout: { findUnique: vi.fn(), create: vi.fn(), update: vi.fn() },
     campaignFulfilment: { upsert: vi.fn() },

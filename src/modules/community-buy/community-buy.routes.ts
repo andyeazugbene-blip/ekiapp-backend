@@ -51,6 +51,7 @@ import {
   getMyPaymentProgress,
   pledgeContribution,
   reconfirmCampaign,
+  addFulfilmentEvidence,
   retryContributionHold,
   startContributionCardUpdate,
   getContributionHoldAction,
@@ -336,6 +337,7 @@ supplierRouter.post("/campaigns/:id/fulfilment/collect", requireApprovedSupplier
 // Phase 6 — campaign + code alone, no contributionId needed at the counter.
 supplierRouter.post("/campaigns/:id/fulfilment/collection/verify", requireApprovedSupplierForOwnCampaign(), asyncHandler(verifySupplierCollectionCode));
 // M5 — same gate as every other supplier fulfilment action above.
+supplierRouter.post("/campaigns/:id/fulfilment/evidence", requireApprovedSupplierForOwnCampaign(), asyncHandler(addFulfilmentEvidence));
 supplierRouter.post("/campaigns/:id/fulfilment/exception", requireApprovedSupplierForOwnCampaign(), asyncHandler(reportFulfilmentException));
 supplierRouter.get("/campaigns/:id/payment", requireApprovedSupplierForOwnCampaign(), asyncHandler(getMySupplierPayment));
 // M2 — spec §16 "POST /community-buys/:id/reconfirm" and the
