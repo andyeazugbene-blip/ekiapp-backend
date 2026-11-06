@@ -166,6 +166,7 @@ export const oauthService = {
     country?: string;
     role: "BUYER" | "VENDOR";
     referralCode?: string;
+    partnerCode?: string;
     attribution?: SignupAttribution;
   }): Promise<{ user: ReturnType<typeof toAuthUser>; token: string }> {
     const payload = verifyRegistrationTicket(input.ticket);
@@ -208,6 +209,7 @@ export const oauthService = {
           password: null,
           phone,
           country: input.country?.trim() || undefined,
+          partnerCode: input.partnerCode,
           role: input.role === "VENDOR" ? UserRole.VENDOR : UserRole.BUYER,
           emailVerifiedAt: payload.emailVerified ? new Date() : null,
         },
