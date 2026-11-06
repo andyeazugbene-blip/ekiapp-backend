@@ -87,7 +87,7 @@ export const organiserFeeService = {
       if (!contribution.campaign.country || !contribution.campaign.pricePerShareMinor) return;
 
       const market = await marketConfigurationService.get(contribution.campaign.country);
-      if (!market?.organiserFeeBps) return; // No organiser-fee program configured for this market — never invent a default rate.
+      if (!market?.organiserFeeBps || market.organiserFeeEnabled === false) return; // No organiser-fee program configured for this market — never invent a default rate.
 
       await prisma.organiserFeeAccrualEvent.create({
         data: { campaignId: contribution.campaignId, contributionId, quantity: contribution.quantity, amount: contribution.amount },

@@ -5,6 +5,7 @@ import { resolveMarketCode } from "../../shared/currency";
 import { isIndividualDeliveryEnabled } from "./community-buy-privacy.service";
 import { notificationsService } from "../notifications/notifications.service";
 import { adminRolesService } from "../admin/admin-roles.service";
+import { notifyUserInAppAndEmail } from "./community-buy-notices";
 
 /**
  * Every market approved for the current launch scope. Africa is
@@ -101,6 +102,9 @@ async function ensure(countryCode: string, currency: string) {
  * every authenticated/internal caller.
  */
 export interface PublicMarketConfiguration {
+  organiserTopUpEnabled: boolean;
+  deadlineExtensionEnabled: boolean;
+  marketRefundTimeframe: string;
   countryCode: string;
   currency: string;
   communityBuyEnabled: boolean;
@@ -124,6 +128,9 @@ function toPublicShape(config: {
   supplierApplicationsEnabled: boolean;
   regularDeliveriesEnabled: boolean;
   communityBuyOffersRequired?: boolean;
+  organiserTopUpEnabled?: boolean;
+  deadlineExtensionEnabled?: boolean;
+  marketRefundTimeframe?: string;
 }): PublicMarketConfiguration {
   return {
     countryCode: config.countryCode,
@@ -134,6 +141,9 @@ function toPublicShape(config: {
     supplierApplicationsEnabled: config.supplierApplicationsEnabled,
     regularDeliveriesEnabled: config.regularDeliveriesEnabled,
     communityBuyOffersRequired: config.communityBuyOffersRequired === true,
+    organiserTopUpEnabled: config.organiserTopUpEnabled !== false,
+    deadlineExtensionEnabled: config.deadlineExtensionEnabled !== false,
+    marketRefundTimeframe: config.marketRefundTimeframe ?? "5 to 10 business days",
     individualDeliveryEnabled: isIndividualDeliveryEnabled(),
   };
 }
@@ -147,7 +157,11 @@ const BOOLEAN_FIELDS = [
   // regularDeliveriesEnabled drives the customer-facing "Foodstuff Subscription" feature.
   "regularDeliveriesEnabled",
   "communityBuyOffersRequired",
+  "organiserTopUpEnabled",
+  "deadlineExtensionEnabled",
+  "organiserFeeEnabled",
 ] as const;
+const REQUIRED_STRING_FIELDS = ["refundRoute", "marketRefundTimeframe"] as const;
 const NULLABLE_STRING_FIELDS = ["paymentProvider", "identityProvider", "refundTermsVersion", "legalTermsVersion"] as const;
 const NULLABLE_INT_FIELDS = ["campaignMinDurationHours", "campaignMaxDurationHours", "campaignMinValueAmount", "campaignMaxValueAmount", "organiserFeeBps"] as const;
 const INT_BPS_FIELDS = ["communityBuyFeeBps", "organiserCommissionBps", "buyerServiceFeeBps"] as const;
@@ -157,7 +171,7 @@ const ENUMS = {
   supplierReleasePolicy: ["ON_DELIVERY_CONFIRMED", "ON_FULFILMENT_MARKED", "MANUAL_ADMIN_RELEASE"],
   communityBuyPaymentMode: ["PLEDGE_THEN_CHARGE", "AUTHORISE_THEN_CAPTURE"],
 } as const;
-const STRING_ARRAY_FIELDS = ["acceptedIdentityDocuments", "deliveryMethods"] as const;
+const STRING_ARRAY_FIELDS = ["acceptedIdentityDocuments", "deliveryMethods", "supportedPaymentMethods"] as const;
 /** Fields that must never be set through the generic update: they have guarded paths or are identity/system columns. */
 const GUARDED_FIELDS = new Set([
   "communityBuyPaymentsEnabled", "providerSupported", "providerConfigChecked", "legalApprovalRef", "refundTested",
@@ -177,7 +191,7 @@ export function sanitiseMarketUpdate(raw: unknown): Record<string, unknown> {
   const input = raw as Record<string, unknown>;
   const out: Record<string, unknown> = {};
   const known = new Set<string>([
-    ...BOOLEAN_FIELDS, ...NULLABLE_STRING_FIELDS, ...NULLABLE_INT_FIELDS, ...INT_BPS_FIELDS, ...INT_AMOUNT_FIELDS,
+    ...BOOLEAN_FIELDS, ...REQUIRED_STRING_FIELDS, ...NULLABLE_STRING_FIELDS, ...NULLABLE_INT_FIELDS, ...INT_BPS_FIELDS, ...INT_AMOUNT_FIELDS,
     ...STRING_ARRAY_FIELDS, ...Object.keys(ENUMS),
   ]);
   for (const key of Object.keys(input)) {
@@ -194,6 +208,11 @@ export function sanitiseMarketUpdate(raw: unknown): Record<string, unknown> {
     if (input[key] === undefined) continue;
     if (typeof input[key] !== "boolean") throw new AppError(`${key} must be a boolean`, 400);
     out[key] = input[key];
+  }
+  for (const key of REQUIRED_STRING_FIELDS) {
+    if (input[key] === undefined) continue;
+    if (typeof input[key] !== "string" || !(input[key] as string).trim()) throw new AppError(`${key} must be text`, 400);
+    out[key] = (input[key] as string).trim();
   }
   for (const key of NULLABLE_STRING_FIELDS) {
     if (input[key] === undefined) continue;
@@ -306,6 +325,26 @@ export async function assertSuperAdmin(userId: string): Promise<void> {
   }
 }
 
+/** CB02: tells people waiting for this market, once. Never blocks the admin's change. */
+async function notifyMarketOpened(countryCode: string): Promise<void> {
+  try {
+    const waiting = await prisma.marketAvailabilityRequest.findMany({ where: { market: countryCode, notifiedAt: null }, select: { id: true, userId: true } });
+    for (const person of waiting) {
+      await notifyUserInAppAndEmail({
+        userId: person.userId,
+        title: "Community Buy is available",
+        body: "Community Buy is now available in your market.",
+        event: "market_opened",
+        data: { market: countryCode },
+        dedupeKey: `market_opened:${countryCode}:${person.userId}`,
+      });
+      await prisma.marketAvailabilityRequest.update({ where: { id: person.id }, data: { notifiedAt: new Date() } });
+    }
+  } catch (error) {
+    logger.error("Could not tell people a market opened", { countryCode, errorMessage: error instanceof Error ? error.message : String(error) });
+  }
+}
+
 const ACTIVE_CAMPAIGN_STATUSES = ["LIVE", "PAUSED", "RESCUE_WINDOW", "HOLD_WINDOW", "DECISION_REQUIRED", "FULFILLING", "PAYMENT_CAPTURE"] as const;
 
 /** Best-effort, never throws. Existing campaigns are preserved - this only informs organisers and participants. */
@@ -396,6 +435,9 @@ export const marketConfigurationService = {
     const updated = await prisma.marketConfiguration.update({ where: { countryCode: code }, data });
     if (existing.communityBuyEnabled && !updated.communityBuyEnabled) {
       void notifyMarketChange(code, "market_disabled");
+    }
+    if (!existing.communityBuyEnabled && updated.communityBuyEnabled) {
+      await notifyMarketOpened(code);
     }
     return updated;
   },

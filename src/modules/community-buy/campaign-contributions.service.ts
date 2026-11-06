@@ -388,6 +388,8 @@ export const campaignContributionsService = {
     // Non-null: reaching RESCUE_WINDOW requires having passed submit()'s
     // full requirement check, which never lets country stay unset.
     if (!campaign.country) throw new AppError("Campaign is missing its market configuration", 409);
+    const topUpMarket = await marketConfigurationService.get(campaign.country);
+    if (topUpMarket?.organiserTopUpEnabled === false) throw new AppError("Top-ups aren't available in this market.", 409, undefined, "TOP_UP_NOT_AVAILABLE");
 
     const paymentsEnabled = await marketConfigurationService.isCommunityBuyPaymentsEnabled(campaign.country);
     if (!paymentsEnabled) {

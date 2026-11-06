@@ -286,6 +286,7 @@ model User {
   businessMemberships      BusinessMember[]
   demandRequests           DemandRequest[]
   campaignInterests        CampaignInterest[]
+  marketAvailabilityRequests MarketAvailabilityRequest[]
   @@index([role, createdAt])
   @@index([createdAt])
   @@index([isSuspended])
@@ -4082,6 +4083,13 @@ model MarketConfiguration {
   supplierApplicationsEnabled  Boolean @default(false)
   regularDeliveriesEnabled     Boolean @default(false)
   // Phase 1: when on, organisers must build on an approved supplier offer. Stays off until offers are seeded.
+  // Community Buy Part L: what each market offers, set per market by admins.
+  organiserTopUpEnabled     Boolean  @default(true)
+  deadlineExtensionEnabled  Boolean  @default(true)
+  organiserFeeEnabled       Boolean  @default(true)
+  supportedPaymentMethods   String[] @default(["CARD"])
+  refundRoute               String   @default("ORIGINAL_PAYMENT_METHOD")
+  marketRefundTimeframe     String   @default("5 to 10 business days")
   communityBuyOffersRequired Boolean @default(false)
 
   // Architecture doc §8 (Market Controls) — added in the A→Z gap-closure pass.
@@ -4672,4 +4680,17 @@ model PhoneVerification {
   attempts  Int      @default(0)
   expiresAt DateTime
   createdAt DateTime @default(now())
+}
+
+/// CB02: someone waiting for Community Buy to open in their market.
+model MarketAvailabilityRequest {
+  id         String    @id @default(cuid())
+  userId     String
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  market     String
+  notifiedAt DateTime?
+  createdAt  DateTime  @default(now())
+
+  @@unique([userId, market])
+  @@index([market, notifiedAt])
 }

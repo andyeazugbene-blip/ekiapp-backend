@@ -241,7 +241,7 @@ describe("Privacy — organiser sees address only for a DELIVERY campaign; suppl
         joinedAt: new Date(),
         user: { name: "Ada Buyer", email: "ada@example.com" },
         contributions: [{
-          quantity: 2, amount: 2000, isOrganiserTopUp: false, createdAt: new Date(),
+          status: "PAID", quantity: 2, amount: 2000, isOrganiserTopUp: false, createdAt: new Date(),
           deliveryRecipientName: "Ada Buyer", deliveryAddressLine1: "1 SW1 Ave", deliveryAddressLine2: null, deliveryCity: "London", deliveryPostcode: "SW1A 1AA",
         }],
       },
@@ -266,7 +266,7 @@ describe("Privacy — organiser sees address only for a DELIVERY campaign; suppl
     m.campaignParticipant.findMany.mockResolvedValue([
       {
         userId: "buyer-1", joinedAt: new Date(), user: { name: "Ada Buyer", email: "ada@example.com" },
-        contributions: [{ quantity: 2, amount: 2000, isOrganiserTopUp: false, createdAt: new Date(), deliveryRecipientName: "Ada Buyer", deliveryAddressLine1: "1 SW1 Ave", deliveryAddressLine2: null, deliveryCity: "London", deliveryPostcode: "SW1A 1AA" }],
+        contributions: [{ status: "PAID", quantity: 2, amount: 2000, isOrganiserTopUp: false, createdAt: new Date(), deliveryRecipientName: "Ada Buyer", deliveryAddressLine1: "1 SW1 Ave", deliveryAddressLine2: null, deliveryCity: "London", deliveryPostcode: "SW1A 1AA" }],
       },
     ]);
 
@@ -282,7 +282,7 @@ describe("Privacy — organiser sees address only for a DELIVERY campaign; suppl
     m.campaignParticipant.findMany.mockResolvedValue([
       {
         userId: "buyer-1", joinedAt: new Date(), user: { name: "Ada Buyer", email: "ada@example.com" },
-        contributions: [{ quantity: 2, amount: 2000, isOrganiserTopUp: false, createdAt: new Date(), deliveryRecipientName: "Ada Buyer", deliveryAddressLine1: "1 SW1 Ave", deliveryAddressLine2: null, deliveryCity: "London", deliveryPostcode: "SW1A 1AA", deliveryPhone: null, deliveryInstructions: null }],
+        contributions: [{ status: "PAID", quantity: 2, amount: 2000, isOrganiserTopUp: false, createdAt: new Date(), deliveryRecipientName: "Ada Buyer", deliveryAddressLine1: "1 SW1 Ave", deliveryAddressLine2: null, deliveryCity: "London", deliveryPostcode: "SW1A 1AA", deliveryPhone: null, deliveryInstructions: null }],
       },
     ]);
 
@@ -299,7 +299,7 @@ describe("Privacy — organiser sees address only for a DELIVERY campaign; suppl
         userId: "buyer-1",
         joinedAt: new Date(),
         user: { name: "Ada Buyer", email: "ada@example.com" },
-        contributions: [{ quantity: 2, amount: 2000, isOrganiserTopUp: false, createdAt: new Date(), deliveryRecipientName: null, deliveryAddressLine1: null, deliveryAddressLine2: null, deliveryCity: null, deliveryPostcode: null }],
+        contributions: [{ status: "PAID", quantity: 2, amount: 2000, isOrganiserTopUp: false, createdAt: new Date(), deliveryRecipientName: null, deliveryAddressLine1: null, deliveryAddressLine2: null, deliveryCity: null, deliveryPostcode: null }],
       },
     ]);
 
