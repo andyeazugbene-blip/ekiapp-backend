@@ -10,6 +10,7 @@ import { renewalsService } from "./renewals.service";
 import { requireReason, subscriptionAdminService } from "./subscription-admin.service";
 import { assertCardAllowedForAccount, viewerIsTest } from "../../shared/test-accounts";
 import { receiptsService } from "../public-site/receipts-page";
+import { subscriptionSupportCasesService } from "./subscription-support-cases.service";
 
 function requireUserId(request: Request): string {
   if (!request.user) throw new AppError("Unauthorized", 401);
@@ -329,6 +330,41 @@ export async function decideRenewalPriceChange(request: Request, response: Respo
   if (decision !== "accepted" && decision !== "declined") throw new AppError("decision must be accepted or declined", 400);
   const renewal = await renewalsService.buyerDecidePriceChange(buyerId, requireIdParam(request), decision);
   response.json({ renewal });
+}
+
+export async function listStockShortages(request: Request, response: Response): Promise<void> {
+  response.json({ items: await renewalsService.stockShortages(requireUserId(request)) });
+}
+
+export async function resolveStockShortage(request: Request, response: Response): Promise<void> {
+  const userId = requireUserId(request);
+  const productId = requireIdParam(request);
+  const mode = request.body?.mode;
+  if (mode === "earliest") {
+    response.json(await renewalsService.allocateStockByEarliest(userId, productId));
+    return;
+  }
+  if (mode === "pause") {
+    response.json(await renewalsService.pauseProductForShortage(userId, productId));
+    return;
+  }
+  throw new AppError("mode must be earliest or pause", 400);
+}
+
+export async function adminRecheckRenewalProvider(request: Request, response: Response): Promise<void> {
+  response.json(await renewalsService.adminRecheckProvider(requireUserId(request), requireIdParam(request)));
+}
+
+export async function adminListSubscriptionSupportCases(request: Request, response: Response): Promise<void> {
+  response.json({ items: await subscriptionSupportCasesService.list(requireIdParam(request)) });
+}
+
+export async function adminCreateSubscriptionSupportCase(request: Request, response: Response): Promise<void> {
+  response.status(201).json({ supportCase: await subscriptionSupportCasesService.create(requireUserId(request), requireIdParam(request), request.body ?? {}) });
+}
+
+export async function adminUpdateSubscriptionSupportCase(request: Request, response: Response): Promise<void> {
+  response.json({ supportCase: await subscriptionSupportCasesService.update(requireUserId(request), requireIdParam(request), request.body ?? {}) });
 }
 
 export async function removeRenewalItem(request: Request, response: Response): Promise<void> {

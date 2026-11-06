@@ -16,6 +16,7 @@ import { nextCycleDate, recordAction } from "./buyer-subscriptions.service";
 import { adminPlatformSettingsService } from "../admin/admin-platform-settings.service";
 import { enqueueProductStockDepleted } from "../products/product-stock-events";
 import { dispatchNotificationsAfterCommit } from "../events/dispatch-notifications";
+import { subscriptionOffersService } from "./subscription-offers.service";
 
 // Regular Deliveries had zero AuditLog coverage for anything beyond buyer-
 // initiated actions (those go to SubscriptionActionHistory instead, see
@@ -279,6 +280,107 @@ export const renewalsService = {
     await prisma.renewal.update({ where: { id: renewalId }, data: { stockConfirmedAt: new Date(), stockConfirmedById: vendorUserId } });
     await this.evaluatePriceChange(renewalId);
     return prisma.renewal.findUnique({ where: { id: renewalId }, include: { items: true } });
+  },
+
+  /** S17: products whose upcoming renewals need more than is in stock. */
+  async stockShortages(vendorUserId: string) {
+    const vendor = await prisma.vendor.findUnique({ where: { userId: vendorUserId }, select: { id: true } });
+    if (!vendor) throw new AppError("Vendor profile required", 403);
+    const items = await prisma.renewalItem.findMany({
+      where: { renewal: { status: "AWAITING_STOCK", subscription: { offer: { vendorId: vendor.id } } } },
+      select: { productId: true, quantity: true, renewalId: true, product: { select: { title: true, stock: true } } },
+    });
+    const byProduct = new Map<string, { productId: string; title: string; availableQuantity: number; requiredQuantity: number; affectedRenewals: number }>();
+    for (const item of items) {
+      const row = byProduct.get(item.productId) ?? { productId: item.productId, title: item.product.title, availableQuantity: item.product.stock, requiredQuantity: 0, affectedRenewals: 0 };
+      row.requiredQuantity += item.quantity;
+      row.affectedRenewals += 1;
+      byProduct.set(item.productId, row);
+    }
+    return [...byProduct.values()].filter((row) => row.requiredQuantity > row.availableQuantity);
+  },
+
+  /**
+   * S17: confirm the earliest renewals that stock can cover. Everyone else is
+   * told before any payment, and stays waiting so stock can be added later.
+   */
+  async allocateStockByEarliest(vendorUserId: string, productId: string) {
+    const vendor = await prisma.vendor.findUnique({ where: { userId: vendorUserId }, select: { id: true } });
+    if (!vendor) throw new AppError("Vendor profile required", 403);
+    const product = await prisma.product.findFirst({ where: { id: productId, vendorId: vendor.id }, select: { id: true, title: true, stock: true } });
+    if (!product) throw new AppError("Product not found", 404);
+    const items = await prisma.renewalItem.findMany({
+      where: { productId, renewal: { status: "AWAITING_STOCK", subscription: { offer: { vendorId: vendor.id } } } },
+      orderBy: { renewal: { cycleDate: "asc" } },
+      select: { id: true, quantity: true, renewalId: true, renewal: { select: { subscription: { select: { id: true, buyerId: true } } } } },
+    });
+    let remaining = product.stock;
+    let confirmed = 0;
+    let waiting = 0;
+    for (const item of items) {
+      if (item.quantity <= remaining) {
+        try {
+          await this.confirmStock(vendorUserId, item.renewalId);
+          remaining -= item.quantity;
+          confirmed += 1;
+          continue;
+        } catch (error) {
+          // Another item in this basket is short. It stays waiting and the buyer is told below.
+          logger.info("Renewal stayed waiting during stock allocation", { renewalId: item.renewalId, reason: error instanceof Error ? error.message : String(error) });
+        }
+      } else {
+        await prisma.renewalItem.update({ where: { id: item.id }, data: { stockAvailable: false } });
+      }
+      waiting += 1;
+      await notificationsService.enqueue({
+        userId: item.renewal.subscription.buyerId,
+        type: "SUBSCRIPTION_UPDATE",
+        title: "Stock is limited",
+        body: `There isn't enough ${product.title} for your next delivery yet. You won't be charged unless it's confirmed.`,
+        data: { type: "subscription_update", event: "stock_limited", subscriptionId: item.renewal.subscription.id, renewalId: item.renewalId },
+        dedupeKey: `stock_limited:${item.renewalId}:${productId}`,
+      });
+    }
+    await recordAudit({ actorId: vendorUserId, action: "renewal.stock_allocated", entityType: "Product", entityId: productId, metadata: { confirmed, waiting } });
+    return { confirmed, waiting };
+  },
+
+  /** S17: pause the product in every offer it belongs to. Buyers are told by pauseProduct. */
+  async pauseProductForShortage(vendorUserId: string, productId: string) {
+    const vendor = await prisma.vendor.findUnique({ where: { userId: vendorUserId }, select: { id: true } });
+    if (!vendor) throw new AppError("Vendor profile required", 403);
+    const links = await prisma.subscriptionOfferProduct.findMany({ where: { productId, pausedAt: null, offer: { vendorId: vendor.id } }, select: { offerId: true } });
+    if (links.length === 0) throw new AppError("This product isn't in any active offer", 404);
+    for (const link of links) {
+      await subscriptionOffersService.pauseProduct(vendor.id, link.offerId, productId, "Stock is limited");
+    }
+    return { paused: links.length };
+  },
+
+  /**
+   * S61: ask Stripe what really happened to a payment still marked processing,
+   * in case a webhook never arrived. It reuses the webhook's own path, so an
+   * order can't be created twice, and a card is never charged from here.
+   */
+  async adminRecheckProvider(adminId: string, renewalId: string) {
+    const renewal = await prisma.renewal.findUnique({ where: { id: renewalId }, select: { status: true } });
+    if (!renewal) throw new AppError("Renewal not found", 404);
+    const attempt = await prisma.subscriptionPaymentAttempt.findFirst({
+      where: { renewalId, stripePaymentIntentId: { not: null } },
+      orderBy: { attemptNumber: "desc" },
+      select: { stripePaymentIntentId: true },
+    });
+    if (!attempt?.stripePaymentIntentId) throw new AppError("There's no payment to check for this renewal yet.", 409, undefined, "NO_PROVIDER_PAYMENT");
+    const intent = await stripe.paymentIntents.retrieve(attempt.stripePaymentIntentId);
+    let changed = false;
+    if (renewal.status === "PAYMENT_PROCESSING" && intent.status === "succeeded") {
+      changed = (await this.resolveProcessingPayment(renewalId, intent.id, true)).handled;
+    } else if (renewal.status === "PAYMENT_PROCESSING" && intent.status !== "processing") {
+      changed = (await this.resolveProcessingPayment(renewalId, intent.id, false, `Provider reports ${intent.status}`)).handled;
+    }
+    await recordAudit({ actorId: adminId, action: "renewal.provider_rechecked", entityType: "Renewal", entityId: renewalId, metadata: { providerStatus: intent.status, changed } });
+    const updated = await prisma.renewal.findUnique({ where: { id: renewalId }, select: { status: true } });
+    return { providerStatus: intent.status, changed, renewalStatus: updated?.status ?? renewal.status };
   },
 
   /** spec §6.6 — a material price increase (above the buyer's approval limit) pauses the renewal for buyer approval. */

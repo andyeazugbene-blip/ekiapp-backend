@@ -26,6 +26,7 @@ import { buyerCountryService } from "./buyer-country.service";
 import { viewerIsTest } from "../../shared/test-accounts";
 import { reviewRequestsService } from "./review-requests.service";
 import { receiptsService } from "../public-site/receipts-page";
+import { supplierCampaignActionsService } from "./supplier-campaign-actions.service";
 
 // ─── Public market availability (used by the mobile app to decide whether
 // to show Regular Deliveries / Community Buy entry points at all — the
@@ -443,6 +444,18 @@ export async function requestCampaignCancellation(request: Request, response: Re
     request,
   });
   response.status(result.requiresReview ? 202 : 200).json(result);
+}
+
+export async function setCampaignInventoryStatus(request: Request, response: Response): Promise<void> {
+  response.json({ campaign: await supplierCampaignActionsService.setInventoryStatus(requireUserId(request), requireIdParam(request), request.body?.status) });
+}
+
+export async function askCampaignQuestion(request: Request, response: Response): Promise<void> {
+  response.status(201).json({ supportCase: await supplierCampaignActionsService.askQuestion(requireUserId(request), requireIdParam(request), request.body?.question) });
+}
+
+export async function getOrganiserHistory(request: Request, response: Response): Promise<void> {
+  response.json(await supplierCampaignActionsService.organiserHistory(requireUserId(request)));
 }
 
 export async function requestMarketNotification(request: Request, response: Response): Promise<void> {

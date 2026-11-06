@@ -128,6 +128,9 @@ import {
   updateOrganiserCampaign,
   deleteOrganiserDraft,
   requestMarketNotification,
+  setCampaignInventoryStatus,
+  askCampaignQuestion,
+  getOrganiserHistory,
   createContributionReceiptLink,
 } from "./community-buy.controller";
 
@@ -205,6 +208,7 @@ organiserRouter.patch("/offer-campaigns/:id", asyncHandler(updateOfferCampaign))
 organiserRouter.post("/offer-campaigns/:id/submit", asyncHandler(submitOfferCampaign));
 organiserRouter.post("/offer-campaigns/:id/withdraw", asyncHandler(withdrawOfferCampaign));
 organiserRouter.post("/campaigns/:id/interest", asyncHandler(registerCampaignInterest));
+organiserRouter.get("/history", asyncHandler(getOrganiserHistory));
 organiserRouter.get("/profile", asyncHandler(getMyOrganiserProfile));
 organiserRouter.patch("/profile", asyncHandler(updateMyOrganiserProfile));
 organiserRouter.post("/applications", asyncHandler(applyAsOrganiser));
@@ -291,6 +295,8 @@ supplierRouter.post("/offers/:id/submit", asyncHandler(submitSupplierOffer));
 supplierRouter.post("/offers/:id/withdraw", asyncHandler(withdrawSupplierOffer));
 supplierRouter.get("/offer-orders", asyncHandler(listSupplierOfferOrders));
 supplierRouter.post("/offer-extensions/:id/reconfirm", asyncHandler(reconfirmOfferExtension));
+supplierRouter.post("/campaigns/:id/inventory-status", asyncHandler(setCampaignInventoryStatus));
+supplierRouter.post("/campaigns/:id/question", asyncHandler(askCampaignQuestion));
 supplierRouter.get("/profile", asyncHandler(getMySupplierProfile));
 supplierRouter.post("/applications", asyncHandler(applyAsSupplier));
 // M5 (spec §6.4 "paused: voluntarily unavailable for new work") — self-service only, no requireApprovedSupplier() gate needed since pause()/resume() enforce their own precondition (APPROVED/PAUSED respectively).
