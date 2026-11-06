@@ -109,6 +109,21 @@ function paymentState(latest?: { status: string } | null): string {
 }
 
 export const subscriptionAdminService = {
+  /** S58's tiles. Demo accounts aren't counted. */
+  async operationsSummary(now = new Date()) {
+    const real = { buyer: { isTest: false } };
+    const renewalsIn = (status: Prisma.RenewalWhereInput["status"]) => prisma.renewal.count({ where: { status, subscription: real } });
+    const [activeSubscriptions, upcomingRenewals, paymentsUnderReview, failedRenewalPayments, priceApprovalsOutstanding, subscriptionExceptions] = await Promise.all([
+      prisma.buyerSubscription.count({ where: { status: "ACTIVE", ...real } }),
+      prisma.buyerSubscription.count({ where: { status: "ACTIVE", nextRenewalAt: { lte: new Date(now.getTime() + 7 * 86_400_000) }, ...real } }),
+      renewalsIn("PAYMENT_PROCESSING"),
+      renewalsIn("PAYMENT_FAILED"),
+      renewalsIn("AWAITING_PRICE_APPROVAL"),
+      prisma.renewal.count({ where: { escalated: true, subscription: real } }),
+    ]);
+    return { activeSubscriptions, upcomingRenewals, paymentsUnderReview, failedRenewalPayments, priceApprovalsOutstanding, subscriptionExceptions };
+  },
+
   async list(query: AdminSubscriptionListQuery) {
     const queue = (SUBSCRIPTION_QUEUES as readonly string[]).includes(query.status ?? "") ? (query.status as SubscriptionQueue) : "all";
     const limit = Math.min(Math.max(Number(query.limit) || 25, 1), 100);
@@ -121,6 +136,8 @@ export const subscriptionAdminService = {
       base.push({
         OR: [
           { id: q },
+          // S59: a renewal or order reference finds its subscription too.
+          { renewals: { some: { OR: [{ id: q }, { orderId: q }, { order: { orderNumber: q } }] } } },
           { buyer: { name: { contains: q, mode: "insensitive" } } },
           { buyer: { email: { contains: q, mode: "insensitive" } } },
           { offer: { vendor: { storeName: { contains: q, mode: "insensitive" } } } },

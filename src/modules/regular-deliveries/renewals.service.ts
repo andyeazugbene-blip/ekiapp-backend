@@ -375,6 +375,50 @@ export const renewalsService = {
   },
 
   /**
+   * S46: the buyer drops the item whose price changed. It leaves this renewal
+   * and future ones. If nothing else changed price, payment can go ahead,
+   * because there's nothing left to decide.
+   */
+  async buyerRemoveItemFromRenewal(buyerId: string, renewalId: string, productId: string) {
+    const renewal = await prisma.renewal.findUnique({
+      where: { id: renewalId },
+      include: { items: true, subscription: { select: { id: true, buyerId: true, offer: { select: { vendorId: true } } } } },
+    });
+    if (!renewal || renewal.subscription.buyerId !== buyerId) throw new AppError("Renewal not found", 404);
+    if (renewal.status !== "AWAITING_PRICE_APPROVAL" || !renewal.priceChangeRequestId) {
+      throw new AppError("This renewal is not awaiting price approval", 409);
+    }
+    const item = renewal.items.find((i) => i.productId === productId);
+    if (!item) throw new AppError("That item isn't in this renewal", 404);
+    const remaining = renewal.items.filter((i) => i.id !== item.id);
+    if (remaining.length === 0) {
+      throw new AppError("This is the only item left. Skip this renewal instead.", 409, undefined, "LAST_ITEM_IN_RENEWAL");
+    }
+    const stillChanged = remaining.some((i) => i.currentUnitPrice > i.previousUnitPrice);
+    const subtotalAmount = remaining.reduce((sum, i) => sum + i.currentUnitPrice * i.quantity, 0);
+
+    await prisma.$transaction(async (tx) => {
+      await tx.renewalItem.delete({ where: { id: item.id } });
+      await tx.subscriptionItem.deleteMany({ where: { subscriptionId: renewal.subscriptionId, productId } });
+      await tx.renewal.update({
+        where: { id: renewalId },
+        data: { subtotalAmount, ...(stillChanged ? {} : { status: "READY_FOR_PAYMENT" }) },
+      });
+      if (!stillChanged) {
+        await tx.priceChangeRequest.update({ where: { id: renewal.priceChangeRequestId as string }, data: { buyerDecision: "accepted", decidedAt: new Date() } });
+      }
+    });
+    await recordAudit({
+      actorId: buyerId,
+      action: "renewal.item_removed",
+      entityType: "Renewal",
+      entityId: renewalId,
+      metadata: { productId, stillAwaitingApproval: stillChanged },
+    });
+    return prisma.renewal.findUnique({ where: { id: renewalId }, include: { items: true } });
+  },
+
+  /**
    * Idempotent charge attempt. Each attempt gets its own row + idempotency
    * key ("{renewalId}:{attemptNumber}") before Stripe is ever called, so a
    * crash mid-call can be safely retried without risking a double charge —

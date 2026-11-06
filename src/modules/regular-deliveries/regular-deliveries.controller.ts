@@ -9,6 +9,7 @@ import { buyerPaymentMethodsService } from "./payment-methods.service";
 import { renewalsService } from "./renewals.service";
 import { requireReason, subscriptionAdminService } from "./subscription-admin.service";
 import { assertCardAllowedForAccount, viewerIsTest } from "../../shared/test-accounts";
+import { receiptsService } from "../public-site/receipts-page";
 
 function requireUserId(request: Request): string {
   if (!request.user) throw new AppError("Unauthorized", 401);
@@ -328,6 +329,20 @@ export async function decideRenewalPriceChange(request: Request, response: Respo
   if (decision !== "accepted" && decision !== "declined") throw new AppError("decision must be accepted or declined", 400);
   const renewal = await renewalsService.buyerDecidePriceChange(buyerId, requireIdParam(request), decision);
   response.json({ renewal });
+}
+
+export async function removeRenewalItem(request: Request, response: Response): Promise<void> {
+  const productId = request.body?.productId;
+  if (typeof productId !== "string" || !productId) throw new AppError("productId is required", 400);
+  response.json({ renewal: await renewalsService.buyerRemoveItemFromRenewal(requireUserId(request), requireIdParam(request), productId) });
+}
+
+export async function createRenewalReceiptLink(request: Request, response: Response): Promise<void> {
+  response.json(await receiptsService.renewalLink(requireUserId(request), requireIdParam(request)));
+}
+
+export async function adminSubscriptionOperationsSummary(_request: Request, response: Response): Promise<void> {
+  response.json(await subscriptionAdminService.operationsSummary());
 }
 
 export async function retryRenewalPayment(request: Request, response: Response): Promise<void> {

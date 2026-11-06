@@ -50,7 +50,10 @@ import {
   resumeBuyerSubscription,
   resumeSubscriptionOfferProduct,
   resumeSubscriptionOfferRenewals,
-  rescheduleNextBuyerSubscription,
+  rescheduleNextBuyerSubscription,
+  removeRenewalItem,
+  createRenewalReceiptLink,
+  adminSubscriptionOperationsSummary,
   retryRenewalPayment,
   skipNextRenewal,
   updateBuyerSubscriptionPaymentMethod,
@@ -96,6 +99,8 @@ export const renewalsRouter = Router();
 renewalsRouter.post("/:id/stock-confirmation", authenticate, requireVendorProfile(), asyncHandler(confirmRenewalStock));
 renewalsRouter.post("/:id/price-change", authenticate, asyncHandler(decideRenewalPriceChange));
 renewalsRouter.post("/:id/retry-payment", authenticate, asyncHandler(retryRenewalPayment));
+renewalsRouter.post("/:id/remove-item", authenticate, asyncHandler(removeRenewalItem));
+renewalsRouter.post("/:id/receipt-link", authenticate, asyncHandler(createRenewalReceiptLink));
 
 // Buyer: saved payment methods — mounted at /buyer/payment-methods.
 export const buyerPaymentMethodsRouter = Router();
@@ -136,6 +141,7 @@ const twoFa = asyncHandler(require2fa);
 export const adminSubscriptionsRouter = Router();
 adminSubscriptionsRouter.use(authenticate, requireRole("ADMIN"));
 adminSubscriptionsRouter.get("/", read, asyncHandler(adminListSubscriptions));
+adminSubscriptionsRouter.get("/operations-summary", read, asyncHandler(adminSubscriptionOperationsSummary));
 adminSubscriptionsRouter.get("/exceptions", read, asyncHandler(adminListSubscriptionExceptions));
 adminSubscriptionsRouter.get("/reports", read, asyncHandler(adminSubscriptionReports));
 adminSubscriptionsRouter.get("/:id", read, asyncHandler(adminGetSubscription));
