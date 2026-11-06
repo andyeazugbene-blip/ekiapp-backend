@@ -30,6 +30,19 @@ function startOfMonth(): Date {
   return d;
 }
 
+/** Handbook 8.2: what the dashboard should put first. The dashboard's recommendation already gives the next step. */
+async function dashboardState(vendorId: string, totalOrders: number): Promise<VendorDashboardData["state"]> {
+  if (totalOrders === 0) return "NO_SALE";
+  const repeat = await prisma.order.groupBy({
+    by: ["buyerId"],
+    where: { items: { some: { vendorId } }, payment: { status: "SUCCEEDED" } },
+    having: { buyerId: { _count: { gt: 1 } } },
+    orderBy: { buyerId: "asc" },
+    take: 1,
+  }).catch(() => []);
+  return repeat.length > 0 ? "REPEAT_BUYERS" : "HAS_SALES";
+}
+
 export const vendorDashboardService = {
   async getDashboard(userId: string): Promise<VendorDashboardData> {
     const vendor = await prisma.vendor.findUnique({
@@ -185,7 +198,9 @@ export const vendorDashboardService = {
       { id: "messages", type: "messages", label: "Messages", route: "/(vendor)/messages", count: unreadMessages },
     ];
 
+    const state = await dashboardState(vendor.id, totalOrders);
     return {
+      state,
       greeting: "Welcome back,",
       storeName: vendor.storeName,
       alerts,

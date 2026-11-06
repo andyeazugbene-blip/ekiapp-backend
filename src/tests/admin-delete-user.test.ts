@@ -10,6 +10,9 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 
 const m = vi.hoisted(() => ({
+  orderCount: vi.fn(),
+  disputeCount: vi.fn(),
+  payoutCount: vi.fn(),
   userFindUnique: vi.fn(),
   userDelete: vi.fn(),
   pushTokenDeleteMany: vi.fn(),
@@ -22,6 +25,9 @@ const m = vi.hoisted(() => ({
 vi.mock("../lib/prisma", () => ({
   prisma: {
     user: { findUnique: m.userFindUnique, delete: m.userDelete, update: m.userUpdate },
+    order: { count: m.orderCount },
+    dispute: { count: m.disputeCount },
+    payoutRequest: { count: m.payoutCount },
     pushToken: { deleteMany: m.pushTokenDeleteMany },
     notification: { deleteMany: m.notificationDeleteMany },
     product: { updateMany: m.productUpdateMany },
@@ -50,12 +56,31 @@ function restrictViolation(): Error {
 beforeEach(() => {
   vi.clearAllMocks();
   m.userFindUnique.mockResolvedValue({ id: "u1", role: "BUYER", createdAt: new Date(), vendor: null });
+  m.orderCount.mockResolvedValue(0);
+  m.disputeCount.mockResolvedValue(0);
+  m.payoutCount.mockResolvedValue(0);
   m.pushTokenDeleteMany.mockResolvedValue({});
   m.notificationDeleteMany.mockResolvedValue({});
   m.userUpdate.mockResolvedValue({ id: "u1", email: "deleted_u1@anonymized.local", name: "Deleted user", role: "BUYER", isSuspended: true, suspendedReason: "test", createdAt: new Date(), updatedAt: new Date() });
 });
 
 describe("adminListingsService.deleteUser", () => {
+  it.each([
+    ["open orders", "orderCount", "1 open order"],
+    ["open disputes", "disputeCount", "1 open dispute"],
+  ])("won't close an account with %s", async (_label, mock, text) => {
+    (m as unknown as Record<string, ReturnType<typeof vi.fn>>)[mock].mockResolvedValue(1);
+    await expect(adminListingsService.deleteUser("u1", "why")).rejects.toMatchObject({ statusCode: 409, code: "ACCOUNT_HAS_OPEN_ITEMS", message: expect.stringContaining(text) });
+    expect(m.userDelete).not.toHaveBeenCalled();
+  });
+
+  it("won't close a vendor with an unpaid payout", async () => {
+    m.userFindUnique.mockResolvedValue({ id: "u1", role: "VENDOR", createdAt: new Date(), vendor: { id: "v1" } });
+    m.payoutCount.mockResolvedValue(2);
+    await expect(adminListingsService.deleteUser("u1", "why")).rejects.toMatchObject({ code: "ACCOUNT_HAS_OPEN_ITEMS", message: expect.stringContaining("2 unpaid payouts") });
+    expect(m.userDelete).not.toHaveBeenCalled();
+  });
+
   it("hard-deletes when nothing restricts it", async () => {
     m.userDelete.mockResolvedValue({});
     const result = await adminListingsService.deleteUser("u1", "test");

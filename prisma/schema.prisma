@@ -2257,6 +2257,10 @@ model UserBlock {
 
 enum AutomationType {
   FIRST_SALE
+  // Handbook 8.5: the store is ready but no order has come after a week.
+  FIRST_SALE_DIAGNOSTIC
+  // Handbook 8.5: first order completed, so start review, reorder and referral.
+  POST_SALE_TRANSITION
   CART_RECOVERY
   BUYER_WIN_BACK
   REVIEW_REQUEST

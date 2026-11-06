@@ -964,6 +964,24 @@ export const adminListingsService = {
     if (!user) throw new AppError("User not found", 404);
     if (user.role === UserRole.ADMIN) throw new AppError("Admin accounts cannot be deleted here", 409);
 
+    // Handbook 14.8: an account closes only after financial and dispute checks.
+    const vendorId = user.vendor?.id;
+    const closedOrderStatuses = ["DELIVERED", "COMPLETED", "CANCELLED", "REFUNDED", "FAILED", "PENDING"] as const;
+    const partyFilter = vendorId ? { OR: [{ buyerId: userId }, { items: { some: { vendorId } } }] } : { buyerId: userId };
+    const [openOrders, openDisputes, pendingPayouts] = await Promise.all([
+      prisma.order.count({ where: { ...partyFilter, status: { notIn: [...closedOrderStatuses] } } }),
+      prisma.dispute.count({ where: { status: "OPEN", order: partyFilter } }),
+      vendorId ? prisma.payoutRequest.count({ where: { vendorId, status: { in: ["PENDING", "APPROVED"] } } }) : Promise.resolve(0),
+    ]);
+    const blockers = [
+      openOrders > 0 ? `${openOrders} open order${openOrders === 1 ? "" : "s"}` : null,
+      openDisputes > 0 ? `${openDisputes} open dispute${openDisputes === 1 ? "" : "s"}` : null,
+      pendingPayouts > 0 ? `${pendingPayouts} unpaid payout${pendingPayouts === 1 ? "" : "s"}` : null,
+    ].filter(Boolean);
+    if (blockers.length > 0) {
+      throw new AppError(`This account can't be closed yet: ${blockers.join(", ")}. Resolve these first.`, 409, { blockers }, "ACCOUNT_HAS_OPEN_ITEMS");
+    }
+
     // Try a real hard delete first. Cascade relations (cart, messages,
     // notifications, push tokens, favorites, etc.) clean themselves up
     // automatically. If the user (or their vendor) has order/payment/review
