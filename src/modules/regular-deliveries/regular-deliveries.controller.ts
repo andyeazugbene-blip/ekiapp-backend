@@ -207,7 +207,7 @@ export async function getVendorRegularDeliveryInsights(request: Request, respons
   const since30d = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
   const in7d = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
 
-  const [activeCount, pausedCount, cancelledLast30d, paidRenewalsLast30d, upcomingRenewalsCount] = await Promise.all([
+  const [activeCount, pausedCount, cancelledLast30d, paidRenewalsLast30d, upcomingRenewalsCount, failedRenewalsLast30d, subscribedItems] = await Promise.all([
     prisma.buyerSubscription.count({ where: { offerId: { in: offerIds }, status: "ACTIVE" } }),
     prisma.buyerSubscription.count({ where: { offerId: { in: offerIds }, status: "PAUSED" } }),
     prisma.buyerSubscription.count({ where: { offerId: { in: offerIds }, status: "CANCELLED", cancelledAt: { gte: since30d } } }),
@@ -216,7 +216,13 @@ export async function getVendorRegularDeliveryInsights(request: Request, respons
       select: { subtotalAmount: true, currency: true },
     }),
     prisma.buyerSubscription.count({ where: { offerId: { in: offerIds }, status: "ACTIVE", nextRenewalAt: { lte: in7d } } }),
+    prisma.renewal.count({ where: { subscription: { offerId: { in: offerIds } }, status: "PAYMENT_FAILED", updatedAt: { gte: since30d } } }),
+    prisma.subscriptionItem.groupBy({ by: ["productId"], where: { subscription: { offerId: { in: offerIds }, status: "ACTIVE" } }, _count: { id: true } }),
   ]);
+
+  const settledRenewals = paidRenewalsLast30d.length + failedRenewalsLast30d;
+  const topProductId = subscribedItems.sort((a, b) => b._count.id - a._count.id)[0]?.productId;
+  const topProduct = topProductId ? await prisma.product.findUnique({ where: { id: topProductId }, select: { title: true } }) : null;
 
   const revenueByCurrency = new Map<string, number>();
   for (const r of paidRenewalsLast30d) {
@@ -230,6 +236,8 @@ export async function getVendorRegularDeliveryInsights(request: Request, respons
     paidRenewalsLast30Days: paidRenewalsLast30d.length,
     revenueLast30Days: [...revenueByCurrency.entries()].map(([currency, amount]) => ({ currency, amount })),
     upcomingRenewalsNext7Days: upcomingRenewalsCount,
+    renewalSuccessRate: settledRenewals > 0 ? Math.round((paidRenewalsLast30d.length / settledRenewals) * 100) : null,
+    mostSubscribedProduct: topProduct?.title ?? null,
   });
 }
 

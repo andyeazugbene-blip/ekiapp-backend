@@ -1,3 +1,4 @@
+import type { Prisma } from "@prisma/client";
 import { vendorMilestoneNotificationsService } from "../vendors/vendor-milestone-notifications.service";
 import type { Product, ProductStatus } from "@prisma/client";
 
@@ -14,7 +15,10 @@ import type {
   CreateProductInput,
   ListProductsQuery,
   UpdateProductInput,
-} from "./products.types";
+} from "./products.types";
+import { launchSettingsService } from "../admin/launch-settings.service";
+import { countryNamesForMarketCode, resolveMarketCode } from "../../shared/currency";
+import { decodeRankCursor, encodeRankCursor, productScore } from "./product-ranking";
 
 // Acceptance audit fix: a suspended vendor must not be able to write
 // anything (matches the existing, established convention in
@@ -59,6 +63,68 @@ async function getVendorForWrite(userId: string): Promise<{ id: string }> {
     throw new AppError("Vendor profile not found", 404);
   }
   return { id: vendor.id };
+}
+
+const RANKING_CANDIDATE_LIMIT = 5000;
+const PERFORMANCE_WINDOW_DAYS = 90;
+const RANKED_PAID_STATUSES = ["PAID", "CONFIRMED", "PROCESSING", "DISPATCHED", "IN_TRANSIT", "DELIVERED", "COMPLETED", "AUTO_RELEASED", "PAYMENT_SECURED", "VENDOR_CONFIRMED"] as const;
+
+/** Scores light rows, then loads only the page being returned. */
+async function listRankedProducts(where: Prisma.ProductWhereInput, query: ListProductsQuery, viewerId?: string) {
+  const candidates = await prisma.product.findMany({
+    where,
+    select: { id: true, vendorId: true, title: true, category: true, description: true, stock: true, createdAt: true, vendor: { select: { createdAt: true } } },
+    orderBy: CURSOR_ORDER_BY,
+    take: RANKING_CANDIDATE_LIMIT,
+  });
+  const productIds = candidates.map((c) => c.id);
+  const vendorIds = [...new Set(candidates.map((c) => c.vendorId))];
+  const since = new Date(Date.now() - PERFORMANCE_WINDOW_DAYS * 86_400_000);
+  const [sales, ratings, soldVendors, viewer, boostDays] = await Promise.all([
+    prisma.orderItem.groupBy({ by: ["productId"], where: { productId: { in: productIds }, order: { status: { in: [...RANKED_PAID_STATUSES] }, createdAt: { gte: since } } }, _sum: { quantity: true } }),
+    prisma.review.groupBy({ by: ["vendorId"], where: { vendorId: { in: vendorIds }, status: "APPROVED" }, _avg: { rating: true } }),
+    prisma.orderItem.findMany({ where: { vendorId: { in: vendorIds }, order: { status: { in: [...RANKED_PAID_STATUSES] } } }, select: { vendorId: true }, distinct: ["vendorId"] }),
+    viewerId ? prisma.user.findUnique({ where: { id: viewerId }, select: { country: true } }) : null,
+    launchSettingsService.get("NEW_VENDOR_BOOST_DAYS"),
+  ]);
+  const countryForms = viewer?.country ? countryNameForms(viewer.country) : [];
+  const deliveringVendors = countryForms.length
+    ? await prisma.deliveryZone.findMany({ where: { vendorId: { in: vendorIds }, isActive: true, country: { in: countryForms } }, select: { vendorId: true }, distinct: ["vendorId"] })
+    : [];
+  const unitsSold = new Map(sales.map((s) => [s.productId, s._sum.quantity ?? 0]));
+  const rating = new Map(ratings.map((r) => [r.vendorId, r._avg.rating]));
+  const hasSold = new Set(soldVendors.map((v) => v.vendorId));
+  const delivers = new Set(deliveringVendors.map((v) => v.vendorId));
+  const scored = candidates.map((c) => ({
+    id: c.id,
+    score: query.sort === "popular"
+      ? unitsSold.get(c.id) ?? 0
+      : productScore(c, {
+          search: query.search,
+          unitsSold: unitsSold.get(c.id) ?? 0,
+          vendorRating: rating.get(c.vendorId) ?? null,
+          deliversToViewer: delivers.has(c.vendorId),
+          newVendor: !hasSold.has(c.vendorId) && boostDays > 0 && Date.now() - c.vendor.createdAt.getTime() < boostDays * 86_400_000,
+        }),
+    createdAt: c.createdAt.getTime(),
+  }));
+  // Newest then id breaks ties, so pages don't shift between requests.
+  scored.sort((a, b) => b.score - a.score || b.createdAt - a.createdAt || (a.id < b.id ? 1 : -1));
+  const offset = decodeRankCursor(query.cursor);
+  const pageIds = scored.slice(offset, offset + query.limit).map((s) => s.id);
+  const rows = await prisma.product.findMany({
+    where: { id: { in: pageIds } },
+    include: { vendor: { select: { storeName: true, city: true, userId: true } } },
+  });
+  const byId = new Map(rows.map((row) => [row.id, row]));
+  const items = pageIds.map((id) => byId.get(id)).filter((row): row is (typeof rows)[number] => Boolean(row));
+  const next = offset + query.limit;
+  return { items, nextCursor: next < scored.length ? encodeRankCursor(next) : null };
+}
+
+function countryNameForms(country: string): string[] {
+  const code = resolveMarketCode(country);
+  return [...new Set([country, ...(code ? [code, ...countryNamesForMarketCode(code)] : [])])];
 }
 
 async function nextProductCode(): Promise<string> {
@@ -312,15 +378,29 @@ export const productsService = {
   async listActiveProducts(
     query: ListProductsQuery,
     viewerIsTest = false,
+    viewerId?: string,
   ): Promise<{ items: Array<Product & { vendor: { storeName: string; city: string | null; userId: string } }>; nextCursor: string | null }> {
-    const items = await prisma.product.findMany({
-      where: {
+    const where: Prisma.ProductWhereInput = {
         isActive: true,
         // B15: hide products whose seller cannot receive payment.
         vendor: { isTest: viewerIsTest, ...(isSellerReadinessGateEnabled() ? purchasableVendorWhere() : {}) },
         ...(query.category ? { category: query.category } : {}),
         ...(query.vendorId ? { vendorId: query.vendorId } : {}),
-      },
+        ...(query.search
+          ? { OR: [
+              { title: { contains: query.search, mode: "insensitive" as const } },
+              { category: { contains: query.search, mode: "insensitive" as const } },
+              { description: { contains: query.search, mode: "insensitive" as const } },
+            ] }
+          : {}),
+    };
+
+    // A store's own list stays newest first. Marketplace lists are ranked.
+    const ranked = query.sort ? query.sort !== "newest" : !query.vendorId;
+    if (ranked) return listRankedProducts(where, query, viewerId);
+
+    const items = await prisma.product.findMany({
+      where,
       include: {
         vendor: {
           select: {

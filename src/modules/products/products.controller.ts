@@ -67,7 +67,7 @@ export async function recordInventoryCount(request: Request, response: Response)
 
 export async function listProducts(request: Request, response: Response): Promise<void> {
   const query = validateListProductsQuery(request.query as Record<string, unknown>);
-  const result = await productsService.listActiveProducts(query, await viewerIsTest(request.user?.id));
+  const result = await productsService.listActiveProducts(query, await viewerIsTest(request.user?.id), request.user?.id);
   response.status(200).json({
     ...result,
     items: result.items.map((product) => stripInternalCost(product as unknown as Record<string, unknown>)),
