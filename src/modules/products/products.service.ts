@@ -63,7 +63,8 @@ async function getVendorForWrite(userId: string): Promise<{ id: string }> {
 
 async function nextProductCode(): Promise<string> {
   const last = await prisma.product.findFirst({
-    where: { productCode: { not: null } },
+    // A code in any other format must not stop new codes being issued.
+    where: { productCode: { startsWith: "EKI-" } },
     orderBy: { productCode: "desc" },
     select: { productCode: true },
   });

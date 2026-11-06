@@ -10,6 +10,7 @@ import { notificationsService } from "../notifications/notifications.service";
 import { env } from "../../config/env";
 import { alertOps } from "./ops-alert.service";
 import { adminPlatformSettingsService } from "../admin/admin-platform-settings.service";
+import { campaignDisputeBlockers } from "./campaign-dispute.service";
 
 const SYSTEM_WEBHOOK_ACTOR = "system:stripe_webhook";
 
@@ -68,6 +69,7 @@ async function assessPayoutEligibility(payout: CommunityBuyPayout): Promise<{ el
     where: { campaignId: payout.campaignId, captureStatus: { in: ["DISPUTED", "REFUNDED"] } },
   });
   if (exposureCount > 0) blockers.push("dispute_or_refund_exposure");
+  blockers.push(...(await campaignDisputeBlockers(payout.campaignId)));
 
   return { eligible: blockers.length === 0, blockers };
 }
