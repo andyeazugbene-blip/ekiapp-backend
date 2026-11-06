@@ -24,6 +24,7 @@ import { campaignSupplierProposalService, type ProposalInput } from "./campaign-
 import { searchDataAccessLog, revokeDeliveryReferencesForSupplierAccount, isIndividualDeliveryEnabled, FULFILMENT_ACCESS_PRESERVED_SCOPE } from "./community-buy-privacy.service";
 import { buyerCountryService } from "./buyer-country.service";
 import { viewerIsTest } from "../../shared/test-accounts";
+import { reviewRequestsService } from "./review-requests.service";
 
 // ─── Public market availability (used by the mobile app to decide whether
 // to show Regular Deliveries / Community Buy entry points at all — the
@@ -456,6 +457,8 @@ export async function requestCampaignExtension(request: Request, response: Respo
     priceUnchangedConfirmed: Boolean(body.priceUnchangedConfirmed),
     participantTermsUnchanged: Boolean(body.participantTermsUnchanged),
   });
+  const campaign = await prisma.communityCampaign.findUniqueOrThrow({ where: { id: request_.campaignId }, select: { country: true } });
+  await reviewRequestsService.open({ type: "EXTENSION", subjectType: "CommunityCampaign", subjectId: request_.campaignId, market: campaign.country ?? "GB", submittedById: userId });
   response.status(201).json({ extensionRequest: request_ });
 }
 
@@ -1477,6 +1480,7 @@ export async function adminApproveExtension(request: Request, response: Response
   const adminId = requireUserId(request);
   const id = requireIdParam(request);
   const extensionRequest = await communityCampaignsService.approveExtension(adminId, id);
+  if (extensionRequest) await reviewRequestsService.closeExtension(extensionRequest.campaignId, "APPROVED", adminId);
   await recordAudit({ actorId: adminId, action: "community_campaign_extension.approve", entityType: "CampaignExtensionRequest", entityId: id, afterState: extensionRequest ? { status: extensionRequest.status } : undefined, request });
   response.json({ extensionRequest });
 }
@@ -1486,6 +1490,7 @@ export async function adminRejectExtension(request: Request, response: Response)
   const id = requireIdParam(request);
   const notes = typeof request.body?.notes === "string" ? request.body.notes : undefined;
   const extensionRequest = await communityCampaignsService.rejectExtension(adminId, id, notes);
+  await reviewRequestsService.closeExtension(extensionRequest.campaignId, "REJECTED", adminId, notes);
   await recordAudit({ actorId: adminId, action: "community_campaign_extension.reject", entityType: "CampaignExtensionRequest", entityId: id, reason: notes, afterState: { status: extensionRequest.status }, request });
   response.json({ extensionRequest });
 }

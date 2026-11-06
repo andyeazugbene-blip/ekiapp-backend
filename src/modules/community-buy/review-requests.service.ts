@@ -192,6 +192,9 @@ export const reviewRequestsService = {
   async requestInformation(id: string, adminId: string, message: string) {
     if (!message?.trim()) throw new AppError("A message is required", 400);
     const request = await this.requireDecidable(id, adminId);
+    if (request.type === "EXTENSION") {
+      throw new AppError("An extension can only be approved or declined. Decline it with the reason, and the organiser can ask again.", 409, undefined, "EXTENSION_NO_INFO_STEP");
+    }
     if (request.subjectType === "SupplierOffer") {
       await prisma.supplierOffer.update({ where: { id: request.subjectId }, data: { status: "INFO_REQUIRED" } });
     }
@@ -226,6 +229,9 @@ export const reviewRequestsService = {
       await prisma.supplierOffer.update({ where: { id: request.subjectId }, data: { status: "REJECTED" } });
     } else if (request.subjectType === "SupplierAccount") {
       await supplierAccountService.reject(request.subjectId, reason, adminId);
+    } else if (request.type === "EXTENSION") {
+      const extension = await pendingExtension(request.subjectId);
+      await communityCampaignsService.rejectExtension(adminId, extension.id, reason);
     } else if (request.type === "COMMUNITY_BUY_CAMPAIGN") {
       // The draft is kept so the organiser can fix it and submit again.
       await prisma.communityCampaign.update({ where: { id: request.subjectId }, data: { status: "CHANGES_REQUIRED", reviewNotes: reason } });
@@ -260,6 +266,14 @@ export const reviewRequestsService = {
     });
   },
 
+  /** Keeps the queue honest when an extension is decided elsewhere: by the older admin route, or by the supplier declining. */
+  async closeExtension(campaignId: string, status: "APPROVED" | "REJECTED", adminId?: string, reason?: string) {
+    return prisma.reviewRequest.updateMany({
+      where: { type: "EXTENSION", subjectType: "CommunityCampaign", subjectId: campaignId, status: { in: OPEN_REVIEW_STATUSES } },
+      data: { status, decidedAt: new Date(), reviewerId: adminId ?? null, decisionReason: reason ?? null },
+    });
+  },
+
   async withdrawForSubject(subjectType: string, subjectId: string) {
     return prisma.reviewRequest.updateMany({
       where: { subjectType, subjectId, status: { in: OPEN_REVIEW_STATUSES } },
@@ -267,6 +281,12 @@ export const reviewRequestsService = {
     });
   },
 };
+
+async function pendingExtension(campaignId: string) {
+  const extension = await prisma.campaignExtensionRequest.findFirst({ where: { campaignId, status: "PENDING" }, orderBy: { createdAt: "desc" }, select: { id: true } });
+  if (!extension) throw new AppError("This extension has already been decided.", 409, undefined, "EXTENSION_ALREADY_DECIDED");
+  return extension;
+}
 
 async function applyApproval(request: { type: ReviewRequestType; subjectId: string; market: string; submittedById: string }, adminId: string): Promise<void> {
   switch (request.type) {
@@ -303,9 +323,11 @@ async function applyApproval(request: { type: ReviewRequestType; subjectId: stri
       await notifyOfferCampaignLive(request.subjectId);
       return;
     }
-    case "EXTENSION":
-      // Extensions keep their own decision path, which also handles supplier reconfirmation.
-      throw new AppError("Decide extension requests from the campaign's extension queue.", 409, undefined, "EXTENSION_USES_OWN_QUEUE");
+    case "EXTENSION": {
+      const extension = await pendingExtension(request.subjectId);
+      await communityCampaignsService.approveExtension(adminId, extension.id);
+      return;
+    }
   }
 }
 

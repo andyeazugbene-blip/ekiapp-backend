@@ -7,6 +7,7 @@ import { sendSms } from "../../lib/sms";
 import { AppError } from "../../shared/errors/app-error";
 import { organiserChecksMissing, supplierOffersService } from "./supplier-offers.service";
 import { reviewRequestsService } from "./review-requests.service";
+import { communityCampaignsService } from "./community-campaigns.service";
 
 const PHONE_CODE_TTL_MS = 10 * 60_000;
 const PHONE_CODE_MAX_ATTEMPTS = 5;
@@ -52,6 +53,14 @@ export async function submitSupplierOffer(request: Request, response: Response):
 
 export async function withdrawSupplierOffer(request: Request, response: Response): Promise<void> {
   response.json({ offer: await supplierOffersService.withdraw(requireUserId(request), idParam(request)) });
+}
+
+export async function reconfirmOfferExtension(request: Request, response: Response): Promise<void> {
+  const userId = requireUserId(request);
+  const canSupply = (request.body as { canSupply?: unknown } | undefined)?.canSupply === true;
+  const extension = await communityCampaignsService.reconfirmExtensionAsSupplier(userId, String(request.params.id), canSupply);
+  if (!canSupply) await reviewRequestsService.closeExtension(extension.campaignId, "REJECTED", undefined, "The supplier can't keep this offer open longer.");
+  response.json({ extensionRequest: extension });
 }
 
 export async function listSupplierOfferOrders(request: Request, response: Response): Promise<void> {

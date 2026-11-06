@@ -348,7 +348,7 @@ describe("communityCampaignsService rescue-window organiser actions", () => {
       campaign: { extensionCount: 0 },
     } as never);
 
-    await expect(communityCampaignsService.approveExtension("admin-1", "ext-1")).rejects.toMatchObject({ statusCode: 400 });
+    await expect(communityCampaignsService.approveExtension("admin-1", "ext-1")).rejects.toMatchObject({ statusCode: 409, code: "SUPPLIER_NOT_RECONFIRMED" });
   });
 
   /** NAV-08 regression guard: extension_approved fires to organiser + every participant under the same event name. */

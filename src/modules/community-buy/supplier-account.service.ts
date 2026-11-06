@@ -7,6 +7,23 @@ import { campaignPayoutService } from "./campaign-payout.service";
 import { notifyUserInAppAndEmail } from "./community-buy-notices";
 
 /** Pre-decision states: the application is still being worked. No Suspend / Restrict applies to these. */
+/** Phase 1: a verified vendor adding supply isn't asked for their details again, and hears so once. Never blocks the application. */
+async function welcomeVerifiedVendor(userId: string): Promise<void> {
+  try {
+    const vendor = await prisma.vendor.findUnique({ where: { userId }, select: { verifiedAt: true } });
+    if (!vendor?.verifiedAt) return;
+    await notifyUserInAppAndEmail({
+      userId,
+      title: "Your details are saved",
+      body: "Your business details are already saved. Add your first bulk offer.",
+      event: "vendor_starts_supplying",
+      dedupeKey: `vendor_starts_supplying:${userId}`,
+    });
+  } catch (error) {
+    logger.error("Could not send the verified vendor supply notice", { userId, errorMessage: error instanceof Error ? error.message : String(error) });
+  }
+}
+
 export const PENDING_APPLICATION_STATES = ["NOT_STARTED", "DRAFT", "VERIFICATION_REQUIRED", "UNDER_REVIEW", "INFORMATION_REQUIRED"] as const;
 const REVIEWABLE_STATES = ["UNDER_REVIEW", "INFORMATION_REQUIRED"] as const;
 
@@ -214,6 +231,7 @@ export const supplierAccountService = {
       },
     });
 
+    if (!existing) await welcomeVerifiedVendor(userId);
     return { ...account, requirementsDue: computeRequirementsDue(account) };
   },
 

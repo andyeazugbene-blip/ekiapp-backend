@@ -9,6 +9,7 @@ import {
   getOrganiserChecks,
   listMySupplierOffers,
   listOffersForOrganiser,
+  reconfirmOfferExtension,
   listSupplierOfferOrders,
   registerCampaignInterest,
   sendPhoneCode,
@@ -285,6 +286,7 @@ supplierRouter.patch("/offers/:id", asyncHandler(updateSupplierOffer));
 supplierRouter.post("/offers/:id/submit", asyncHandler(submitSupplierOffer));
 supplierRouter.post("/offers/:id/withdraw", asyncHandler(withdrawSupplierOffer));
 supplierRouter.get("/offer-orders", asyncHandler(listSupplierOfferOrders));
+supplierRouter.post("/offer-extensions/:id/reconfirm", asyncHandler(reconfirmOfferExtension));
 supplierRouter.get("/profile", asyncHandler(getMySupplierProfile));
 supplierRouter.post("/applications", asyncHandler(applyAsSupplier));
 // M5 (spec §6.4 "paused: voluntarily unavailable for new work") — self-service only, no requireApprovedSupplier() gate needed since pause()/resume() enforce their own precondition (APPROVED/PAUSED respectively).

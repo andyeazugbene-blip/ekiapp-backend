@@ -84,7 +84,7 @@ describe("the admin list and the public view", () => {
   });
 
   it("gives the apps only what they need", async () => {
-    expect(await launchSettingsService.publicView()).toEqual({ ukLaunchMode: true, launchMarket: "GB", vendorTrialDays: 30 });
+    expect(await launchSettingsService.publicView()).toEqual({ ukLaunchMode: true, launchMarket: "GB", vendorTrialDays: 30, offerReviewHours: 24, campaignReviewHours: 24 });
   });
 });
 
