@@ -28,7 +28,11 @@ export interface DashboardToolEntry {
  * existing mobile client keeps working without any client-side change —
  * this is additive, not a replacement of what's already shipped.
  */
+export type VendorDashboardState = "NO_SALE" | "HAS_SALES" | "REPEAT_BUYERS";
+
 export interface VendorDashboardData {
+  /** Handbook 8.2: what the dashboard should put first. */
+  state: VendorDashboardState;
   greeting: string;
   storeName: string;
   alerts: DashboardAlert[];

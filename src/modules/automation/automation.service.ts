@@ -86,6 +86,18 @@ export const DEFAULT_TEMPLATES: Record<AutomationType, { title: string; body: st
   // Spec R10: "Store live, never shared." Migrated 2026-10-25 from the
   // non-toggleable "handoff V-06" send — now push+in_app+email like the
   // rest of this file's onboarding types (was push+in_app only before).
+  FIRST_SALE_DIAGNOSTIC: {
+    title: "Let's find your first buyer",
+    body: "Hi {{name}}, your store is ready but hasn't had an order yet. Check your prices and photos, then share your store link again.",
+    channels: ["push", "in_app", "email"],
+    recipientType: "VENDOR",
+  },
+  POST_SALE_TRANSITION: {
+    title: "Your first order is complete",
+    body: "Hi {{name}}, ask your buyer for a review and invite them to order again. You can also invite other vendors to Eki.",
+    channels: ["push", "in_app", "email"],
+    recipientType: "VENDOR",
+  },
   STORE_SHARE_REMINDER: {
     title: "Share your store link",
     body: "Hi {{name}}, your store is ready for its next step — share your store link with buyers.",

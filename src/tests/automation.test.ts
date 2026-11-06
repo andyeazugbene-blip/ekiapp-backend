@@ -392,6 +392,8 @@ describe("automationService — per-vendor tunable config (CART_RECOVERY, BUYER_
     expect(types.sort()).toEqual(
       [
         "FIRST_SALE",
+        "FIRST_SALE_DIAGNOSTIC",
+        "POST_SALE_TRANSITION",
         "FIRST_PRODUCT_REMINDER",
         "DELIVERY_SETUP_REMINDER",
         "VERIFICATION_REMINDER",

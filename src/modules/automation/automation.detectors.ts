@@ -1,5 +1,7 @@
 import crypto from "crypto";
 
+import type { OrderStatus } from "@prisma/client";
+
 import { prisma } from "../../lib/prisma";
 import { logger } from "../../lib/logger";
 import { automationService } from "./automation.service";
@@ -358,6 +360,60 @@ async function detectFirstSale(): Promise<number> {
       title: "Work towards your first order",
       body: "Open your First Sale Campaign for the next step.",
       data: { store_name: vendor.storeName },
+    });
+  }
+  return scheduled;
+}
+
+/** Handbook 8.5: a week after a store could have sold, with nothing yet. Stops at the first paid order. */
+const DIAGNOSTIC_AFTER_HOURS = 7 * 24;
+async function detectFirstSaleDiagnostic(): Promise<number> {
+  const candidates = await loadOnboardingProgressCandidates();
+  let scheduled = 0;
+  for (const vendor of candidates) {
+    if (!vendor.hasProduct || !vendor.hasDelivery || !vendor.isVerified) continue;
+    const hoursSinceCreated = (Date.now() - vendor.createdAt.getTime()) / HOUR_MS;
+    if (hoursSinceCreated < DIAGNOSTIC_AFTER_HOURS) continue;
+    scheduled += await scheduleP2Touches({
+      type: "FIRST_SALE_DIAGNOSTIC",
+      recipientUserId: vendor.userId,
+      vendorId: vendor.id,
+      subjectPrefix: vendor.id,
+      hoursSinceEligible: hoursSinceCreated - DIAGNOSTIC_AFTER_HOURS,
+      requiresMarketingConsent: false,
+      title: "Let's find your first buyer",
+      body: "Your store is ready but hasn't had an order yet.",
+      data: { store_name: vendor.storeName },
+    });
+  }
+  return scheduled;
+}
+
+/** Handbook 8.5: once, after a vendor's first completed order. */
+const POST_SALE_WINDOW_MS = 14 * 24 * HOUR_MS;
+async function detectPostSaleTransition(): Promise<number> {
+  const completed = { status: { in: ["DELIVERED", "COMPLETED"] as OrderStatus[] }, payment: { status: "SUCCEEDED" as const }, isTest: false };
+  const recent = await prisma.orderItem.findMany({
+    where: { order: { ...completed, updatedAt: { gte: new Date(Date.now() - POST_SALE_WINDOW_MS) } }, vendor: { isSuspended: false } },
+    select: { vendorId: true, order: { select: { updatedAt: true } }, vendor: { select: { userId: true, storeName: true } } },
+    take: 1000,
+  });
+  const byVendor = new Map(recent.map((item) => [item.vendorId, item]));
+  let scheduled = 0;
+  for (const [vendorId, item] of byVendor) {
+    // Only a vendor's first completed order counts. Items are per vendor, because an order can span vendors.
+    const completedOrders = await prisma.order.count({ where: { ...completed, items: { some: { vendorId } } } });
+    if (completedOrders !== 1) continue;
+    scheduled += await scheduleP2Touches({
+      type: "POST_SALE_TRANSITION",
+      recipientUserId: item.vendor.userId,
+      vendorId,
+      subjectPrefix: vendorId,
+      hoursSinceEligible: (Date.now() - item.order.updatedAt.getTime()) / HOUR_MS,
+      requiresMarketingConsent: false,
+      title: "Your first order is complete",
+      body: "Ask your buyer for a review and invite them to order again.",
+      data: { store_name: item.vendor.storeName },
     });
   }
   return scheduled;
@@ -1057,6 +1113,8 @@ export const automationDetectors = {
       ["DELIVERY_SETUP_REMINDER", detectDeliverySetupReminder],
       ["VERIFICATION_REMINDER", detectVerificationReminder],
       ["FIRST_SALE", detectFirstSale],
+      ["FIRST_SALE_DIAGNOSTIC", detectFirstSaleDiagnostic],
+      ["POST_SALE_TRANSITION", detectPostSaleTransition],
       ["STORE_SHARE_REMINDER", detectStoreShareReminder],
       ["AUTOMATION_FAILURE_ALERT", detectAutomationFailureAlert],
       ["CART_RECOVERY", detectCartRecovery],
