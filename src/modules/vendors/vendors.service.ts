@@ -9,6 +9,7 @@ import { resolveUniqueSlug } from "../../shared/utils/slug";
 import { resolveCurrencyForMarket, vendorMarketsService } from "./vendor-markets.service";
 import { notifyAutomationAccountCreated } from "../../lib/automation-events";
 import { vendorMilestoneNotificationsService } from "./vendor-milestone-notifications.service";
+import { launchSettingsService } from "../admin/launch-settings.service";
 import type {
   CreatePayoutMethodInput,
   CreateVendorInput,
@@ -85,6 +86,21 @@ function isUniqueViolation(error: unknown, field: string): boolean {
     && e.meta.target.includes(field);
 }
 
+/** A new store ranks like one with five orders, enough to be seen but not to outrank proven stores. */
+const NEW_VENDOR_BOOST_POINTS = 25;
+
+/** Module 16 ranking: orders, range, profile and rating, plus the first-sale boost for new stores with stock. */
+export function discoveryScore(
+  vendor: { totalOrders: number; totalProducts: number; hasAvatar: boolean; rating: number; totalReviews: number; createdAt: Date },
+  boostDays: number,
+  now = new Date(),
+): number {
+  const base = vendor.totalOrders * 5 + vendor.totalProducts * 2 + (vendor.hasAvatar ? 4 : 0) + (vendor.totalReviews > 0 ? vendor.rating * 2 : 0);
+  const ageDays = (now.getTime() - vendor.createdAt.getTime()) / 86_400_000;
+  const boosted = boostDays > 0 && ageDays < boostDays && vendor.totalOrders === 0 && vendor.totalProducts > 0;
+  return base + (boosted ? NEW_VENDOR_BOOST_POINTS : 0);
+}
+
 export const vendorsService = {
   async listPublicVendors(input?: { viewerIsTest?: boolean; search?: string; limit?: number; sort?: "newest" | "popular" }): Promise<any[]> {
     const search = input?.search?.trim();
@@ -94,8 +110,10 @@ export const vendorsService = {
     const vendors = await prisma.vendor.findMany({
       where: {
         isSuspended: false,
-        verificationStatus: "VERIFIED",
         isTest: input?.viewerIsTest ?? false,
+        // Unverified vendors sell live and verify at withdrawal, so being listed
+        // depends on having something to sell, not on verification.
+        AND: [{ OR: [{ verificationStatus: "VERIFIED" }, { products: { some: { isActive: true, status: "PUBLISHED" } } }] }],
         ...(search
           ? {
               OR: [
@@ -149,11 +167,16 @@ export const vendorsService = {
     }));
 
     if (sort === "popular") {
-      serialized.sort((left, right) => {
-        const leftScore = (left.totalOrders ?? 0) * 5 + (left.totalProducts ?? 0) * 2 + (left.user?.avatar ? 4 : 0);
-        const rightScore = (right.totalOrders ?? 0) * 5 + (right.totalProducts ?? 0) * 2 + (right.user?.avatar ? 4 : 0);
-        return rightScore - leftScore || right.createdAt.getTime() - left.createdAt.getTime();
-      });
+      const boostDays = await launchSettingsService.get("NEW_VENDOR_BOOST_DAYS");
+      const score = (vendor: (typeof serialized)[number]) => discoveryScore({
+        totalOrders: vendor.totalOrders ?? 0,
+        totalProducts: vendor.totalProducts ?? 0,
+        hasAvatar: !!vendor.user?.avatar,
+        rating: vendor.rating ?? 0,
+        totalReviews: vendor.totalReviews ?? 0,
+        createdAt: vendor.createdAt,
+      }, boostDays);
+      serialized.sort((left, right) => score(right) - score(left) || right.createdAt.getTime() - left.createdAt.getTime());
     }
 
     return serialized;
@@ -164,7 +187,6 @@ export const vendorsService = {
       where: {
         id,
         isSuspended: false,
-        verificationStatus: "VERIFIED",
         isTest: viewerIsTest,
       },
       include: {

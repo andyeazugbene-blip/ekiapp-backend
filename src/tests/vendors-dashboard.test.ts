@@ -109,14 +109,24 @@ describe("vendorDashboardService.getDashboard — urgent_actions", () => {
 });
 
 describe("vendorDashboardService.getDashboard — recommended_action (exactly one, never duplicating an urgent action)", () => {
-  it("is null when the vendor is verified, has products, and has already tried marketing tools", async () => {
+  it("recommends the First Sale Campaign to a ready store with no orders yet", async () => {
     // First product.count call is the low-stock alert count, second is totalProducts.
     m.product.count.mockResolvedValueOnce(0).mockResolvedValueOnce(5);
     m.bundle.count.mockResolvedValue(1);
 
     const result = await vendorDashboardService.getDashboard("user-1");
 
-    expect(result.recommended_action).toBeNull();
+    expect(result.recommended_action).toEqual(expect.objectContaining({ type: "first_sale_campaign", route: "/(vendor)/first-sale-campaign" }));
+  });
+
+  it("tells an unverified vendor they can sell, and only need verification to withdraw", async () => {
+    m.vendor.findUnique.mockResolvedValue({ id: "vendor-1", storeName: "Test Store", country: "GB", verificationStatus: "PENDING" } as never);
+    getVendorAccount.mockResolvedValue({ ...BASE_ACCOUNT, verificationStatus: "pending" } as never);
+
+    const result = await vendorDashboardService.getDashboard("user-1");
+
+    expect(result.recommended_action?.reason).toContain("before you can withdraw");
+    expect(JSON.stringify(result.recommended_action)).not.toMatch(/accept orders|take orders/);
   });
 
   it("recommends completing verification when the vendor isn't verified — a type no urgent_action ever uses", async () => {
@@ -147,6 +157,7 @@ describe("vendorDashboardService.getDashboard — recommended_action (exactly on
     m.product.count.mockResolvedValueOnce(0).mockResolvedValueOnce(3); // has products
     m.bundle.count.mockResolvedValue(0);
     m.flashSale.count.mockResolvedValue(0);
+    m.orderItem.findMany.mockResolvedValue([{ orderId: "o1" }] as never); // has sold something
 
     const result = await vendorDashboardService.getDashboard("user-1");
 
@@ -159,11 +170,12 @@ describe("vendorDashboardService.getDashboard — recommended_action (exactly on
     m.product.count.mockResolvedValueOnce(0).mockResolvedValueOnce(3);
     m.bundle.count.mockResolvedValue(0);
     m.flashSale.count.mockResolvedValue(0);
+    m.orderItem.findMany.mockResolvedValue([{ orderId: "o1" }] as never);
     getVendorAccount.mockResolvedValue({ ...BASE_ACCOUNT, limits: { ...BASE_ACCOUNT.limits, bundles: false } } as never);
 
     const result = await vendorDashboardService.getDashboard("user-1");
 
-    expect(result.recommended_action).toBeNull();
+    expect(result.recommended_action?.type).not.toBe("try_marketing_tools");
     expect(result.marketing_tools.some((t) => t.type === "bundles")).toBe(false);
   });
 

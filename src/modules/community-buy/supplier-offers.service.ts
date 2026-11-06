@@ -7,6 +7,7 @@ import { marketConfigurationService } from "./market-configuration.service";
 import { isUniqueViolation, notifyOfferCampaignLive, reviewRequestsService } from "./review-requests.service";
 import { isSupplierPayoutReady } from "./supplier-account.service";
 import { notifyUserInAppAndEmail } from "./community-buy-notices";
+import { launchSettingsService } from "../admin/launch-settings.service";
 
 const V1_MARKET = "GB";
 const AUTO_APPROVAL_ACTOR = "system:auto-approval";
@@ -405,6 +406,45 @@ export const supplierOffersService = {
       update: {},
     });
     return { registered: true, count: await prisma.campaignInterest.count({ where: { campaignId } }) };
+  },
+
+  /**
+   * Module 15: once enough organisers ask for a foodstuff in a week, tell the
+   * suppliers who list it as something they supply. Once per supplier per week.
+   */
+  async matchDemandToSuppliers(now = new Date()) {
+    const threshold = await launchSettingsService.get("DEMAND_REQUEST_THRESHOLD");
+    const since = new Date(now.getTime() - 7 * 86_400_000);
+    const requests = await prisma.demandRequest.findMany({ where: { createdAt: { gte: since }, user: { isTest: false } }, select: { foodstuff: true }, take: 2000 });
+    const counts = new Map<string, { name: string; count: number }>();
+    for (const { foodstuff } of requests) {
+      const key = foodstuff.trim().toLowerCase();
+      if (key) counts.set(key, { name: foodstuff.trim().slice(0, 60), count: (counts.get(key)?.count ?? 0) + 1 });
+    }
+    const wanted = [...counts.entries()].filter(([, value]) => value.count >= threshold);
+    if (wanted.length === 0) return { foodstuffs: 0, notified: 0 };
+    const suppliers = await prisma.supplierAccount.findMany({ where: { supplierState: "APPROVED", user: { isTest: false } }, select: { userId: true, categories: true }, take: 1000 });
+    const week = Math.floor(now.getTime() / (7 * 86_400_000));
+    let notified = 0;
+    for (const [key, { name }] of wanted) {
+      for (const supplier of suppliers) {
+        const supplies = supplier.categories.some((category) => {
+          const c = category.trim().toLowerCase();
+          return !!c && (key.includes(c) || c.includes(key));
+        });
+        if (!supplies) continue;
+        await notifyUserInAppAndEmail({
+          userId: supplier.userId,
+          title: "Organisers are asking for this",
+          body: `Organisers are asking for ${name}. Add a bulk offer if you can supply it.`,
+          event: "demand_match",
+          data: { foodstuff: name },
+          dedupeKey: `demand_match:${week}:${key}:${supplier.userId}`,
+        });
+        notified += 1;
+      }
+    }
+    return { foodstuffs: wanted.length, notified };
   },
 
   /** Phase 1: admins get one daily summary of what organisers asked for, not a message per request. */
