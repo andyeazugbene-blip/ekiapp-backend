@@ -13,7 +13,8 @@ The Phase 1 specification requires these events in the registry, with IDs, prior
 | `demand_digest` | Admin | Daily summary of foodstuff requests | Demand list | Low | Once per admin per day. Nothing sent on a day with no requests |
 | `campaign_interest_open` | Someone who showed interest | "[Title] is now open on Eki. Join before the deadline." | Campaign | Normal | Once per person per campaign. A guest's email is cleared afterwards |
 | `extension_reconfirm` | Offer's supplier | "The organiser of [title] has asked for a later deadline." | Supply bulk orders | High | Supplier answers, or the request is decided |
+| `demand_match` | Supplier | "Organisers are asking for [foodstuff]. Add a bulk offer if you can supply it." | Supply bulk orders | Normal | Once per supplier, foodstuff and week |
 
 ## Scheduling
 
-`demand-digest` runs in the daily Vercel sweep. The others are sent when the event happens.
+`demand-digest` and `demand-matching` run in the daily Vercel sweep. The others are sent when the event happens.

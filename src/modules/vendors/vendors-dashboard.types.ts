@@ -6,6 +6,7 @@ export interface DashboardAlert {
 }
 
 export interface RecommendedAction {
+  route: string;
   id: string;
   type: string;
   label: string;

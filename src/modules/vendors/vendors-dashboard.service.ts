@@ -168,11 +168,17 @@ export const vendorDashboardService = {
     // unused feature), so there's no overlap to filter out after the fact.
     let recommendedAction: RecommendedAction | null = null;
     if (!isVerified) {
-      recommendedAction = { id: "verify_account", type: "verify_account", label: "Complete verification to accept orders", reason: "Your store can't take orders until identity verification is approved." };
+      recommendedAction = { id: "verify_account", type: "verify_account", label: "Complete your verification", reason: "You can sell now, but you'll need this before you can withdraw your earnings.", route: "/(vendor-verification)" };
     } else if (totalProducts === 0) {
-      recommendedAction = { id: "add_product", type: "add_product", label: "Add your first foodstuff", reason: "Your store has no listed products yet." };
+      recommendedAction = { id: "add_product", type: "add_product", label: "Add your first foodstuff", reason: "Your store has no listed products yet.", route: "/(vendor)/foodstuff-add" };
+    } else if (totalOrders === 0) {
+      recommendedAction = { id: "first_sale_campaign", type: "first_sale_campaign", label: "Start your First Sale Campaign", reason: "We'll help you reach your first buyers.", route: "/(vendor)/first-sale-campaign" };
     } else if (account.limits.bundles && bundleCount === 0 && flashSaleCount === 0) {
-      recommendedAction = { id: "try_marketing_tools", type: "try_marketing_tools", label: "Try a Bundle or Flash Sale to boost sales", reason: "You haven't used any marketing tools yet." };
+      recommendedAction = { id: "try_marketing_tools", type: "try_marketing_tools", label: "Try a Bundle or Flash Sale", reason: "You haven't used any marketing tools yet.", route: "/(vendor)/create-bundle" };
+    } else if (repeatBuyers > 0) {
+      recommendedAction = { id: "offer_subscription", type: "offer_subscription", label: "Offer a Foodstuff Subscription", reason: "You have buyers who order again.", route: "/(vendor)/regular-deliveries" };
+    } else {
+      recommendedAction = { id: "invite_vendors", type: "invite_vendors", label: "Invite other vendors", reason: "Earn credit towards your Eki Membership.", route: "/(vendor)/referrals" };
     }
 
     const marketingTools: DashboardToolEntry[] = [];

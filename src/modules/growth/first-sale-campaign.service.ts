@@ -104,6 +104,7 @@ export const firstSaleCampaignService = {
       enabled,
       status: campaign?.status ?? (paid ? "NOT_NEEDED" : "NOT_STARTED"),
       readiness: checks,
+      readinessScore: Math.round((checks.filter((check) => check.done).length / checks.length) * 100),
       canLaunch: enabled && !paid && !campaign && checks.filter((c) => c.blocking).every((c) => c.done),
       launchProducts: selected.map((p) => ({ id: p.id, title: p.title, image: p.images[0] ?? null, priceInCents: p.priceInCents, currency: p.currency })),
       assets: {

@@ -470,6 +470,7 @@ const jobs: [string, string, () => Promise<Record<string, unknown>>][] = [
   // Timed suspensions (Handbook 4.3): lift those whose end date has passed.
   ["suspension-expiry", "timed suspension expiry", () => adminSuspensionService.liftExpired()],
   ["first-sale-campaign-sweep", "First Sale Campaign outcomes", () => firstSaleCampaignService.sweep()],
+  ["demand-matching", "match foodstuff demand to suppliers", () => supplierOffersService.matchDemandToSuppliers()],
   ["demand-digest", "daily foodstuff request digest", () => supplierOffersService.sendDemandDigest()],
 ];
 
