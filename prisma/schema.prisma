@@ -3223,6 +3223,11 @@ model CommunityCampaign {
   // to the organiser) — this is admin-internal-only and never surfaced to
   // the organiser or participants.
   adminIssueNotes           String?
+  // Handbook 10.2: an admin marks a Community Buy as disputed, which holds its
+  // money. A flag beside status, so fulfilment for other participants carries on.
+  disputedAt                DateTime?
+  disputedById              String?
+  disputeReason             String?
   // Handbook 10.1: public URL identity and timing with timezone. All
   // optional - existing campaigns keep working with nulls.
   slug                      String?                            @unique

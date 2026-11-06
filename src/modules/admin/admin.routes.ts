@@ -315,7 +315,9 @@ import {
 import { adminRestoreProduct, adminUnpublishProduct } from "./admin-products.controller";
 import { adminProvisionDemoAccount, adminCreateDemoAccount } from "./admin-demo-accounts.controller";
 import { adminCampaignsRouter } from "../campaigns/campaigns.routes";
-import { adminResetUsers } from "./admin-reset.controller";
+import { adminResetUsers } from "./admin-reset.controller";
+import { adminContactPrivacy, revealSupplierContact, revealUserContact, revealVendorContact } from "./admin-pii";
+import { adminDisputeCampaign, adminResolveCampaignDispute } from "../community-buy/campaign-dispute.service";
 
 function requireAdminUserId(request: unknown): string {
   const id = (request as { user?: { id?: string } }).user?.id;
@@ -342,6 +344,7 @@ adminRouter.post(
 );
 
 adminRouter.use(authenticate, requireRole("ADMIN"));
+adminRouter.use(adminContactPrivacy);
 
 // Dashboard & Analytics
 // Test (QA/seed) records are excluded from these aggregates unless ?includeTest=true.
@@ -421,6 +424,8 @@ adminRouter.get("/community-campaigns/closed", asyncHandler(requireAdminPermissi
 adminRouter.post("/community-campaigns/:id/approve", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(require2fa), asyncHandler(adminApproveCampaign));
 adminRouter.post("/community-campaigns/:id/request-changes", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(require2fa), asyncHandler(adminRequestCampaignChanges));
 adminRouter.post("/community-campaigns/:id/reject", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(require2fa), asyncHandler(adminRejectCampaign));
+adminRouter.post("/community-campaigns/:id/dispute", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(require2fa), asyncHandler(adminDisputeCampaign));
+adminRouter.post("/community-campaigns/:id/dispute/resolve", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(require2fa), asyncHandler(adminResolveCampaignDispute));
 adminRouter.post("/community-campaigns/:id/pause", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(require2fa), asyncHandler(adminPauseCampaign));
 adminRouter.get("/community-campaigns/:id/admin-detail", asyncHandler(requireAdminPermission("community_buy.read")), asyncHandler(adminGetCampaignDetail));
 adminRouter.post("/community-campaigns/:id/extend-deadline", asyncHandler(requireAdminPermission("community_buy.mutate")), asyncHandler(require2fa), asyncHandler(adminExtendCampaignDeadline));
@@ -599,6 +604,9 @@ adminRouter.patch("/community-buy/support-cases/:id", asyncHandler(requireAdminP
 // Listings
 adminRouter.get("/users", asyncHandler(requireAdminPermission("users.read")), asyncHandler(listUsers));
 adminRouter.get("/users/:id", asyncHandler(requireAdminPermission("users.read")), asyncHandler(getUser));
+adminRouter.post("/users/:id/reveal-contact", asyncHandler(requireAdminPermission("users.read")), asyncHandler(revealUserContact));
+adminRouter.post("/vendors/:id/reveal-contact", asyncHandler(requireAdminPermission("vendors.read")), asyncHandler(revealVendorContact));
+adminRouter.post("/community-buy/supplier-accounts/:id/reveal-contact", asyncHandler(requireAdminPermission("community_buy.read")), asyncHandler(revealSupplierContact));
 adminRouter.get("/vendors/stats", asyncHandler(requireAdminPermission("vendors.read")), asyncHandler(getVendorStats));
 adminRouter.get("/vendors", asyncHandler(requireAdminPermission("vendors.read")), asyncHandler(listVendors));
 adminRouter.get("/vendors/:id/stripe-status", asyncHandler(requireAdminPermission("vendors.read")), asyncHandler(getVendorStripeStatus));

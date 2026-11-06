@@ -11,6 +11,7 @@ import { LedgerAccountType, LedgerDirection, LedgerOwnerType } from "@prisma/cli
 import { marketConfigurationService } from "./market-configuration.service";
 import { notificationsService } from "../notifications/notifications.service";
 import { recordAudit } from "../../shared/utils/audit";
+import { assertNoCampaignDispute } from "./campaign-dispute.service";
 
 /**
  * Diaspora escrow reconciliation (final V1 settlement doc §N) — the
@@ -82,6 +83,7 @@ export const organiserPayoutService = {
    * ledger posting.
    */
   async releaseOrganiserPayment(adminId: string, campaignId: string) {
+    await assertNoCampaignDispute(campaignId);
     const payout = await prisma.communityBuyOrganiserPayout.findUnique({
       where: { campaignId },
       include: { campaign: true, organiser: true },

@@ -20,7 +20,8 @@ import { upsertParticipantWithAttribution } from "./campaign-participant-attribu
 import { buyerCountryService } from "./buyer-country.service";
 import { notifyProgressMilestone } from "./campaign-notifications";
 import { dispatchNotificationsAfterCommit } from "../events/dispatch-notifications";
-import { viewerIsTest } from "../../shared/test-accounts";
+import { viewerIsTest } from "../../shared/test-accounts";
+import { assertNoCampaignDispute } from "./campaign-dispute.service";
 
 /**
  * Client decision (2026-09-22, buyer-country acceptance fix) — a buyer may
@@ -1078,6 +1079,7 @@ export const campaignContributionsService = {
     if (payment.status !== "NOT_RELEASED" && payment.status !== "ON_HOLD") {
       throw new AppError("This payment cannot be released from its current state", 409);
     }
+    await assertNoCampaignDispute(campaignId);
 
     // Workstream 3: dual-path payout-target resolution. When
     // campaign.supplierAccountId is unset (every pre-Workstream-3 campaign)

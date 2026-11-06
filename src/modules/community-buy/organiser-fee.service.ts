@@ -4,7 +4,8 @@ import { AppError } from "../../shared/errors/app-error";
 import { recordAudit } from "../../shared/utils/audit";
 import { calculatePlatformFee } from "../../shared/pricing";
 import { marketConfigurationService } from "./market-configuration.service";
-import { resolveCampaignSupplierLedgerOwnerId } from "./campaign-supplier-resolution.service";
+import { resolveCampaignSupplierLedgerOwnerId } from "./campaign-supplier-resolution.service";
+import { assertNoCampaignDispute } from "./campaign-dispute.service";
 
 const SYSTEM_WEBHOOK_ACTOR = "system:stripe_webhook";
 
@@ -154,6 +155,7 @@ export const organiserFeeService = {
     const fee = await prisma.communityBuyOrganiserFee.findUnique({ where: { campaignId } });
     if (!fee) throw new AppError("No organiser fee record exists for this campaign", 404);
     if (fee.status !== "HELD") throw new AppError("Only a held organiser fee can be released", 409);
+    await assertNoCampaignDispute(campaignId);
     const claim = await prisma.communityBuyOrganiserFee.updateMany({ where: { campaignId, status: "HELD" }, data: { status: "ACCRUED", heldReasonCodes: [] } });
     if (claim.count !== 1) throw new AppError("This organiser fee cannot be released from its current state", 409);
     await recordAudit({ actorId: adminId, action: "community_buy_organiser_fee.released", entityType: "CommunityBuyOrganiserFee", entityId: fee.id });

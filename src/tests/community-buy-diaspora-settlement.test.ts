@@ -17,6 +17,11 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+vi.mock("../modules/community-buy/campaign-dispute.service", () => ({
+  campaignDisputeBlockers: async () => [],
+  assertNoCampaignDispute: async () => undefined,
+}));
+
 vi.mock("../lib/prisma", () => ({
   prisma: {
     communityCampaign: { findMany: vi.fn(), update: vi.fn(), updateMany: vi.fn(), findUnique: vi.fn(), findUniqueOrThrow: vi.fn(), create: vi.fn() },
